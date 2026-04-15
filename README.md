@@ -34,6 +34,8 @@ StockHelper4me/
 │   ├── db.py                   # SQLite 連線管理 + UPSERT
 │   ├── field_mapper.py         # 欄位映射 + detail JSON 打包
 │   ├── sync_tracker.py         # 斷點續傳追蹤
+│   ├── aggregators.py          # Phase 5-6 聚合策略（法人 pivot、財報 pack）
+│   ├── post_process.py         # 除權息後處理 + 現增事件偵測
 │   └── rust_bridge.py          # 呼叫 Rust binary（Phase 4）
 ├── rust_compute/               # Rust binary 專案
 │   ├── Cargo.toml
@@ -145,13 +147,46 @@ options:
 
 ## 開發進度
 
-| Phase | 狀態 | 模組 |
-|-------|------|------|
-| A — 基礎骨架 | ✅ 完成 | logger_setup, config_loader, db, rate_limiter, api_client |
-| B — Phase 1 | ✅ 完成 | phase_executor, field_mapper, stock_resolver |
-| C — Phase 2-3 | ✅ 完成 | date_segmenter, sync_tracker, computed_fields, post_process |
-| D — Phase 4 Rust | ✅ 完成 | rust_bridge, rust_compute |
-| E — Phase 5-6 | 待實作 | 法人籌碼、基本面 API |
+| Phase | 狀態 | 主要模組 / 說明 |
+|-------|------|----------------|
+| A — 基礎骨架 | ✅ 完成 | `logger_setup`, `config_loader`, `db`（17 張表）, `rate_limiter`, `api_client` |
+| B — Phase 1 排程通路 | ✅ 完成 | `phase_executor`, `field_mapper`（schema 驗證 + 衍生欄位）, `stock_resolver` |
+| C — Phase 2-3 斷點續傳 | ✅ 完成 | `date_segmenter`（年度分段）, `sync_tracker`（5 種狀態）, `post_process`（除權息拆分 + 現增）|
+| D — Phase 4 Rust 計算層 | ✅ 完成 | `rust_bridge`（SIGTERM/SIGKILL）, `rust_compute`（後復權 + 週K/月K） |
+| E — Phase 5-6 籌碼 & 總經 | ✅ 完成 | `aggregators`（三大法人 pivot、財報 pack）, 28 個 API 設定補全 |
+| 缺漏修正 | ✅ 完成 | `DateSegmenter` 補傳 `sync_tracker`；`cooldown_on_429_sec` 從 config 讀取；`updated_at` 使用 Python 真實時間；`schema_mismatch` 寫入 `sync_tracker` |
+
+---
+
+## 資料庫 Schema（SQLite）
+
+| 資料表 | 說明 | PK |
+|--------|------|----|
+| `stock_info` | 股票基本資料（名稱、市場、產業、上市日） | market, stock_id |
+| `trading_calendar` | 交易日曆 | market, date |
+| `market_index_tw` | 台灣加權報酬指數 | market, date |
+| `price_adjustment_events` | 除權息 / 減資 / 分割 / 面額變更 / 現增 | market, stock_id, date, event_type |
+| `price_daily` | 日K 原始收盤價 | market, stock_id, date |
+| `price_limit` | 漲跌停價格 | market, stock_id, date |
+| `price_daily_fwd` | 後復權日K（Rust Phase 4 產出） | market, stock_id, date |
+| `price_weekly_fwd` | 後復權週K | market, stock_id, year, week |
+| `price_monthly_fwd` | 後復權月K | market, stock_id, year, month |
+| `institutional_daily` | 三大法人買賣超（外資/投信/自營商） | market, stock_id, date |
+| `margin_daily` | 融資融券餘額 | market, stock_id, date |
+| `foreign_holding` | 外資持股比例 | market, stock_id, date |
+| `holding_shares_per` | 股權分散表（detail JSON 各級距） | market, stock_id, date |
+| `valuation_daily` | 本益比 / 殖利率 / 淨值比 | market, stock_id, date |
+| `day_trading` | 當沖買賣量 | market, stock_id, date |
+| `index_weight_daily` | 指數成分權重 | market, stock_id, date |
+| `monthly_revenue` | 月營收 + YoY / MoM | market, stock_id, date |
+| `financial_statement` | 損益表 / 資負表 / 現金流量（detail JSON） | market, stock_id, date, type |
+| `market_index_us` | SPY / VIX 美股指數 | market, stock_id, date |
+| `exchange_rate` | 台幣匯率（spot_buy 為主欄位） | market, date, currency |
+| `institutional_market_daily` | 全市場三大法人 | market, date |
+| `market_margin_maintenance` | 整體融資維持率 | market, date |
+| `fear_greed_index` | CNN 恐懼貪婪指數 | market, date |
+| `api_sync_progress` | 斷點續傳進度（per segment） | api_name, stock_id, segment_start |
+| `stock_sync_status` | 每支股票同步時間戳 + fwd_adj_valid | market, stock_id |
 
 ---
 
