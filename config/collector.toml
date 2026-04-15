@@ -118,13 +118,7 @@ enabled      = true
 is_backer    = true
 segment_days = 0
 event_type   = "dividend"
-field_rename = {
-    "stock_or_cache_dividend"  = "_event_subtype",
-    "stock_and_cache_dividend" = "_combined_dividend",
-    "max_price"                = "_max_price",
-    "min_price"                = "_min_price",
-    "open_price"               = "_open_price"
-}
+field_rename = {"stock_or_cache_dividend" = "_event_subtype", "stock_and_cache_dividend" = "_combined_dividend", "max_price" = "_max_price", "min_price" = "_min_price", "open_price" = "_open_price"}
 detail_fields    = ["_event_subtype", "_combined_dividend", "_max_price", "_min_price", "_open_price"]
 computed_fields  = ["adjustment_factor", "volume_factor", "cash_dividend", "stock_dividend"]
 notes        = "除權息結果 → price_adjustment_events (event_type=dividend)"
@@ -151,15 +145,7 @@ enabled      = true
 is_backer    = false
 segment_days = 0
 event_type   = "capital_reduction"
-field_rename = {
-    "ClosingPriceonTheLastTradingDay" = "before_price",
-    "PostReductionReferencePrice"     = "after_price",
-    "OpeningReferencePrice"           = "reference_price",
-    "ReasonforCapitalReduction"       = "_reason",
-    "LimitUp"                         = "_limit_up",
-    "LimitDown"                       = "_limit_down",
-    "ExrightReferencePrice"           = "_exright_ref"
-}
+field_rename = {"ClosingPriceonTheLastTradingDay" = "before_price", "PostReductionReferencePrice" = "after_price", "OpeningReferencePrice" = "reference_price", "ReasonforCapitalReduction" = "_reason", "LimitUp" = "_limit_up", "LimitDown" = "_limit_down", "ExrightReferencePrice" = "_exright_ref"}
 detail_fields   = ["_reason", "_limit_up", "_limit_down", "_exright_ref"]
 computed_fields = ["adjustment_factor", "volume_factor"]
 notes       = "減資參考價"
@@ -174,12 +160,7 @@ enabled      = true
 is_backer    = false
 segment_days = 0
 event_type   = "split"
-field_rename = {
-    "open_price" = "reference_price",
-    "type"       = "_split_type",
-    "max_price"  = "_max_price",
-    "min_price"  = "_min_price"
-}
+field_rename = {"open_price" = "reference_price", "type" = "_split_type", "max_price" = "_max_price", "min_price" = "_min_price"}
 detail_fields   = ["_split_type", "_max_price", "_min_price"]
 computed_fields = ["adjustment_factor", "volume_factor"]
 notes       = "分割參考價"
@@ -194,14 +175,7 @@ enabled      = true
 is_backer    = false
 segment_days = 0
 event_type   = "par_value_change"
-field_rename = {
-    "before_close"    = "before_price",
-    "after_ref_close" = "after_price",
-    "after_ref_open"  = "reference_price",
-    "after_ref_max"   = "_limit_up",
-    "after_ref_min"   = "_limit_down",
-    "stock_name"      = "_stock_name"
-}
+field_rename = {"before_close" = "before_price", "after_ref_close" = "after_price", "after_ref_open" = "reference_price", "after_ref_max" = "_limit_up", "after_ref_min" = "_limit_down", "stock_name" = "_stock_name"}
 detail_fields   = ["_limit_up", "_limit_down", "_stock_name"]
 computed_fields = ["adjustment_factor", "volume_factor"]
 notes       = "面額變更；⚠️ 無 data_id 參數，全市場查詢"
@@ -266,22 +240,7 @@ segment_days = 365
 # 融資：MarginPurchaseBuy/Sell/TodayBalance → margin_purchase/sell/balance
 # 融券：ShortSaleBuy/Sell/TodayBalance → short_sale/cover/balance
 # 其他欄位導入 detail JSON
-field_rename = {
-    "MarginPurchaseBuy"              = "margin_purchase",
-    "MarginPurchaseSell"             = "margin_sell",
-    "MarginPurchaseTodayBalance"     = "margin_balance",
-    "ShortSaleBuy"                   = "short_sale",
-    "ShortSaleSell"                  = "short_cover",
-    "ShortSaleTodayBalance"          = "short_balance",
-    "MarginPurchaseCashRepayment"    = "_margin_cash_repay",
-    "MarginPurchaseYesterdayBalance" = "_margin_prev_balance",
-    "MarginPurchaseLimit"            = "_margin_limit",
-    "ShortSaleCashRepayment"         = "_short_cash_repay",
-    "ShortSaleYesterdayBalance"      = "_short_prev_balance",
-    "ShortSaleLimit"                 = "_short_limit",
-    "OffsetLoanAndShort"             = "_offset_loan_short",
-    "Note"                           = "_note"
-}
+field_rename = {"MarginPurchaseBuy" = "margin_purchase", "MarginPurchaseSell" = "margin_sell", "MarginPurchaseTodayBalance" = "margin_balance", "ShortSaleBuy" = "short_sale", "ShortSaleSell" = "short_cover", "ShortSaleTodayBalance" = "short_balance", "MarginPurchaseCashRepayment" = "_margin_cash_repay", "MarginPurchaseYesterdayBalance" = "_margin_prev_balance", "MarginPurchaseLimit" = "_margin_limit", "ShortSaleCashRepayment" = "_short_cash_repay", "ShortSaleYesterdayBalance" = "_short_prev_balance", "ShortSaleLimit" = "_short_limit", "OffsetLoanAndShort" = "_offset_loan_short", "Note" = "_note"}
 detail_fields = ["_margin_cash_repay", "_margin_prev_balance", "_margin_limit",
                  "_short_cash_repay", "_short_prev_balance", "_short_limit",
                  "_offset_loan_short", "_note"]
@@ -299,19 +258,7 @@ segment_days = 365
 # ForeignInvestmentShares → foreign_holding_shares（張數）
 # ForeignInvestmentSharesRatio → foreign_holding_ratio（比率 %）
 # 其他輔助欄位導入 detail JSON
-field_rename = {
-    "ForeignInvestmentShares"          = "foreign_holding_shares",
-    "ForeignInvestmentSharesRatio"     = "foreign_holding_ratio",
-    "ForeignInvestmentRemainingShares" = "_remaining_shares",
-    "ForeignInvestmentRemainRatio"     = "_remain_ratio",
-    "ForeignInvestmentUpperLimitRatio" = "_upper_limit_ratio",
-    "ChineseInvestmentUpperLimitRatio" = "_cn_upper_limit",
-    "NumberOfSharesIssued"             = "_total_issued",
-    "RecentlyDeclareDate"              = "_declare_date",
-    "InternationalCode"                = "_intl_code",
-    "stock_name"                       = "_stock_name",
-    "note"                             = "_note"
-}
+field_rename = {"ForeignInvestmentShares" = "foreign_holding_shares", "ForeignInvestmentSharesRatio" = "foreign_holding_ratio", "ForeignInvestmentRemainingShares" = "_remaining_shares", "ForeignInvestmentRemainRatio" = "_remain_ratio", "ForeignInvestmentUpperLimitRatio" = "_upper_limit_ratio", "ChineseInvestmentUpperLimitRatio" = "_cn_upper_limit", "NumberOfSharesIssued" = "_total_issued", "RecentlyDeclareDate" = "_declare_date", "InternationalCode" = "_intl_code", "stock_name" = "_stock_name", "note" = "_note"}
 detail_fields = ["_remaining_shares", "_remain_ratio", "_upper_limit_ratio",
                  "_cn_upper_limit", "_total_issued", "_declare_date",
                  "_intl_code", "_stock_name", "_note"]
@@ -342,10 +289,7 @@ enabled      = true
 is_backer    = false
 segment_days = 365
 # 欄位：date, stock_id, dividend_yield, PER, PBR
-field_rename = {
-    "PER" = "per",
-    "PBR" = "pbr"
-}
+field_rename = {"PER" = "per", "PBR" = "pbr"}
 notes = "本益比 / 殖利率 / 淨值比"
 
 [[api]]
@@ -359,12 +303,7 @@ is_backer    = true
 segment_days = 365
 # 欄位：stock_id, date, BuyAfterSale, Volume, BuyAmount, SellAmount
 # BuyAfterSale = 當沖買（先買後賣）
-field_rename = {
-    "BuyAfterSale" = "day_trading_buy",
-    "Volume"       = "day_trading_sell",
-    "BuyAmount"    = "_buy_amount",
-    "SellAmount"   = "_sell_amount"
-}
+field_rename = {"BuyAfterSale" = "day_trading_buy", "Volume" = "day_trading_sell", "BuyAmount" = "_buy_amount", "SellAmount" = "_sell_amount"}
 detail_fields = ["_buy_amount", "_sell_amount"]
 notes = "當沖資訊"
 
@@ -379,12 +318,7 @@ is_backer    = true
 segment_days = 365
 # 欄位：rank, stock_id, stock_name, weight_per, date, type
 # weight_per = 指數權重（%），type = 指數類型（如 TWSE）
-field_rename = {
-    "weight_per" = "weight",
-    "rank"       = "_rank",
-    "stock_name" = "_stock_name",
-    "type"       = "_index_type"
-}
+field_rename = {"weight_per" = "weight", "rank" = "_rank", "stock_name" = "_stock_name", "type" = "_index_type"}
 detail_fields = ["_rank", "_stock_name", "_index_type"]
 notes = "指數成分權重"
 
@@ -399,11 +333,7 @@ is_backer    = true
 segment_days = 0
 # 欄位：date, stock_id, country, revenue, revenue_month, revenue_year
 # revenue_month = 月增率（MoM），revenue_year = 年增率（YoY）
-field_rename = {
-    "revenue_month" = "revenue_mom",
-    "revenue_year"  = "revenue_yoy",
-    "country"       = "_country"
-}
+field_rename = {"revenue_month" = "revenue_mom", "revenue_year" = "revenue_yoy", "country" = "_country"}
 detail_fields = ["_country"]
 notes = "月營收"
 
@@ -466,13 +396,7 @@ is_backer        = false
 segment_days     = 365
 fixed_stock_ids  = ["SPY", "^VIX"]
 # 欄位：date, stock_id, open, max, min, close, Trading_Volume, Trading_money, spread
-field_rename = {
-    "max"            = "high",
-    "min"            = "low",
-    "Trading_Volume" = "volume",
-    "Trading_money"  = "_trading_money",
-    "spread"         = "_spread"
-}
+field_rename = {"max" = "high", "min" = "low", "Trading_Volume" = "volume", "Trading_money" = "_trading_money", "spread" = "_spread"}
 detail_fields = ["_trading_money", "_spread"]
 notes = "美股指數 SPY / VIX"
 
@@ -487,12 +411,7 @@ is_backer    = false
 segment_days = 365
 # 欄位：date, currency, cash_buy, cash_sell, spot_buy, spot_sell
 # 以 spot_buy 作為主要 rate，其他存入 detail
-field_rename = {
-    "spot_buy"  = "rate",
-    "cash_buy"  = "_cash_buy",
-    "cash_sell" = "_cash_sell",
-    "spot_sell" = "_spot_sell"
-}
+field_rename = {"spot_buy" = "rate", "cash_buy" = "_cash_buy", "cash_sell" = "_cash_sell", "spot_sell" = "_spot_sell"}
 detail_fields = ["_cash_buy", "_cash_sell", "_spot_sell"]
 notes = "台幣匯率（spot_buy 為主要 rate，其餘存 detail）"
 
@@ -520,9 +439,7 @@ enabled      = true
 is_backer    = true
 segment_days = 365
 # 欄位：date, TotalExchangeMarginMaintenance（整體市場融資維持率 %）
-field_rename = {
-    "TotalExchangeMarginMaintenance" = "ratio"
-}
+field_rename = {"TotalExchangeMarginMaintenance" = "ratio"}
 notes = "整體市場融資維持率"
 
 [[api]]
