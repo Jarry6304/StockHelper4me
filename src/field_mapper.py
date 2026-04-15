@@ -33,7 +33,7 @@ class FieldMapper:
         self,
         api_config: ApiConfig,
         raw_records: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], bool]:
         """
         將 API 回傳的原始資料轉換為 DB 可寫入的格式。
 
@@ -42,13 +42,16 @@ class FieldMapper:
             raw_records:  API 原始回傳資料（list of dict）
 
         Returns:
-            處理後的資料列 list，準備好交給 DBWriter.upsert()
+            (rows, schema_mismatch)：
+              rows           — 處理後的資料列 list，準備好交給 DBWriter.upsert()
+              schema_mismatch — True 表示回傳欄位與 field_rename 定義不符（已記錄 WARNING）
         """
         if not raw_records:
-            return []
+            return [], False
 
         # 步驟 0：Schema Validation（以第一筆資料為樣本）
-        self._validate_schema(api_config, raw_records[0])
+        # 回傳 True 表示欄位與預期不符，由呼叫端決定是否記錄 schema_mismatch
+        schema_mismatch = self._validate_schema(api_config, raw_records[0])
 
         results = []
         for record in raw_records:
@@ -83,7 +86,7 @@ class FieldMapper:
 
             results.append(row)
 
-        return results
+        return results, schema_mismatch
 
     # =========================================================================
     # Schema Validation（v1.1 新增）
@@ -93,23 +96,26 @@ class FieldMapper:
         self,
         api_config: ApiConfig,
         sample_record: dict[str, Any],
-    ) -> None:
+    ) -> bool:
         """
         比對 API 回傳的第一筆資料欄位與 field_rename 定義的來源欄位。
 
         策略：
-        - 缺少必要欄位 → WARNING（可能導致 computed_fields 計算錯誤）
+        - 缺少必要欄位 → WARNING + 回傳 True（呼叫端標記 schema_mismatch）
         - API 新增未知欄位 → INFO（純資訊，不影響流程）
         - 不 raise exception：API 變動不應阻斷入庫
 
         Args:
             api_config:    API 設定
             sample_record: 第一筆回傳資料（用於取得欄位集合）
+
+        Returns:
+            True 表示有必要欄位缺失（schema mismatch），False 表示正常
         """
         actual_keys   = set(sample_record.keys())
         expected_keys = set(api_config.field_rename.keys())
 
-        # 缺少的來源欄位 → rename/compute 可能失敗
+        # 缺少的來源欄位 → rename/compute 可能失敗，回傳 True 通知呼叫端
         missing = expected_keys - actual_keys
         if missing:
             logger.warning(
@@ -117,9 +123,9 @@ class FieldMapper:
                 f"expected fields missing from API response: {missing}. "
                 f"Data will be ingested but computed_fields may be incorrect."
             )
-            # 更新 sync_tracker 狀態為 schema_mismatch（由 phase_executor 處理）
+            return True
 
-        # API 新增未知欄位 → 純資訊記錄
+        # API 新增未知欄位 → 純資訊記錄，不視為 mismatch
         known_keys = expected_keys | {"date", "stock_id", "stock_name"}
         novel      = actual_keys - known_keys
         if novel:
@@ -127,6 +133,8 @@ class FieldMapper:
                 f"[SchemaValidation] {api_config.name}: "
                 f"novel fields detected in API response: {novel}"
             )
+
+        return False
 
     # =========================================================================
     # Computed Fields 計算

@@ -66,7 +66,8 @@ class PhaseExecutor:
         self.rust_runner     = rust_runner
         self.dry_run         = dry_run
         self.field_mapper    = FieldMapper()
-        self.date_segmenter  = DateSegmenter(config)
+        # sync_tracker 傳入 DateSegmenter，供 incremental 模式查詢上次同步日期
+        self.date_segmenter  = DateSegmenter(config, sync_tracker)
 
         # 初始股票清單（Phase 1 前可能為空，Phase 1 後刷新）
         self._stock_list: list[str] = []
@@ -183,8 +184,15 @@ class PhaseExecutor:
                     )
                     continue
 
-                # 欄位映射
-                rows = self.field_mapper.transform(api_config, raw_records)
+                # 欄位映射（回傳 rows 與 schema_mismatch 旗標）
+                rows, schema_mismatch = self.field_mapper.transform(api_config, raw_records)
+
+                # 若欄位定義與 API 回傳不符，記錄 schema_mismatch（仍繼續入庫）
+                if schema_mismatch:
+                    self.sync_tracker.mark_schema_mismatch(
+                        api_config.name, stock_id, seg_start, seg_end,
+                        record_count=len(rows),
+                    )
 
                 # Phase E：聚合策略（pivot / pack）
                 # 在 field_mapper 之後、DB 寫入之前，對需要跨列合併的資料執行聚合

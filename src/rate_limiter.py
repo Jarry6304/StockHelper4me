@@ -34,24 +34,28 @@ class RateLimiter:
         calls_per_hour: int,
         burst_size: int,
         min_interval_ms: int,
+        cooldown_on_429_sec: int = 120,
     ):
         """
         Args:
-            calls_per_hour:  每小時允許的最大呼叫次數（帳號級別）
-            burst_size:      啟動時初始 token 數（允許連續快速發送的上限）
-            min_interval_ms: 兩次呼叫之間的最小間隔（毫秒），防止 burst 時頻率過高
+            calls_per_hour:      每小時允許的最大呼叫次數（帳號級別）
+            burst_size:          啟動時初始 token 數（允許連續快速發送的上限）
+            min_interval_ms:     兩次呼叫之間的最小間隔（毫秒），防止 burst 時頻率過高
+            cooldown_on_429_sec: 收到 HTTP 429 時的冷卻秒數（預設 120 秒）
         """
-        self.capacity     = burst_size
-        self.tokens       = float(burst_size)   # 啟動時有 burst 額度
-        self.refill_rate  = calls_per_hour / 3600.0  # tokens per second
-        self.min_interval = min_interval_ms / 1000.0  # 轉為秒
+        self.capacity            = burst_size
+        self.tokens              = float(burst_size)   # 啟動時有 burst 額度
+        self.refill_rate         = calls_per_hour / 3600.0  # tokens per second
+        self.min_interval        = min_interval_ms / 1000.0  # 轉為秒
+        self.cooldown_on_429_sec = cooldown_on_429_sec  # 供 api_client 讀取
 
         self._last_call_time   = 0.0
         self._last_refill_time = time.monotonic()
 
         logger.info(
             f"RateLimiter 初始化：calls_per_hour={calls_per_hour}, "
-            f"burst_size={burst_size}, min_interval={min_interval_ms}ms"
+            f"burst_size={burst_size}, min_interval={min_interval_ms}ms, "
+            f"cooldown_on_429={cooldown_on_429_sec}s"
         )
 
     async def acquire(self) -> float:

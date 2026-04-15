@@ -206,9 +206,10 @@ async def _run_collector(args, config, stock_list_cfg) -> None:
     db.init_schema()
 
     rate_limiter = RateLimiter(
-        calls_per_hour   = config.global_cfg.rate_limit.calls_per_hour,
-        burst_size       = config.global_cfg.rate_limit.burst_size,
-        min_interval_ms  = config.global_cfg.rate_limit.min_interval_ms,
+        calls_per_hour       = config.global_cfg.rate_limit.calls_per_hour,
+        burst_size           = config.global_cfg.rate_limit.burst_size,
+        min_interval_ms      = config.global_cfg.rate_limit.min_interval_ms,
+        cooldown_on_429_sec  = config.global_cfg.rate_limit.cooldown_on_429_sec,
     )
 
     sync_tracker = SyncTracker(db)

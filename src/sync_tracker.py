@@ -15,7 +15,7 @@ Status 說明：
 """
 
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from db import DBWriter
 
@@ -140,7 +140,8 @@ class SyncTracker:
                 "status":        status,
                 "record_count":  record_count,
                 "error_message": error_message,
-                "updated_at":    "datetime('now')",
+                # 使用 Python 端時間字串，避免 SQLite 字串字面值問題
+                "updated_at":    datetime.now().isoformat(timespec="seconds"),
             }],
         )
 

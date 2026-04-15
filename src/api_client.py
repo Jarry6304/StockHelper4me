@@ -134,10 +134,8 @@ class FinMindClient:
                     # 需要重試的 HTTP 狀態碼
                     if resp.status in self.retry.retry_on_status:
                         if resp.status == 429:
-                            # 觸發全域冷卻
-                            self.rate_limiter.cooldown(self.retry.cooldown_on_429_sec
-                                                       if hasattr(self.retry, 'cooldown_on_429_sec')
-                                                       else 120)
+                            # 觸發全域冷卻，冷卻秒數從 rate_limiter 讀取（來自 RateLimitConfig）
+                            self.rate_limiter.cooldown(self.rate_limiter.cooldown_on_429_sec)
 
                         wait = min(
                             self.retry.backoff_base_sec * (2 ** attempt),
