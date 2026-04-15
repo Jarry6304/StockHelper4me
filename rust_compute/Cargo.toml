@@ -1,0 +1,31 @@
+[package]
+name    = "tw_stock_compute"
+version = "0.1.0"
+edition = "2021"
+description = "台股後復權計算與 K 線聚合（Phase 4）"
+
+[[bin]]
+name = "tw_stock_compute"
+path = "src/main.rs"
+
+[dependencies]
+# SQLite 連線（rusqlite + bundled 特性可省略系統安裝）
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# JSON 序列化
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 時間處理
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI 參數解析
+clap = { version = "4", features = ["derive"] }
+
+# 錯誤處理
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto       = true     # 啟用 Link Time Optimization，減少 binary 大小
+codegen-units = 1    # 單一 codegen unit，最大化優化
