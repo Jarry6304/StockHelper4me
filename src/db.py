@@ -68,6 +68,10 @@ class DBWriter:
         """
         以 INSERT OR REPLACE 執行批次 UPSERT。
 
+        寫入前會比對資料表實際欄位（PRAGMA table_info），
+        自動略過不存在的欄位，防止 API 新增欄位時炸掉。
+        欄位清單有快取，同一 table 只查一次。
+
         Args:
             table:        目標資料表名稱
             rows:         要寫入的資料列（dict list）
@@ -79,7 +83,22 @@ class DBWriter:
         if not rows:
             return 0
 
-        columns      = list(rows[0].keys())
+        # 取得資料表有效欄位（有快取，同表只查一次 PRAGMA）
+        valid_cols = self._table_columns(table)
+
+        # 過濾 rows，只保留 DB 中實際存在的欄位
+        # 被略過的欄位已在 field_mapper._validate_schema 記錄 WARNING
+        columns = [c for c in rows[0].keys() if c in valid_cols]
+        if not columns:
+            logger.warning(f"upsert → {table}: 所有欄位都不在 schema 中，略過")
+            return 0
+
+        dropped = set(rows[0].keys()) - set(columns)
+        if dropped:
+            logger.warning(
+                f"upsert → {table}: 略過不存在的欄位 {dropped}（API 欄位與 DB schema 不符）"
+            )
+
         placeholders = ", ".join(["?"] * len(columns))
         col_str      = ", ".join(columns)
 
@@ -91,6 +110,25 @@ class DBWriter:
 
         logger.debug(f"upsert → {table}: {cursor.rowcount} rows (pk={primary_keys})")
         return cursor.rowcount
+
+    def _table_columns(self, table: str) -> set[str]:
+        """
+        回傳指定資料表的有效欄位名稱集合（結果有快取）。
+
+        Args:
+            table: 資料表名稱
+
+        Returns:
+            欄位名稱 set
+        """
+        if not hasattr(self, "_col_cache"):
+            self._col_cache: dict[str, set[str]] = {}
+
+        if table not in self._col_cache:
+            rows = self.query(f"PRAGMA table_info({table})")
+            self._col_cache[table] = {row["name"] for row in rows}
+
+        return self._col_cache[table]
 
     def insert(self, table: str, row: dict[str, Any]) -> None:
         """

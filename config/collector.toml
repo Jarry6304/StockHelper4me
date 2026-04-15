@@ -66,7 +66,9 @@ phase        = 1
 enabled      = true
 is_backer    = false
 segment_days = 0          # 0 = 不分段，一次拉全部
-field_rename = {}
+# API 回傳欄位：stock_id, stock_name, type, industry_category
+# type → market_type（上市/上櫃/興櫃）；industry_category → industry（產業別）
+field_rename = {"type" = "market_type", "industry_category" = "industry"}
 detail_fields = []
 notes        = "上市上櫃股票基本資料"
 
