@@ -465,15 +465,16 @@ def _get_schema_ddl() -> list[str]:
         )
         """,
 
-        # 匯率
+        # 匯率（每日多幣別，PK 含 currency）
         """
         CREATE TABLE IF NOT EXISTS exchange_rate (
             market      TEXT    NOT NULL,
             date        TEXT    NOT NULL,
-            currency    TEXT,
-            rate        REAL,
+            currency    TEXT    NOT NULL,  -- 幣別代碼，如 USD、EUR
+            rate        REAL,              -- spot_buy（即期買匯）
+            detail      TEXT,              -- JSON，儲存 cash_buy / cash_sell / spot_sell
             source      TEXT    DEFAULT 'finmind',
-            PRIMARY KEY (market, date)
+            PRIMARY KEY (market, date, currency)
         )
         """,
 
@@ -511,6 +512,7 @@ def _get_schema_ddl() -> list[str]:
             date        TEXT    NOT NULL,
             score       REAL,
             label       TEXT,
+            detail      TEXT,              -- JSON，儲存任何額外欄位（欄位視 API 版本而定）
             source      TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, date)
         )

@@ -50,6 +50,17 @@ class ApiConfig:
     merge_strategy: str | None = None
     post_process: str | None = None
 
+    # Phase E 新增：聚合策略與財報類型
+    # aggregation：指定 aggregators.py 中的聚合策略
+    #   "pivot_institutional"        → 三大法人 per-stock pivot
+    #   "pivot_institutional_market" → 全市場三大法人 pivot
+    #   "pack_financial"             → 財報科目打包（需搭配 stmt_type）
+    #   "pack_holding_shares"        → 股權分散表打包
+    aggregation: str | None = None
+    # stmt_type：財報類型，僅 aggregation="pack_financial" 需要
+    #   "income" | "balance" | "cashflow"
+    stmt_type: str | None = None
+
 
 @dataclass
 class RateLimitConfig:
@@ -270,6 +281,8 @@ def _parse_apis(api_list: list[dict]) -> list[ApiConfig]:
             fixed_stock_ids  = entry.get("fixed_stock_ids"),
             merge_strategy   = entry.get("merge_strategy"),
             post_process     = entry.get("post_process"),
+            aggregation      = entry.get("aggregation"),
+            stmt_type        = entry.get("stmt_type"),
         )
         results.append(cfg)
     return results

@@ -17,6 +17,7 @@ Phase 1 完成後需重新解析股票清單（先雞後蛋問題）。
 import logging
 from typing import Callable
 
+from aggregators import apply_aggregation
 from api_client import ALL_MARKET_SENTINEL, APIError, FinMindClient
 from config_loader import ApiConfig, CollectorConfig, StockListConfig
 from date_segmenter import DateSegmenter
@@ -184,6 +185,25 @@ class PhaseExecutor:
 
                 # 欄位映射
                 rows = self.field_mapper.transform(api_config, raw_records)
+
+                # Phase E：聚合策略（pivot / pack）
+                # 在 field_mapper 之後、DB 寫入之前，對需要跨列合併的資料執行聚合
+                if api_config.aggregation and rows:
+                    try:
+                        rows = apply_aggregation(
+                            api_config.aggregation,
+                            rows,
+                            stmt_type=api_config.stmt_type,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[{api_config.name}] aggregation={api_config.aggregation} "
+                            f"失敗，跳過此 segment：{e}"
+                        )
+                        self.sync_tracker.mark_failed(
+                            api_config.name, stock_id, seg_start, seg_end, str(e)
+                        )
+                        continue
 
                 # 寫入 DB（merge_strategy 特殊處理）
                 if api_config.merge_strategy == "update_delist_date":

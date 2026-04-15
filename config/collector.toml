@@ -248,7 +248,11 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-notes        = "三大法人買賣超"
+# API 回傳每日 3 筆（外資/投信/自營商），需 pivot 為 1 筆
+# field_rename 為空：name/buy/sell 欄位由 aggregators.pivot_institutional 處理
+field_rename  = {}
+aggregation   = "pivot_institutional"
+notes         = "三大法人買賣超（每日3筆 pivot → 1筆）"
 
 [[api]]
 name         = "margin_daily"
@@ -259,7 +263,29 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-notes        = "融資融券"
+# 融資：MarginPurchaseBuy/Sell/TodayBalance → margin_purchase/sell/balance
+# 融券：ShortSaleBuy/Sell/TodayBalance → short_sale/cover/balance
+# 其他欄位導入 detail JSON
+field_rename = {
+    "MarginPurchaseBuy"              = "margin_purchase",
+    "MarginPurchaseSell"             = "margin_sell",
+    "MarginPurchaseTodayBalance"     = "margin_balance",
+    "ShortSaleBuy"                   = "short_sale",
+    "ShortSaleSell"                  = "short_cover",
+    "ShortSaleTodayBalance"          = "short_balance",
+    "MarginPurchaseCashRepayment"    = "_margin_cash_repay",
+    "MarginPurchaseYesterdayBalance" = "_margin_prev_balance",
+    "MarginPurchaseLimit"            = "_margin_limit",
+    "ShortSaleCashRepayment"         = "_short_cash_repay",
+    "ShortSaleYesterdayBalance"      = "_short_prev_balance",
+    "ShortSaleLimit"                 = "_short_limit",
+    "OffsetLoanAndShort"             = "_offset_loan_short",
+    "Note"                           = "_note"
+}
+detail_fields = ["_margin_cash_repay", "_margin_prev_balance", "_margin_limit",
+                 "_short_cash_repay", "_short_prev_balance", "_short_limit",
+                 "_offset_loan_short", "_note"]
+notes = "融資融券"
 
 [[api]]
 name         = "foreign_holding"
@@ -270,7 +296,26 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-notes        = "外資持股"
+# ForeignInvestmentShares → foreign_holding_shares（張數）
+# ForeignInvestmentSharesRatio → foreign_holding_ratio（比率 %）
+# 其他輔助欄位導入 detail JSON
+field_rename = {
+    "ForeignInvestmentShares"          = "foreign_holding_shares",
+    "ForeignInvestmentSharesRatio"     = "foreign_holding_ratio",
+    "ForeignInvestmentRemainingShares" = "_remaining_shares",
+    "ForeignInvestmentRemainRatio"     = "_remain_ratio",
+    "ForeignInvestmentUpperLimitRatio" = "_upper_limit_ratio",
+    "ChineseInvestmentUpperLimitRatio" = "_cn_upper_limit",
+    "NumberOfSharesIssued"             = "_total_issued",
+    "RecentlyDeclareDate"              = "_declare_date",
+    "InternationalCode"                = "_intl_code",
+    "stock_name"                       = "_stock_name",
+    "note"                             = "_note"
+}
+detail_fields = ["_remaining_shares", "_remain_ratio", "_upper_limit_ratio",
+                 "_cn_upper_limit", "_total_issued", "_declare_date",
+                 "_intl_code", "_stock_name", "_note"]
+notes = "外資持股"
 
 [[api]]
 name         = "holding_shares_per"
@@ -281,7 +326,11 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-notes        = "股權分散表"
+# API 回傳每日多筆（每個持股級距一筆），需 pack 成 1 筆 detail JSON
+# 欄位：date, stock_id, HoldingSharesLevel, people, percent, unit
+field_rename  = {}
+aggregation   = "pack_holding_shares"
+notes         = "股權分散表（每日多筆 pack → 1筆 detail JSON）"
 
 [[api]]
 name         = "valuation_daily"
@@ -289,10 +338,15 @@ dataset      = "TaiwanStockPER"
 param_mode   = "per_stock"
 target_table = "valuation_daily"
 phase        = 5
-enabled      = false    # 免費方案可用，暫時關閉
+enabled      = true
 is_backer    = false
 segment_days = 365
-notes        = "本益比 / 殖利率 / 淨值比"
+# 欄位：date, stock_id, dividend_yield, PER, PBR
+field_rename = {
+    "PER" = "per",
+    "PBR" = "pbr"
+}
+notes = "本益比 / 殖利率 / 淨值比"
 
 [[api]]
 name         = "day_trading"
@@ -303,7 +357,16 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-notes        = "當沖資訊"
+# 欄位：stock_id, date, BuyAfterSale, Volume, BuyAmount, SellAmount
+# BuyAfterSale = 當沖買（先買後賣）
+field_rename = {
+    "BuyAfterSale" = "day_trading_buy",
+    "Volume"       = "day_trading_sell",
+    "BuyAmount"    = "_buy_amount",
+    "SellAmount"   = "_sell_amount"
+}
+detail_fields = ["_buy_amount", "_sell_amount"]
+notes = "當沖資訊"
 
 [[api]]
 name         = "index_weight"
@@ -314,7 +377,16 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-notes        = "指數權重"
+# 欄位：rank, stock_id, stock_name, weight_per, date, type
+# weight_per = 指數權重（%），type = 指數類型（如 TWSE）
+field_rename = {
+    "weight_per" = "weight",
+    "rank"       = "_rank",
+    "stock_name" = "_stock_name",
+    "type"       = "_index_type"
+}
+detail_fields = ["_rank", "_stock_name", "_index_type"]
+notes = "指數成分權重"
 
 [[api]]
 name         = "monthly_revenue"
@@ -324,8 +396,16 @@ target_table = "monthly_revenue"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 0    # 事件量少，不需分段
-notes        = "月營收"
+segment_days = 0
+# 欄位：date, stock_id, country, revenue, revenue_month, revenue_year
+# revenue_month = 月增率（MoM），revenue_year = 年增率（YoY）
+field_rename = {
+    "revenue_month" = "revenue_mom",
+    "revenue_year"  = "revenue_yoy",
+    "country"       = "_country"
+}
+detail_fields = ["_country"]
+notes = "月營收"
 
 [[api]]
 name         = "financial_income"
@@ -336,7 +416,12 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 0
-notes        = "損益表"
+# 欄位：date, stock_id, type（科目中文名）, value（金額）, origin_name（科目英文名）
+# 每日回傳多筆科目，需 pack 成 1 筆 detail JSON
+field_rename  = {}
+aggregation   = "pack_financial"
+stmt_type     = "income"
+notes         = "損益表（多筆科目 pack → 1筆 detail JSON）"
 
 [[api]]
 name         = "financial_balance"
@@ -347,7 +432,10 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 0
-notes        = "資產負債表"
+field_rename  = {}
+aggregation   = "pack_financial"
+stmt_type     = "balance"
+notes         = "資產負債表（多筆科目 pack → 1筆 detail JSON）"
 
 [[api]]
 name         = "financial_cashflow"
@@ -358,7 +446,10 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 0
-notes        = "現金流量表"
+field_rename  = {}
+aggregation   = "pack_financial"
+stmt_type     = "cashflow"
+notes         = "現金流量表（多筆科目 pack → 1筆 detail JSON）"
 
 # =============================================================================
 # Phase 6：MACRO（總體指標，大多免費）
@@ -373,8 +464,17 @@ phase            = 6
 enabled          = true
 is_backer        = false
 segment_days     = 365
-fixed_stock_ids  = ["SPY", "^VIX"]    # 不走 stock_list，固定查這兩個
-notes            = "美股指數 SPY / VIX"
+fixed_stock_ids  = ["SPY", "^VIX"]
+# 欄位：date, stock_id, open, max, min, close, Trading_Volume, Trading_money, spread
+field_rename = {
+    "max"            = "high",
+    "min"            = "low",
+    "Trading_Volume" = "volume",
+    "Trading_money"  = "_trading_money",
+    "spread"         = "_spread"
+}
+detail_fields = ["_trading_money", "_spread"]
+notes = "美股指數 SPY / VIX"
 
 [[api]]
 name         = "exchange_rate"
@@ -385,7 +485,16 @@ phase        = 6
 enabled      = true
 is_backer    = false
 segment_days = 365
-notes        = "台幣匯率"
+# 欄位：date, currency, cash_buy, cash_sell, spot_buy, spot_sell
+# 以 spot_buy 作為主要 rate，其他存入 detail
+field_rename = {
+    "spot_buy"  = "rate",
+    "cash_buy"  = "_cash_buy",
+    "cash_sell" = "_cash_sell",
+    "spot_sell" = "_spot_sell"
+}
+detail_fields = ["_cash_buy", "_cash_sell", "_spot_sell"]
+notes = "台幣匯率（spot_buy 為主要 rate，其餘存 detail）"
 
 [[api]]
 name         = "institutional_market"
@@ -396,7 +505,10 @@ phase        = 6
 enabled      = true
 is_backer    = false
 segment_days = 365
-notes        = "全市場三大法人買賣超"
+# 與 institutional_daily 相同格式，每日 3 筆，需 pivot
+field_rename  = {}
+aggregation   = "pivot_institutional_market"
+notes         = "全市場三大法人買賣超（每日3筆 pivot → 1筆）"
 
 [[api]]
 name         = "market_margin"
@@ -407,7 +519,11 @@ phase        = 6
 enabled      = true
 is_backer    = true
 segment_days = 365
-notes        = "整體市場融資維持率"
+# 欄位：date, TotalExchangeMarginMaintenance（整體市場融資維持率 %）
+field_rename = {
+    "TotalExchangeMarginMaintenance" = "ratio"
+}
+notes = "整體市場融資維持率"
 
 [[api]]
 name         = "fear_greed"
@@ -418,4 +534,7 @@ phase        = 6
 enabled      = true
 is_backer    = false
 segment_days = 365
-notes        = "CNN 恐懼貪婪指數"
+# 欄位未完全確認，推測有 date, score/index, label
+# 以 _schema_flexible 模式處理：未知欄位自動存入 detail
+field_rename = {}
+notes = "CNN 恐懼貪婪指數（欄位待執行時 schema validation 確認）"
