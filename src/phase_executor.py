@@ -69,8 +69,11 @@ class PhaseExecutor:
         # sync_tracker 傳入 DateSegmenter，供 incremental 模式查詢上次同步日期
         self.date_segmenter  = DateSegmenter(config, sync_tracker)
 
-        # 初始股票清單（Phase 1 前可能為空，Phase 1 後刷新）
-        self._stock_list: list[str] = []
+        # 初始解析股票清單。
+        # - dev_enabled = True（含 --stocks 覆蓋）→ 直接回 static_ids，不查 DB
+        # - 否則查 DB；首次執行時 stock_info 表可能為空，phase 1 完成後會再 refresh 一次
+        self._stock_list: list[str] = stock_resolver.resolve(stock_list_cfg, db)
+        logger.info(f"StockList initial resolve. total={len(self._stock_list)}")
 
     # =========================================================================
     # 主要執行入口
