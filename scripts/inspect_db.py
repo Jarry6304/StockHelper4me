@@ -125,6 +125,61 @@ def main(argv: list[str]) -> int:
             for r in rows:
                 print(f"  {r['date']:<12s} {r['detail_preview']}")
 
+        # Phase 3：price_daily 最近 5 筆 + 最早 / 最新 / 筆數
+        if "price_daily" in existing:
+            print()
+            print(f"--- price_daily for {stock_id}（範圍 + 最近 5 筆）---")
+            stat = cur.execute(
+                "SELECT COUNT(*) AS n, MIN(date) AS d_min, MAX(date) AS d_max "
+                "FROM price_daily WHERE stock_id = ?",
+                (stock_id,),
+            ).fetchone()
+            if stat["n"] == 0:
+                print("  (no rows)")
+            else:
+                print(f"  rows={stat['n']}  range={stat['d_min']} ~ {stat['d_max']}")
+                print(f"  {'date':<12s} {'open':>9s} {'high':>9s} {'low':>9s} "
+                      f"{'close':>9s} {'volume':>12s} {'turnover':>14s}")
+                rows = cur.execute(
+                    "SELECT date, open, high, low, close, volume, turnover "
+                    "FROM price_daily WHERE stock_id = ? "
+                    "ORDER BY date DESC LIMIT 5",
+                    (stock_id,),
+                ).fetchall()
+                for r in rows:
+                    o = f"{r['open']:.2f}"     if r['open']     is not None else "NULL"
+                    h = f"{r['high']:.2f}"     if r['high']     is not None else "NULL"
+                    l = f"{r['low']:.2f}"      if r['low']      is not None else "NULL"
+                    c = f"{r['close']:.2f}"    if r['close']    is not None else "NULL"
+                    v = f"{r['volume']:,}"     if r['volume']   is not None else "NULL"
+                    t = f"{r['turnover']:,.0f}" if r['turnover'] is not None else "NULL"
+                    print(f"  {r['date']:<12s} {o:>9s} {h:>9s} {l:>9s} {c:>9s} {v:>12s} {t:>14s}")
+
+        # Phase 3：price_limit 最近 5 筆 + 範圍
+        if "price_limit" in existing:
+            print()
+            print(f"--- price_limit for {stock_id}（範圍 + 最近 5 筆）---")
+            stat = cur.execute(
+                "SELECT COUNT(*) AS n, MIN(date) AS d_min, MAX(date) AS d_max "
+                "FROM price_limit WHERE stock_id = ?",
+                (stock_id,),
+            ).fetchone()
+            if stat["n"] == 0:
+                print("  (no rows)")
+            else:
+                print(f"  rows={stat['n']}  range={stat['d_min']} ~ {stat['d_max']}")
+                print(f"  {'date':<12s} {'limit_up':>10s} {'limit_down':>12s}")
+                rows = cur.execute(
+                    "SELECT date, limit_up, limit_down "
+                    "FROM price_limit WHERE stock_id = ? "
+                    "ORDER BY date DESC LIMIT 5",
+                    (stock_id,),
+                ).fetchall()
+                for r in rows:
+                    lu = f"{r['limit_up']:.2f}"   if r['limit_up']   is not None else "NULL"
+                    ld = f"{r['limit_down']:.2f}" if r['limit_down'] is not None else "NULL"
+                    print(f"  {r['date']:<12s} {lu:>10s} {ld:>12s}")
+
         # sync 進度
         if "api_sync_progress" in existing:
             print()
