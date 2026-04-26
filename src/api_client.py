@@ -180,13 +180,17 @@ class FinMindClient:
         end: str,
     ) -> dict[str, str]:
         """
-        依 param_mode 組裝 FinMind API 查詢參數。
+        依 param_mode 組裝 FinMind v4 HTTP API 查詢參數。
 
         param_mode 說明：
           all_market       → dataset + start_date + end_date（無 data_id）
+          all_market_no_id → 同上，語意明示「無 data_id」
           per_stock        → dataset + data_id + start_date + end_date
           per_stock_no_end → dataset + data_id + start_date（無 end_date）
-          all_market_no_id → dataset + start_date + end_date（無 data_id，如 ParValueChange）
+          per_stock_fixed  → 同 per_stock，但 data_id 來自 fixed_ids（如 SPY、TAIEX）
+
+        ⚠️ FinMind v4 HTTP API 統一使用 data_id 作為股票識別參數。
+           SDK 函式參數 stock_id 為 Pythonic 命名，內部會 mapping 到 data_id 才送出。
         """
         params: dict[str, str] = {
             "dataset":    api_config.dataset,
@@ -194,16 +198,14 @@ class FinMindClient:
             "token":      self.token,
         }
 
-        # 需要 data_id 的模式
-        if (
-            api_config.param_mode in ("per_stock", "per_stock_no_end")
-            and stock_id != ALL_MARKET_SENTINEL
-        ):
+        # 需要 data_id 的模式（per_stock 系列）
+        per_stock_modes = ("per_stock", "per_stock_no_end", "per_stock_fixed")
+        if api_config.param_mode in per_stock_modes and stock_id != ALL_MARKET_SENTINEL:
             params["data_id"] = stock_id
 
-        # 需要 end_date 的模式
-        if api_config.param_mode in ("per_stock", "all_market", "all_market_no_id"):
-            if end:
-                params["end_date"] = end
+        # 需要 end_date 的模式（per_stock_no_end 例外不送）
+        end_date_modes = ("per_stock", "per_stock_fixed", "all_market", "all_market_no_id")
+        if api_config.param_mode in end_date_modes and end:
+            params["end_date"] = end
 
         return params

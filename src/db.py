@@ -247,10 +247,11 @@ def _get_schema_ddl() -> list[str]:
         # 台股加權報酬指數
         """
         CREATE TABLE IF NOT EXISTS market_index_tw (
-            market  TEXT NOT NULL,
-            date    TEXT NOT NULL,
-            price   REAL,
-            PRIMARY KEY (market, date)
+            market    TEXT NOT NULL,
+            stock_id  TEXT NOT NULL,   -- 指數代碼：TAIEX（加權報酬指數）/ TPEx（櫃買報酬指數）
+            date      TEXT NOT NULL,
+            price     REAL,
+            PRIMARY KEY (market, stock_id, date)
         )
         """,
 

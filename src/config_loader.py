@@ -18,7 +18,13 @@ from typing import Any
 logger = logging.getLogger("collector.config_loader")
 
 # 合法的 param_mode 值
-VALID_PARAM_MODES = {"all_market", "per_stock", "per_stock_no_end", "all_market_no_id"}
+VALID_PARAM_MODES = {
+    "all_market",       # 不需 data_id；start_date (+ end_date)
+    "all_market_no_id", # 同上，語意明示「無 data_id」
+    "per_stock",        # data_id + start_date + end_date
+    "per_stock_no_end", # data_id + start_date（無 end_date）
+    "per_stock_fixed",  # 同 per_stock 但 data_id 來自 fixed_ids，不走 stock_list
+}
 
 # Phase 4 在 phase_executor 特殊處理，不使用 [[api]] 定義
 VALID_PHASES = {1, 2, 3, 5, 6}
@@ -46,9 +52,13 @@ class ApiConfig:
     field_rename: dict[str, str] = field(default_factory=dict)
     detail_fields: list[str] = field(default_factory=list)
     computed_fields: list[str] = field(default_factory=list)
+    # v1.4 後 fixed_ids 為主要欄位名；fixed_stock_ids 保留作 alias 供舊版讀取
+    fixed_ids: list[str] | None = None
     fixed_stock_ids: list[str] | None = None
     merge_strategy: str | None = None
     post_process: str | None = None
+    # 個別 API 可覆寫 global.backfill_start_date（例：減資資料 2020 起即可）
+    backfill_start_override: str | None = None
 
     # Phase E 新增：聚合策略與財報類型
     # aggregation：指定 aggregators.py 中的聚合策略
@@ -261,28 +271,39 @@ def _parse_execution(raw: dict) -> ExecutionConfig:
 
 
 def _parse_apis(api_list: list[dict]) -> list[ApiConfig]:
-    """將 [[api]] 陣列解析為 ApiConfig 清單"""
+    """
+    將 [[api]] 陣列解析為 ApiConfig 清單。
+
+    向後相容：fixed_ids 與 fixed_stock_ids 會互相填補，下游程式只看任一即可。
+    """
     results = []
     for entry in api_list:
+        # fixed_ids 是主要欄位名（v1.4+），fixed_stock_ids 是舊名（v1.2/v1.3）
+        fixed_ids       = entry.get("fixed_ids")
+        fixed_stock_ids = entry.get("fixed_stock_ids")
+        canonical_fixed = fixed_ids or fixed_stock_ids
+
         cfg = ApiConfig(
-            name          = entry["name"],
-            dataset       = entry["dataset"],
-            param_mode    = entry["param_mode"],
-            target_table  = entry["target_table"],
-            phase         = entry["phase"],
-            enabled       = entry.get("enabled", True),
-            is_backer     = entry.get("is_backer", False),
-            segment_days  = entry.get("segment_days", 0),
-            notes         = entry.get("notes", ""),
-            event_type    = entry.get("event_type"),
-            field_rename  = entry.get("field_rename", {}),
-            detail_fields = entry.get("detail_fields", []),
+            name             = entry["name"],
+            dataset          = entry["dataset"],
+            param_mode       = entry["param_mode"],
+            target_table     = entry["target_table"],
+            phase            = entry["phase"],
+            enabled          = entry.get("enabled", True),
+            is_backer        = entry.get("is_backer", False),
+            segment_days     = entry.get("segment_days", 0),
+            notes            = entry.get("notes", ""),
+            event_type       = entry.get("event_type"),
+            field_rename     = entry.get("field_rename", {}),
+            detail_fields    = entry.get("detail_fields", []),
             computed_fields  = entry.get("computed_fields", []),
-            fixed_stock_ids  = entry.get("fixed_stock_ids"),
+            fixed_ids        = canonical_fixed,
+            fixed_stock_ids  = canonical_fixed,
             merge_strategy   = entry.get("merge_strategy"),
             post_process     = entry.get("post_process"),
             aggregation      = entry.get("aggregation"),
             stmt_type        = entry.get("stmt_type"),
+            backfill_start_override = entry.get("backfill_start_override"),
         )
         results.append(cfg)
     return results
@@ -348,6 +369,12 @@ def _validate(config: CollectorConfig) -> None:
             errors.append(
                 f"規則6：{api.name} 的 segment_days={api.segment_days} 不合法，"
                 f"必須 >= 0"
+            )
+
+        # 規則 8：per_stock_fixed 必須有非空 fixed_ids
+        if api.param_mode == "per_stock_fixed" and not api.fixed_ids:
+            errors.append(
+                f"規則8：{api.name} 為 per_stock_fixed 但未提供 fixed_ids（或舊欄名 fixed_stock_ids）"
             )
 
         # 規則 7：field_rename value 以 _ 開頭者記錄（供 field_mapper 識別）

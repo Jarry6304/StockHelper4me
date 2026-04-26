@@ -1,60 +1,79 @@
 # =============================================================================
-# tw-stock-collector 主設定檔
-# 版本：v1.2
-# 說明：FinMind API 蒐集器的全域設定，包含 API Registry、Rate Limit、重試策略
+# tw-stock-collector / config / collector.toml — SUGGESTED v1.4
+#
+# 用途：依 FinMind 官方 Python SDK 原始碼（FinMind/data/data_loader.py +
+#       finmind_api.py）逐支 dataset 對齊，並對應 src/db.py 的 DB schema。
+#
+# 與 v1.3 主要差異：
+#   1. 移除 id_field 設定（v4 HTTP API 統一用 data_id；v1.3 引入此欄是錯誤的）
+#   2. 補回 v1.3 移除的 3 支 dataset：
+#        - TaiwanStockSplitPrice         → all_market_no_id
+#        - TaiwanStockParValueChange     → all_market_no_id
+#        - TaiwanStockPriceLimit         → per_stock
+#   3. 補回所有 field_rename / detail_fields / aggregation
+#      （v1.3 多支 API 直接拿掉這些欄位，DB upsert PRAGMA 過濾後資料會靜默掉）
+#   4. token 維持空字串，請改用環境變數 FINMIND_TOKEN
+#
+# 已知細節：
+#   - day_trading 表的 day_trading_buy/sell 語意為「買進/賣出金額」（API 的
+#     BuyAmount/SellAmount），而非「買進筆數/賣出筆數」。SDK 文件確認：
+#       BuyAfterSale (str) = 可否當沖旗標（不是買進筆數）
+#       Volume (int)        = 成交量（不是賣出筆數）
+#     v1.2 的映射 BuyAfterSale→day_trading_buy 語意錯，本檔改為映射金額。
+#   - 財報三表（TaiwanStockFinancialStatements / BalanceSheet / CashFlowsStatement）
+#     的 date 欄位是「會計期間結束日」而非「公告日」。因此 incremental 模式
+#     會以較長 lookback 重新查詢（在 phase_executor 中處理），確保抓到新公告的
+#     上一季財報。
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# 全域設定
-# -----------------------------------------------------------------------------
 [global]
-db_path     = "data/tw_stock.db"      # SQLite 資料庫路徑
-log_dir     = "logs"                  # 日誌目錄
-log_level   = "INFO"                  # DEBUG | INFO | WARNING | ERROR
-token       = ""                      # FinMind API Token（必填）
-backfill_start_date = "2019-01-01"    # 歷史回補起始日
-rust_binary_path = "rust_compute/target/release/tw_stock_compute"  # Rust binary 路徑
+db_path             = "data/tw_stock.db"
+log_dir             = "logs"
+log_level           = "INFO"
+token               = ""                                  # 必填，建議改用環境變數 FINMIND_TOKEN
+backfill_start_date = "2019-01-01"
+rust_binary_path    = "rust_compute/target/release/tw_stock_compute"
 
-# Rate Limit 設定（Backer 方案：1,600 次/小時）
 [global.rate_limit]
-calls_per_hour   = 1600     # 帳號級別上限
-burst_size       = 5        # 允許連續快速發送的最大次數（burst）
-cooldown_on_429_sec = 120   # 收到 HTTP 429 後冷卻秒數
-min_interval_ms  = 2250     # 兩次呼叫最小間隔 ms（= 3600/1600*1000）
+calls_per_hour      = 1600
+burst_size          = 5
+cooldown_on_429_sec = 120
+min_interval_ms     = 2250
 
-# 重試策略
 [global.retry]
-max_attempts     = 3        # 單次 API call 最大重試次數
-backoff_base_sec = 5        # 指數退避基底秒數（5, 10, 20...）
-backoff_max_sec  = 60       # 退避上限秒數
-retry_on_status  = [429, 500, 502, 503, 504]  # 觸發重試的 HTTP status code
+max_attempts     = 3
+backoff_base_sec = 5
+backoff_max_sec  = 60
+retry_on_status  = [429, 500, 502, 503, 504]
 
-# -----------------------------------------------------------------------------
-# 執行模式
-# -----------------------------------------------------------------------------
 [execution]
-mode = "backfill"    # "backfill"（全量回補）| "incremental"（增量同步）
+mode = "backfill"
 
 [execution.backfill]
-start_date = "2019-01-01"         # 覆蓋 global.backfill_start_date（可選）
-phases     = [1, 2, 3, 4, 5, 6]  # 指定要跑的 Phase（可部分跑）
-resume     = true                 # 從上次中斷處繼續（斷點續傳）
+start_date = "2019-01-01"
+phases     = [1, 2, 3, 4, 5, 6]
+resume     = true
 
 [execution.incremental]
-phases = [1, 2, 3, 4, 5, 6]      # incremental 模式自動從 last_sync+1 起算
+phases = [1, 2, 3, 4, 5, 6]
 
 # =============================================================================
 # API Registry
-# =============================================================================
-# 參數模式說明：
-#   "all_market"         → 只需 dataset + start_date (+ end_date)
-#   "per_stock"          → 需 dataset + data_id + start_date + end_date
-#   "per_stock_no_end"   → 需 dataset + data_id + start_date（無 end_date）
-#   "all_market_no_id"   → 需 dataset + start_date + end_date（無 data_id）
+#
+# param_mode 一覽：
+#   "all_market"        → dataset (+ start_date/end_date)，無 id 參數
+#   "all_market_no_id"  → dataset + start_date + end_date，無 data_id（語意同上）
+#   "per_stock"         → dataset + data_id + start_date + end_date
+#   "per_stock_no_end"  → dataset + data_id + start_date（無 end_date）
+#   "per_stock_fixed"   → 同 per_stock 但 data_id 來自 fixed_ids，不走 stock_list
+#
+# ⚠️ 重要：v4 HTTP API 一律使用 data_id 作為股票識別參數。
+#         FinMind Python SDK 的 stock_id 函式參數會被內部映射到 data_id。
+#         本 toml 不再使用 id_field 欄位。
 # =============================================================================
 
 # =============================================================================
-# Phase 1：META（免費，全市場）
+# Phase 1：META（全市場基礎資料）
 # =============================================================================
 
 [[api]]
@@ -65,12 +84,9 @@ target_table = "stock_info"
 phase        = 1
 enabled      = true
 is_backer    = false
-segment_days = 0          # 0 = 不分段，一次拉全部
-# API 回傳欄位：stock_id, stock_name, type, industry_category
-# type → market_type（上市/上櫃/興櫃）；industry_category → industry（產業別）
+segment_days = 0
 field_rename = {"type" = "market_type", "industry_category" = "industry"}
-detail_fields = []
-notes        = "上市上櫃股票基本資料"
+notes        = "上市上櫃股票基本資料；API 回傳 type/industry_category 需 rename"
 
 [[api]]
 name           = "stock_delisting"
@@ -81,8 +97,9 @@ phase          = 1
 enabled        = true
 is_backer      = false
 segment_days   = 0
-merge_strategy = "update_delist_date"   # 特殊策略：只更新 stock_info.delist_date
-notes          = "下市櫃清單，合併寫入 stock_info"
+backfill_start_override = "2022-01-01"
+merge_strategy = "update_delist_date"
+notes          = "下市櫃清單，合併寫入 stock_info.delist_date"
 
 [[api]]
 name         = "trading_calendar"
@@ -93,18 +110,20 @@ phase        = 1
 enabled      = true
 is_backer    = false
 segment_days = 0
-notes        = "交易日曆"
+notes        = "交易日曆；API 只回 date 欄位"
 
 [[api]]
 name         = "market_index_tw"
 dataset      = "TaiwanStockTotalReturnIndex"
-param_mode   = "all_market"
+param_mode   = "per_stock_fixed"
 target_table = "market_index_tw"
 phase        = 1
 enabled      = true
 is_backer    = false
 segment_days = 365
-notes        = "加權報酬指數"
+fixed_ids    = ["TAIEX", "TPEx"]
+notes        = "加權報酬指數（TAIEX）+ 櫃買報酬指數（TPEx）"
+# API 回傳 (date, stock_id, price)；DB schema PK 已更新為 (market, stock_id, date)
 
 # =============================================================================
 # Phase 2：EVENTS（除權息 / 減資 / 分割 / 面額變更）
@@ -119,11 +138,12 @@ phase        = 2
 enabled      = true
 is_backer    = true
 segment_days = 0
+backfill_start_override = "2022-01-01"
 event_type   = "dividend"
 field_rename = {"stock_or_cache_dividend" = "_event_subtype", "stock_and_cache_dividend" = "_combined_dividend", "max_price" = "_max_price", "min_price" = "_min_price", "open_price" = "_open_price"}
 detail_fields    = ["_event_subtype", "_combined_dividend", "_max_price", "_min_price", "_open_price"]
 computed_fields  = ["adjustment_factor", "volume_factor", "cash_dividend", "stock_dividend"]
-notes        = "除權息結果 → price_adjustment_events (event_type=dividend)"
+notes        = "除權息結果。API 直接 column: before_price/after_price/reference_price 已對齊 DB"
 
 [[api]]
 name         = "dividend_policy"
@@ -135,7 +155,7 @@ enabled      = true
 is_backer    = true
 segment_days = 0
 post_process = "dividend_policy_merge"
-notes        = "股利政策表；用於拆分「權息」混合事件 + 偵測純現增事件；非直接入庫"
+notes        = "股利政策；非直接入庫，post_process 拆權息事件 + 偵測純現增"
 
 [[api]]
 name         = "capital_reduction"
@@ -144,28 +164,29 @@ param_mode   = "per_stock"
 target_table = "price_adjustment_events"
 phase        = 2
 enabled      = true
-is_backer    = false
+is_backer    = true
 segment_days = 0
+backfill_start_override = "2020-01-01"
 event_type   = "capital_reduction"
 field_rename = {"ClosingPriceonTheLastTradingDay" = "before_price", "PostReductionReferencePrice" = "after_price", "OpeningReferencePrice" = "reference_price", "ReasonforCapitalReduction" = "_reason", "LimitUp" = "_limit_up", "LimitDown" = "_limit_down", "ExrightReferencePrice" = "_exright_ref"}
-detail_fields   = ["_reason", "_limit_up", "_limit_down", "_exright_ref"]
-computed_fields = ["adjustment_factor", "volume_factor"]
-notes       = "減資參考價"
+detail_fields    = ["_reason", "_limit_up", "_limit_down", "_exright_ref"]
+computed_fields  = ["adjustment_factor", "volume_factor"]
+notes        = "減資參考價"
 
 [[api]]
 name         = "split_price"
 dataset      = "TaiwanStockSplitPrice"
-param_mode   = "per_stock"
+param_mode   = "all_market_no_id"
 target_table = "price_adjustment_events"
 phase        = 2
 enabled      = true
 is_backer    = false
-segment_days = 0
+segment_days = 365
 event_type   = "split"
 field_rename = {"open_price" = "reference_price", "type" = "_split_type", "max_price" = "_max_price", "min_price" = "_min_price"}
-detail_fields   = ["_split_type", "_max_price", "_min_price"]
-computed_fields = ["adjustment_factor", "volume_factor"]
-notes       = "分割參考價"
+detail_fields    = ["_split_type", "_max_price", "_min_price"]
+computed_fields  = ["adjustment_factor", "volume_factor"]
+notes        = "分割參考價；API 回 (date, stock_id, type, before_price, after_price, max_price, min_price, open_price)；無需 data_id"
 
 [[api]]
 name         = "par_value_change"
@@ -175,15 +196,15 @@ target_table = "price_adjustment_events"
 phase        = 2
 enabled      = true
 is_backer    = false
-segment_days = 0
+segment_days = 365
 event_type   = "par_value_change"
 field_rename = {"before_close" = "before_price", "after_ref_close" = "after_price", "after_ref_open" = "reference_price", "after_ref_max" = "_limit_up", "after_ref_min" = "_limit_down", "stock_name" = "_stock_name"}
-detail_fields   = ["_limit_up", "_limit_down", "_stock_name"]
-computed_fields = ["adjustment_factor", "volume_factor"]
-notes       = "面額變更；⚠️ 無 data_id 參數，全市場查詢"
+detail_fields    = ["_limit_up", "_limit_down", "_stock_name"]
+computed_fields  = ["adjustment_factor", "volume_factor"]
+notes        = "面額變更；無需 data_id"
 
 # =============================================================================
-# Phase 3：RAW PRICE（日K 原始價格）
+# Phase 3：RAW PRICE（日K + 漲跌停）
 # =============================================================================
 
 [[api]]
@@ -194,8 +215,10 @@ target_table = "price_daily"
 phase        = 3
 enabled      = true
 is_backer    = true
-segment_days = 365    # 每次拉一年，避免 response 過大
-notes        = "日K 原始價格，歷史回補量最大的 API"
+segment_days = 365
+field_rename = {"max" = "high", "min" = "low", "Trading_Volume" = "volume", "Trading_turnover" = "turnover", "Trading_money" = "_trading_money", "spread" = "_spread"}
+detail_fields = ["_trading_money", "_spread"]
+notes        = "日K 原始價格。⚠️ v1.2/v1.3 缺 field_rename，max/min/Trading_Volume 會被 PRAGMA 過濾掉"
 
 [[api]]
 name         = "price_limit"
@@ -206,13 +229,16 @@ phase        = 3
 enabled      = true
 is_backer    = true
 segment_days = 365
-notes        = "漲跌停價格"
-
-# Phase 4：RUST 計算（非 API，由 phase_executor 特殊處理）
-# 不定義 [[api]] entry，見 rust_bridge.py
+field_rename = {"reference_price" = "_reference_price"}
+detail_fields = ["_reference_price"]
+notes        = "漲跌停價；limit_up/limit_down 已對齊 DB，reference_price 進 detail"
 
 # =============================================================================
-# Phase 5：CHIP / FUNDAMENTAL（籌碼 & 基本面）
+# Phase 4：RUST 計算（不定義 [[api]] entry）
+# =============================================================================
+
+# =============================================================================
+# Phase 5：CHIP / FUNDAMENTAL
 # =============================================================================
 
 [[api]]
@@ -224,11 +250,9 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-# API 回傳每日 3 筆（外資/投信/自營商），需 pivot 為 1 筆
-# field_rename 為空：name/buy/sell 欄位由 aggregators.pivot_institutional 處理
-field_rename  = {}
-aggregation   = "pivot_institutional"
-notes         = "三大法人買賣超（每日3筆 pivot → 1筆）"
+field_rename = {}
+aggregation  = "pivot_institutional"
+notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營），需 pivot 為 1 列"
 
 [[api]]
 name         = "margin_daily"
@@ -239,14 +263,9 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-# 融資：MarginPurchaseBuy/Sell/TodayBalance → margin_purchase/sell/balance
-# 融券：ShortSaleBuy/Sell/TodayBalance → short_sale/cover/balance
-# 其他欄位導入 detail JSON
 field_rename = {"MarginPurchaseBuy" = "margin_purchase", "MarginPurchaseSell" = "margin_sell", "MarginPurchaseTodayBalance" = "margin_balance", "ShortSaleBuy" = "short_sale", "ShortSaleSell" = "short_cover", "ShortSaleTodayBalance" = "short_balance", "MarginPurchaseCashRepayment" = "_margin_cash_repay", "MarginPurchaseYesterdayBalance" = "_margin_prev_balance", "MarginPurchaseLimit" = "_margin_limit", "ShortSaleCashRepayment" = "_short_cash_repay", "ShortSaleYesterdayBalance" = "_short_prev_balance", "ShortSaleLimit" = "_short_limit", "OffsetLoanAndShort" = "_offset_loan_short", "Note" = "_note"}
-detail_fields = ["_margin_cash_repay", "_margin_prev_balance", "_margin_limit",
-                 "_short_cash_repay", "_short_prev_balance", "_short_limit",
-                 "_offset_loan_short", "_note"]
-notes = "融資融券"
+detail_fields = ["_margin_cash_repay", "_margin_prev_balance", "_margin_limit", "_short_cash_repay", "_short_prev_balance", "_short_limit", "_offset_loan_short", "_note"]
+notes        = "融資融券；16 個 API 欄位 → 6 個直存 + 8 個入 detail JSON"
 
 [[api]]
 name         = "foreign_holding"
@@ -257,14 +276,9 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-# ForeignInvestmentShares → foreign_holding_shares（張數）
-# ForeignInvestmentSharesRatio → foreign_holding_ratio（比率 %）
-# 其他輔助欄位導入 detail JSON
 field_rename = {"ForeignInvestmentShares" = "foreign_holding_shares", "ForeignInvestmentSharesRatio" = "foreign_holding_ratio", "ForeignInvestmentRemainingShares" = "_remaining_shares", "ForeignInvestmentRemainRatio" = "_remain_ratio", "ForeignInvestmentUpperLimitRatio" = "_upper_limit_ratio", "ChineseInvestmentUpperLimitRatio" = "_cn_upper_limit", "NumberOfSharesIssued" = "_total_issued", "RecentlyDeclareDate" = "_declare_date", "InternationalCode" = "_intl_code", "stock_name" = "_stock_name", "note" = "_note"}
-detail_fields = ["_remaining_shares", "_remain_ratio", "_upper_limit_ratio",
-                 "_cn_upper_limit", "_total_issued", "_declare_date",
-                 "_intl_code", "_stock_name", "_note"]
-notes = "外資持股"
+detail_fields = ["_remaining_shares", "_remain_ratio", "_upper_limit_ratio", "_cn_upper_limit", "_total_issued", "_declare_date", "_intl_code", "_stock_name", "_note"]
+notes        = "外資持股"
 
 [[api]]
 name         = "holding_shares_per"
@@ -275,11 +289,9 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-# API 回傳每日多筆（每個持股級距一筆），需 pack 成 1 筆 detail JSON
-# 欄位：date, stock_id, HoldingSharesLevel, people, percent, unit
-field_rename  = {}
-aggregation   = "pack_holding_shares"
-notes         = "股權分散表（每日多筆 pack → 1筆 detail JSON）"
+field_rename = {}
+aggregation  = "pack_holding_shares"
+notes        = "股權分散表；每日多筆級距 pack → 1 筆 detail JSON"
 
 [[api]]
 name         = "valuation_daily"
@@ -290,9 +302,8 @@ phase        = 5
 enabled      = true
 is_backer    = false
 segment_days = 365
-# 欄位：date, stock_id, dividend_yield, PER, PBR
 field_rename = {"PER" = "per", "PBR" = "pbr"}
-notes = "本益比 / 殖利率 / 淨值比"
+notes        = "本益比 / 殖利率 / 淨值比"
 
 [[api]]
 name         = "day_trading"
@@ -303,11 +314,9 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-# 欄位：stock_id, date, BuyAfterSale, Volume, BuyAmount, SellAmount
-# BuyAfterSale = 當沖買（先買後賣）
-field_rename = {"BuyAfterSale" = "day_trading_buy", "Volume" = "day_trading_sell", "BuyAmount" = "_buy_amount", "SellAmount" = "_sell_amount"}
-detail_fields = ["_buy_amount", "_sell_amount"]
-notes = "當沖資訊"
+field_rename = {"BuyAmount" = "day_trading_buy", "SellAmount" = "day_trading_sell", "BuyAfterSale" = "_day_trading_flag", "Volume" = "_volume"}
+detail_fields = ["_day_trading_flag", "_volume"]
+notes        = "當沖。⚠️ v1.2 把 BuyAfterSale→day_trading_buy 語意錯誤，本檔改為映射 BuyAmount/SellAmount"
 
 [[api]]
 name         = "index_weight"
@@ -318,11 +327,9 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
-# 欄位：rank, stock_id, stock_name, weight_per, date, type
-# weight_per = 指數權重（%），type = 指數類型（如 TWSE）
 field_rename = {"weight_per" = "weight", "rank" = "_rank", "stock_name" = "_stock_name", "type" = "_index_type"}
 detail_fields = ["_rank", "_stock_name", "_index_type"]
-notes = "指數成分權重"
+notes        = "指數成分權重"
 
 [[api]]
 name         = "monthly_revenue"
@@ -333,11 +340,9 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 0
-# 欄位：date, stock_id, country, revenue, revenue_month, revenue_year
-# revenue_month = 月增率（MoM），revenue_year = 年增率（YoY）
-field_rename = {"revenue_month" = "revenue_mom", "revenue_year" = "revenue_yoy", "country" = "_country"}
-detail_fields = ["_country"]
-notes = "月營收"
+field_rename = {"revenue_month" = "revenue_mom", "revenue_year" = "revenue_yoy", "country" = "_country", "create_time" = "_create_time"}
+detail_fields = ["_country", "_create_time"]
+notes        = "月營收"
 
 [[api]]
 name         = "financial_income"
@@ -348,12 +353,10 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 0
-# 欄位：date, stock_id, type（科目中文名）, value（金額）, origin_name（科目英文名）
-# 每日回傳多筆科目，需 pack 成 1 筆 detail JSON
-field_rename  = {}
-aggregation   = "pack_financial"
-stmt_type     = "income"
-notes         = "損益表（多筆科目 pack → 1筆 detail JSON）"
+field_rename = {}
+aggregation  = "pack_financial"
+stmt_type    = "income"
+notes        = "損益表（多筆科目 pack → 1 筆 detail JSON）"
 
 [[api]]
 name         = "financial_balance"
@@ -364,10 +367,10 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 0
-field_rename  = {}
-aggregation   = "pack_financial"
-stmt_type     = "balance"
-notes         = "資產負債表（多筆科目 pack → 1筆 detail JSON）"
+field_rename = {}
+aggregation  = "pack_financial"
+stmt_type    = "balance"
+notes        = "資產負債表"
 
 [[api]]
 name         = "financial_cashflow"
@@ -378,29 +381,28 @@ phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 0
-field_rename  = {}
-aggregation   = "pack_financial"
-stmt_type     = "cashflow"
-notes         = "現金流量表（多筆科目 pack → 1筆 detail JSON）"
+field_rename = {}
+aggregation  = "pack_financial"
+stmt_type    = "cashflow"
+notes        = "現金流量表"
 
 # =============================================================================
-# Phase 6：MACRO（總體指標，大多免費）
+# Phase 6：MACRO（總體指標）
 # =============================================================================
 
 [[api]]
-name             = "market_index_us"
-dataset          = "USStockPrice"
-param_mode       = "per_stock"
-target_table     = "market_index_us"
-phase            = 6
-enabled          = true
-is_backer        = false
-segment_days     = 365
-fixed_stock_ids  = ["SPY", "^VIX"]
-# 欄位：date, stock_id, open, max, min, close, Trading_Volume, Trading_money, spread
-field_rename = {"max" = "high", "min" = "low", "Trading_Volume" = "volume", "Trading_money" = "_trading_money", "spread" = "_spread"}
-detail_fields = ["_trading_money", "_spread"]
-notes = "美股指數 SPY / VIX"
+name         = "market_index_us"
+dataset      = "USStockPrice"
+param_mode   = "per_stock_fixed"
+target_table = "market_index_us"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+fixed_ids    = ["SPY", "^VIX"]
+field_rename = {"Open" = "open", "Close" = "close", "High" = "high", "Low" = "low", "Volume" = "volume", "Adj_Close" = "_adj_close"}
+detail_fields = ["_adj_close"]
+notes        = "美股指數 SPY / ^VIX；⚠️ v1.3 用 ^vix 小寫待驗，建議用 ^VIX 大寫"
 
 [[api]]
 name         = "exchange_rate"
@@ -411,11 +413,9 @@ phase        = 6
 enabled      = true
 is_backer    = false
 segment_days = 365
-# 欄位：date, currency, cash_buy, cash_sell, spot_buy, spot_sell
-# 以 spot_buy 作為主要 rate，其他存入 detail
 field_rename = {"spot_buy" = "rate", "cash_buy" = "_cash_buy", "cash_sell" = "_cash_sell", "spot_sell" = "_spot_sell"}
 detail_fields = ["_cash_buy", "_cash_sell", "_spot_sell"]
-notes = "台幣匯率（spot_buy 為主要 rate，其餘存 detail）"
+notes        = "台幣匯率；spot_buy 為主要 rate，其他存 detail"
 
 [[api]]
 name         = "institutional_market"
@@ -426,10 +426,9 @@ phase        = 6
 enabled      = true
 is_backer    = false
 segment_days = 365
-# 與 institutional_daily 相同格式，每日 3 筆，需 pivot
-field_rename  = {}
-aggregation   = "pivot_institutional_market"
-notes         = "全市場三大法人買賣超（每日3筆 pivot → 1筆）"
+field_rename = {}
+aggregation  = "pivot_institutional_market"
+notes        = "全市場三大法人；每日 3 列 pivot → 1 列"
 
 [[api]]
 name         = "market_margin"
@@ -440,9 +439,8 @@ phase        = 6
 enabled      = true
 is_backer    = true
 segment_days = 365
-# 欄位：date, TotalExchangeMarginMaintenance（整體市場融資維持率 %）
 field_rename = {"TotalExchangeMarginMaintenance" = "ratio"}
-notes = "整體市場融資維持率"
+notes        = "整體市場融資維持率"
 
 [[api]]
 name         = "fear_greed"
@@ -453,7 +451,5 @@ phase        = 6
 enabled      = true
 is_backer    = false
 segment_days = 365
-# 欄位未完全確認，推測有 date, score/index, label
-# 以 _schema_flexible 模式處理：未知欄位自動存入 detail
-field_rename = {}
-notes = "CNN 恐懼貪婪指數（欄位待執行時 schema validation 確認）"
+field_rename = {"fear_greed" = "score", "fear_greed_emotion" = "label"}
+notes        = "CNN 恐懼貪婪指數；實測欄位為 fear_greed / fear_greed_emotion"

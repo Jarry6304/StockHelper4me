@@ -10,6 +10,12 @@ date_segmenter.py
   segment_days = 0   → 單段 [(backfill_start, today)]
   segment_days = N   → 按 N 天切段（如 365 表示每次拉一年）
   incremental 模式   → 單段 [(last_sync+1, today)]
+
+特殊處理：
+  pack_financial 系列（財報三表）的 date 欄位是「會計期間結束日」而非「公告
+  日」，例如 2025-12-31 年報實際公告於 2026-03 月底。incremental 模式若直接
+  從 last_sync+1 起算會永遠抓不到新公告的舊期報表。對這類 API 我們把 start
+  往前推 INCREMENTAL_LOOKBACK_DAYS 天，確保涵蓋上一季尚未公告完的財報。
 """
 
 import logging
@@ -19,6 +25,10 @@ from config_loader import ApiConfig, CollectorConfig
 from sync_tracker import SyncTracker
 
 logger = logging.getLogger("collector.date_segmenter")
+
+# pack_financial 的 incremental 起始日往前回拉的天數
+# 120 天約涵蓋一個完整公告週期：上一季結束日 + 公告期限 + 緩衝
+INCREMENTAL_LOOKBACK_DAYS = 120
 
 
 class DateSegmenter:
@@ -60,6 +70,10 @@ class DateSegmenter:
         """
         today = date.today()
 
+        # 個別 API 可用 backfill_start_override 縮短回補範圍
+        # （例：減資資料 2020 起即可，免拉到 2019）
+        api_override = api_config.backfill_start_override
+
         # ── incremental 模式：從上次同步後一天起算，拉到今天
         if mode == "incremental":
             last_sync = None
@@ -69,14 +83,27 @@ class DateSegmenter:
             if last_sync:
                 start = last_sync + timedelta(days=1)
             else:
-                # 無同步記錄 → 從設定的 backfill 起始日開始
-                start = date.fromisoformat(self.config.global_cfg.backfill_start_date)
+                # 無同步記錄 → 用 API 個別 override，否則用 global backfill_start_date
+                start = date.fromisoformat(
+                    api_override or self.config.global_cfg.backfill_start_date
+                )
+
+            # pack_financial：date 是會計期間結束日，往前回拉確保抓到新公告的舊期報表
+            if api_config.aggregation == "pack_financial":
+                start = start - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)
+                logger.debug(
+                    f"[{api_config.name}] pack_financial lookback "
+                    f"-{INCREMENTAL_LOOKBACK_DAYS} 天 → 實際 start={start.isoformat()}"
+                )
 
             return [(start.isoformat(), today.isoformat())]
 
         # ── backfill 模式
+        # 優先順序：api.backfill_start_override > execution.start_date > global.backfill_start_date
         backfill_start = date.fromisoformat(
-            self.config.execution.start_date or self.config.global_cfg.backfill_start_date
+            api_override
+            or self.config.execution.start_date
+            or self.config.global_cfg.backfill_start_date
         )
 
         # segment_days = 0：不分段，一次拉全部

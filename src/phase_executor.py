@@ -283,9 +283,9 @@ class PhaseExecutor:
         """
         依 param_mode 決定要迭代的股票清單。
 
-        all_market / all_market_no_id → ["__ALL__"]（sentinel）
-        fixed_stock_ids               → 使用固定清單（如 SPY, ^VIX）
-        per_stock / per_stock_no_end  → 使用動態股票清單
+        all_market / all_market_no_id → ["__ALL__"]（sentinel，不送 data_id）
+        per_stock_fixed               → 使用 fixed_ids（如 SPY, ^VIX, TAIEX）
+        per_stock / per_stock_no_end  → 優先 fixed_ids，否則動態股票清單
 
         Args:
             api_config: API 設定
@@ -296,8 +296,20 @@ class PhaseExecutor:
         if api_config.param_mode in ("all_market", "all_market_no_id"):
             return [ALL_MARKET_SENTINEL]
 
-        if api_config.fixed_stock_ids:
-            return api_config.fixed_stock_ids
+        # fixed_ids 為主要欄位名，fixed_stock_ids 為舊版相容
+        fixed = api_config.fixed_ids or api_config.fixed_stock_ids
+
+        if api_config.param_mode == "per_stock_fixed":
+            if not fixed:
+                logger.warning(
+                    f"[{api_config.name}] per_stock_fixed 但無 fixed_ids，跳過此 API"
+                )
+                return []
+            return fixed
+
+        # per_stock / per_stock_no_end：先看 fixed_ids（如 v1.2 用法），否則動態清單
+        if fixed:
+            return fixed
 
         return self._stock_list
 
