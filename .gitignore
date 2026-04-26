@@ -212,3 +212,4 @@ data/*.db-wal
 data/*.db-shm
 logs/
 rust_compute/target/
+scripts/test_28_apis_result.json
