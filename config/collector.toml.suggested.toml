@@ -1,0 +1,454 @@
+# =============================================================================
+# tw-stock-collector / config / collector.toml — SUGGESTED v1.4
+#
+# 用途：依 FinMind 官方 Python SDK 原始碼（FinMind/data/data_loader.py +
+#       finmind_api.py）逐支 dataset 對齊，並對應 src/db.py 的 DB schema。
+#
+# 與 v1.3 主要差異：
+#   1. 移除 id_field 設定（v4 HTTP API 統一用 data_id；v1.3 引入此欄是錯誤的）
+#   2. 補回 v1.3 移除的 3 支 dataset：
+#        - TaiwanStockSplitPrice         → all_market_no_id
+#        - TaiwanStockParValueChange     → all_market_no_id
+#        - TaiwanStockPriceLimit         → per_stock
+#   3. 補回所有 field_rename / detail_fields / aggregation
+#      （v1.3 多支 API 直接拿掉這些欄位，DB upsert PRAGMA 過濾後資料會靜默掉）
+#   4. token 維持空字串，請改用環境變數 FINMIND_TOKEN
+#
+# ⚠️ 已知 schema 限制（不在本檔修正，需動 db.py）：
+#   - market_index_tw 表 PK 為 (market, date)，無 stock_id 欄位。
+#     若同時跑 fixed_ids = ["TAIEX", "TPEx"] 兩個會在 PK 衝突。
+#     目前先只跑 TAIEX；若要跑兩個指數需先擴 schema 加 stock_id 欄位。
+#   - day_trading 表的 day_trading_buy/sell 語意實為「買進/賣出金額」（API 的
+#     BuyAmount/SellAmount），而非「買進筆數/賣出筆數」。SDK 文件確認：
+#       BuyAfterSale (str) = 可否當沖旗標（不是買進筆數）
+#       Volume (int)        = 成交量（不是賣出筆數）
+#     v1.2 的映射 BuyAfterSale→day_trading_buy 語意錯，本檔改為映射金額。
+# =============================================================================
+
+[global]
+db_path             = "data/tw_stock.db"
+log_dir             = "logs"
+log_level           = "INFO"
+token               = ""                                  # 必填，建議改用環境變數 FINMIND_TOKEN
+backfill_start_date = "2019-01-01"
+rust_binary_path    = "rust_compute/target/release/tw_stock_compute"
+
+[global.rate_limit]
+calls_per_hour      = 1600
+burst_size          = 5
+cooldown_on_429_sec = 120
+min_interval_ms     = 2250
+
+[global.retry]
+max_attempts     = 3
+backoff_base_sec = 5
+backoff_max_sec  = 60
+retry_on_status  = [429, 500, 502, 503, 504]
+
+[execution]
+mode = "backfill"
+
+[execution.backfill]
+start_date = "2019-01-01"
+phases     = [1, 2, 3, 4, 5, 6]
+resume     = true
+
+[execution.incremental]
+phases = [1, 2, 3, 4, 5, 6]
+
+# =============================================================================
+# API Registry
+#
+# param_mode 一覽：
+#   "all_market"        → dataset (+ start_date/end_date)，無 id 參數
+#   "all_market_no_id"  → dataset + start_date + end_date，無 data_id（語意同上）
+#   "per_stock"         → dataset + data_id + start_date + end_date
+#   "per_stock_no_end"  → dataset + data_id + start_date（無 end_date）
+#   "per_stock_fixed"   → 同 per_stock 但 data_id 來自 fixed_ids，不走 stock_list
+#
+# ⚠️ 重要：v4 HTTP API 一律使用 data_id 作為股票識別參數。
+#         FinMind Python SDK 的 stock_id 函式參數會被內部映射到 data_id。
+#         本 toml 不再使用 id_field 欄位。
+# =============================================================================
+
+# =============================================================================
+# Phase 1：META（全市場基礎資料）
+# =============================================================================
+
+[[api]]
+name         = "stock_info"
+dataset      = "TaiwanStockInfo"
+param_mode   = "all_market"
+target_table = "stock_info"
+phase        = 1
+enabled      = true
+is_backer    = false
+segment_days = 0
+field_rename = {"type" = "market_type", "industry_category" = "industry"}
+notes        = "上市上櫃股票基本資料；API 回傳 type/industry_category 需 rename"
+
+[[api]]
+name           = "stock_delisting"
+dataset        = "TaiwanStockDelisting"
+param_mode     = "all_market"
+target_table   = "stock_info"
+phase          = 1
+enabled        = true
+is_backer      = false
+segment_days   = 0
+backfill_start_override = "2022-01-01"
+merge_strategy = "update_delist_date"
+notes          = "下市櫃清單，合併寫入 stock_info.delist_date"
+
+[[api]]
+name         = "trading_calendar"
+dataset      = "TaiwanStockTradingDate"
+param_mode   = "all_market"
+target_table = "trading_calendar"
+phase        = 1
+enabled      = true
+is_backer    = false
+segment_days = 0
+notes        = "交易日曆；API 只回 date 欄位"
+
+[[api]]
+name         = "market_index_tw"
+dataset      = "TaiwanStockTotalReturnIndex"
+param_mode   = "per_stock_fixed"
+target_table = "market_index_tw"
+phase        = 1
+enabled      = true
+is_backer    = false
+segment_days = 365
+fixed_ids    = ["TAIEX"]
+notes        = "加權報酬指數；TPEx 需 schema 加 stock_id 欄位後才能加入 fixed_ids"
+# API 回傳 (date, stock_id, price)；DB 目前 PK(market, date) 不含 stock_id
+
+# =============================================================================
+# Phase 2：EVENTS（除權息 / 減資 / 分割 / 面額變更）
+# =============================================================================
+
+[[api]]
+name         = "dividend_result"
+dataset      = "TaiwanStockDividendResult"
+param_mode   = "per_stock"
+target_table = "price_adjustment_events"
+phase        = 2
+enabled      = true
+is_backer    = true
+segment_days = 0
+backfill_start_override = "2022-01-01"
+event_type   = "dividend"
+field_rename = {"stock_or_cache_dividend" = "_event_subtype", "stock_and_cache_dividend" = "_combined_dividend", "max_price" = "_max_price", "min_price" = "_min_price", "open_price" = "_open_price"}
+detail_fields    = ["_event_subtype", "_combined_dividend", "_max_price", "_min_price", "_open_price"]
+computed_fields  = ["adjustment_factor", "volume_factor", "cash_dividend", "stock_dividend"]
+notes        = "除權息結果。API 直接 column: before_price/after_price/reference_price 已對齊 DB"
+
+[[api]]
+name         = "dividend_policy"
+dataset      = "TaiwanStockDividend"
+param_mode   = "per_stock_no_end"
+target_table = "_dividend_policy_staging"
+phase        = 2
+enabled      = true
+is_backer    = true
+segment_days = 0
+post_process = "dividend_policy_merge"
+notes        = "股利政策；非直接入庫，post_process 拆權息事件 + 偵測純現增"
+
+[[api]]
+name         = "capital_reduction"
+dataset      = "TaiwanStockCapitalReductionReferencePrice"
+param_mode   = "per_stock"
+target_table = "price_adjustment_events"
+phase        = 2
+enabled      = true
+is_backer    = true
+segment_days = 0
+backfill_start_override = "2020-01-01"
+event_type   = "capital_reduction"
+field_rename = {"ClosingPriceonTheLastTradingDay" = "before_price", "PostReductionReferencePrice" = "after_price", "OpeningReferencePrice" = "reference_price", "ReasonforCapitalReduction" = "_reason", "LimitUp" = "_limit_up", "LimitDown" = "_limit_down", "ExrightReferencePrice" = "_exright_ref"}
+detail_fields    = ["_reason", "_limit_up", "_limit_down", "_exright_ref"]
+computed_fields  = ["adjustment_factor", "volume_factor"]
+notes        = "減資參考價"
+
+[[api]]
+name         = "split_price"
+dataset      = "TaiwanStockSplitPrice"
+param_mode   = "all_market_no_id"
+target_table = "price_adjustment_events"
+phase        = 2
+enabled      = true
+is_backer    = false
+segment_days = 365
+event_type   = "split"
+field_rename = {"open_price" = "reference_price", "type" = "_split_type", "max_price" = "_max_price", "min_price" = "_min_price"}
+detail_fields    = ["_split_type", "_max_price", "_min_price"]
+computed_fields  = ["adjustment_factor", "volume_factor"]
+notes        = "分割參考價；API 回 (date, stock_id, type, before_price, after_price, max_price, min_price, open_price)；無需 data_id"
+
+[[api]]
+name         = "par_value_change"
+dataset      = "TaiwanStockParValueChange"
+param_mode   = "all_market_no_id"
+target_table = "price_adjustment_events"
+phase        = 2
+enabled      = true
+is_backer    = false
+segment_days = 365
+event_type   = "par_value_change"
+field_rename = {"before_close" = "before_price", "after_ref_close" = "after_price", "after_ref_open" = "reference_price", "after_ref_max" = "_limit_up", "after_ref_min" = "_limit_down", "stock_name" = "_stock_name"}
+detail_fields    = ["_limit_up", "_limit_down", "_stock_name"]
+computed_fields  = ["adjustment_factor", "volume_factor"]
+notes        = "面額變更；無需 data_id"
+
+# =============================================================================
+# Phase 3：RAW PRICE（日K + 漲跌停）
+# =============================================================================
+
+[[api]]
+name         = "price_daily"
+dataset      = "TaiwanStockPrice"
+param_mode   = "per_stock"
+target_table = "price_daily"
+phase        = 3
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {"max" = "high", "min" = "low", "Trading_Volume" = "volume", "Trading_turnover" = "turnover", "Trading_money" = "_trading_money", "spread" = "_spread"}
+detail_fields = ["_trading_money", "_spread"]
+notes        = "日K 原始價格。⚠️ v1.2/v1.3 缺 field_rename，max/min/Trading_Volume 會被 PRAGMA 過濾掉"
+
+[[api]]
+name         = "price_limit"
+dataset      = "TaiwanStockPriceLimit"
+param_mode   = "per_stock"
+target_table = "price_limit"
+phase        = 3
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {"reference_price" = "_reference_price"}
+detail_fields = ["_reference_price"]
+notes        = "漲跌停價；limit_up/limit_down 已對齊 DB，reference_price 進 detail"
+
+# =============================================================================
+# Phase 4：RUST 計算（不定義 [[api]] entry）
+# =============================================================================
+
+# =============================================================================
+# Phase 5：CHIP / FUNDAMENTAL
+# =============================================================================
+
+[[api]]
+name         = "institutional_daily"
+dataset      = "TaiwanStockInstitutionalInvestorsBuySell"
+param_mode   = "per_stock"
+target_table = "institutional_daily"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {}
+aggregation  = "pivot_institutional"
+notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營），需 pivot 為 1 列"
+
+[[api]]
+name         = "margin_daily"
+dataset      = "TaiwanStockMarginPurchaseShortSale"
+param_mode   = "per_stock"
+target_table = "margin_daily"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {"MarginPurchaseBuy" = "margin_purchase", "MarginPurchaseSell" = "margin_sell", "MarginPurchaseTodayBalance" = "margin_balance", "ShortSaleBuy" = "short_sale", "ShortSaleSell" = "short_cover", "ShortSaleTodayBalance" = "short_balance", "MarginPurchaseCashRepayment" = "_margin_cash_repay", "MarginPurchaseYesterdayBalance" = "_margin_prev_balance", "MarginPurchaseLimit" = "_margin_limit", "ShortSaleCashRepayment" = "_short_cash_repay", "ShortSaleYesterdayBalance" = "_short_prev_balance", "ShortSaleLimit" = "_short_limit", "OffsetLoanAndShort" = "_offset_loan_short", "Note" = "_note"}
+detail_fields = ["_margin_cash_repay", "_margin_prev_balance", "_margin_limit", "_short_cash_repay", "_short_prev_balance", "_short_limit", "_offset_loan_short", "_note"]
+notes        = "融資融券；16 個 API 欄位 → 6 個直存 + 8 個入 detail JSON"
+
+[[api]]
+name         = "foreign_holding"
+dataset      = "TaiwanStockShareholding"
+param_mode   = "per_stock"
+target_table = "foreign_holding"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {"ForeignInvestmentShares" = "foreign_holding_shares", "ForeignInvestmentSharesRatio" = "foreign_holding_ratio", "ForeignInvestmentRemainingShares" = "_remaining_shares", "ForeignInvestmentRemainRatio" = "_remain_ratio", "ForeignInvestmentUpperLimitRatio" = "_upper_limit_ratio", "ChineseInvestmentUpperLimitRatio" = "_cn_upper_limit", "NumberOfSharesIssued" = "_total_issued", "RecentlyDeclareDate" = "_declare_date", "InternationalCode" = "_intl_code", "stock_name" = "_stock_name", "note" = "_note"}
+detail_fields = ["_remaining_shares", "_remain_ratio", "_upper_limit_ratio", "_cn_upper_limit", "_total_issued", "_declare_date", "_intl_code", "_stock_name", "_note"]
+notes        = "外資持股"
+
+[[api]]
+name         = "holding_shares_per"
+dataset      = "TaiwanStockHoldingSharesPer"
+param_mode   = "per_stock"
+target_table = "holding_shares_per"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {}
+aggregation  = "pack_holding_shares"
+notes        = "股權分散表；每日多筆級距 pack → 1 筆 detail JSON"
+
+[[api]]
+name         = "valuation_daily"
+dataset      = "TaiwanStockPER"
+param_mode   = "per_stock"
+target_table = "valuation_daily"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"PER" = "per", "PBR" = "pbr"}
+notes        = "本益比 / 殖利率 / 淨值比"
+
+[[api]]
+name         = "day_trading"
+dataset      = "TaiwanStockDayTrading"
+param_mode   = "per_stock"
+target_table = "day_trading"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {"BuyAmount" = "day_trading_buy", "SellAmount" = "day_trading_sell", "BuyAfterSale" = "_day_trading_flag", "Volume" = "_volume"}
+detail_fields = ["_day_trading_flag", "_volume"]
+notes        = "當沖。⚠️ v1.2 把 BuyAfterSale→day_trading_buy 語意錯誤，本檔改為映射 BuyAmount/SellAmount"
+
+[[api]]
+name         = "index_weight"
+dataset      = "TaiwanStockMarketValueWeight"
+param_mode   = "per_stock"
+target_table = "index_weight_daily"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {"weight_per" = "weight", "rank" = "_rank", "stock_name" = "_stock_name", "type" = "_index_type"}
+detail_fields = ["_rank", "_stock_name", "_index_type"]
+notes        = "指數成分權重"
+
+[[api]]
+name         = "monthly_revenue"
+dataset      = "TaiwanStockMonthRevenue"
+param_mode   = "per_stock"
+target_table = "monthly_revenue"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 0
+field_rename = {"revenue_month" = "revenue_mom", "revenue_year" = "revenue_yoy", "country" = "_country", "create_time" = "_create_time"}
+detail_fields = ["_country", "_create_time"]
+notes        = "月營收"
+
+[[api]]
+name         = "financial_income"
+dataset      = "TaiwanStockFinancialStatements"
+param_mode   = "per_stock"
+target_table = "financial_statement"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 0
+field_rename = {}
+aggregation  = "pack_financial"
+stmt_type    = "income"
+notes        = "損益表（多筆科目 pack → 1 筆 detail JSON）"
+
+[[api]]
+name         = "financial_balance"
+dataset      = "TaiwanStockBalanceSheet"
+param_mode   = "per_stock"
+target_table = "financial_statement"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 0
+field_rename = {}
+aggregation  = "pack_financial"
+stmt_type    = "balance"
+notes        = "資產負債表"
+
+[[api]]
+name         = "financial_cashflow"
+dataset      = "TaiwanStockCashFlowsStatement"
+param_mode   = "per_stock"
+target_table = "financial_statement"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 0
+field_rename = {}
+aggregation  = "pack_financial"
+stmt_type    = "cashflow"
+notes        = "現金流量表"
+
+# =============================================================================
+# Phase 6：MACRO（總體指標）
+# =============================================================================
+
+[[api]]
+name         = "market_index_us"
+dataset      = "USStockPrice"
+param_mode   = "per_stock_fixed"
+target_table = "market_index_us"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+fixed_ids    = ["SPY", "^VIX"]
+field_rename = {"Open" = "open", "Close" = "close", "High" = "high", "Low" = "low", "Volume" = "volume", "Adj_Close" = "_adj_close"}
+detail_fields = ["_adj_close"]
+notes        = "美股指數 SPY / ^VIX；⚠️ v1.3 用 ^vix 小寫待驗，建議用 ^VIX 大寫"
+
+[[api]]
+name         = "exchange_rate"
+dataset      = "TaiwanExchangeRate"
+param_mode   = "all_market"
+target_table = "exchange_rate"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"spot_buy" = "rate", "cash_buy" = "_cash_buy", "cash_sell" = "_cash_sell", "spot_sell" = "_spot_sell"}
+detail_fields = ["_cash_buy", "_cash_sell", "_spot_sell"]
+notes        = "台幣匯率；spot_buy 為主要 rate，其他存 detail"
+
+[[api]]
+name         = "institutional_market"
+dataset      = "TaiwanStockTotalInstitutionalInvestors"
+param_mode   = "all_market"
+target_table = "institutional_market_daily"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {}
+aggregation  = "pivot_institutional_market"
+notes        = "全市場三大法人；每日 3 列 pivot → 1 列"
+
+[[api]]
+name         = "market_margin"
+dataset      = "TaiwanTotalExchangeMarginMaintenance"
+param_mode   = "all_market"
+target_table = "market_margin_maintenance"
+phase        = 6
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {"TotalExchangeMarginMaintenance" = "ratio"}
+notes        = "整體市場融資維持率"
+
+[[api]]
+name         = "fear_greed"
+dataset      = "CnnFearGreedIndex"
+param_mode   = "all_market"
+target_table = "fear_greed_index"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"fear_greed" = "score", "fear_greed_emotion" = "label"}
+notes        = "CNN 恐懼貪婪指數；實測欄位為 fear_greed / fear_greed_emotion"
