@@ -95,6 +95,36 @@ def main(argv: list[str]) -> int:
             for r in rows:
                 print(f"  {r['event_type']:<24s} {r['n']:>6d}")
 
+            print()
+            print(f"--- price_adjustment_events 明細 for {stock_id} ---")
+            print(f"  {'date':<12s} {'event_type':<20s} {'cash_div':>10s} {'stock_div':>10s} {'AF':>8s}")
+            rows = cur.execute(
+                "SELECT date, event_type, cash_dividend, stock_dividend, adjustment_factor "
+                "FROM price_adjustment_events WHERE stock_id = ? ORDER BY date",
+                (stock_id,),
+            ).fetchall()
+            for r in rows:
+                cash = f"{r['cash_dividend']:.4f}" if r['cash_dividend'] is not None else "NULL"
+                stk  = f"{r['stock_dividend']:.4f}" if r['stock_dividend'] is not None else "NULL"
+                af   = f"{r['adjustment_factor']:.4f}" if r['adjustment_factor'] is not None else "NULL"
+                print(f"  {r['date']:<12s} {r['event_type']:<20s} {cash:>10s} {stk:>10s} {af:>8s}")
+
+        # _dividend_policy_staging 的 detail JSON 是否非空
+        if "_dividend_policy_staging" in existing:
+            print()
+            print(f"--- _dividend_policy_staging for {stock_id}（detail 是否有資料）---")
+            rows = cur.execute(
+                "SELECT date, "
+                "CASE WHEN detail IS NULL OR detail = '' THEN 'EMPTY' "
+                "     ELSE substr(detail, 1, 80) || '...' END AS detail_preview "
+                "FROM _dividend_policy_staging WHERE stock_id = ? ORDER BY date",
+                (stock_id,),
+            ).fetchall()
+            if not rows:
+                print("  (no rows)")
+            for r in rows:
+                print(f"  {r['date']:<12s} {r['detail_preview']}")
+
         # sync 進度
         if "api_sync_progress" in existing:
             print()
