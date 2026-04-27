@@ -283,7 +283,7 @@ python scripts\inspect_db.py 2330
 | `fear_greed_index` | market, date | |
 | `_dividend_policy_staging` | market, stock_id, date | 🆕 v1.6 加 source 欄位（post_process 用） |
 | `api_sync_progress` | api_name, stock_id, segment_start | |
-| `stock_sync_status` | market, stock_id | ⚠️ `update_stock_sync_status` 沒人呼叫，這表永遠 0 筆 |
+| `stock_sync_status` | market, stock_id | Rust Phase 4 寫 `fwd_adj_valid`；`last_full_sync`/`last_incr_sync` 欄位保留未用（v1.6 已砍 Python 端 dead helper） |
 
 ---
 

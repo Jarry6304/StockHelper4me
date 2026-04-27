@@ -227,36 +227,3 @@ class SyncTracker:
         )
         return {row["status"]: row["cnt"] for row in rows}
 
-    def update_stock_sync_status(
-        self,
-        market: str,
-        stock_id: str,
-        sync_type: str = "full",
-    ) -> None:
-        """
-        更新 stock_sync_status 表的同步時間戳記。
-
-        Args:
-            market:    市場代碼（"TW"）
-            stock_id:  股票代碼
-            sync_type: "full"（全量）| "incr"（增量）
-        """
-        today = date.today().isoformat()
-
-        if sync_type == "full":
-            sql    = """
-                INSERT OR REPLACE INTO stock_sync_status
-                    (market, stock_id, last_full_sync, fwd_adj_valid)
-                VALUES (?, ?, ?, 0)
-            """
-            params = [market, stock_id, today]
-        else:
-            sql    = """
-                INSERT INTO stock_sync_status (market, stock_id, last_incr_sync)
-                VALUES (?, ?, ?)
-                ON CONFLICT(market, stock_id)
-                DO UPDATE SET last_incr_sync = excluded.last_incr_sync
-            """
-            params = [market, stock_id, today]
-
-        self.db.update(sql, params)
