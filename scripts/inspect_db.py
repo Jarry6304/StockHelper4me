@@ -367,6 +367,57 @@ def main(argv: list[str]) -> int:
             except sqlite3.OperationalError as e:
                 print(f"  (查詢失敗：{e})")
 
+        # v1.6 detail 欄位驗證：8 張表 + _dividend_policy_staging 的 source
+        # 確認 v1.6 schema 變更後 detail JSON 真的有寫進去（光改 schema 不會回填，
+        # 必須 drop 表 + 重跑該 phase 才會生效）
+        print()
+        print("--- v1.6 detail 欄位內容預覽（每張表抓 1 筆 detail 不為空的）---")
+        v16_tables = [
+            "price_daily",
+            "price_limit",
+            "margin_daily",
+            "foreign_holding",
+            "day_trading",
+            "index_weight_daily",
+            "monthly_revenue",
+            "market_index_us",
+        ]
+        for tbl in v16_tables:
+            if tbl not in existing:
+                print(f"  {tbl:<24s} (表不存在)")
+                continue
+            # 確認 detail 欄位實際存在 schema 中（避免舊 db 沒升級）
+            cols = {r["name"] for r in cur.execute(f"PRAGMA table_info({tbl})").fetchall()}
+            if "detail" not in cols:
+                print(f"  {tbl:<24s} (schema 沒 detail 欄位 — 需要 drop 重跑)")
+                continue
+            row = cur.execute(
+                f"SELECT date, detail FROM {tbl} "
+                f"WHERE detail IS NOT NULL AND detail != '' LIMIT 1"
+            ).fetchone()
+            if row is None:
+                # detail 欄位存在但全 NULL → 該表還沒重跑或 API 沒回 detail 欄位
+                total = cur.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+                print(f"  {tbl:<24s} (有 detail 欄位但全 NULL；表共 {total} 筆)")
+            else:
+                preview = row["detail"][:80].replace("\n", " ")
+                print(f"  {tbl:<24s} {row['date']}  {preview}{'...' if len(row['detail']) > 80 else ''}")
+
+        # _dividend_policy_staging 的 source 欄位（v1.6 新增）
+        if "_dividend_policy_staging" in existing:
+            cols = {r["name"] for r in cur.execute(
+                "PRAGMA table_info(_dividend_policy_staging)"
+            ).fetchall()}
+            if "source" in cols:
+                row = cur.execute(
+                    "SELECT COUNT(*) AS n, COUNT(source) AS with_src "
+                    "FROM _dividend_policy_staging"
+                ).fetchone()
+                print(f"  _dividend_policy_staging.source: "
+                      f"{row['with_src']}/{row['n']} 筆有值")
+            else:
+                print("  _dividend_policy_staging (schema 沒 source 欄位 — 需要 drop 重跑)")
+
         # sync 進度
         if "api_sync_progress" in existing:
             print()
