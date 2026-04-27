@@ -180,6 +180,65 @@ def main(argv: list[str]) -> int:
                     ld = f"{r['limit_down']:.2f}" if r['limit_down'] is not None else "NULL"
                     print(f"  {r['date']:<12s} {lu:>10s} {ld:>12s}")
 
+        # Phase 4：price_daily_fwd 最近 5 筆（後復權）
+        if "price_daily_fwd" in existing:
+            print()
+            print(f"--- price_daily_fwd for {stock_id}（範圍 + 最近 5 筆 後復權）---")
+            stat = cur.execute(
+                "SELECT COUNT(*) AS n, MIN(date) AS d_min, MAX(date) AS d_max "
+                "FROM price_daily_fwd WHERE stock_id = ?",
+                (stock_id,),
+            ).fetchone()
+            if stat["n"] == 0:
+                print("  (no rows — Phase 4 尚未跑過或 stock 不在處理清單)")
+            else:
+                print(f"  rows={stat['n']}  range={stat['d_min']} ~ {stat['d_max']}")
+                print(f"  {'date':<12s} {'open':>9s} {'high':>9s} {'low':>9s} "
+                      f"{'close':>9s} {'volume':>12s}")
+                rows = cur.execute(
+                    "SELECT date, open, high, low, close, volume "
+                    "FROM price_daily_fwd WHERE stock_id = ? "
+                    "ORDER BY date DESC LIMIT 5",
+                    (stock_id,),
+                ).fetchall()
+                for r in rows:
+                    o = f"{r['open']:.2f}"     if r['open']     is not None else "NULL"
+                    h = f"{r['high']:.2f}"     if r['high']     is not None else "NULL"
+                    l = f"{r['low']:.2f}"      if r['low']      is not None else "NULL"
+                    c = f"{r['close']:.2f}"    if r['close']    is not None else "NULL"
+                    v = f"{r['volume']:,}"     if r['volume']   is not None else "NULL"
+                    print(f"  {r['date']:<12s} {o:>9s} {h:>9s} {l:>9s} {c:>9s} {v:>12s}")
+
+        # Phase 4：週K / 月K 簡報
+        for tbl, kcol in (("price_weekly_fwd", "week"), ("price_monthly_fwd", "month")):
+            if tbl in existing:
+                print()
+                print(f"--- {tbl} for {stock_id}（最近 3 筆）---")
+                stat = cur.execute(
+                    f"SELECT COUNT(*) AS n FROM {tbl} WHERE stock_id = ?",
+                    (stock_id,),
+                ).fetchone()
+                if stat["n"] == 0:
+                    print("  (no rows)")
+                else:
+                    print(f"  rows={stat['n']}")
+                    print(f"  {'year':>4s} {kcol:>6s} {'open':>9s} {'high':>9s} "
+                          f"{'low':>9s} {'close':>9s} {'volume':>14s}")
+                    rows = cur.execute(
+                        f"SELECT year, {kcol}, open, high, low, close, volume "
+                        f"FROM {tbl} WHERE stock_id = ? "
+                        f"ORDER BY year DESC, {kcol} DESC LIMIT 3",
+                        (stock_id,),
+                    ).fetchall()
+                    for r in rows:
+                        o = f"{r['open']:.2f}"   if r['open']   is not None else "NULL"
+                        h = f"{r['high']:.2f}"   if r['high']   is not None else "NULL"
+                        l = f"{r['low']:.2f}"    if r['low']    is not None else "NULL"
+                        c = f"{r['close']:.2f}"  if r['close']  is not None else "NULL"
+                        v = f"{r['volume']:,}"   if r['volume'] is not None else "NULL"
+                        print(f"  {r['year']:>4d} {r[kcol]:>6d} {o:>9s} {h:>9s} "
+                              f"{l:>9s} {c:>9s} {v:>14s}")
+
         # sync 進度
         if "api_sync_progress" in existing:
             print()
