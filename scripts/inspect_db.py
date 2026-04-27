@@ -297,7 +297,9 @@ def main(argv: list[str]) -> int:
                         if ev["date"] > d:
                             theo *= ev["adjustment_factor"]
                     diff_pct = abs(actual_ratio - theo) / theo * 100 if theo else 0
-                    ok = "OK" if diff_pct < 0.5 else "FAIL"
+                    # 0.05% 以內視為 OK（浮點 round 誤差約 0.01%）；
+                    # 0.5% 是「除息日當日 AF 重複計算」的典型 bug 量級
+                    ok = "OK" if diff_pct < 0.05 else "FAIL"
                     print(f"  {d:<12s} {raw_c:>10.2f} {fwd_c:>10.2f} "
                           f"{actual_ratio:>9.4f} {theo:>12.4f} {ok:>6s}")
 

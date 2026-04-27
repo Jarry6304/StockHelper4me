@@ -496,11 +496,8 @@ fn compute_forward_adjusted(
     let mut result: Vec<FwdDailyPrice> = Vec::with_capacity(raw_prices.len());
 
     for price in raw_prices.iter().rev() {
-        // 遇到調整事件日，更新 multiplier（注意：此日之前的資料才需乘）
-        if let Some(&af) = event_af.get(&price.date) {
-            multiplier *= af;
-        }
-
+        // 先用「當前」multiplier 計算當日 fwd。
+        // 除息日當日 raw 已是除息後價，不需再乘該日 AF（會重複計算）。
         result.push(FwdDailyPrice {
             stock_id: stock_id.to_string(),
             date:     price.date,
@@ -510,6 +507,11 @@ fn compute_forward_adjusted(
             close:    (price.close * multiplier * 100.0).round() / 100.0,
             volume:   (price.volume as f64 / multiplier).round() as i64,
         });
+
+        // 套用完當日後才更新 multiplier，影響「此日之前」的資料
+        if let Some(&af) = event_af.get(&price.date) {
+            multiplier *= af;
+        }
     }
 
     // 反轉回升序
