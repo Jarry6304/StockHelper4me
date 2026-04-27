@@ -201,23 +201,18 @@ python src\main.py backfill --stocks 2330 --phases 6       # market_index_us
 - 跑完不應再看到 `略過不存在的欄位 {'detail'}` 或 `略過不存在的欄位 {'source'}`
 - `inspect_db.py 2330` 各表 detail 欄位應該有 JSON 內容（用 SQL `SELECT detail FROM price_daily WHERE stock_id='2330' LIMIT 1` 確認）
 
-### 🟡 低優先：institutional_daily 1774 vs price_daily 1772 多 2 筆
+### ~~🟡 institutional_daily vs price_daily 多 2 筆~~（v1.6 已解）
 
-可能 FinMind 在某些日期回了非交易日資料（連假補登）。需要 inspect 確認哪兩天額外多出來。
+FinMind `TaiwanStockInstitutionalInvestorsBuySell` 在週六會回殘留資料（內容是某筆固定值，date 是非交易日，2330 在 2019-08-24/2019-10-26 各 1 筆，內容字字相同）。
+修法：`aggregators._filter_to_trading_days()` 在 pivot 前用 `trading_calendar` 過濾掉非交易日；`scripts/cleanup_non_trading_days.py` 一次性清現存歷史鬼資料。
+驗證後 `institutional_daily` 1772 vs `price_daily` 1773 對齊（差 1 是當日尚未結算）。
 
-```sql
-SELECT date FROM institutional_daily WHERE stock_id = '2330'
-EXCEPT SELECT date FROM price_daily WHERE stock_id = '2330'
-```
+### ~~🟢 exchange_rate FinMind 限制~~（v1.6 已解）
 
-### 🟢 待研究：exchange_rate FinMind 限制
-
-CLAUDE.md v1.4 預警「90 天只回 19 筆」確認屬實：跑 7 個年度 segment 只回 57 筆 = 19 種貨幣 × 3 個日期。
-
-需研究 FinMind v4 `TaiwanExchangeRate` 是否：
-1. 回傳 quota 限制 19 筆/segment？
-2. 需要其他 query 參數（如 currency=TWD）？
-3. 用其他 dataset（`TaiwanExchangeRateLong`?）？
+**根因**：`TaiwanExchangeRate` 必須帶 `data_id` (currency) 才會回完整時序，不帶就只回每幣 3 個代表性日期 → 7 segment × 19 幣 × 3 = 57 筆假象。
+**驗證**：FinMind 測試 `get_datalist("TaiwanExchangeRate")` 回 `["AUD", "CAD", "CHF", "CNY", "EUR", "GBP", "HKD", "IDR", "JPY", "KRW", "MYR", "NZD", "PHP", "SEK", "SGD", "THB", "USD", "VND", "ZAR"]` 共 19 幣。
+**修法**：collector.toml 把 `exchange_rate` 從 `param_mode = "all_market"` 改成 `per_stock_fixed` + `fixed_ids = [...19 幣...]`，跟 `market_index_us` (SPY/^VIX)、`market_index_tw` (TAIEX/TPEx) 同樣 pattern。
+**重跑成本**：8 segment × 19 幣 = 152 個 API call（rate_limit 1600/h、min_interval 2250ms 下約 6 分鐘跑完），phase 6 整體耗時會明顯增加。
 
 ### 🟢 待做：agent-review-mcp 支線
 
