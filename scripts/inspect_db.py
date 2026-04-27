@@ -239,6 +239,68 @@ def main(argv: list[str]) -> int:
                         print(f"  {r['year']:>4d} {r[kcol]:>6d} {o:>9s} {h:>9s} "
                               f"{l:>9s} {c:>9s} {v:>14s}")
 
+        # Phase 4 後復權正確性驗證：raw vs fwd 對比 + 累積 AF 比值
+        # 預期：fwd_close(D) = raw_close(D) × ∏(AF for events where date > D)
+        # 即「事件日當天當日 AF 不算」（除息日 raw 已是除息後價）
+        if (
+            "price_daily" in existing
+            and "price_daily_fwd" in existing
+            and "price_adjustment_events" in existing
+        ):
+            print()
+            print(f"--- 後復權驗證 for {stock_id}（理論 vs 實際）---")
+            events = cur.execute(
+                "SELECT date, adjustment_factor "
+                "FROM price_adjustment_events WHERE stock_id = ? ORDER BY date",
+                (stock_id,),
+            ).fetchall()
+            if not events:
+                print("  (無除權事件，fwd 應該完全等於 raw)")
+            else:
+                # 取一些關鍵驗證點：最早日 + 第一次事件前一日 + 第一次事件當日 + 最近日
+                first_event_date = events[0]["date"]
+                check_dates = cur.execute(
+                    "SELECT date FROM price_daily WHERE stock_id = ? "
+                    "AND date IN ("
+                    "  (SELECT MIN(date) FROM price_daily WHERE stock_id = ?), "
+                    "  (SELECT MAX(date) FROM price_daily WHERE stock_id = ? AND date < ?), "
+                    "  ?, "
+                    "  (SELECT MAX(date) FROM price_daily WHERE stock_id = ?)"
+                    ") ORDER BY date",
+                    (stock_id, stock_id, stock_id, first_event_date,
+                     first_event_date, stock_id),
+                ).fetchall()
+
+                print(f"  累積事件數：{len(events)}")
+                print(f"  {'date':<12s} {'raw_close':>10s} {'fwd_close':>10s} "
+                      f"{'fwd/raw':>9s} {'theoretical':>12s} {'match':>6s}")
+
+                for cd in check_dates:
+                    d = cd["date"]
+                    raw = cur.execute(
+                        "SELECT close FROM price_daily WHERE stock_id = ? AND date = ?",
+                        (stock_id, d),
+                    ).fetchone()
+                    fwd = cur.execute(
+                        "SELECT close FROM price_daily_fwd WHERE stock_id = ? AND date = ?",
+                        (stock_id, d),
+                    ).fetchone()
+                    if not raw or not fwd or raw["close"] is None or fwd["close"] is None:
+                        continue
+                    raw_c = raw["close"]
+                    fwd_c = fwd["close"]
+                    actual_ratio = fwd_c / raw_c if raw_c else float("nan")
+
+                    # 理論值：累乘 D 之後（不含當日）所有事件的 AF
+                    theo = 1.0
+                    for ev in events:
+                        if ev["date"] > d:
+                            theo *= ev["adjustment_factor"]
+                    diff_pct = abs(actual_ratio - theo) / theo * 100 if theo else 0
+                    ok = "OK" if diff_pct < 0.5 else "FAIL"
+                    print(f"  {d:<12s} {raw_c:>10.2f} {fwd_c:>10.2f} "
+                          f"{actual_ratio:>9.4f} {theo:>12.4f} {ok:>6s}")
+
         # sync 進度
         if "api_sync_progress" in existing:
             print()
