@@ -65,7 +65,7 @@ class PhaseExecutor:
         self.sync_tracker    = sync_tracker
         self.rust_runner     = rust_runner
         self.dry_run         = dry_run
-        self.field_mapper    = FieldMapper()
+        self.field_mapper    = FieldMapper(db=db)
         # sync_tracker 傳入 DateSegmenter，供 incremental 模式查詢上次同步日期
         self.date_segmenter  = DateSegmenter(config, sync_tracker)
 

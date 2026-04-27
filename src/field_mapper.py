@@ -29,6 +29,11 @@ class FieldMapper:
     transform() 接受原始 API 回傳資料，輸出準備好入庫的 dict list。
     """
 
+    def __init__(self, db=None):
+        # db 供 _validate_schema 把 target_table 欄位納入 known_keys 豁免，
+        # 避免「與 DB 同名直接入庫」的核心欄位（如 open/close/limit_up）被誤報 novel
+        self.db = db
+
     def transform(
         self,
         api_config: ApiConfig,
@@ -126,7 +131,14 @@ class FieldMapper:
             return True
 
         # API 新增未知欄位 → 純資訊記錄，不視為 mismatch
+        # known_keys = field_rename 來源欄位 + 通用豁免 + DB target_table 欄位
+        # （後者避免 open/close/limit_up 這類「不需 rename 直接入庫」的欄位被誤報）
         known_keys = expected_keys | {"date", "stock_id", "stock_name"}
+        if self.db is not None and api_config.target_table:
+            try:
+                known_keys |= self.db._table_columns(api_config.target_table)
+            except Exception:
+                pass  # 表不存在或查詢失敗時退回原行為（仍會印 novel）
         novel      = actual_keys - known_keys
         if novel:
             logger.info(
