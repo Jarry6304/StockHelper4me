@@ -284,6 +284,7 @@ def _get_schema_ddl() -> list[str]:
             stock_id    TEXT NOT NULL,
             date        TEXT NOT NULL,
             detail      TEXT,
+            source      TEXT DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
         """,
@@ -300,6 +301,7 @@ def _get_schema_ddl() -> list[str]:
             close       REAL,
             volume      INTEGER,
             turnover    REAL,
+            detail      TEXT,
             source      TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
@@ -313,6 +315,7 @@ def _get_schema_ddl() -> list[str]:
             date        TEXT    NOT NULL,
             limit_up    REAL,
             limit_down  REAL,
+            detail      TEXT,
             source      TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
@@ -398,6 +401,7 @@ def _get_schema_ddl() -> list[str]:
             short_sale          INTEGER,
             short_cover         INTEGER,
             short_balance       INTEGER,
+            detail              TEXT,
             source              TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
@@ -411,6 +415,7 @@ def _get_schema_ddl() -> list[str]:
             date                TEXT    NOT NULL,
             foreign_holding_shares  INTEGER,
             foreign_holding_ratio   REAL,
+            detail              TEXT,
             source              TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
@@ -450,6 +455,7 @@ def _get_schema_ddl() -> list[str]:
             date            TEXT    NOT NULL,
             day_trading_buy  INTEGER,
             day_trading_sell INTEGER,
+            detail          TEXT,
             source          TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
@@ -462,6 +468,7 @@ def _get_schema_ddl() -> list[str]:
             stock_id    TEXT    NOT NULL,
             date        TEXT    NOT NULL,
             weight      REAL,
+            detail      TEXT,
             source      TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
@@ -476,6 +483,7 @@ def _get_schema_ddl() -> list[str]:
             revenue     REAL,
             revenue_mom REAL,
             revenue_yoy REAL,
+            detail      TEXT,
             source      TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
@@ -505,6 +513,7 @@ def _get_schema_ddl() -> list[str]:
             low         REAL,
             close       REAL,
             volume      INTEGER,
+            detail      TEXT,
             source      TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
