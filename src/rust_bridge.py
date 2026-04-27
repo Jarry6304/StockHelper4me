@@ -21,6 +21,8 @@ Signal Handling（v1.1）：
 import asyncio
 import json
 import logging
+import sys
+from pathlib import Path
 
 logger = logging.getLogger("collector.rust_bridge")
 
@@ -47,8 +49,15 @@ class RustBridge:
         Args:
             binary_path: Rust binary 路徑
                          預設：rust_compute/target/release/tw_stock_compute
+                         Windows 上若實體檔案是 .exe 而 toml 沒寫副檔名，會自動補上
             db_path:     SQLite 資料庫路徑（Rust 直接讀寫此檔案）
         """
+        # Windows: cargo build 產出 tw_stock_compute.exe，
+        # 但 collector.toml 為跨平台寫成不含副檔名 → 自動補
+        if sys.platform == "win32" and not binary_path.lower().endswith(".exe"):
+            exe_path = binary_path + ".exe"
+            if Path(exe_path).exists():
+                binary_path = exe_path
         self.binary = binary_path
         self.db     = db_path
 

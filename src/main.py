@@ -263,9 +263,9 @@ async def _run_collector(args, config, stock_list_cfg) -> None:
     # Rust Bridge（Phase 4）
     rust_bridge = RustBridge(config.global_cfg.rust_binary_path, config.global_cfg.db_path)
 
-    async def rust_runner(mode: str) -> None:
+    async def rust_runner(mode: str, stock_ids: list[str] | None = None) -> None:
         """Phase 4 呼叫函式，傳入 PhaseExecutor"""
-        await rust_bridge.run_phase4(mode=mode)
+        await rust_bridge.run_phase4(mode=mode, stock_ids=stock_ids)
 
     # incremental 子命令對應 incremental 模式，其餘皆為 backfill
     mode = "incremental" if command == "incremental" else "backfill"

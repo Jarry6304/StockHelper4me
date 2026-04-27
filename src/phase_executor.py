@@ -249,9 +249,11 @@ class PhaseExecutor:
             logger.warning("[Phase 4] rust_runner 未設定，跳過 Phase 4")
             return
 
-        logger.info("[Phase 4] Started（呼叫 Rust binary）")
+        logger.info(
+            f"[Phase 4] Started（呼叫 Rust binary）stocks={len(self._stock_list)}"
+        )
         mode = self.config.execution.mode
-        await self.rust_runner(mode=mode)
+        await self.rust_runner(mode=mode, stock_ids=self._stock_list)
 
     # =========================================================================
     # Post-Process
