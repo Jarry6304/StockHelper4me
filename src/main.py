@@ -133,10 +133,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # ── incremental 子命令
-    subparsers.add_parser(
+    incremental_parser = subparsers.add_parser(
         "incremental",
         parents=[_exec_parent],
         help="增量同步（日常排程用）",
+    )
+    incremental_parser.add_argument(
+        "--phases",
+        help="指定要跑的 Phase，逗號分隔（如：1,2,3,4）。未指定則跑 collector.toml 設定的全部",
     )
 
     # ── phase 子命令（只跑單一 Phase）
@@ -216,8 +220,8 @@ async def _run_collector(args, config, stock_list_cfg) -> None:
     start_time = time.monotonic()
     command    = args.command
 
-    # ── --phases 覆蓋（僅 backfill 子命令有此參數）
-    if command == "backfill" and args.phases:
+    # ── --phases 覆蓋（backfill / incremental 子命令）
+    if command in ("backfill", "incremental") and getattr(args, "phases", None):
         try:
             config.execution.phases = [int(p.strip()) for p in args.phases.split(",")]
         except ValueError:
