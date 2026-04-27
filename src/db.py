@@ -526,15 +526,19 @@ def _get_schema_ddl() -> list[str]:
         # 全市場三大法人
         """
         CREATE TABLE IF NOT EXISTS institutional_market_daily (
-            market              TEXT    NOT NULL,
-            date                TEXT    NOT NULL,
-            foreign_buy         INTEGER,
-            foreign_sell        INTEGER,
-            investment_trust_buy  INTEGER,
-            investment_trust_sell INTEGER,
-            dealer_buy          INTEGER,
-            dealer_sell         INTEGER,
-            source              TEXT    DEFAULT 'finmind',
+            market                    TEXT    NOT NULL,
+            date                      TEXT    NOT NULL,
+            foreign_buy               INTEGER,
+            foreign_sell              INTEGER,
+            foreign_dealer_self_buy   INTEGER,
+            foreign_dealer_self_sell  INTEGER,
+            investment_trust_buy      INTEGER,
+            investment_trust_sell     INTEGER,
+            dealer_buy                INTEGER,
+            dealer_sell               INTEGER,
+            dealer_hedging_buy        INTEGER,
+            dealer_hedging_sell       INTEGER,
+            source                    TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, date)
         )
         """,

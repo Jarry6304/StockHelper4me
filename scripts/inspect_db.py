@@ -335,6 +335,38 @@ def main(argv: list[str]) -> int:
                     print(f"    自營(自行) buy={fmt(r['dealer_buy'])} sell={fmt(r['dealer_sell'])}")
                     print(f"    自營(避險) buy={fmt(r['dealer_hedging_buy'])} sell={fmt(r['dealer_hedging_sell'])}")
 
+        # Phase 6 全市場資料（不分 stock_id，只看資料量 + 最近 3 筆）
+        # 這幾張表沒 stock_id 欄位，跟 stock_id 引數無關，但跟著一起印方便驗證
+        for tbl, cols in (
+            ("market_index_us",            "stock_id, date, open, high, low, close, volume"),
+            ("exchange_rate",               "date, currency, rate"),
+            ("institutional_market_daily",  "date, foreign_buy, foreign_sell, "
+                                            "foreign_dealer_self_buy, foreign_dealer_self_sell, "
+                                            "investment_trust_buy, investment_trust_sell, "
+                                            "dealer_buy, dealer_sell, "
+                                            "dealer_hedging_buy, dealer_hedging_sell"),
+            ("market_margin_maintenance",   "date, ratio"),
+            ("fear_greed_index",            "date, score, label"),
+        ):
+            if tbl not in existing:
+                continue
+            print()
+            print(f"--- {tbl}（最近 3 筆）---")
+            stat = cur.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()
+            if stat["n"] == 0:
+                print("  (no rows)")
+                continue
+            print(f"  rows={stat['n']}")
+            try:
+                rows = cur.execute(
+                    f"SELECT {cols} FROM {tbl} ORDER BY date DESC LIMIT 3"
+                ).fetchall()
+                for r in rows:
+                    items = [f"{k}={r[k]}" for k in r.keys()]
+                    print("  " + ", ".join(items))
+            except sqlite3.OperationalError as e:
+                print(f"  (查詢失敗：{e})")
+
         # sync 進度
         if "api_sync_progress" in existing:
             print()

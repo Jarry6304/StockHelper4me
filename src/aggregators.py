@@ -126,12 +126,16 @@ def aggregate_institutional_market(rows: list[dict[str, Any]]) -> list[dict[str,
                 "date":   date,
                 "market": row.get("market", "TW"),
                 "source": row.get("source", "finmind"),
-                "foreign_buy":           None,
-                "foreign_sell":          None,
-                "investment_trust_buy":  None,
-                "investment_trust_sell": None,
-                "dealer_buy":            None,
-                "dealer_sell":           None,
+                "foreign_buy":               None,
+                "foreign_sell":              None,
+                "foreign_dealer_self_buy":   None,
+                "foreign_dealer_self_sell":  None,
+                "investment_trust_buy":      None,
+                "investment_trust_sell":     None,
+                "dealer_buy":                None,
+                "dealer_sell":               None,
+                "dealer_hedging_buy":        None,
+                "dealer_hedging_sell":       None,
             }
 
         name = row.get("name", "")
@@ -140,6 +144,8 @@ def aggregate_institutional_market(rows: list[dict[str, Any]]) -> list[dict[str,
             buy_col, sell_col = cols
             grouped[date][buy_col]  = row.get("buy")
             grouped[date][sell_col] = row.get("sell")
+        else:
+            logger.warning(f"未知的法人機構名稱（market）：'{name}'，無法 pivot，已略過")
 
     result = list(grouped.values())
     logger.debug(f"institutional_market pivot：{len(rows)} 筆 → {len(result)} 筆")
