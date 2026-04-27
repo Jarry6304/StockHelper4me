@@ -1,190 +1,107 @@
 # CLAUDE.md — tw-stock-collector Session 銜接文件
 
 > 這份文件記錄本專案的完整實作歷程與架構決策，供下次 session 自動載入後直接銜接，無需重新閱讀 git log。
-> 最後更新：2026-04-15
+> 最後更新：2026-04-27（v1.5）
 
 ---
 
 ## 分支狀態
 
-- **開發分支**：`claude/review-collector-spec-Gktcf`
-- **目標分支**：`collector`
-- **PR**：PR #2（非 draft，待 review）
-- **Base**：`302c9d7 Initial commit` → `1d255a8 搜集器初版規格添加` → 以下 7 個 commit
+- **開發分支**：`claude/setup-agent-review-mcp-berOR`（已推到 origin）
+- **目標分支**：`collector`（v1.4 PR #2 已合併，本 branch 是後續 v1.5）
+- **base**：`37ca6d0`（v1.4 結尾）→ 本 session 12 個 commit
 
 | SHA | 訊息 |
 |-----|------|
-| `b031d1d` | 實作 tw-stock-collector 完整骨架（Phase A-D） |
-| `80ae049` | 實作 Phase E：籌碼 / 基本面 / 總經聚合層 |
-| `13514d5` | 修正 4 個實作缺漏（audit 結果） |
-| `57253cc` | 更新 README：補全 Phase E 完成狀態與 Schema 一覽表 |
-| `667e672` | 修正 main.py argparse 結構：執行選項移至子命令層 |
-| `f1a3db5` | 修正 collector.toml：所有多行 inline table 改為單行格式 |
-| `c622a59` | 修正 stock_info 欄位映射 + db.upsert() 加欄位過濾防炸 |
+| `e464c1f` | dividend_policy 補 source 欄位 rename |
+| `f9348d4` | inspect_db.py 加印 Phase 3 驗證資訊 |
+| `e67bf96` | SchemaValidation：把 DB target_table 欄位納入 known_keys 豁免 |
+| `8dfa9f8` | incremental 子命令補 --phases 參數 |
+| `9b1a2cf` | Phase 4 兩個炸點修正：Windows .exe 路徑 + 缺少 stock_ids 傳遞 |
+| `0afec6a` | inspect_db.py 加印 Phase 4 驗證資訊（fwd 三張表） |
+| `e302050` | inspect_db.py 加後復權正確性驗證（raw vs fwd 對照） |
+| `536962e` | **修正 Rust 後復權 bug：除息日當日 AF 重複計算** |
+| `acc7b1f` | **擴充 institutional_daily schema：5 類法人各自獨立記錄** |
+| `68269d5` | Phase 6 預先修正：institutional_market 同 5 類法人擴充 |
+| `00c5dae` | 新增 scripts/drop_table.py：單表 schema 變更後快速 drop |
+| `60b2937` | 靜默略過 institutional API 的 'total' 合計列 |
 
 ---
 
-## 目前可正常執行
+## 目前狀態：Phase 1~6 全部驗證通過 ✅
 
-```bash
-python src/main.py validate
-# ✓ collector.toml 格式正確
-# ✓ stock_list.toml 格式正確
+| Phase | 內容 | 驗證結果 |
+|-------|------|---------|
+| 1 | stock_info / trading_calendar / market_index_tw | ✅ 3048 / 1773 / 3544 |
+| 2 | dividend / split / par_value / capital_reduction | ✅ 17 筆 dividend events |
+| 3 | price_daily / price_limit | ✅ 1772 筆/支 × 2 |
+| 4 | 後復權 + 週月K（Rust） | ✅ 4 個關鍵日驗證點全 OK |
+| 5 | 11 支 chip / financial | ✅ 5 類法人正確分開 |
+| 6 | 5 支 macro | ✅ exchange_rate 受 API 限制只有 57 筆 |
 
-python src/main.py backfill --stocks 2330,2317,2442 --phases 1
-# Phase 1 stock_info 已可正確寫入 market_type / industry
+### 後復權驗證資料（2330）
 
-python src/main.py --verbose backfill --stocks 2330 --dry-run
-```
-
----
-
-## 各 Commit 核心變更
-
-### `b031d1d` — Phase A-D 骨架（所有模組初版）
-
-新增所有 Python 模組 + Rust binary + 設定檔：
-
-| 模組 | 功能 |
-|------|------|
-| `src/logger_setup.py` | 日誌初始化，每日輪替，寫入 `logs/` |
-| `src/config_loader.py` | TOML 解析 + 7 條驗證規則，DataClass 強型別 |
-| `src/db.py` | SQLite WAL + 17 張 DDL + upsert/query/update |
-| `src/rate_limiter.py` | Token Bucket，支援 burst + min_interval + 429 冷卻 |
-| `src/api_client.py` | FinMindClient async context manager + 指數退避 |
-| `src/phase_executor.py` | Phase 1-6 排程引擎（per stock × per segment） |
-| `src/field_mapper.py` | 欄位映射 + schema 驗證 + computed_fields |
-| `src/stock_resolver.py` | db/file/both 三種清單模式 |
-| `src/date_segmenter.py` | backfill 年度分段 + incremental 從上次同步日起算 |
-| `src/sync_tracker.py` | `api_sync_progress` 5 種狀態（pending/completed/empty/failed/schema_mismatch） |
-| `src/post_process.py` | `dividend_policy_merge`：權息/減資/分割拆分 + 現增偵測 |
-| `src/rust_bridge.py` | SIGTERM/SIGKILL subprocess + schema_version 驗證 |
-| `src/main.py` | CLI：backfill/incremental/phase/status/validate |
-| `rust_compute/src/main.rs` | 後復權 + 週K/月K + capital_increase AF |
-| `config/collector.toml` | 全 28 API entry（Phase 1-3, 5-6） |
-| `config/stock_list.toml` | db/file/both + dev mode |
+| date | raw_close | fwd_close | fwd/raw | theoretical | match |
+|------|-----------|-----------|---------|-------------|-------|
+| 2019-01-02 | 219.50 | 237.54 | 1.0822 | 1.0822 | OK |
+| 2022-03-15 | 558.00 | 603.87 | 1.0822 | 1.0822 | OK（除息前一日） |
+| 2022-03-16 | 558.00 | 600.89 | 1.0769 | 1.0769 | OK（除息日當日） |
+| 2026-04-24 | 2185.00 | 2185.00 | 1.0000 | 1.0000 | OK（最新日） |
 
 ---
 
-### `80ae049` — Phase E（籌碼 / 基本面 / 總經聚合）
+## 本 session 重要修正詳解
 
-新增 `src/aggregators.py`，4 種聚合策略：
+### 1. Rust 後復權 bug（commit `536962e`）— 重要！
 
-```python
-# 三大法人：3 筆/日 → pivot 1 筆
-aggregate_institutional(rows) -> list[dict]
-aggregate_institutional_market(rows) -> list[dict]
+**問題**：除息日當日 fwd_close 多乘了一次 AF。
 
-# 財報：N 科目/日 → detail JSON
-aggregate_financial(rows, stmt_type) -> list[dict]
-
-# 股權分散：N 級距/日 → detail JSON
-aggregate_holding_shares(rows) -> list[dict]
-
-# 分派入口
-apply_aggregation(strategy, rows, stmt_type=None)
-```
-
-- `src/config_loader.py`：`ApiConfig` 新增 `aggregation: str | None`、`stmt_type: str | None`
-- `src/phase_executor.py`：`_run_api()` 在 `field_mapper.transform()` 後接入 `apply_aggregation`
-- `config/collector.toml` Phase 5/6：補全 `field_rename` + `aggregation` + `stmt_type`
-- `src/db.py`：`exchange_rate` PK 加 `currency`；`fear_greed_index` 加 `detail` 欄位
-
----
-
-### `13514d5` — Audit 修正（4 個缺漏）
-
-| # | 問題 | 修正位置 |
-|---|------|---------|
-| 1 | `DateSegmenter(config)` → incremental 永遠從頭拉 | `phase_executor.py:70`：改為 `DateSegmenter(config, sync_tracker)` |
-| 2 | `cooldown_on_429_sec` 恆為 120（讀錯設定源） | `rate_limiter.py` 加 param；`api_client.py` 讀 `rate_limiter.cooldown_on_429_sec`；`main.py` 傳入 config 值 |
-| 3 | `updated_at` 存入字串 `"datetime('now')"` 而非真實時間 | `sync_tracker.py`：改為 `datetime.now().isoformat(timespec="seconds")` |
-| 4 | `schema_mismatch` 只記 log，未寫入 sync_tracker | `field_mapper.transform()` 改回傳 `(rows, bool)`；`phase_executor` 解包後呼叫 `mark_schema_mismatch()` |
-
----
-
-### `57253cc` — README 更新
-
-- 開發進度表：Phase E 標記完成，加缺漏修正列
-- 新增資料庫 Schema 章節（25 張表）
-- 專案結構加 `aggregators.py` / `post_process.py`
-
----
-
-### `667e672` — argparse 修正
-
-**問題**：`--stocks`、`--dry-run` 是全域參數，必須放在子命令前；
-`python src/main.py backfill --stocks 2330` 報 `unrecognized arguments` 錯誤。
-
-**修正方式**（`src/main.py`）：
-```python
-# 建立共用 parent parser（add_help=False 避免衝突）
-_exec_parent = argparse.ArgumentParser(add_help=False)
-_exec_parent.add_argument("--stocks", ...)
-_exec_parent.add_argument("--dry-run", action="store_true", ...)
-
-# 透過 parents= 注入各子命令
-subparsers.add_parser("backfill",     parents=[_exec_parent], ...)
-subparsers.add_parser("incremental",  parents=[_exec_parent], ...)
-subparsers.add_parser("phase",        parents=[_exec_parent], ...)
-```
-
-真正全域選項（影響 config 載入）：`--config`、`--stock-list`、`--verbose`（仍在主 parser）。
-
----
-
-### `f1a3db5` — TOML 格式修正
-
-**問題**：Python `tomllib`（TOML v1.0）不允許 inline table `{ }` 跨行；
-13 處多行 `field_rename = {\n  ...\n}` 導致 `Invalid statement` 錯誤。
-
-```toml
-# 錯誤（TOML v1.0 不允許）：
-field_rename = {
-    "type" = "market_type",
-    "industry_category" = "industry"
+**原版邏輯（錯）**：
+```rust
+for price in raw_prices.iter().rev() {
+    if let Some(&af) = event_af.get(&price.date) {
+        multiplier *= af;            // ← 先更新
+    }
+    result.push(... close: price.close * multiplier ...);  // ← 當日已含當日 AF
 }
-
-# 正確（單行）：
-field_rename = {"type" = "market_type", "industry_category" = "industry"}
 ```
 
-修正：`config/collector.toml` 所有 13 處多行 field_rename 壓縮為單行。
-
----
-
-### `c622a59` — stock_info 欄位映射 + db 防禦修正
-
-**問題**：`TaiwanStockInfo` API 回傳 `type`/`industry_category`，但 DB 欄位為 `market_type`/`industry`。
-沒有 field_rename 導致 `sqlite3.OperationalError: table stock_info has no column named industry_category`。
-
-**修正 1**（`config/collector.toml`）：
-```toml
-# stock_info section
-field_rename = {"type" = "market_type", "industry_category" = "industry"}
+**正確邏輯**：
+```rust
+for price in raw_prices.iter().rev() {
+    result.push(... close: price.close * multiplier ...);  // ← 先用當前 multiplier
+    if let Some(&af) = event_af.get(&price.date) {
+        multiplier *= af;            // ← 再更新給更早的日子
+    }
+}
 ```
 
-**修正 2**（`src/db.py`）— PRAGMA 欄位過濾防禦機制：
-```python
-def upsert(self, table, rows, primary_keys=None) -> int:
-    valid_cols = self._table_columns(table)          # PRAGMA table_info 查詢（有快取）
-    columns = [c for c in rows[0].keys() if c in valid_cols]
-    if not columns:
-        logger.warning(f"upsert → {table}: 所有欄位都不在 schema 中，略過")
-        return 0
-    dropped = set(rows[0].keys()) - set(columns)
-    if dropped:
-        logger.warning(f"upsert → {table}: 略過不存在的欄位 {dropped}")
-    # ... 後續 INSERT OR REPLACE ...
+理由：除息日當日 raw 已是「除息後價格」，不應再乘該日 AF（會重複）。
 
-def _table_columns(self, table: str) -> set[str]:
-    if not hasattr(self, "_col_cache"):
-        self._col_cache: dict[str, set[str]] = {}
-    if table not in self._col_cache:
-        rows = self.query(f"PRAGMA table_info({table})")
-        self._col_cache[table] = {row["name"] for row in rows}
-    return self._col_cache[table]
-```
+### 2. institutional schema 5 類法人（commit `acc7b1f` + `68269d5`）
+
+FinMind 實際回傳 5 類法人：
+- `Foreign_Investor`（外資不含自營商）
+- `Foreign_Dealer_Self`（外資自營商）
+- `Investment_Trust`（投信）
+- `Dealer_self`（自營商自行買賣）
+- `Dealer_Hedging`（自營商避險）
+
+DB 表 `institutional_daily` 跟 `institutional_market_daily` 從 6 欄擴充為 10 欄，分別記錄。
+
+### 3. Phase 4 鏈路修正（commit `9b1a2cf`）
+
+兩個炸點：
+- Windows 上 `asyncio.create_subprocess_exec` 不會自動補 `.exe` → `rust_bridge.__init__` 偵測 `sys.platform=="win32"` 自動補
+- `phase_executor._run_phase4` 沒傳 `stock_ids` 給 Rust → Rust 從 `stock_sync_status` 取，但這表沒人寫入 → 永遠 0 筆。改為從 `self._stock_list` 直接傳。
+
+### 4. SchemaValidation 用 DB schema 豁免（commit `e67bf96`）
+
+`field_mapper._validate_schema` 的 `known_keys` 只包含 `field_rename` 來源欄位 + 通用豁免。但 API 也會回「與 DB 同名直接入庫」的核心欄位（如 `open/close/limit_up`）→ 被誤判 novel。修法：把 `db._table_columns(target_table)` 加進 known_keys。
+
+### 5. INSTITUTIONAL_NAME_IGNORED 名單（commit `60b2937`）
+
+FinMind `TaiwanStockTotalInstitutionalInvestors` 多回 `total` 合計列。可從 5 類自行加總，不需要。加進「靜默略過」名單，避免 noisy warning。
 
 ---
 
@@ -194,64 +111,164 @@ def _table_columns(self, table: str) -> set[str]:
 |------|------|
 | `field_mapper.transform()` 回傳 `(rows, schema_mismatch: bool)` tuple | phase_executor 需要知道是否要呼叫 mark_schema_mismatch |
 | `db.upsert()` 有 PRAGMA 欄位過濾 | 防禦性設計：API 新增欄位不會炸掉整個 sync |
-| TOML inline table 必須單行 | `tomllib` TOML v1.0 限制，array `[]` 可跨行但 table `{}` 不行 |
-| `--stocks`、`--dry-run` 是子命令選項 | 放在子命令後才符合使用者直覺 |
-| `--config`、`--verbose` 是全域選項 | 影響 config 載入與日誌初始化，必須在子命令前解析 |
-| `cooldown_on_429_sec` 存在 `RateLimiter` 實例上 | `RetryConfig` 沒有這個欄位；`api_client` 從 `rate_limiter.cooldown_on_429_sec` 讀取 |
-| `DateSegmenter(config, sync_tracker)` | incremental 模式需要 sync_tracker 查詢上次同步日期 |
-| `updated_at = datetime.now().isoformat()` | SQLite function 字串透過 parameterized query 不會被執行 |
+| TOML inline table 必須單行 | `tomllib` TOML v1.0 限制 |
+| `--stocks`、`--dry-run`、`--phases` 是子命令選項 | 放在子命令後才符合使用者直覺 |
+| `cooldown_on_429_sec` 存在 `RateLimiter` 實例上 | api_client 從這裡讀 |
+| **Rust 後復權迴圈：先 push 再更新 multiplier** | 除息日當日 raw 已是除息後，不可再乘該日 AF |
+| **`FieldMapper(db=db)`** | 用 DB schema 補豁免名單，避免「與 DB 同名直接入庫」欄位被誤報 novel |
+| **Phase 4 必須傳 `stock_ids`** | `stock_sync_status` 表沒人寫入，Rust 取不到清單 |
+| **Windows binary path 自動補 .exe** | `asyncio.create_subprocess_exec` 不像 shell 會自動補 |
+| **`detail_fields` 在 toml 是「文件用」** | runtime 沒消費，純註記哪些欄位會進 detail JSON |
+| **5 類法人各自獨立欄位**（不累加） | 外資/自營商「自行 vs 避險/自營」量化策略上有差別 |
 
 ---
 
-## 資料庫 Schema（25 張表）
+## 已知問題清單（下次 session todo）
 
-| 資料表 | PK |
-|--------|----|
-| `stock_info` | market, stock_id |
-| `trading_calendar` | market, date |
-| `market_index_tw` | market, date |
-| `price_adjustment_events` | market, stock_id, date, event_type |
-| `price_daily` | market, stock_id, date |
-| `price_limit` | market, stock_id, date |
-| `price_daily_fwd` | market, stock_id, date |
-| `price_weekly_fwd` | market, stock_id, year, week |
-| `price_monthly_fwd` | market, stock_id, year, month |
-| `institutional_daily` | market, stock_id, date |
-| `margin_daily` | market, stock_id, date |
-| `foreign_holding` | market, stock_id, date |
-| `holding_shares_per` | market, stock_id, date |
-| `valuation_daily` | market, stock_id, date |
-| `day_trading` | market, stock_id, date |
-| `index_weight_daily` | market, stock_id, date |
-| `monthly_revenue` | market, stock_id, date |
-| `financial_statement` | market, stock_id, date, type |
-| `market_index_us` | market, stock_id, date |
-| `exchange_rate` | market, date, currency |
-| `institutional_market_daily` | market, date |
-| `market_margin_maintenance` | market, date |
-| `fear_greed_index` | market, date |
-| `api_sync_progress` | api_name, stock_id, segment_start |
-| `stock_sync_status` | market, stock_id |
+按優先序排列，每項都標明影響範圍與建議修法：
+
+### 🔴 中優先：detail warning 群（多支 API）
+
+**現象**：`upsert → <table>: 略過不存在的欄位 {'detail'}` warning
+
+**影響的 API**：
+- price_daily（_trading_money, _spread）
+- price_limit（_reference_price）
+- margin_daily（8 個 _xxx detail 欄位）
+- foreign_holding（9 個 _xxx）
+- day_trading（_day_trading_flag, _volume）
+- index_weight_daily（_rank, _stock_name, _index_type）
+- monthly_revenue（_country, _create_time）
+- market_index_us（_adj_close）
+- exchange_rate（_cash_buy, _cash_sell, _spot_sell）
+
+**根因**：toml 定義了 `_xxx` rename → field_mapper pack 進 `detail` JSON → 但這些表 schema 沒 `detail` 欄位 → PRAGMA 過濾掉 → warning + 次要欄位資料丟失。
+
+**建議方案**：
+- 方案 A（保留資料）：給上述每張表加 `detail TEXT` 欄位 → 重灌 db
+- 方案 B（捨棄資料）：toml 把這些 `_xxx` rename 改回直接欄位（要 schema 配合）或刪除 rename → 不重灌
+
+### 🟡 低優先：dividend_policy 雙 source warning
+
+**現象**：每次跑 dividend_policy 都印兩條 warning：
+```
+[WARNING] field_mapper: expected fields missing from API response: {'source'}
+[WARNING] db: upsert → _dividend_policy_staging: 略過不存在的欄位 {'source'}
+```
+
+**根因**：
+- 第一條：`source` 列入 field_rename 期望但 API 不一定每次都回（2317 沒回，2330 有回）
+- 第二條：`field_mapper` 步驟 5 自動補 `row["source"] = "finmind"` 固定欄位，但 staging 表 schema 沒這欄位
+
+**最乾淨修法**：`_dividend_policy_staging` schema 加 `source TEXT` 欄位 + 把 toml 的 `"source" = "_source"` 拿掉（讓 API 真實 source 直接入庫）。需重灌 db（或 drop staging 表）。
+
+### 🟡 低優先：institutional_daily 1774 vs price_daily 1772 多 2 筆
+
+可能 FinMind 在某些日期回了非交易日資料（連假補登）。需要 inspect 確認哪兩天額外多出來。
+
+```sql
+SELECT date FROM institutional_daily WHERE stock_id = '2330'
+EXCEPT SELECT date FROM price_daily WHERE stock_id = '2330'
+```
+
+### 🟢 待研究：exchange_rate FinMind 限制
+
+CLAUDE.md v1.4 預警「90 天只回 19 筆」確認屬實：跑 7 個年度 segment 只回 57 筆 = 19 種貨幣 × 3 個日期。
+
+需研究 FinMind v4 `TaiwanExchangeRate` 是否：
+1. 回傳 quota 限制 19 筆/segment？
+2. 需要其他 query 參數（如 currency=TWD）？
+3. 用其他 dataset（`TaiwanExchangeRateLong`?）？
+
+### 🟢 待做：agent-review-mcp 支線
+
+本 branch 名稱叫 `claude/setup-agent-review-mcp-berOR` 但全程在做 collector。CLAUDE.md v1.4 第 6 點提到「要不要切支線開始建 agent-review-mcp（spec 在最早的訊息）」這件事還沒開始。下次 session 處理。
+
+### 🟢 待做：PR 合併
+
+本 branch 12 commit 累積，testing 都通過，可以 merge 到 collector branch。
 
 ---
 
-## 下次 Session 建議工作項目
+## helper 腳本清單
 
-1. **Phase 2 欄位映射驗證**：執行 `python src/main.py backfill --stocks 2330 --phases 2` 確認 `price_adjustment_events` 寫入無誤
-2. **Phase 3 測試**：`--phases 3` 確認日K + 漲跌停資料正確
-3. **Phase 4 Rust binary**：需先在本機 `cd rust_compute && cargo build --release`，binary 輸出在 `rust_compute/target/release/tw_stock_compute`，對應 `config/collector.toml` 的 `rust_binary_path`
-4. **stock_list `source_mode = "db"`**：首次 Phase 1 執行後 `stock_info` 有資料，可切換為 db 模式
-5. **合併 PR**：測試穩定後 merge `claude/review-collector-spec-Gktcf` → `collector`
-6. **Phase 5-6 欄位映射驗證**：三大法人 pivot、財報 pack、股權分散 pack 的實際 API 回傳欄位名稱可能需要微調
+| 腳本 | 用途 | 範例 |
+|------|------|------|
+| `scripts/inspect_db.py` | 檢視 db 各表筆數 + 特定股票詳細內容 + Phase 6 全市場資料 + 後復權驗證 | `python scripts/inspect_db.py 2330` |
+| `scripts/drop_table.py` | schema 變更後 drop 指定表（避免重灌全套） | `python scripts/drop_table.py institutional_market_daily` |
+| `scripts/test_28_apis.py` | 28 支 API 連線健檢（urllib + tomllib，零依賴） | 需要 token |
 
 ---
 
-## 常見錯誤排查
+## 完整重跑流程（從零開始）
 
-| 錯誤訊息 | 原因 | 解法 |
-|----------|------|------|
-| `Invalid statement (at line N)` | collector.toml 有多行 inline table `{}` | 壓縮為單行 |
-| `table X has no column named Y` | field_rename 未設定 API → DB 欄位映射 | 在 collector.toml 對應 API section 加 `field_rename = {"api_col" = "db_col"}` |
-| `unrecognized arguments: --stocks` | `--stocks` 放在子命令前 | 改為放在子命令後：`backfill --stocks 2330` |
-| `cooldown_on_429_sec` 不生效 | 舊版讀錯 config 源 | 確認 `api_client.py` 讀的是 `rate_limiter.cooldown_on_429_sec` |
-| incremental 從頭拉 | `DateSegmenter` 沒傳 `sync_tracker` | `DateSegmenter(config, sync_tracker)` |
+```powershell
+cd C:\Users\jarry\source\repos\StockHelper4me
+del data\tw_stock.db
+python src\main.py backfill --stocks 2330,2317 --phases 1
+python src\main.py backfill --stocks 2330,2317 --phases 2
+python src\main.py backfill --stocks 2330,2317 --phases 3
+# Phase 4 之前確認 rust binary 存在；不存在的話：
+#   cd rust_compute && cargo build --release && cd ..
+python src\main.py backfill --stocks 2330,2317 --phases 4
+python src\main.py backfill --stocks 2330 --phases 5      # 5 類法人
+python src\main.py backfill --stocks 2330 --phases 6      # macro
+python scripts\inspect_db.py 2330
+```
+
+預估時間：~6 分鐘（不含 cargo build）。
+
+---
+
+## 資料庫 Schema（25 張表，v1.5 變更標 ⚠️）
+
+| 資料表 | PK | 備註 |
+|--------|----|----|
+| `stock_info` | market, stock_id | |
+| `trading_calendar` | market, date | |
+| `market_index_tw` | market, stock_id, date | (TAIEX + TPEx) |
+| `price_adjustment_events` | market, stock_id, date, event_type | |
+| `price_daily` | market, stock_id, date | |
+| `price_limit` | market, stock_id, date | |
+| `price_daily_fwd` | market, stock_id, date | Rust 計算 |
+| `price_weekly_fwd` | market, stock_id, year, week | Rust 計算 |
+| `price_monthly_fwd` | market, stock_id, year, month | Rust 計算 |
+| `institutional_daily` | market, stock_id, date | ⚠️ v1.5 從 6 欄擴 10 欄（5 類法人）|
+| `margin_daily` | market, stock_id, date | |
+| `foreign_holding` | market, stock_id, date | |
+| `holding_shares_per` | market, stock_id, date | pack_holding_shares |
+| `valuation_daily` | market, stock_id, date | |
+| `day_trading` | market, stock_id, date | |
+| `index_weight_daily` | market, stock_id, date | |
+| `monthly_revenue` | market, stock_id, date | |
+| `financial_statement` | market, stock_id, date, type | pack_financial |
+| `market_index_us` | market, stock_id, date | SPY + ^VIX |
+| `exchange_rate` | market, date, currency | ⚠️ FinMind 19 筆限制 |
+| `institutional_market_daily` | market, date | ⚠️ v1.5 同 institutional_daily 擴充 |
+| `market_margin_maintenance` | market, date | |
+| `fear_greed_index` | market, date | |
+| `_dividend_policy_staging` | market, stock_id, date | post_process 用 |
+| `api_sync_progress` | api_name, stock_id, segment_start | |
+| `stock_sync_status` | market, stock_id | ⚠️ `update_stock_sync_status` 沒人呼叫，這表永遠 0 筆 |
+
+---
+
+## 環境細節（沿用 v1.4）
+
+- Python 3.11+（需 tomllib）
+- aiohttp 已裝
+- DB schema 變更不能用 ALTER（CREATE IF NOT EXISTS 不更新已存在表），可用 `scripts/drop_table.py` 單表 drop
+- PowerShell 對 `python -c "..."` 的 nested quotes 處理很差，所有查詢用 `scripts/inspect_db.py`，**不要寫 inline SQL**
+- User token 環境變數 `$env:FINMIND_TOKEN`，禁止寫進 collector.toml
+- Sandbox 環境連不到 finmindtrade.com，所有 API 實測都得 user 本機跑
+
+---
+
+## 下次 session 建議優先序
+
+1. **PR 合併準備**（最簡單，沒風險）
+2. **detail warning 群清理**（影響最廣，但需重灌 db）
+3. **dividend_policy source 雙 warning**（順便處理）
+4. **agent-review-mcp 支線開始**（branch 名字本來就是這個）
+5. **exchange_rate 19 筆限制研究**（API 層面研究）
+6. **institutional_daily 多 2 筆查證**（小議題）
