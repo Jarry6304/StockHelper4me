@@ -56,7 +56,10 @@ INSTITUTIONAL_NAME_IGNORED: set[str] = {
 }
 
 
-def aggregate_institutional(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def aggregate_institutional(
+    rows: list[dict[str, Any]],
+    trading_dates: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """
     將三大法人 API 回傳的多筆資料（每日 3 筆）pivot 為 1 筆。
 
@@ -71,11 +74,17 @@ def aggregate_institutional(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         dealer_buy=2000, dealer_sell=1000, market, source}]
 
     Args:
-        rows: field_mapper 輸出的資料列（已含 market/source）
+        rows:          field_mapper 輸出的資料列（已含 market/source）
+        trading_dates: 若提供，會過濾掉 date 不在此集合內的 rows，避免
+                       FinMind institutional API 在週六回鬼資料（內容為某筆
+                       殘留值，date 是非交易日）
 
     Returns:
         pivot 後的資料列
     """
+    if trading_dates is not None:
+        rows = _filter_to_trading_days(rows, trading_dates, label="institutional")
+
     grouped: dict[tuple, dict[str, Any]] = {}
 
     for row in rows:
@@ -115,7 +124,10 @@ def aggregate_institutional(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def aggregate_institutional_market(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def aggregate_institutional_market(
+    rows: list[dict[str, Any]],
+    trading_dates: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """
     將全市場三大法人 API 回傳的多筆資料 pivot 為 1 筆（無 stock_id）。
 
@@ -124,7 +136,13 @@ def aggregate_institutional_market(rows: list[dict[str, Any]]) -> list[dict[str,
 
     輸出（1 筆 / 日）：
       [{date, foreign_buy=..., foreign_sell=..., ..., market, source}]
+
+    Args:
+        trading_dates: 若提供，會過濾掉 date 不在此集合內的 rows（同上）
     """
+    if trading_dates is not None:
+        rows = _filter_to_trading_days(rows, trading_dates, label="institutional_market")
+
     grouped: dict[str, dict[str, Any]] = {}
 
     for row in rows:
@@ -265,14 +283,17 @@ def apply_aggregation(
     strategy: str,
     rows: list[dict[str, Any]],
     stmt_type: str | None = None,
+    trading_dates: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     依 strategy 名稱分派到對應的聚合函式。
 
     Args:
-        strategy:  聚合策略名稱（對應 collector.toml 的 aggregation 欄位）
-        rows:      field_mapper 輸出的原始資料列
-        stmt_type: 財報類型（僅 pack_financial 需要）
+        strategy:      聚合策略名稱（對應 collector.toml 的 aggregation 欄位）
+        rows:          field_mapper 輸出的原始資料列
+        stmt_type:     財報類型（僅 pack_financial 需要）
+        trading_dates: 交易日集合（僅 institutional 兩個策略會用到，過濾掉 FinMind
+                       週六回的鬼資料）
 
     Returns:
         聚合後的資料列
@@ -281,10 +302,10 @@ def apply_aggregation(
         ValueError: 未知的 strategy 名稱
     """
     if strategy == "pivot_institutional":
-        return aggregate_institutional(rows)
+        return aggregate_institutional(rows, trading_dates=trading_dates)
 
     if strategy == "pivot_institutional_market":
-        return aggregate_institutional_market(rows)
+        return aggregate_institutional_market(rows, trading_dates=trading_dates)
 
     if strategy == "pack_financial":
         if stmt_type is None:
@@ -295,3 +316,38 @@ def apply_aggregation(
         return aggregate_holding_shares(rows)
 
     raise ValueError(f"未知的聚合策略：'{strategy}'")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 通用工具
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _filter_to_trading_days(
+    rows: list[dict[str, Any]],
+    trading_dates: set[str],
+    label: str,
+) -> list[dict[str, Any]]:
+    """過濾掉 date 不在 trading_dates 集合內的 rows，並記錄被丟掉的日期。"""
+    # 安全閥：trading_dates 為空（trading_calendar 還沒灌資料）時不過濾，
+    # 避免把整批資料都當鬼資料丟掉
+    if not trading_dates:
+        logger.warning(
+            f"[{label}] trading_dates 為空（trading_calendar 表未填充？）"
+            f"，跳過非交易日過濾"
+        )
+        return rows
+
+    kept: list[dict[str, Any]] = []
+    dropped_dates: set[str] = set()
+    for row in rows:
+        d = row.get("date")
+        if d is None or d in trading_dates:
+            kept.append(row)
+        else:
+            dropped_dates.add(d)
+    if dropped_dates:
+        logger.warning(
+            f"[{label}] FinMind 回了 {len(dropped_dates)} 個非交易日的資料，"
+            f"已過濾：{sorted(dropped_dates)}"
+        )
+    return kept

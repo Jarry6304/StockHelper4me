@@ -201,10 +201,21 @@ class PhaseExecutor:
                 # 在 field_mapper 之後、DB 寫入之前，對需要跨列合併的資料執行聚合
                 if api_config.aggregation and rows:
                     try:
+                        # institutional 兩個策略需要 trading_dates 過濾掉
+                        # FinMind 週六回的鬼資料；其他策略傳 None 即可
+                        td = (
+                            self._get_trading_dates()
+                            if api_config.aggregation in (
+                                "pivot_institutional",
+                                "pivot_institutional_market",
+                            )
+                            else None
+                        )
                         rows = apply_aggregation(
                             api_config.aggregation,
                             rows,
                             stmt_type=api_config.stmt_type,
+                            trading_dates=td,
                         )
                     except Exception as e:
                         logger.warning(
@@ -325,6 +336,21 @@ class PhaseExecutor:
         """
         self._stock_list = stock_resolver.resolve(self.stock_list_cfg, self.db)
         logger.info(f"StockList refreshed from DB. total={len(self._stock_list)}")
+
+    def _get_trading_dates(self) -> set[str]:
+        """
+        Lazy-load trading_calendar 日期集合（per-process 快取一次）。
+        institutional aggregator 用來過濾 FinMind 在週六回的鬼資料。
+        若 trading_calendar 表為空（罕見：Phase 1 還沒跑），回傳空集合 →
+        aggregator 不做過濾、保留全部 rows。
+        """
+        if not hasattr(self, "_trading_dates_cache"):
+            rows = self.db.query("SELECT date FROM trading_calendar")
+            self._trading_dates_cache = {r["date"] for r in rows}
+            logger.debug(
+                f"trading_dates cache loaded: {len(self._trading_dates_cache)} days"
+            )
+        return self._trading_dates_cache
 
     def _merge_delist_date(self, rows: list[dict]) -> None:
         """
