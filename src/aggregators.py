@@ -49,6 +49,12 @@ INSTITUTIONAL_NAME_MAP: dict[str, tuple[str, str]] = {
     "Dealer_Hedging":        ("dealer_hedging_buy",   "dealer_hedging_sell"),
 }
 
+# 已知會出現但可從 5 類法人自己加總得到的「合計」列，靜默略過不發 warning
+INSTITUTIONAL_NAME_IGNORED: set[str] = {
+    "total", "Total",      # TaiwanStockTotalInstitutionalInvestors 多回的合計列
+    "合計",                 # 中文版本
+}
+
 
 def aggregate_institutional(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
@@ -99,6 +105,8 @@ def aggregate_institutional(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             buy_col, sell_col = cols
             grouped[key][buy_col]  = row.get("buy")
             grouped[key][sell_col] = row.get("sell")
+        elif name in INSTITUTIONAL_NAME_IGNORED:
+            pass  # 已知合計列，靜默略過
         else:
             logger.warning(f"未知的法人機構名稱：'{name}'，無法 pivot，已略過")
 
@@ -144,6 +152,8 @@ def aggregate_institutional_market(rows: list[dict[str, Any]]) -> list[dict[str,
             buy_col, sell_col = cols
             grouped[date][buy_col]  = row.get("buy")
             grouped[date][sell_col] = row.get("sell")
+        elif name in INSTITUTIONAL_NAME_IGNORED:
+            pass  # 已知合計列，靜默略過
         else:
             logger.warning(f"未知的法人機構名稱（market）：'{name}'，無法 pivot，已略過")
 
