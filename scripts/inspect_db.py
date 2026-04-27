@@ -303,6 +303,38 @@ def main(argv: list[str]) -> int:
                     print(f"  {d:<12s} {raw_c:>10.2f} {fwd_c:>10.2f} "
                           f"{actual_ratio:>9.4f} {theo:>12.4f} {ok:>6s}")
 
+        # Phase 5：institutional_daily 5 類法人最近 3 筆
+        if "institutional_daily" in existing:
+            print()
+            print(f"--- institutional_daily for {stock_id}（最近 3 筆 5 類法人）---")
+            stat = cur.execute(
+                "SELECT COUNT(*) AS n, MIN(date) AS d_min, MAX(date) AS d_max "
+                "FROM institutional_daily WHERE stock_id = ?",
+                (stock_id,),
+            ).fetchone()
+            if stat["n"] == 0:
+                print("  (no rows)")
+            else:
+                print(f"  rows={stat['n']}  range={stat['d_min']} ~ {stat['d_max']}")
+                rows = cur.execute(
+                    "SELECT date, foreign_buy, foreign_sell, "
+                    "foreign_dealer_self_buy, foreign_dealer_self_sell, "
+                    "investment_trust_buy, investment_trust_sell, "
+                    "dealer_buy, dealer_sell, "
+                    "dealer_hedging_buy, dealer_hedging_sell "
+                    "FROM institutional_daily WHERE stock_id = ? "
+                    "ORDER BY date DESC LIMIT 3",
+                    (stock_id,),
+                ).fetchall()
+                fmt = lambda v: f"{v:>12,d}" if v is not None else f"{'NULL':>12s}"
+                for r in rows:
+                    print(f"  {r['date']}")
+                    print(f"    外資       buy={fmt(r['foreign_buy'])} sell={fmt(r['foreign_sell'])}")
+                    print(f"    外資自營商 buy={fmt(r['foreign_dealer_self_buy'])} sell={fmt(r['foreign_dealer_self_sell'])}")
+                    print(f"    投信       buy={fmt(r['investment_trust_buy'])} sell={fmt(r['investment_trust_sell'])}")
+                    print(f"    自營(自行) buy={fmt(r['dealer_buy'])} sell={fmt(r['dealer_sell'])}")
+                    print(f"    自營(避險) buy={fmt(r['dealer_hedging_buy'])} sell={fmt(r['dealer_hedging_sell'])}")
+
         # sync 進度
         if "api_sync_progress" in existing:
             print()

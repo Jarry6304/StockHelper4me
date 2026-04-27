@@ -28,19 +28,25 @@ logger = logging.getLogger("collector.aggregators")
 # FinMind 的 name 欄位值（中文，可能有多種寫法）
 # ──────────────────────────────────────────────────────────────────────────────
 INSTITUTIONAL_NAME_MAP: dict[str, tuple[str, str]] = {
-    # 外資（含陸資）
+    # 外資（不含外資自營商）
     "外資及陸資":             ("foreign_buy",          "foreign_sell"),
     "外資及陸資(不含外資自營商)": ("foreign_buy",          "foreign_sell"),
     "外資":                  ("foreign_buy",          "foreign_sell"),
     "Foreign_Investor":      ("foreign_buy",          "foreign_sell"),
+    # 外資自營商
+    "外資自營商":             ("foreign_dealer_self_buy", "foreign_dealer_self_sell"),
+    "Foreign_Dealer_Self":   ("foreign_dealer_self_buy", "foreign_dealer_self_sell"),
     # 投信
     "投信":                  ("investment_trust_buy",  "investment_trust_sell"),
     "Investment_Trust":      ("investment_trust_buy",  "investment_trust_sell"),
-    # 自營商
+    # 自營商（自行買賣）
     "自營商":                 ("dealer_buy",            "dealer_sell"),
     "自營商(自行買賣)":        ("dealer_buy",            "dealer_sell"),
     "Dealer":                ("dealer_buy",            "dealer_sell"),
     "Dealer_self":           ("dealer_buy",            "dealer_sell"),
+    # 自營商（避險）
+    "自營商(避險)":           ("dealer_hedging_buy",   "dealer_hedging_sell"),
+    "Dealer_Hedging":        ("dealer_hedging_buy",   "dealer_hedging_sell"),
 }
 
 
@@ -75,12 +81,16 @@ def aggregate_institutional(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "market":   row.get("market", "TW"),
                 "source":   row.get("source", "finmind"),
                 # 初始化所有欄位為 None（部分機構可能缺漏）
-                "foreign_buy":           None,
-                "foreign_sell":          None,
-                "investment_trust_buy":  None,
-                "investment_trust_sell": None,
-                "dealer_buy":            None,
-                "dealer_sell":           None,
+                "foreign_buy":               None,
+                "foreign_sell":              None,
+                "foreign_dealer_self_buy":   None,
+                "foreign_dealer_self_sell":  None,
+                "investment_trust_buy":      None,
+                "investment_trust_sell":     None,
+                "dealer_buy":                None,
+                "dealer_sell":               None,
+                "dealer_hedging_buy":        None,
+                "dealer_hedging_sell":       None,
             }
 
         name = row.get("name", "")

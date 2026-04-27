@@ -365,19 +365,23 @@ def _get_schema_ddl() -> list[str]:
         )
         """,
 
-        # 三大法人買賣超
+        # 三大法人買賣超（5 類：外資、外資自營商、投信、自營商自行、自營商避險）
         """
         CREATE TABLE IF NOT EXISTS institutional_daily (
-            market              TEXT    NOT NULL,
-            stock_id            TEXT    NOT NULL,
-            date                TEXT    NOT NULL,
-            foreign_buy         INTEGER,
-            foreign_sell        INTEGER,
-            investment_trust_buy  INTEGER,
-            investment_trust_sell INTEGER,
-            dealer_buy          INTEGER,
-            dealer_sell         INTEGER,
-            source              TEXT    DEFAULT 'finmind',
+            market                    TEXT    NOT NULL,
+            stock_id                  TEXT    NOT NULL,
+            date                      TEXT    NOT NULL,
+            foreign_buy               INTEGER,
+            foreign_sell              INTEGER,
+            foreign_dealer_self_buy   INTEGER,
+            foreign_dealer_self_sell  INTEGER,
+            investment_trust_buy      INTEGER,
+            investment_trust_sell     INTEGER,
+            dealer_buy                INTEGER,
+            dealer_sell               INTEGER,
+            dealer_hedging_buy        INTEGER,
+            dealer_hedging_sell       INTEGER,
+            source                    TEXT    DEFAULT 'finmind',
             PRIMARY KEY (market, stock_id, date)
         )
         """,
