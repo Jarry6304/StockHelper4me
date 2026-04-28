@@ -1,0 +1,57 @@
+# =============================================================================
+# tw-stock-collector — Postgres 17 Compose
+# -----------------------------------------------------------------------------
+# 用途：本地開發 + 後續 v2.0 動工共用的 Postgres 實例
+# 啟動：docker compose up -d
+# 連線：psql postgresql://twstock:twstock@localhost:5432/twstock
+# 停止：docker compose down                  # 保留資料
+# 重置：docker compose down -v                # 連 volume 一起刪
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: twstock-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: twstock
+      POSTGRES_PASSWORD: twstock
+      POSTGRES_DB: twstock
+      # 預先指定 locale，避免中文排序怪異
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - twstock-pgdata:/var/lib/postgresql/data
+      # 第一次啟動會自動跑 /docker-entrypoint-initdb.d/*.sql
+      - ./src/schema_pg.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U twstock -d twstock"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    # tuning（自用 + batch 並行寫優化）
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=100"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=2GB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "wal_compression=on"
+      - "-c"
+      - "synchronous_commit=off"  # 自用可接受偶發掉資料風險,batch 會重補
+      - "-c"
+      - "log_min_duration_statement=1000"  # 1秒以上 query 寫 log
+
+volumes:
+  twstock-pgdata:
+    name: twstock-pgdata

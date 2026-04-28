@@ -213,6 +213,9 @@ data/*.db-shm
 logs/
 rust_compute/target/
 scripts/test_28_apis_result.json
+*.db
+*.sqlite
+.venv/
 
 # tw-stock-collector：個人探測 / 測試殘留（repo root only，避免誤殺 src/scripts 下同名檔）
 /.vs/
