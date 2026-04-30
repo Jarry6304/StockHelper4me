@@ -96,7 +96,9 @@ class PhaseExecutor:
             for phase_num in phases_to_run:
                 if phase_num == 4:
                     # Phase 4 特殊處理：呼叫 Rust binary
-                    await self._run_phase4()
+                    # mode 從 CLI runtime 傳入（main.py 依 command 決定 backfill/incremental），
+                    # 不從 config.execution.mode 讀，避免 toml 寫死 backfill 但 CLI 跑 incremental 時錯位
+                    await self._run_phase4(mode)
                     continue
 
                 await self._run_phase(phase_num, mode)
@@ -267,16 +269,21 @@ class PhaseExecutor:
     # Phase 4（Rust）
     # =========================================================================
 
-    async def _run_phase4(self) -> None:
-        """呼叫 Rust binary 執行後復權 + 週K/月K 聚合"""
+    async def _run_phase4(self, mode: str) -> None:
+        """呼叫 Rust binary 執行後復權 + 週K/月K 聚合。
+
+        Args:
+            mode: "backfill" | "incremental"，由 run() 從 CLI command 決定後傳入。
+                  Rust binary 端目前未消費 mode（process_stock 永遠全段重算），
+                  但保留參數對齊 CLI 語意，避免 toml execution.mode 與 CLI 命令錯位。
+        """
         if self.rust_runner is None:
             logger.warning("[Phase 4] rust_runner 未設定，跳過 Phase 4")
             return
 
         logger.info(
-            f"[Phase 4] Started（呼叫 Rust binary）stocks={len(self._stock_list)}"
+            f"[Phase 4] Started（呼叫 Rust binary）stocks={len(self._stock_list)}, mode={mode}"
         )
-        mode = self.config.execution.mode
         await self.rust_runner(mode=mode, stock_ids=self._stock_list)
 
     # =========================================================================
