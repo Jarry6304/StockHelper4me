@@ -49,10 +49,10 @@ def _patch_mixed_dividend(db: DBWriter, stock_id: str) -> None:
     mixed_events = db.query(
         """
         SELECT * FROM price_adjustment_events
-        WHERE stock_id = %s AND event_type = 'dividend'
+        WHERE market = %s AND stock_id = %s AND event_type = 'dividend'
           AND cash_dividend IS NULL AND stock_dividend IS NULL
         """,
-        [stock_id],
+        ["TW", stock_id],
     )
 
     if not mixed_events:
@@ -67,13 +67,13 @@ def _patch_mixed_dividend(db: DBWriter, stock_id: str) -> None:
         policy = db.query_one(
             """
             SELECT * FROM _dividend_policy_staging
-            WHERE stock_id = %s
+            WHERE market = %s AND stock_id = %s
               AND (
                   detail->>'CashExDividendTradingDate' = %s
                   OR detail->>'StockExDividendTradingDate' = %s
               )
             """,
-            [stock_id, ex_date, ex_date],
+            ["TW", stock_id, ex_date, ex_date],
         )
 
         if policy is None:
@@ -134,10 +134,10 @@ def _detect_capital_increase(db: DBWriter, stock_id: str) -> None:
     capital_increases = db.query(
         """
         SELECT * FROM _dividend_policy_staging
-        WHERE stock_id = %s
+        WHERE market = %s AND stock_id = %s
           AND (detail->>'CashIncreaseSubscriptionpRrice')::numeric > 0
         """,
-        [stock_id],
+        ["TW", stock_id],
     )
 
     for ci in capital_increases:
@@ -157,9 +157,9 @@ def _detect_capital_increase(db: DBWriter, stock_id: str) -> None:
         existing = db.query_one(
             """
             SELECT 1 FROM price_adjustment_events
-            WHERE stock_id = %s AND date = %s
+            WHERE market = %s AND stock_id = %s AND date = %s
             """,
-            [stock_id, ex_date],
+            ["TW", stock_id, ex_date],
         )
 
         if existing:
