@@ -247,9 +247,20 @@ class PostgresWriter:
         update_cols = [c for c in columns if c not in primary_keys]
 
         if update_cols:
-            update_clause = ", ".join(
-                f'"{c}" = EXCLUDED."{c}"' for c in update_cols
-            )
+            # updated_at 特殊處理(兩條路都對齊):
+            #   1. row dict 有 updated_at → UPDATE 不照 EXCLUDED 寫,改 NOW()
+            #      (api_sync_progress 走這條,row 帶 datetime.now() 跟 NOW() 等價)
+            #   2. row dict 沒 updated_at 但 schema 有(stock_info 移到 detail 後)
+            #      → 補一條 updated_at = NOW(),跟 _merge_delist_date 的
+            #      SET updated_at = NOW() 語意一致,也跟 schema DEFAULT NOW() 對 INSERT
+            #      的行為一致。否則 UPDATE 路徑會留下舊的「ISO date 轉 timestamp」殘值。
+            update_pairs = [
+                f'"{c}" = NOW()' if c == "updated_at" else f'"{c}" = EXCLUDED."{c}"'
+                for c in update_cols
+            ]
+            if "updated_at" in valid_cols and "updated_at" not in columns:
+                update_pairs.append('"updated_at" = NOW()')
+            update_clause = ", ".join(update_pairs)
             sql = (
                 f'INSERT INTO "{table}" ({col_str}) VALUES ({placeholders}) '
                 f"ON CONFLICT ({pk_str}) DO UPDATE SET {update_clause}"
