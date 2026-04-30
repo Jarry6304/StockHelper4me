@@ -41,7 +41,7 @@ class RustBridge:
     Rust binary 呼叫器。
 
     使用方式：
-        bridge = RustBridge(binary_path, db_path)
+        bridge = RustBridge(binary_path)  # database_url 從 DATABASE_URL 環境變數讀
         result = await bridge.run_phase4(mode="backfill")
     """
 
@@ -61,12 +61,58 @@ class RustBridge:
             if Path(exe_path).exists():
                 binary_path = exe_path
         self.binary       = binary_path
-        self.database_url = database_url or os.getenv("DATABASE_URL")
+        # 容錯:.env 可能寫成 `DATABASE_URL=  ` 留下純空白,
+        # 不 strip 的話會送進 Rust 端才報錯,使用者看到的是 sqlx 的 obscure 錯訊。
+        raw_url = database_url if database_url is not None else os.getenv("DATABASE_URL", "")
+        self.database_url = raw_url.strip()
         if not self.database_url:
             raise RuntimeError(
                 "RustBridge: 找不到 Postgres 連線字串。請設定 DATABASE_URL 環境變數，"
                 "或在初始化時傳入 database_url 參數。"
             )
+
+        # Binary 存在性與新鮮度檢查(dev 階段救命用)
+        # production 部署 binary 跟 source 通常不在同一台機器,
+        # source 不存在時 silently 跳過,不打擾。
+        self._check_binary_freshness()
+
+    def _check_binary_freshness(self) -> None:
+        """
+        Binary 健全性檢查:
+          1. binary 不存在 → raise FileNotFoundError(早於 subprocess 啟動)
+          2. main.rs 比 binary 新 → 警告但不 raise(dev 場景常見)
+        Production 場景下 main.rs 不會跟 binary 在同一台機器,
+        source 找不到時 silently 跳過,不洗版。
+        """
+        binary_path = Path(self.binary)
+        if not binary_path.exists():
+            raise FileNotFoundError(
+                f"Rust binary 不存在:{self.binary}。"
+                f"請先執行:cd rust_compute && cargo build --release"
+            )
+
+        # mtime 警告(dev 階段救命)
+        try:
+            project_root = Path(__file__).resolve().parent.parent
+            main_rs = project_root / "rust_compute" / "src" / "main.rs"
+            cargo_toml = project_root / "rust_compute" / "Cargo.toml"
+            if not main_rs.exists():
+                return  # production:source 不在同台機器,不打擾
+
+            binary_mtime = binary_path.stat().st_mtime
+            stale_sources = [
+                p for p in (main_rs, cargo_toml)
+                if p.exists() and p.stat().st_mtime > binary_mtime
+            ]
+            if stale_sources:
+                names = ", ".join(p.name for p in stale_sources)
+                logger.warning(
+                    f"Rust binary 比 source 舊 ({names} 較新)。"
+                    f"如剛改過 Rust code,請執行:cd rust_compute && cargo build --release"
+                )
+        except OSError as e:
+            # stat 失敗(權限 / 競態檔案被刪)→ debug log 帶過,不影響執行
+            logger.debug(f"Rust binary 新鮮度檢查 stat 失敗:{e}")
 
     async def run_phase4(
         self,
@@ -84,11 +130,12 @@ class RustBridge:
         Returns:
             Rust binary 輸出的 JSON 摘要，格式：
             {
-                "schema_version": "1.1",
+                "schema_version": "2.0",
                 "processed": 1800,
                 "skipped": 12,
                 "errors": [{"stock_id": "XXXX", "reason": "..."}],
                 "af_patched": 3,
+                "interrupted": false,
                 "elapsed_ms": 45000
             }
 
@@ -162,13 +209,28 @@ class RustBridge:
             logger.error(f"[Phase 4] 無法解析 Rust binary 輸出：{e}\n輸出內容：{stdout_str}")
             raise RustComputeError(f"無法解析 Rust binary JSON 輸出：{e}") from e
 
-        # ── Schema Version 驗證（v1.1）──
+        # ── Schema Version 驗證(v1.2:warn → hard fail)──
+        # 三層防線:
+        #   1. 缺欄位 → 舊 binary(SQLite 版根本不輸出 schema_version)→ raise
+        #   2. 不一致 → Python / Rust / DB 三者版本錯位 → raise
+        #   3. 一致   → pass
+        # 之前是 logger.warning,在 production log 會被淹沒,Phase 4
+        # silently 跑完但 price_daily_fwd 全空(此即 commit 0ba3b5f 的症狀)。
+        # 此處 hard fail 為了避免下次 schema 演進時再踩同一個坑。
         rust_schema = result.get("schema_version")
-        if rust_schema and rust_schema != EXPECTED_SCHEMA_VERSION:
-            logger.warning(
+        if not rust_schema:
+            raise RustComputeError(
+                f"Rust binary 輸出缺 schema_version 欄位,可能是舊版 binary。"
+                f"請執行 `cargo build --release` 重新編譯 "
+                f"rust_compute/target/release/tw_stock_compute。"
+            )
+        if rust_schema != EXPECTED_SCHEMA_VERSION:
+            raise RustComputeError(
                 f"Rust binary schema_version={rust_schema}, "
-                f"expected={EXPECTED_SCHEMA_VERSION}. "
-                f"Consider rebuilding: cargo build --release"
+                f"expected={EXPECTED_SCHEMA_VERSION}。"
+                f"請確認:(1) `cargo build --release` 已重編,"
+                f"(2) Python 端 EXPECTED_SCHEMA_VERSION 已同步升級,"
+                f"(3) DB 已執行 `alembic upgrade head`。"
             )
 
         # 記錄執行摘要
