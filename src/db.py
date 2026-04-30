@@ -553,16 +553,18 @@ class PostgresWriter:
 
 class SqliteWriter:
     """
-    SQLite fallback,僅供:
-    1. CI 快速測試(不起 Postgres 容器)
-    2. debug 個別股票(離線驗證)
-    3. v2.0 遷移期雙寫驗證
+    SQLite fallback — v2.0 起實質停用,只剩讀取舊 dump 的能力。
 
-    維護紀律:
-    - 只實作 Protocol 必要 method
-    - DDL 走 sqlite 版本(暫保留,供完全脫離前用)
-    - 不跟進 Postgres 新功能(advisory lock / GIN index 等)
-    - v2.1 評估完全廢棄
+    停用原因:
+    - init_schema() 依賴的 db_legacy_sqlite_ddl 模組已移除
+    - update() 用 ? 佔位符,但 phase_executor / post_process / stock_resolver
+      已全面改 PG 的 %s 佔位符,SQLite 模式跑這些 SQL 會語法錯
+    - schema 演進(detail TEXT、5 類法人擴充等)不再回填 SQLite 端
+
+    保留唯一目的:CI 環境無 Postgres 時用 query / query_one 讀舊 .db dump,
+    純檢視用。寫入(upsert/insert/update)、init_schema 都會 raise。
+
+    v2.1 規劃完全砍除整個 class。
     """
 
     def __init__(self, db_path: str):
@@ -576,7 +578,8 @@ class SqliteWriter:
         self._col_cache: dict[str, set[str]] = {}
         logger.warning(
             f"SqliteWriter 啟用 (path={db_path}). "
-            "此模式僅供 debug / CI,production 應走 PostgresWriter."
+            "v2.0 起此模式僅支援 query / query_one(讀取舊 dump);"
+            "init_schema / upsert / insert / update 已停用,production 應走 PostgresWriter."
         )
 
     def upsert(
@@ -585,45 +588,21 @@ class SqliteWriter:
         rows: list[dict[str, Any]],
         primary_keys: list[str],
     ) -> int:
-        if not rows:
-            return 0
-        valid_cols = self._table_columns(table)
-        columns = [c for c in rows[0].keys() if c in valid_cols]
-        if not columns:
-            logger.warning(f"upsert -> {table}: 所有欄位都不在 schema 中,略過")
-            return 0
-
-        dropped = set(rows[0].keys()) - set(columns)
-        if dropped:
-            logger.warning(
-                f"upsert -> {table}: 略過不存在的欄位 {dropped}"
-            )
-
-        placeholders = ", ".join(["?"] * len(columns))
-        col_str = ", ".join(columns)
-        sql = f"INSERT OR REPLACE INTO {table} ({col_str}) VALUES ({placeholders})"
-
-        # SQLite 不支援 dict 直接寫入 → 確保 dict/list 已被 json.dumps
-        values = []
-        for row in rows:
-            tup = []
-            for c in columns:
-                v = row.get(c)
-                if isinstance(v, (dict, list)):
-                    v = json.dumps(v, ensure_ascii=False)
-                tup.append(v)
-            values.append(tuple(tup))
-
-        cursor = self.conn.executemany(sql, values)
-        return cursor.rowcount
+        raise NotImplementedError(
+            "v2.0 起 SqliteWriter 寫入功能已停用(schema 不再同步維護)。"
+            "請改用 PostgresWriter:export DATABASE_URL=postgresql://..."
+        )
 
     def insert(self, table: str, row: dict[str, Any]) -> None:
-        self.upsert(table, [row], primary_keys=[])
+        raise NotImplementedError(
+            "v2.0 起 SqliteWriter 寫入功能已停用。請改用 PostgresWriter。"
+        )
 
     def update(self, sql: str, params: list[Any] | None = None) -> int:
-        # SQLite 用 ?,直接傳;若上層傳的是 %s 參數會炸 → 用此方法的程式碼必須選對 driver
-        cursor = self.conn.execute(sql, params or [])
-        return cursor.rowcount
+        raise NotImplementedError(
+            "v2.0 起 SqliteWriter.update 已停用:呼叫端的 SQL 用 PG 的 %s 佔位符,"
+            "與 SQLite 的 ? 不相容。請改用 PostgresWriter。"
+        )
 
     def query(
         self,
@@ -643,11 +622,11 @@ class SqliteWriter:
         return dict(row) if row else None
 
     def init_schema(self) -> None:
-        """SQLite fallback 用內嵌 DDL(從 v1.x 保留,不再維護新欄位)。"""
-        from db_legacy_sqlite_ddl import get_sqlite_ddl  # type: ignore[import-not-found]
-        for ddl in get_sqlite_ddl():
-            self.conn.execute(ddl)
-        logger.info(f"SQLite Schema 初始化完成 (legacy version, debug only)")
+        """v2.0 起停用:db_legacy_sqlite_ddl 模組已不存在,且 schema 不再維護 SQLite 版。"""
+        raise NotImplementedError(
+            "v2.0 起 SqliteWriter.init_schema 已停用(legacy DDL 模組已移除)。"
+            "請改用 PostgresWriter:export DATABASE_URL=postgresql://... && alembic upgrade head"
+        )
 
     def _table_columns(self, table: str) -> set[str]:
         if table not in self._col_cache:
