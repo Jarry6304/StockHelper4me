@@ -276,6 +276,11 @@ class PhaseExecutor:
             mode: "backfill" | "incremental"，由 run() 從 CLI command 決定後傳入。
                   Rust binary 端目前未消費 mode（process_stock 永遠全段重算），
                   但保留參數對齊 CLI 語意，避免 toml execution.mode 與 CLI 命令錯位。
+
+        註：Rust process_stock 永遠全量重算（後復權 multiplier 從尾端倒推，新除權息
+            事件會回頭改全段歷史值，partial 邏輯上是錯的；詳見 main.rs 的 docstring）。
+            mode 參數目前不影響 Rust 行為，但保留供未來「Python 偵測除權息變化後決定
+            要不要叫 Rust」的優化空間。
         """
         if self.rust_runner is None:
             logger.warning("[Phase 4] rust_runner 未設定，跳過 Phase 4")

@@ -380,6 +380,18 @@ async fn mark_fwd_valid(
     Ok(())
 }
 
+/// 處理單一股票的後復權 + 週月 K 聚合。
+///
+/// ⚠️ 設計決策：永遠全量重算，`_mode` 參數刻意忽略（變數名 `_` 前綴）。
+///
+/// 後復權 multiplier 從序列尾端倒推（見 `compute_forward_adjusted`），
+/// 新增除權息事件會回頭修改整個 fwd 序列的歷史值。partial / incremental
+/// 重算會產生「舊日期的 fwd 價被新事件改動但沒重寫入庫」的資料矛盾，
+/// 因此這層必須三張 fwd 表 DELETE 後整段重建（見 `upsert_*_fwd`）。
+///
+/// 若未來要做真正的 incremental 優化，必須在 Python 層偵測「該股票自從上次
+/// Phase 4 以後有沒有新除權息事件」，沒有的話跳過呼叫；有的話仍須全量。
+/// 不能在 Rust 內 partial。
 async fn process_stock(
     pool: &PgPool,
     stock_id: &str,
