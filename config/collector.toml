@@ -85,8 +85,8 @@ phase        = 1
 enabled      = true
 is_backer    = false
 segment_days = 0
-field_rename = {"type" = "market_type", "industry_category" = "industry", "date" = "updated_at"}
-notes        = "上市上櫃股票基本資料；API 的 date 是『資料更新日』，映射到 stock_info.updated_at"
+field_rename = {"type" = "market_type", "industry_category" = "industry", "date" = "_data_update_date"}
+notes        = "上市上櫃股票基本資料；API 的 date 是『資料更新日』，pack 進 detail.data_update_date；updated_at 由 schema DEFAULT NOW() 填同步時刻（與 _merge_delist_date 一致）"
 
 [[api]]
 name           = "stock_delisting"
