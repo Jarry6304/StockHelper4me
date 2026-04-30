@@ -146,9 +146,14 @@ class PostgresWriter:
     或讓業務 code 直接用 psycopg.AsyncConnection,本 class 不混合 sync/async。
 
     Connection 模式:
-    - 持有單一 Connection(autocommit=False)
-    - 每個 method 自管 transaction(with conn.transaction(): ...)
+    - 持有單一 Connection(autocommit=True)
+    - 每個寫入 method 用 `with conn.transaction()` 建立顯式 BEGIN ... COMMIT 邊界
+    - 讀取 method 走 implicit single-statement transaction(autocommit 預設行為)
     - close() 時釋放
+    為何 autocommit=True:psycopg3 在 autocommit=False 下,第一個 query 會
+    隱式開 outer transaction,後續 with conn.transaction() 只開 SAVEPOINT,
+    process 結束 close 時整段 outer tx rollback → 寫入丟失。
+    ref: https://www.psycopg.org/psycopg3/docs/basic/transactions.html
     """
 
     def __init__(self, connection_url: str):
@@ -347,7 +352,11 @@ class PostgresWriter:
         若 alembic 不可用,fallback 到讀取 src/schema_pg.sql 一次性執行
         (供 CI 快速啟動或無 alembic 環境使用)。
         """
-        # Step 1: 檢查 schema_metadata(若表不存在會 abort transaction,要 rollback)
+        # Step 1: 檢查 schema_metadata 是否存在 + 版本是否吻合
+        # autocommit=True 下,query_one 失敗 connection 不會卡 abort 狀態,
+        # 不需要顯式 rollback。只縮窄 except 到 UndefinedTable,避免把
+        # 連線錯誤 / 權限錯誤誤判為「表不存在」往下走 alembic 路徑。
+        UndefinedTable = self._psycopg.errors.UndefinedTable
         try:
             row = self.query_one(
                 "SELECT value FROM schema_metadata WHERE key = %s",
@@ -356,9 +365,7 @@ class PostgresWriter:
             if row and row.get("value") == SCHEMA_VERSION:
                 logger.info(f"Schema 已是最新版本 (version={SCHEMA_VERSION}),略過初始化")
                 return
-        except Exception:
-            # 表不存在,需要初始化。先 rollback 清掉 abort 狀態
-            self.conn.rollback()
+        except UndefinedTable:
             logger.info("schema_metadata 不存在,執行初始化")
 
         # Step 2: 嘗試走 Alembic
