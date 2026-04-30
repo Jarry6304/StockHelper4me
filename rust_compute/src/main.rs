@@ -1,88 +1,37 @@
-//! tw_stock_compute — Phase 4 後復權計算與 K 線聚合
-//!
-//! CLI 使用方式：
-//!   tw_stock_compute --db <path> --mode <backfill|incremental> [--stocks <id1,id2,...>]
-//!
-//! 執行步驟：
-//!   1.   讀取 price_daily + price_adjustment_events
-//!   1.5. 補算 capital_increase 事件的 adjustment_factor
-//!   2.   計算 price_daily_fwd（後復權 OHLCV）
-//!   3.   聚合 price_weekly_fwd（依 trading_calendar 的 ISO week）
-//!   4.   聚合 price_monthly_fwd（依 year-month）
-//!   5.   更新 stock_sync_status.fwd_adj_valid = 1
-//!   6.   stdout 輸出 JSON 摘要
+//! tw_stock_compute — Phase 4 後復權計算與 K 線聚合 (C5 完整版)
 
 use std::collections::HashMap;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use chrono::{Datelike, IsoWeek, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use clap::Parser;
-use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
+use sqlx::postgres::{PgPool, PgPoolOptions};
 
-// ─────────────────────────────────────────────
-// CLI 參數定義
-// ─────────────────────────────────────────────
+const EXPECTED_SCHEMA_VERSION: &str = "2.0";
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "tw_stock_compute",
-    about = "台股後復權計算與 K 線聚合（Phase 4）"
-)]
+#[command(name = "tw_stock_compute", about = "台股後復權計算與 K 線聚合")]
 struct Args {
-    /// SQLite 資料庫路徑
-    #[arg(long)]
-    db: String,
-
-    /// 執行模式：backfill（全量）或 incremental（增量）
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
     #[arg(long, default_value = "backfill")]
     mode: String,
-
-    /// 指定股票代碼（逗號分隔）；省略則處理所有待計算股票
     #[arg(long)]
     stocks: Option<String>,
 }
 
-// ─────────────────────────────────────────────
-// 資料結構
-// ─────────────────────────────────────────────
-
-/// 日K 原始價格
 #[derive(Debug, Clone)]
-struct DailyPrice {
-    date: NaiveDate,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: i64,
-}
+struct DailyPrice { date: NaiveDate, open: f64, high: f64, low: f64, close: f64, volume: i64 }
 
-/// 價格調整事件
 #[derive(Debug, Clone)]
-struct AdjEvent {
-    date: NaiveDate,
-    event_type: String,
-    adjustment_factor: f64,
-    /// detail JSON（用於補算 capital_increase AF）
-    detail: Option<String>,
-}
+struct AdjEvent { date: NaiveDate, event_type: String, adjustment_factor: f64, detail: Option<String> }
 
-/// 後復權日K
 #[derive(Debug, Clone)]
-struct FwdDailyPrice {
-    stock_id: String,
-    date: NaiveDate,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: i64,
-}
+struct FwdDailyPrice { stock_id: String, date: NaiveDate, open: f64, high: f64, low: f64, close: f64, volume: i64 }
 
-/// stdout 輸出摘要
 #[derive(Serialize)]
 struct Summary {
     schema_version: String,
@@ -90,517 +39,455 @@ struct Summary {
     skipped: usize,
     errors: Vec<ErrorEntry>,
     af_patched: usize,
+    /// 是否因 Ctrl-C / SIGTERM 中斷（Python 端用來判斷批次是否完整）
+    interrupted: bool,
     elapsed_ms: u128,
 }
 
-/// 錯誤記錄
 #[derive(Serialize)]
-struct ErrorEntry {
-    stock_id: String,
-    reason: String,
-}
+struct ErrorEntry { stock_id: String, reason: String }
 
 // ─────────────────────────────────────────────
 // 主程式
 // ─────────────────────────────────────────────
 
-fn main() -> Result<()> {
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() -> Result<()> {
     let args = Args::parse();
     let timer = Instant::now();
 
-    // 開啟 SQLite 連線，啟用 WAL 模式
-    let conn = Connection::open(&args.db)
-        .with_context(|| format!("無法開啟資料庫：{}", args.db))?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(10))
+        .connect(&args.database_url)
+        .await
+        .with_context(|| format!("無法連線到資料庫：{}", mask_url(&args.database_url)))?;
 
-    // 取得要處理的股票清單
-    let stock_ids = resolve_stock_ids(&conn, &args)?;
+    // C5: 啟動時確認 DB schema 版本與程式碼一致
+    assert_schema_version(&pool).await?;
+
+    let stock_ids = resolve_stock_ids(&pool, &args).await?;
+    let trading_dates = load_trading_calendar(&pool).await?;
 
     let mut processed  = 0usize;
     let mut skipped    = 0usize;
     let mut af_patched = 0usize;
     let mut errors: Vec<ErrorEntry> = Vec::new();
+    let mut interrupted = false;
 
-    // 取得交易日曆（用於週K/月K聚合）
-    let trading_dates = load_trading_calendar(&conn)?;
+    // C4: signal handler
+    // tokio::select! 的 branch 不支援 #[cfg(...)]，用兩個完整的 cfg 版本分開處理。
+    // 中斷點在「股票與股票之間」，每個股票都在 transaction 內，不會 half-commit。
 
-    for stock_id in &stock_ids {
-        match process_stock(&conn, stock_id, &trading_dates, &args.mode) {
-            Ok(patched) => {
-                processed += 1;
-                af_patched += patched;
-            }
-            Err(e) => {
-                // 單股失敗不中斷整體流程
-                errors.push(ErrorEntry {
-                    stock_id: stock_id.clone(),
-                    reason: e.to_string(),
-                });
-                skipped += 1;
+    // ── Unix 版（支援 SIGTERM + Ctrl-C）
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("無法註冊 SIGTERM handler");
+
+        'batch: for stock_id in &stock_ids {
+            tokio::select! {
+                biased;
+                _ = sigterm.recv() => { interrupted = true; break 'batch; }
+                _ = tokio::signal::ctrl_c() => { interrupted = true; break 'batch; }
+                result = process_stock(&pool, stock_id, &trading_dates, &args.mode) => {
+                    match result {
+                        Ok(patched) => { processed += 1; af_patched += patched; }
+                        Err(e) => { errors.push(ErrorEntry { stock_id: stock_id.clone(), reason: e.to_string() }); skipped += 1; }
+                    }
+                }
             }
         }
     }
 
-    let elapsed_ms = timer.elapsed().as_millis();
+    // ── Windows 版（只有 Ctrl-C）
+    #[cfg(not(unix))]
+    {
+        'batch: for stock_id in &stock_ids {
+            tokio::select! {
+                biased;
+                _ = tokio::signal::ctrl_c() => { interrupted = true; break 'batch; }
+                result = process_stock(&pool, stock_id, &trading_dates, &args.mode) => {
+                    match result {
+                        Ok(patched) => { processed += 1; af_patched += patched; }
+                        Err(e) => { errors.push(ErrorEntry { stock_id: stock_id.clone(), reason: e.to_string() }); skipped += 1; }
+                    }
+                }
+            }
+        }
+    }
 
-    // 輸出 JSON 摘要至 stdout（Python 端解析）
-    let summary = Summary {
-        schema_version: "1.1".to_string(),
-        processed,
-        skipped,
-        errors,
-        af_patched,
-        elapsed_ms,
-    };
-    println!("{}", serde_json::to_string(&summary)?);
+    pool.close().await;
+
+    println!("{}", serde_json::to_string(&Summary {
+        schema_version: EXPECTED_SCHEMA_VERSION.to_string(),
+        processed, skipped, errors, af_patched,
+        interrupted,
+        elapsed_ms: timer.elapsed().as_millis(),
+    })?);
 
     Ok(())
 }
 
 // ─────────────────────────────────────────────
-// 股票清單解析
+// 輔助函式
 // ─────────────────────────────────────────────
 
-/// 解析要處理的股票清單。
-/// - `--stocks` 有指定 → 使用指定清單
-/// - 未指定 → 從 stock_sync_status 取 fwd_adj_valid = 0 的股票
-fn resolve_stock_ids(conn: &Connection, args: &Args) -> Result<Vec<String>> {
-    if let Some(stocks_str) = &args.stocks {
-        return Ok(stocks_str.split(',').map(|s| s.trim().to_string()).collect());
+fn mask_url(url: &str) -> String {
+    if let Some(scheme_end) = url.find("://") {
+        let after = &url[scheme_end + 3..];
+        if let Some(at) = after.find('@') {
+            let creds = &after[..at];
+            if let Some(colon) = creds.find(':') {
+                return format!("{}://{}:***{}", &url[..scheme_end], &creds[..colon], &after[at..]);
+            }
+        }
     }
+    url.to_string()
+}
 
-    // 查詢待計算的股票
-    let mut stmt = conn.prepare(
+// ─────────────────────────────────────────────
+// C5: schema version assert
+// ─────────────────────────────────────────────
+
+/// 確認 schema_metadata.schema_version 與 EXPECTED_SCHEMA_VERSION 一致。
+/// 版本不符直接 bail!，防止舊程式碼跑在新 DB schema 上（或反之）。
+///
+/// schema_metadata 表由 alembic baseline 建立：
+///   CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+///   INSERT INTO schema_metadata VALUES ('schema_version', '2.0');
+async fn assert_schema_version(pool: &PgPool) -> Result<()> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM schema_metadata WHERE key = 'schema_version'",
+    )
+    .fetch_optional(pool)
+    .await
+    .context("查詢 schema_metadata 失敗（表是否存在？請確認 alembic upgrade head 已執行）")?;
+
+    match row {
+        None => anyhow::bail!(
+            "schema_metadata 中找不到 schema_version，請確認 alembic upgrade head 已執行"
+        ),
+        Some((ver,)) if ver != EXPECTED_SCHEMA_VERSION => anyhow::bail!(
+            "schema version 不符：DB={ver}, 程式碼期望={EXPECTED_SCHEMA_VERSION}"
+        ),
+        Some(_) => Ok(()),
+    }
+}
+
+// ─────────────────────────────────────────────
+// C3: DB 查詢實作
+// ─────────────────────────────────────────────
+
+/// fwd_adj_valid 是 SMALLINT 0/1（非 BOOLEAN）
+async fn resolve_stock_ids(pool: &PgPool, args: &Args) -> Result<Vec<String>> {
+    if let Some(s) = &args.stocks {
+        return Ok(s.split(',').map(|x| x.trim().to_string()).collect());
+    }
+    let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT stock_id FROM stock_sync_status WHERE fwd_adj_valid = 0 ORDER BY stock_id",
-    )?;
-    let ids: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(ids)
+    )
+    .fetch_all(pool)
+    .await
+    .context("查詢 stock_sync_status 失敗")?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-// ─────────────────────────────────────────────
-// 交易日曆
-// ─────────────────────────────────────────────
-
-/// 載入交易日曆，回傳所有交易日的 NaiveDate 集合
-fn load_trading_calendar(conn: &Connection) -> Result<Vec<NaiveDate>> {
-    let mut stmt = conn.prepare(
+async fn load_trading_calendar(pool: &PgPool) -> Result<Vec<NaiveDate>> {
+    let rows: Vec<(NaiveDate,)> = sqlx::query_as(
         "SELECT date FROM trading_calendar WHERE market = 'TW' ORDER BY date",
-    )?;
-    let dates: Vec<NaiveDate> = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .filter_map(|r| r.ok())
-        .filter_map(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .collect();
-    Ok(dates)
+    )
+    .fetch_all(pool)
+    .await
+    .context("載入交易日曆失敗")?;
+    Ok(rows.into_iter().map(|(d,)| d).collect())
 }
 
-// ─────────────────────────────────────────────
-// 單股處理
-// ─────────────────────────────────────────────
+/// NUMERIC 欄位用 ::float8 拉出，避免需要 bigdecimal feature
+async fn load_raw_prices(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    market: &str,
+    stock_id: &str,
+) -> Result<Vec<DailyPrice>> {
+    let rows: Vec<(NaiveDate, f64, f64, f64, f64, i64)> = sqlx::query_as(
+        "SELECT date, open::float8, high::float8, low::float8, close::float8, volume
+           FROM price_daily
+          WHERE market = $1 AND stock_id = $2
+          ORDER BY date",
+    )
+    .bind(market).bind(stock_id)
+    .fetch_all(tx.as_mut())
+    .await
+    .with_context(|| format!("讀取 price_daily 失敗：{stock_id}"))?;
+    Ok(rows.into_iter().map(|(date, open, high, low, close, volume)| DailyPrice { date, open, high, low, close, volume }).collect())
+}
 
-/// 處理單一股票的完整 Phase 4 流程。
-/// 回傳補算的 AF 筆數。
-fn process_stock(
-    conn: &Connection,
+/// detail JSONB 讀成 TEXT，Rust 端再 parse
+async fn load_adj_events(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    market: &str,
+    stock_id: &str,
+) -> Result<Vec<AdjEvent>> {
+    let rows: Vec<(NaiveDate, String, f64, Option<String>)> = sqlx::query_as(
+        "SELECT date, event_type, adjustment_factor::float8, detail::text
+           FROM price_adjustment_events
+          WHERE market = $1 AND stock_id = $2
+          ORDER BY date",
+    )
+    .bind(market).bind(stock_id)
+    .fetch_all(tx.as_mut())
+    .await
+    .with_context(|| format!("讀取 price_adjustment_events 失敗：{stock_id}"))?;
+    Ok(rows.into_iter().map(|(date, event_type, adjustment_factor, detail)| AdjEvent { date, event_type, adjustment_factor, detail }).collect())
+}
+
+async fn patch_capital_increase_af(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    market: &str,
+    stock_id: &str,
+    raw_prices: &[DailyPrice],
+    events: &mut Vec<AdjEvent>,
+) -> Result<usize> {
+    let mut patched = 0usize;
+    for event in events.iter_mut() {
+        if event.event_type != "capital_increase" { continue; }
+        let detail_str = match &event.detail { Some(s) => s.clone(), None => continue };
+        let Some((af, p_pre, after_price)) = compute_capital_increase_af(raw_prices, event.date, &detail_str) else { continue };
+
+        let new_detail: Value = {
+            let mut d: Value = serde_json::from_str(&detail_str).unwrap_or(Value::Null);
+            if let Some(obj) = d.as_object_mut() {
+                obj.remove("status");
+                obj.insert("p_pre".into(), p_pre.into());
+                obj.insert("after_price".into(), after_price.into());
+                obj.insert("af_computed_by".into(), "rust_phase4".into());
+            }
+            d
+        };
+
+        sqlx::query(
+            "UPDATE price_adjustment_events
+                SET adjustment_factor = $1, detail = $2::jsonb
+              WHERE market = $3 AND stock_id = $4 AND date = $5 AND event_type = 'capital_increase'",
+        )
+        .bind(af)
+        .bind(new_detail.to_string())
+        .bind(market).bind(stock_id).bind(event.date)
+        .execute(tx.as_mut())
+        .await
+        .with_context(|| format!("UPDATE capital_increase AF 失敗：{stock_id} {}", event.date))?;
+
+        event.adjustment_factor = af;
+        patched += 1;
+    }
+    Ok(patched)
+}
+
+async fn upsert_daily_fwd(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    market: &str, stock_id: &str,
+    fwd_prices: &[FwdDailyPrice],
+) -> Result<()> {
+    sqlx::query("DELETE FROM price_daily_fwd WHERE market = $1 AND stock_id = $2")
+        .bind(market).bind(stock_id).execute(tx.as_mut()).await.context("DELETE price_daily_fwd 失敗")?;
+    if fwd_prices.is_empty() { return Ok(()); }
+
+    let dates:   Vec<NaiveDate> = fwd_prices.iter().map(|p| p.date).collect();
+    let opens:   Vec<f64>       = fwd_prices.iter().map(|p| p.open).collect();
+    let highs:   Vec<f64>       = fwd_prices.iter().map(|p| p.high).collect();
+    let lows:    Vec<f64>       = fwd_prices.iter().map(|p| p.low).collect();
+    let closes:  Vec<f64>       = fwd_prices.iter().map(|p| p.close).collect();
+    let volumes: Vec<i64>       = fwd_prices.iter().map(|p| p.volume).collect();
+
+    sqlx::query(
+        "INSERT INTO price_daily_fwd (market, stock_id, date, open, high, low, close, volume)
+         SELECT $1, $2, UNNEST($3::date[]), UNNEST($4::float8[]), UNNEST($5::float8[]),
+                UNNEST($6::float8[]), UNNEST($7::float8[]), UNNEST($8::bigint[])",
+    )
+    .bind(market).bind(stock_id)
+    .bind(&dates).bind(&opens).bind(&highs).bind(&lows).bind(&closes).bind(&volumes)
+    .execute(tx.as_mut()).await.context("INSERT price_daily_fwd 失敗")?;
+    Ok(())
+}
+
+async fn upsert_weekly_fwd(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    market: &str, stock_id: &str,
+    weeks: &[(i32, u32, f64, f64, f64, f64, i64)],
+) -> Result<()> {
+    sqlx::query("DELETE FROM price_weekly_fwd WHERE market = $1 AND stock_id = $2")
+        .bind(market).bind(stock_id).execute(tx.as_mut()).await.context("DELETE price_weekly_fwd 失敗")?;
+    if weeks.is_empty() { return Ok(()); }
+
+    let years:   Vec<i32> = weeks.iter().map(|w| w.0).collect();
+    let week_ns: Vec<i32> = weeks.iter().map(|w| w.1 as i32).collect();
+    let opens:   Vec<f64> = weeks.iter().map(|w| w.2).collect();
+    let highs:   Vec<f64> = weeks.iter().map(|w| w.3).collect();
+    let lows:    Vec<f64> = weeks.iter().map(|w| w.4).collect();
+    let closes:  Vec<f64> = weeks.iter().map(|w| w.5).collect();
+    let volumes: Vec<i64> = weeks.iter().map(|w| w.6).collect();
+
+    sqlx::query(
+        "INSERT INTO price_weekly_fwd (market, stock_id, year, week, open, high, low, close, volume)
+         SELECT $1, $2, UNNEST($3::int[]), UNNEST($4::int[]), UNNEST($5::float8[]),
+                UNNEST($6::float8[]), UNNEST($7::float8[]), UNNEST($8::float8[]), UNNEST($9::bigint[])",
+    )
+    .bind(market).bind(stock_id)
+    .bind(&years).bind(&week_ns).bind(&opens).bind(&highs).bind(&lows).bind(&closes).bind(&volumes)
+    .execute(tx.as_mut()).await.context("INSERT price_weekly_fwd 失敗")?;
+    Ok(())
+}
+
+async fn upsert_monthly_fwd(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    market: &str, stock_id: &str,
+    months: &[(i32, u32, f64, f64, f64, f64, i64)],
+) -> Result<()> {
+    sqlx::query("DELETE FROM price_monthly_fwd WHERE market = $1 AND stock_id = $2")
+        .bind(market).bind(stock_id).execute(tx.as_mut()).await.context("DELETE price_monthly_fwd 失敗")?;
+    if months.is_empty() { return Ok(()); }
+
+    let years:    Vec<i32> = months.iter().map(|m| m.0).collect();
+    let month_ns: Vec<i32> = months.iter().map(|m| m.1 as i32).collect();
+    let opens:    Vec<f64> = months.iter().map(|m| m.2).collect();
+    let highs:    Vec<f64> = months.iter().map(|m| m.3).collect();
+    let lows:     Vec<f64> = months.iter().map(|m| m.4).collect();
+    let closes:   Vec<f64> = months.iter().map(|m| m.5).collect();
+    let volumes:  Vec<i64> = months.iter().map(|m| m.6).collect();
+
+    sqlx::query(
+        "INSERT INTO price_monthly_fwd (market, stock_id, year, month, open, high, low, close, volume)
+         SELECT $1, $2, UNNEST($3::int[]), UNNEST($4::int[]), UNNEST($5::float8[]),
+                UNNEST($6::float8[]), UNNEST($7::float8[]), UNNEST($8::float8[]), UNNEST($9::bigint[])",
+    )
+    .bind(market).bind(stock_id)
+    .bind(&years).bind(&month_ns).bind(&opens).bind(&highs).bind(&lows).bind(&closes).bind(&volumes)
+    .execute(tx.as_mut()).await.context("INSERT price_monthly_fwd 失敗")?;
+    Ok(())
+}
+
+async fn mark_fwd_valid(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    market: &str, stock_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO stock_sync_status (market, stock_id, fwd_adj_valid)
+              VALUES ($1, $2, 1)
+         ON CONFLICT (market, stock_id) DO UPDATE SET fwd_adj_valid = 1",
+    )
+    .bind(market).bind(stock_id)
+    .execute(tx.as_mut()).await.context("UPSERT stock_sync_status 失敗")?;
+    Ok(())
+}
+
+async fn process_stock(
+    pool: &PgPool,
     stock_id: &str,
     trading_dates: &[NaiveDate],
     _mode: &str,
 ) -> Result<usize> {
-    // 讀取原始日K
-    let raw_prices = load_raw_prices(conn, stock_id)?;
+    let market = "TW";
+    let mut tx = pool.begin().await.context("開啟 transaction 失敗")?;
+
+    let raw_prices = load_raw_prices(&mut tx, market, stock_id).await?;
     if raw_prices.is_empty() {
+        tx.rollback().await.ok();
         return Ok(0);
     }
 
-    // 讀取調整事件
-    let mut events = load_adj_events(conn, stock_id)?;
+    let mut events = load_adj_events(&mut tx, market, stock_id).await?;
+    let af_patched = patch_capital_increase_af(&mut tx, market, stock_id, &raw_prices, &mut events).await?;
 
-    // Step 1.5：補算 capital_increase AF
-    let patched = patch_capital_increase_af(conn, stock_id, &mut events, &raw_prices)?;
-
-    // Step 2：計算後復權日K
     let fwd_prices = compute_forward_adjusted(stock_id, &raw_prices, &events);
+    let weeks  = aggregate_weekly(&fwd_prices, trading_dates);
+    let months = aggregate_monthly(&fwd_prices);
 
-    // Step 3 & 4：聚合週K / 月K
-    let weekly  = aggregate_weekly(&fwd_prices, trading_dates);
-    let monthly = aggregate_monthly(&fwd_prices);
+    upsert_daily_fwd  (&mut tx, market, stock_id, &fwd_prices).await?;
+    upsert_weekly_fwd (&mut tx, market, stock_id, &weeks).await?;
+    upsert_monthly_fwd(&mut tx, market, stock_id, &months).await?;
+    mark_fwd_valid    (&mut tx, market, stock_id).await?;
 
-    // 寫入 DB（使用 transaction 確保原子性）
-    conn.execute_batch("BEGIN;")?;
-
-    // 清除舊的後復權資料
-    conn.execute(
-        "DELETE FROM price_daily_fwd WHERE market = 'TW' AND stock_id = ?",
-        params![stock_id],
-    )?;
-    conn.execute(
-        "DELETE FROM price_weekly_fwd WHERE market = 'TW' AND stock_id = ?",
-        params![stock_id],
-    )?;
-    conn.execute(
-        "DELETE FROM price_monthly_fwd WHERE market = 'TW' AND stock_id = ?",
-        params![stock_id],
-    )?;
-
-    // 寫入後復權日K
-    {
-        let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO price_daily_fwd
-             (market, stock_id, date, open, high, low, close, volume)
-             VALUES ('TW', ?, ?, ?, ?, ?, ?, ?)",
-        )?;
-        for p in &fwd_prices {
-            stmt.execute(params![
-                p.stock_id,
-                p.date.to_string(),
-                p.open, p.high, p.low, p.close, p.volume
-            ])?;
-        }
-    }
-
-    // 寫入週K
-    {
-        let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO price_weekly_fwd
-             (market, stock_id, year, week, open, high, low, close, volume)
-             VALUES ('TW', ?, ?, ?, ?, ?, ?, ?, ?)",
-        )?;
-        for (year, week, o, h, l, c, v) in &weekly {
-            stmt.execute(params![stock_id, year, week, o, h, l, c, v])?;
-        }
-    }
-
-    // 寫入月K
-    {
-        let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO price_monthly_fwd
-             (market, stock_id, year, month, open, high, low, close, volume)
-             VALUES ('TW', ?, ?, ?, ?, ?, ?, ?, ?)",
-        )?;
-        for (year, month, o, h, l, c, v) in &monthly {
-            stmt.execute(params![stock_id, year, month, o, h, l, c, v])?;
-        }
-    }
-
-    // Step 5：標記後復權已完成
-    conn.execute(
-        "INSERT INTO stock_sync_status (market, stock_id, fwd_adj_valid)
-         VALUES ('TW', ?, 1)
-         ON CONFLICT(market, stock_id) DO UPDATE SET fwd_adj_valid = 1",
-        params![stock_id],
-    )?;
-
-    conn.execute_batch("COMMIT;")?;
-
-    Ok(patched)
+    tx.commit().await.context("commit 失敗")?;
+    Ok(af_patched)
 }
 
 // ─────────────────────────────────────────────
-// 資料載入
+// 純計算（不動 DB）
 // ─────────────────────────────────────────────
 
-/// 從 price_daily 載入原始日K資料（按日期升序）
-fn load_raw_prices(conn: &Connection, stock_id: &str) -> Result<Vec<DailyPrice>> {
-    let mut stmt = conn.prepare(
-        "SELECT date, open, high, low, close, volume
-         FROM price_daily
-         WHERE market = 'TW' AND stock_id = ?
-         ORDER BY date ASC",
-    )?;
-
-    let prices: Vec<DailyPrice> = stmt
-        .query_map(params![stock_id], |row| {
-            let date_str: String = row.get(0)?;
-            Ok((date_str, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
-        })?
-        .filter_map(|r| r.ok())
-        .filter_map(|(d, o, h, l, c, v)| {
-            NaiveDate::parse_from_str(&d, "%Y-%m-%d")
-                .ok()
-                .map(|date| DailyPrice { date, open: o, high: h, low: l, close: c, volume: v })
-        })
-        .collect();
-
-    Ok(prices)
-}
-
-/// 從 price_adjustment_events 載入調整事件（按日期升序）
-fn load_adj_events(conn: &Connection, stock_id: &str) -> Result<Vec<AdjEvent>> {
-    let mut stmt = conn.prepare(
-        "SELECT date, event_type, adjustment_factor, detail
-         FROM price_adjustment_events
-         WHERE market = 'TW' AND stock_id = ?
-         ORDER BY date ASC",
-    )?;
-
-    let events: Vec<AdjEvent> = stmt
-        .query_map(params![stock_id], |row| {
-            let date_str: String = row.get(0)?;
-            Ok((
-                date_str,
-                row.get::<_, String>(1)?,
-                row.get::<_, f64>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .filter_map(|(d, et, af, detail)| {
-            NaiveDate::parse_from_str(&d, "%Y-%m-%d")
-                .ok()
-                .map(|date| AdjEvent { date, event_type: et, adjustment_factor: af, detail })
-        })
-        .collect();
-
-    Ok(events)
-}
-
-// ─────────────────────────────────────────────
-// Step 1.5：補算 capital_increase AF
-// ─────────────────────────────────────────────
-
-/// 補算 capital_increase 事件的 adjustment_factor。
-///
-/// 公式（Subscription Price Method）：
-///   after_price  = (P_pre * S_old + sub_price * S_new) / (S_old + S_new)
-///   AF           = P_pre / after_price
-///
-/// 其中：
-///   P_pre      = 除權前一交易日收盤價
-///   sub_price  = 現增認購價
-///   sub_rate   = 認購比率（每 1 股有權認購 sub_rate 股）
-///   S_old = 1, S_new = sub_rate（以舊股比率計算）
-fn patch_capital_increase_af(
-    conn: &Connection,
-    stock_id: &str,
-    events: &mut Vec<AdjEvent>,
-    raw_prices: &[DailyPrice],
-) -> Result<usize> {
-    // 建立日期 → 收盤價的快速查詢表
-    let price_map: HashMap<NaiveDate, f64> = raw_prices
-        .iter()
-        .map(|p| (p.date, p.close))
-        .collect();
-
-    let mut patched = 0usize;
-
-    for event in events.iter_mut() {
-        // 只處理 capital_increase 且 AF = 1.0（暫用佔位符）的事件
-        if event.event_type != "capital_increase" || (event.adjustment_factor - 1.0).abs() > 1e-9 {
-            continue;
-        }
-
-        let detail_str = match &event.detail {
-            Some(d) => d.clone(),
-            None => continue,
-        };
-
-        // 解析 detail JSON
-        let detail: Value = match serde_json::from_str(&detail_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        // 確認是 pending_rust_phase4 狀態
-        if detail.get("status").and_then(|v| v.as_str()) != Some("pending_rust_phase4") {
-            continue;
-        }
-
-        let sub_price = match detail.get("subscription_price").and_then(|v| v.as_f64()) {
-            Some(p) if p > 0.0 => p,
-            _ => continue,
-        };
-
-        let sub_rate = match detail.get("subscription_rate_raw").and_then(|v| v.as_f64()) {
-            Some(r) if r > 0.0 => r,
-            _ => continue,
-        };
-
-        // 找除權日前一交易日的收盤價
-        let ex_date = event.date;
-        let p_pre = raw_prices
-            .iter()
-            .filter(|p| p.date < ex_date)
-            .last()
-            .map(|p| p.close);
-
-        let p_pre = match p_pre {
-            Some(p) if p > 0.0 => p,
-            _ => {
-                // price_daily 中無前一日資料，跳過
-                continue;
-            }
-        };
-
-        // 計算 after_price 與 AF
-        // sub_rate 單位：每 1 股舊股可認購 sub_rate 股新股
-        // 將 sub_rate 從 % 轉為比率（FinMind 的 CashIncreaseSubscriptionRate 單位為張/千股，需確認）
-        let normalized_rate = sub_rate / 1000.0;   // 暫以千股為單位換算
-        let after_price = (p_pre * 1.0 + sub_price * normalized_rate) / (1.0 + normalized_rate);
-        let af = if after_price > 0.0 { p_pre / after_price } else { 1.0 };
-
-        // 更新 price_adjustment_events
-        conn.execute(
-            "UPDATE price_adjustment_events
-             SET adjustment_factor = ?, before_price = ?, after_price = ?
-             WHERE market = 'TW' AND stock_id = ? AND date = ? AND event_type = 'capital_increase'",
-            params![af, p_pre, after_price, stock_id, ex_date.to_string()],
-        )?;
-
-        // 同步更新記憶體中的 event
-        event.adjustment_factor = af;
-        patched += 1;
-
-        let _ = price_map; // 避免 dead_code 警告
-    }
-
-    Ok(patched)
-}
-
-// ─────────────────────────────────────────────
-// Step 2：後復權計算
-// ─────────────────────────────────────────────
-
-/// 計算後復權（Forward Adjusted）日K。
-///
-/// 後復權算法：
-///   從最早日期往最新日期計算累積 AF。
-///   遇到調整事件時，該日之前所有價格乘以 AF。
-///
-/// 實作採「全段重算」策略：
-///   從最新到最舊反向遍歷，維護一個累積 multiplier。
-///   每遇到一個調整事件，multiplier *= AF。
-fn compute_forward_adjusted(
-    stock_id: &str,
-    raw_prices: &[DailyPrice],
-    events: &[AdjEvent],
-) -> Vec<FwdDailyPrice> {
-    if raw_prices.is_empty() {
-        return Vec::new();
-    }
-
-    // 建立日期 → 事件 AF 的快速查詢（一天可能有多個事件，相乘）
+fn compute_forward_adjusted(stock_id: &str, raw_prices: &[DailyPrice], events: &[AdjEvent]) -> Vec<FwdDailyPrice> {
+    if raw_prices.is_empty() { return Vec::new(); }
     let mut event_af: HashMap<NaiveDate, f64> = HashMap::new();
-    for event in events {
-        let af = event.adjustment_factor;
-        if (af - 1.0).abs() > 1e-12 {
-            *event_af.entry(event.date).or_insert(1.0) *= af;
+    for e in events {
+        if (e.adjustment_factor - 1.0).abs() > 1e-12 {
+            *event_af.entry(e.date).or_insert(1.0) *= e.adjustment_factor;
         }
     }
-
-    // 從最新到最舊反向計算，維護累積 multiplier
     let mut multiplier = 1.0_f64;
     let mut result: Vec<FwdDailyPrice> = Vec::with_capacity(raw_prices.len());
-
     for price in raw_prices.iter().rev() {
-        // 先用「當前」multiplier 計算當日 fwd。
-        // 除息日當日 raw 已是除息後價，不需再乘該日 AF（會重複計算）。
         result.push(FwdDailyPrice {
-            stock_id: stock_id.to_string(),
-            date:     price.date,
-            open:     (price.open  * multiplier * 100.0).round() / 100.0,
-            high:     (price.high  * multiplier * 100.0).round() / 100.0,
-            low:      (price.low   * multiplier * 100.0).round() / 100.0,
-            close:    (price.close * multiplier * 100.0).round() / 100.0,
-            volume:   (price.volume as f64 / multiplier).round() as i64,
+            stock_id: stock_id.to_string(), date: price.date,
+            open:   (price.open   * multiplier * 100.0).round() / 100.0,
+            high:   (price.high   * multiplier * 100.0).round() / 100.0,
+            low:    (price.low    * multiplier * 100.0).round() / 100.0,
+            close:  (price.close  * multiplier * 100.0).round() / 100.0,
+            volume: (price.volume as f64 / multiplier).round() as i64,
         });
-
-        // 套用完當日後才更新 multiplier，影響「此日之前」的資料
-        if let Some(&af) = event_af.get(&price.date) {
-            multiplier *= af;
-        }
+        if let Some(&af) = event_af.get(&price.date) { multiplier *= af; }
     }
-
-    // 反轉回升序
     result.reverse();
     result
 }
 
-// ─────────────────────────────────────────────
-// Step 3：週K 聚合
-// ─────────────────────────────────────────────
-
-/// 聚合後復權週K（以 ISO week 分組）。
-/// 回傳 (year, week, open, high, low, close, volume) 元組列表。
-fn aggregate_weekly(
-    fwd_prices: &[FwdDailyPrice],
-    _trading_dates: &[NaiveDate],
-) -> Vec<(i32, u32, f64, f64, f64, f64, i64)> {
-    if fwd_prices.is_empty() {
-        return Vec::new();
-    }
-
-    // 以 (year, week) 分組
+fn aggregate_weekly(fwd_prices: &[FwdDailyPrice], _trading_dates: &[NaiveDate]) -> Vec<(i32, u32, f64, f64, f64, f64, i64)> {
     let mut groups: HashMap<(i32, u32), Vec<&FwdDailyPrice>> = HashMap::new();
-    for price in fwd_prices {
-        let iso = price.date.iso_week();
-        let key = (iso.year(), iso.week());
-        groups.entry(key).or_default().push(price);
+    for p in fwd_prices {
+        let iso = p.date.iso_week();
+        groups.entry((iso.year(), iso.week())).or_default().push(p);
     }
-
-    // 計算每週的 OHLCV
-    let mut weeks: Vec<(i32, u32, f64, f64, f64, f64, i64)> = groups
-        .iter()
-        .map(|(&(year, week), prices)| {
-            // 確保按日期排序
-            let mut sorted = prices.clone();
-            sorted.sort_by_key(|p| p.date);
-
-            let open   = sorted.first().map(|p| p.open).unwrap_or(0.0);
-            let close  = sorted.last().map(|p| p.close).unwrap_or(0.0);
-            let high   = sorted.iter().map(|p| p.high).fold(f64::NEG_INFINITY, f64::max);
-            let low    = sorted.iter().map(|p| p.low).fold(f64::INFINITY, f64::min);
-            let volume = sorted.iter().map(|p| p.volume).sum();
-
-            (year, week, open, high, low, close, volume)
-        })
-        .collect();
-
-    // 按年份 + 週次排序
+    let mut weeks: Vec<_> = groups.iter().map(|(&(y, w), ps)| {
+        let mut s = ps.clone(); s.sort_by_key(|p| p.date);
+        let open  = s.first().map(|p| p.open).unwrap_or(0.0);
+        let close = s.last().map(|p| p.close).unwrap_or(0.0);
+        let high  = s.iter().map(|p| p.high).fold(f64::NEG_INFINITY, f64::max);
+        let low   = s.iter().map(|p| p.low).fold(f64::INFINITY, f64::min);
+        let vol   = s.iter().map(|p| p.volume).sum();
+        (y, w, open, high, low, close, vol)
+    }).collect();
     weeks.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
     weeks
 }
 
-// ─────────────────────────────────────────────
-// Step 4：月K 聚合
-// ─────────────────────────────────────────────
-
-/// 聚合後復權月K（以 year-month 分組）。
-/// 回傳 (year, month, open, high, low, close, volume) 元組列表。
-fn aggregate_monthly(
-    fwd_prices: &[FwdDailyPrice],
-) -> Vec<(i32, u32, f64, f64, f64, f64, i64)> {
-    if fwd_prices.is_empty() {
-        return Vec::new();
-    }
-
-    // 以 (year, month) 分組
+fn aggregate_monthly(fwd_prices: &[FwdDailyPrice]) -> Vec<(i32, u32, f64, f64, f64, f64, i64)> {
     let mut groups: HashMap<(i32, u32), Vec<&FwdDailyPrice>> = HashMap::new();
-    for price in fwd_prices {
-        let key = (price.date.year(), price.date.month());
-        groups.entry(key).or_default().push(price);
+    for p in fwd_prices {
+        groups.entry((p.date.year(), p.date.month())).or_default().push(p);
     }
-
-    // 計算每月的 OHLCV
-    let mut months: Vec<(i32, u32, f64, f64, f64, f64, i64)> = groups
-        .iter()
-        .map(|(&(year, month), prices)| {
-            let mut sorted = prices.clone();
-            sorted.sort_by_key(|p| p.date);
-
-            let open   = sorted.first().map(|p| p.open).unwrap_or(0.0);
-            let close  = sorted.last().map(|p| p.close).unwrap_or(0.0);
-            let high   = sorted.iter().map(|p| p.high).fold(f64::NEG_INFINITY, f64::max);
-            let low    = sorted.iter().map(|p| p.low).fold(f64::INFINITY, f64::min);
-            let volume = sorted.iter().map(|p| p.volume).sum();
-
-            (year, month, open, high, low, close, volume)
-        })
-        .collect();
-
+    let mut months: Vec<_> = groups.iter().map(|(&(y, m), ps)| {
+        let mut s = ps.clone(); s.sort_by_key(|p| p.date);
+        let open  = s.first().map(|p| p.open).unwrap_or(0.0);
+        let close = s.last().map(|p| p.close).unwrap_or(0.0);
+        let high  = s.iter().map(|p| p.high).fold(f64::NEG_INFINITY, f64::max);
+        let low   = s.iter().map(|p| p.low).fold(f64::INFINITY, f64::min);
+        let vol   = s.iter().map(|p| p.volume).sum();
+        (y, m, open, high, low, close, vol)
+    }).collect();
     months.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
     months
+}
+
+fn compute_capital_increase_af(raw_prices: &[DailyPrice], event_date: NaiveDate, detail_str: &str) -> Option<(f64, f64, f64)> {
+    let detail: Value = serde_json::from_str(detail_str).ok()?;
+    if detail.get("status").and_then(|v| v.as_str()) != Some("pending_rust_phase4") { return None; }
+    let sub_price = detail.get("subscription_price").and_then(|v| v.as_f64())?;
+    if sub_price <= 0.0 { return None; }
+    let sub_rate = detail.get("subscription_rate_raw").and_then(|v| v.as_f64())?;
+    if sub_rate <= 0.0 { return None; }
+    let p_pre = raw_prices.iter().filter(|p| p.date < event_date).last()?.close;
+    if p_pre <= 0.0 { return None; }
+    let r = sub_rate / 1000.0;
+    let after_price = (p_pre + sub_price * r) / (1.0 + r);
+    let af = if after_price > 0.0 { p_pre / after_price } else { 1.0 };
+    Some((af, p_pre, after_price))
 }

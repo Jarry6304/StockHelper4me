@@ -1,28 +1,46 @@
 [package]
 name    = "tw_stock_compute"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "台股後復權計算與 K 線聚合（Phase 4）"
+description = "台股後復權計算與 K 線聚合（Phase 4，Postgres + sqlx 版）"
 
 [[bin]]
 name = "tw_stock_compute"
 path = "src/main.rs"
 
 [dependencies]
-# SQLite 連線（rusqlite + bundled 特性可省略系統安裝）
-rusqlite = { version = "0.31", features = ["bundled"] }
+# ─── DB driver ───
+# 從 rusqlite 改成 sqlx + Postgres + tokio runtime
+# - runtime-tokio:    用 tokio 作為 async runtime
+# - tls-native-tls:   走系統 TLS（Windows schannel / macOS Secure Transport / Linux openssl）
+# - postgres:         啟用 Postgres driver
+# - chrono:           讓 sqlx 直接綁 chrono::NaiveDate / DateTime
+# - macros:           query!() 編譯期檢查 macro（即使我們選 runtime 路線，留著也無害）
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "tls-native-tls",
+    "postgres",
+    "chrono",
+    "macros",
+] }
 
-# JSON 序列化
+# ─── Async runtime ───
+# rt-multi-thread: 多執行緒 runtime
+# macros:          #[tokio::main]
+# signal:          tokio::signal::ctrl_c() / unix SIGTERM 處理
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+
+# JSON 序列化（不變）
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# 時間處理
+# 時間處理（不變）
 chrono = { version = "0.4", features = ["serde"] }
 
-# CLI 參數解析
-clap = { version = "4", features = ["derive"] }
+# CLI 參數解析（不變）
+clap = { version = "4", features = ["derive", "env"] }
 
-# 錯誤處理
+# 錯誤處理（不變）
 anyhow = "1"
 
 [profile.release]

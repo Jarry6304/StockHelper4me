@@ -10,8 +10,8 @@ Phase 4 由 Python 呼叫 Rust binary 執行：
   3.   月K聚合：price_monthly_fwd
   4.   更新 stock_sync_status.fwd_adj_valid = 1
 
-Python 與 Rust 透過 CLI 參數傳遞設定，
-資料交換直接讀寫同一個 SQLite 檔案。
+Python 與 Rust 透過 CLI 參數傳遞 PG 連線字串，
+Rust 用 sqlx 直接連 Postgres（v2.0 起改 PG，先前是 SQLite）。
 
 Signal Handling（v1.1）：
   攔截 CancelledError（Ctrl+C 觸發），先 SIGTERM 再 wait(10s)，
@@ -21,13 +21,14 @@ Signal Handling（v1.1）：
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
 logger = logging.getLogger("collector.rust_bridge")
 
-# 與 Rust binary 約定的 schema 版本號
-EXPECTED_SCHEMA_VERSION = "1.1"
+# 與 Rust binary 約定的 schema 版本號（v2.0 = PG/sqlx 版）
+EXPECTED_SCHEMA_VERSION = "2.0"
 
 
 class RustComputeError(Exception):
@@ -44,13 +45,14 @@ class RustBridge:
         result = await bridge.run_phase4(mode="backfill")
     """
 
-    def __init__(self, binary_path: str, db_path: str):
+    def __init__(self, binary_path: str, database_url: str | None = None):
         """
         Args:
-            binary_path: Rust binary 路徑
-                         預設：rust_compute/target/release/tw_stock_compute
-                         Windows 上若實體檔案是 .exe 而 toml 沒寫副檔名，會自動補上
-            db_path:     SQLite 資料庫路徑（Rust 直接讀寫此檔案）
+            binary_path:  Rust binary 路徑
+                          預設：rust_compute/target/release/tw_stock_compute
+                          Windows 上若實體檔案是 .exe 而 toml 沒寫副檔名，會自動補上
+            database_url: Postgres 連線字串。None 時走環境變數 DATABASE_URL，
+                          這也對齊 Rust 端 #[arg(long, env = "DATABASE_URL")]。
         """
         # Windows: cargo build 產出 tw_stock_compute.exe，
         # 但 collector.toml 為跨平台寫成不含副檔名 → 自動補
@@ -58,8 +60,13 @@ class RustBridge:
             exe_path = binary_path + ".exe"
             if Path(exe_path).exists():
                 binary_path = exe_path
-        self.binary = binary_path
-        self.db     = db_path
+        self.binary       = binary_path
+        self.database_url = database_url or os.getenv("DATABASE_URL")
+        if not self.database_url:
+            raise RuntimeError(
+                "RustBridge: 找不到 Postgres 連線字串。請設定 DATABASE_URL 環境變數，"
+                "或在初始化時傳入 database_url 參數。"
+            )
 
     async def run_phase4(
         self,
@@ -90,10 +97,12 @@ class RustBridge:
             FileNotFoundError: binary_path 不存在
         """
         # 組裝 CLI 指令
+        # 注意：Rust binary 的 CLI 是 --database-url（不是 --db）
+        # 對應 main.rs: #[arg(long, env = "DATABASE_URL")] database_url: String
         cmd = [
             self.binary,
-            "--db",   self.db,
-            "--mode", mode,
+            "--database-url", self.database_url,
+            "--mode",         mode,
         ]
 
         # 若有指定股票清單，以逗號分隔傳入
