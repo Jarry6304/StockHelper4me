@@ -448,7 +448,7 @@ CREATE TABLE IF NOT EXISTS api_sync_progress (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (api_name, stock_id, segment_start),
     CONSTRAINT chk_progress_status CHECK (
-        status IN ('pending', 'completed', 'failed')
+        status IN ('pending', 'completed', 'failed', 'empty', 'schema_mismatch')
     )
 );
 
