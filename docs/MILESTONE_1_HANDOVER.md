@@ -68,7 +68,6 @@
 | Step | 內容 | 預估工作量 | 風險點 |
 |---|---|---|---|
 | **1.4** | `rust_compute` 改 sqlx | **大**(~3 天) | rusqlite → sqlx 是大改,SQL 邏輯不變但 transaction / async 模式全變 |
-| **1.5** | `json_extract` → `->>` / `->` 全 codebase 掃描替換 | 小 | 主要在 Phase 5 financial_statement、_dividend_policy_staging |
 | **1.6** | 日期欄位 type 修正(audit) | 中 | db.py 的 `_cast_for_pg` 已自動處理,但要 audit `aggregators.py` 中是否還有 TEXT 假設 |
 | **1.7** | 全 Phase 1–6 重跑 + diff 驗證 | 中 | 需要 FinMind token,Claude sandbox 跑不了,user 端執行 |
 | **1.8** | 文件更新(CLAUDE.md、README) | 小 | M1 完成後更新到 v2.0 |
@@ -263,7 +262,7 @@ anyhow = "1"
 ```
 Step 1.4 (rust_compute → sqlx)              ~3 天
   ↓
-Step 1.5 (json_extract → ->>)               ~0.5 天
+Step 1.5 (json_extract → ->>)               ~0.5 天(已完成)
   ↓
 Step 1.6 (日期欄位 audit)                    ~1 天
   ↓
