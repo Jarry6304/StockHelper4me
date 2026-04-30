@@ -233,19 +233,8 @@ class PhaseExecutor:
                 if api_config.merge_strategy == "update_delist_date":
                     self._merge_delist_date(rows)
                 elif rows:
-                    # 依 table 決定 PK（對應 schema_pg.sql 的 PRIMARY KEY 定義）
-                    _TABLE_PKS = {
-                        "stock_info":                ["market", "stock_id"],
-                        "trading_calendar":          ["market", "date"],
-                        "exchange_rate":             ["market", "date", "currency"],
-                        "fear_greed_index":          ["market", "date"],
-                        "institutional_market_daily":["market", "date"],
-                        "market_margin_maintenance": ["market", "date"],
-                        "financial_statement":       ["market", "stock_id", "date", "type"],
-                        "price_adjustment_events":   ["market", "stock_id", "date", "event_type"],
-                        "_dividend_policy_staging":  ["market", "stock_id", "date"],
-                    }
-                    pks = _TABLE_PKS.get(api_config.target_table, ["market", "stock_id", "date"])
+                    # PK 從 schema 動態查（DBWriter._table_pks），schema 是 single source of truth
+                    pks = self.db._table_pks(api_config.target_table)
                     self.db.upsert(api_config.target_table, rows, primary_keys=pks)
 
                 # 更新進度

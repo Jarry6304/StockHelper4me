@@ -143,7 +143,7 @@ class SyncTracker:
                 # 使用 Python 端時間字串，避免 SQLite 字串字面值問題
                 "updated_at":    datetime.now().isoformat(timespec="seconds"),
             }],
-            primary_keys=["api_name", "stock_id", "segment_start"],
+            primary_keys=self.db._table_pks("api_sync_progress"),
         )
 
         if status == "failed":

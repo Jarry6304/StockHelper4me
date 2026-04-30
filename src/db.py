@@ -125,6 +125,13 @@ class DBWriter(Protocol):
         """
         ...
 
+    def _table_pks(self, table: str) -> list[str]:
+        """
+        回傳指定資料表的 PRIMARY KEY 欄位名稱列表(依 ordinal_position 排序)。
+        給 upsert 的 ON CONFLICT 子句用,避免上層硬編碼 PK 對照表。
+        """
+        ...
+
     def close(self) -> None:
         """關閉連線。"""
         ...
@@ -456,12 +463,51 @@ class PostgresWriter:
         """外部 API:回傳欄位名稱 set。給 field_mapper / upsert 過濾用。"""
         return set(self._table_column_types(table).keys())
 
+    def _table_pks(self, table: str) -> list[str]:
+        """
+        回傳指定資料表的 PRIMARY KEY 欄位名稱列表(依 ordinal_position 排序)。
+
+        schema 是 single source of truth — 上層 phase_executor / sync_tracker
+        不再硬編碼 PK 對照表,改呼叫此 API 動態查 PG。
+
+        快取:同表只查一次。schema migration 改 PK 時呼叫 _invalidate_cache()。
+
+        Raises:
+            RuntimeError: 表不存在或沒有 PRIMARY KEY 定義。
+        """
+        if not hasattr(self, "_pk_cache"):
+            self._pk_cache: dict[str, list[str]] = {}
+        if table not in self._pk_cache:
+            rows = self.query(
+                """
+                SELECT a.attname AS column_name
+                  FROM pg_index i
+                  JOIN pg_attribute a
+                    ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                 WHERE i.indrelid = %s::regclass AND i.indisprimary
+                 ORDER BY array_position(i.indkey, a.attnum)
+                """,
+                [table],
+            )
+            pks = [r["column_name"] for r in rows]
+            if not pks:
+                raise RuntimeError(
+                    f"_table_pks: 表 {table} 找不到 PRIMARY KEY,"
+                    f"可能是表不存在或 schema 未初始化"
+                )
+            self._pk_cache[table] = pks
+        return self._pk_cache[table]
+
     def _invalidate_cache(self, table: str | None = None) -> None:
         """schema migration 後清快取。table=None 全清。"""
         if table is None:
             self._col_type_cache.clear()
+            if hasattr(self, "_pk_cache"):
+                self._pk_cache.clear()
         else:
             self._col_type_cache.pop(table, None)
+            if hasattr(self, "_pk_cache"):
+                self._pk_cache.pop(table, None)
 
     # -------------------------------------------------------------------------
     # 型別 cast(寫入時依欄位 type 自動處理)
@@ -633,6 +679,12 @@ class SqliteWriter:
             rows = self.query(f"PRAGMA table_info({table})")
             self._col_cache[table] = {r["name"] for r in rows}
         return self._col_cache[table]
+
+    def _table_pks(self, table: str) -> list[str]:
+        raise NotImplementedError(
+            "v2.0 起 SqliteWriter._table_pks 已停用(寫入功能也停用,讀取無此需求)。"
+            "請改用 PostgresWriter。"
+        )
 
     def close(self) -> None:
         if self.conn:
