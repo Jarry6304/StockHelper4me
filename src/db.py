@@ -163,10 +163,15 @@ class PostgresWriter:
         self._psycopg = psycopg
         self._dict_row = dict_row
         self.url = connection_url
-        # autocommit=False,所有寫入透過 with conn.transaction()
+        # autocommit=True，讓 transaction() block 能自己 BEGIN ... COMMIT。
+        # 若設 False，第一個 query 會隱式開一個 outer transaction，
+        # 之後 with conn.transaction() 只會在它裡面開 SAVEPOINT，
+        # 帶 RELEASE 但不 COMMIT → close() 就隨 connection 一起 rollback。
+        # 之前的「寫入看似成功但 process 結束後資料不見」就是踩這個坑。
+        # ref: https://www.psycopg.org/psycopg3/docs/basic/transactions.html
         self.conn: psycopg.Connection = psycopg.connect(
             connection_url,
-            autocommit=False,
+            autocommit=True,
             row_factory=dict_row,
         )
         # 快取:table -> {col_name: col_type}

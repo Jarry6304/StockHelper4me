@@ -26,8 +26,9 @@ VALID_PARAM_MODES = {
     "per_stock_fixed",  # 同 per_stock 但 data_id 來自 fixed_ids，不走 stock_list
 }
 
+# Phase 0：trading_calendar 預載入（其他 Phase 的 trading_dates 過濾依賴此表）
 # Phase 4 在 phase_executor 特殊處理，不使用 [[api]] 定義
-VALID_PHASES = {1, 2, 3, 5, 6}
+VALID_PHASES = {0, 1, 2, 3, 5, 6}
 
 
 # =============================================================================

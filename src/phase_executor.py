@@ -21,7 +21,7 @@ from aggregators import apply_aggregation
 from api_client import ALL_MARKET_SENTINEL, APIError, FinMindClient
 from config_loader import ApiConfig, CollectorConfig, StockListConfig
 from date_segmenter import DateSegmenter
-from db import DBWriter
+from db import DBWriter   # 改成 type hint 用,實際 instantiate 由呼叫方傳入
 from field_mapper import FieldMapper
 import stock_resolver
 from sync_tracker import SyncTracker
@@ -231,7 +231,20 @@ class PhaseExecutor:
                 if api_config.merge_strategy == "update_delist_date":
                     self._merge_delist_date(rows)
                 elif rows:
-                    self.db.upsert(api_config.target_table, rows, primary_keys=["market", "stock_id", "date"])
+                    # 依 table 決定 PK（對應 schema_pg.sql 的 PRIMARY KEY 定義）
+                    _TABLE_PKS = {
+                        "stock_info":                ["market", "stock_id"],
+                        "trading_calendar":          ["market", "date"],
+                        "exchange_rate":             ["market", "date", "currency"],
+                        "fear_greed_index":          ["market", "date"],
+                        "institutional_market_daily":["market", "date"],
+                        "market_margin_maintenance": ["market", "date"],
+                        "financial_statement":       ["market", "stock_id", "date", "type"],
+                        "price_adjustment_events":   ["market", "stock_id", "date", "event_type"],
+                        "_dividend_policy_staging":  ["market", "stock_id", "date"],
+                    }
+                    pks = _TABLE_PKS.get(api_config.target_table, ["market", "stock_id", "date"])
+                    self.db.upsert(api_config.target_table, rows, primary_keys=pks)
 
                 # 更新進度
                 status = "empty" if not rows else "completed"
@@ -346,7 +359,13 @@ class PhaseExecutor:
         """
         if not hasattr(self, "_trading_dates_cache"):
             rows = self.db.query("SELECT date FROM trading_calendar")
-            self._trading_dates_cache = {r["date"] for r in rows}
+            # psycopg3 從 Postgres DATE 欄位回傳 datetime.date，
+            # 但 FinMind rows 的 date 是 str（"2024-01-15"），
+            # 統一轉成 str 避免 set membership check 永遠 False
+            self._trading_dates_cache = {
+                r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"])
+                for r in rows
+            }
             logger.debug(
                 f"trading_dates cache loaded: {len(self._trading_dates_cache)} days"
             )
@@ -369,8 +388,8 @@ class PhaseExecutor:
             self.db.update(
                 """
                 UPDATE stock_info
-                SET delist_date = ?, updated_at = datetime('now')
-                WHERE market = 'TW' AND stock_id = ?
+                SET delist_date = %s, updated_at = NOW()
+                WHERE market = 'TW' AND stock_id = %s
                 """,
                 [delist_date, stock_id],
             )

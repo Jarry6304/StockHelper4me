@@ -51,11 +51,11 @@ mode = "backfill"
 
 [execution.backfill]
 start_date = "2019-01-01"
-phases     = [1, 2, 3, 4, 5, 6]
+phases     = [0, 1, 2, 3, 4, 5, 6]
 resume     = true
 
 [execution.incremental]
-phases = [1, 2, 3, 4, 5, 6]
+phases = [0, 1, 2, 3, 4, 5, 6]
 
 # =============================================================================
 # API Registry
@@ -106,11 +106,11 @@ name         = "trading_calendar"
 dataset      = "TaiwanStockTradingDate"
 param_mode   = "all_market"
 target_table = "trading_calendar"
-phase        = 1
+phase        = 0
 enabled      = true
-is_backer    = false
+is_backer    = true
 segment_days = 0
-notes        = "交易日曆；API 只回 date 欄位"
+notes        = "交易日曆；API 只回 date 欄位。獨立為 Phase 0 因為 Phase 5 institutional aggregator 依賴本表過濾 FinMind 週六鬼資料"
 
 [[api]]
 name         = "market_index_tw"
@@ -416,10 +416,10 @@ phase        = 6
 enabled      = true
 is_backer    = false
 segment_days = 365
-fixed_ids    = ["AUD", "CAD", "CHF", "CNY", "EUR", "GBP", "HKD", "IDR", "JPY", "KRW", "MYR", "NZD", "PHP", "SEK", "SGD", "THB", "USD", "VND", "ZAR"]
+fixed_ids    = ["USD", "CNY", "JPY", "AUD"]
 field_rename = {"spot_buy" = "rate", "cash_buy" = "_cash_buy", "cash_sell" = "_cash_sell", "spot_sell" = "_spot_sell"}
 detail_fields = ["_cash_buy", "_cash_sell", "_spot_sell"]
-notes        = "台幣匯率；TaiwanExchangeRate 必須帶 data_id (currency) 才會回完整時序，不帶就只會回每幣 3 個日期的縮水資料（v1.6 之前踩過此坑）。19 個幣別來自 get_datalist('TaiwanExchangeRate')。"
+notes        = "台幣匯率；TaiwanExchangeRate 必須帶 data_id (currency) 才會回完整時序，不帶就只會回每幣 3 個日期的縮水資料。v1.7 收斂為 4 個主要幣別（美/中/日/澳）；DB PK (market, date, currency) 已保證一天一幣別一筆。"
 
 [[api]]
 name         = "institutional_market"

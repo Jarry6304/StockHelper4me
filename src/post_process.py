@@ -49,7 +49,7 @@ def _patch_mixed_dividend(db: DBWriter, stock_id: str) -> None:
     mixed_events = db.query(
         """
         SELECT * FROM price_adjustment_events
-        WHERE stock_id = ? AND event_type = 'dividend'
+        WHERE stock_id = %s AND event_type = 'dividend'
           AND cash_dividend IS NULL AND stock_dividend IS NULL
         """,
         [stock_id],
@@ -67,10 +67,10 @@ def _patch_mixed_dividend(db: DBWriter, stock_id: str) -> None:
         policy = db.query_one(
             """
             SELECT * FROM _dividend_policy_staging
-            WHERE stock_id = ?
+            WHERE stock_id = %s
               AND (
-                  json_extract(detail, '$.CashExDividendTradingDate') = ?
-                  OR json_extract(detail, '$.StockExDividendTradingDate') = ?
+                  detail->>'CashExDividendTradingDate' = %s
+                  OR detail->>'StockExDividendTradingDate' = %s
               )
             """,
             [stock_id, ex_date, ex_date],
@@ -83,8 +83,8 @@ def _patch_mixed_dividend(db: DBWriter, stock_id: str) -> None:
             )
             continue
 
-        # 解析 detail JSON
-        detail = json.loads(policy["detail"]) if policy["detail"] else {}
+        # JSONB 已自動 deserialize 為 dict
+        detail = policy["detail"] if policy["detail"] else {}
 
         # 計算現金股利（現金股利 + 法定盈餘公積現金）
         cash_earnings   = _safe_float(detail.get("CashEarningsDistribution", 0))
@@ -100,8 +100,8 @@ def _patch_mixed_dividend(db: DBWriter, stock_id: str) -> None:
         db.update(
             """
             UPDATE price_adjustment_events
-            SET cash_dividend = ?, stock_dividend = ?
-            WHERE market = 'TW' AND stock_id = ? AND date = ? AND event_type = 'dividend'
+            SET cash_dividend = %s, stock_dividend = %s
+            WHERE market = 'TW' AND stock_id = %s AND date = %s AND event_type = 'dividend'
             """,
             [cash_dividend, stock_dividend, stock_id, ex_date],
         )
@@ -134,14 +134,14 @@ def _detect_capital_increase(db: DBWriter, stock_id: str) -> None:
     capital_increases = db.query(
         """
         SELECT * FROM _dividend_policy_staging
-        WHERE stock_id = ?
-          AND json_extract(detail, '$.CashIncreaseSubscriptionpRrice') > 0
+        WHERE stock_id = %s
+          AND (detail->>'CashIncreaseSubscriptionpRrice')::numeric > 0
         """,
         [stock_id],
     )
 
     for ci in capital_increases:
-        detail = json.loads(ci["detail"]) if ci["detail"] else {}
+        detail = ci["detail"] if ci["detail"] else {}
 
         # 取得除權日（優先使用股票除權日，其次現金除息日）
         ex_date = (
@@ -157,7 +157,7 @@ def _detect_capital_increase(db: DBWriter, stock_id: str) -> None:
         existing = db.query_one(
             """
             SELECT 1 FROM price_adjustment_events
-            WHERE stock_id = ? AND date = ?
+            WHERE stock_id = %s AND date = %s
             """,
             [stock_id, ex_date],
         )

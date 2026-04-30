@@ -33,6 +33,9 @@ class FieldMapper:
         # db 供 _validate_schema 把 target_table 欄位納入 known_keys 豁免，
         # 避免「與 DB 同名直接入庫」的核心欄位（如 open/close/limit_up）被誤報 novel
         self.db = db
+        # 同 session 內 novel fields 警告去重快取：(api_name, frozenset(novel_keys)) 集合
+        # 避免每個 segment 都重印一次相同警告（noise 太多會吃掉真正重要的 log）
+        self._seen_novel: set[tuple[str, frozenset[str]]] = set()
 
     def transform(
         self,
@@ -139,12 +142,16 @@ class FieldMapper:
                 known_keys |= self.db._table_columns(api_config.target_table)
             except Exception:
                 pass  # 表不存在或查詢失敗時退回原行為（仍會印 novel）
-        novel      = actual_keys - known_keys
+        novel = actual_keys - known_keys
         if novel:
-            logger.info(
-                f"[SchemaValidation] {api_config.name}: "
-                f"novel fields detected in API response: {novel}"
-            )
+            seen_key = (api_config.name, frozenset(novel))
+            if seen_key not in self._seen_novel:
+                self._seen_novel.add(seen_key)
+                logger.info(
+                    f"[SchemaValidation] {api_config.name}: "
+                    f"novel fields detected in API response: {novel} "
+                    f"(此警告本 session 內同 API + 同欄位組合只印一次)"
+                )
 
         return False
 

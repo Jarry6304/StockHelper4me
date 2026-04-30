@@ -94,13 +94,13 @@ def _query_from_db(stock_list_cfg: StockListConfig, db: DBWriter) -> list[str]:
 
     # 市場類型篩選
     if stock_list_cfg.market_type:
-        placeholders = ", ".join(["?"] * len(stock_list_cfg.market_type))
+        placeholders = ", ".join(["%s"] * len(stock_list_cfg.market_type))
         conditions.append(f"market_type IN ({placeholders})")
         params.extend(stock_list_cfg.market_type)
 
     # 排除已下市/下櫃
     if stock_list_cfg.exclude_delisted:
-        conditions.append("(delist_date IS NULL OR delist_date = '')")
+        conditions.append("delist_date IS NULL")
 
     # 排除 ETF（依命名慣例：股票代碼為 4 碼數字的通常是 ETF，
     # 但更可靠的方式是看 industry 欄位）
@@ -113,13 +113,13 @@ def _query_from_db(stock_list_cfg: StockListConfig, db: DBWriter) -> list[str]:
 
     # 排除 TDR（台灣存託憑證，代碼通常以 9 開頭且為 5 碼）
     if stock_list_cfg.exclude_tdr:
-        conditions.append("NOT (length(stock_id) = 5 AND stock_id LIKE '9%')")
+        conditions.append("NOT (length(stock_id) = 5 AND stock_id LIKE '9%%')")
 
     # 排除上市未滿 N 天的新股
     if stock_list_cfg.min_listing_days > 0:
         conditions.append(
-            f"(listing_date IS NULL OR "
-            f"julianday('now') - julianday(listing_date) >= ?)"
+            "(listing_date IS NULL OR "
+            "(CURRENT_DATE - listing_date) >= %s)"
         )
         params.append(stock_list_cfg.min_listing_days)
 

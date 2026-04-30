@@ -70,7 +70,7 @@ class SyncTracker:
         row = self.db.query_one(
             """
             SELECT status FROM api_sync_progress
-            WHERE api_name = ? AND stock_id = ? AND segment_start = ?
+            WHERE api_name = %s AND stock_id = %s AND segment_start = %s
             """,
             [api_name, stock_id, segment_start],
         )
@@ -94,7 +94,7 @@ class SyncTracker:
             """
             SELECT MAX(segment_end) AS last_end
             FROM api_sync_progress
-            WHERE api_name = ? AND stock_id = ?
+            WHERE api_name = %s AND stock_id = %s
               AND status IN ('completed', 'empty')
             """,
             [api_name, stock_id],
@@ -143,6 +143,7 @@ class SyncTracker:
                 # 使用 Python 端時間字串，避免 SQLite 字串字面值問題
                 "updated_at":    datetime.now().isoformat(timespec="seconds"),
             }],
+            primary_keys=["api_name", "stock_id", "segment_start"],
         )
 
         if status == "failed":

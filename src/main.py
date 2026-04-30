@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from api_client import FinMindClient
 from config_loader import load_collector_config, load_stock_list_config
-from db import DBWriter
+from db import create_writer
 from logger_setup import setup_logger
 from phase_executor import PhaseExecutor
 from rate_limiter import RateLimiter
@@ -152,9 +152,9 @@ def build_parser() -> argparse.ArgumentParser:
     phase_parser.add_argument(
         "phase_num",
         type=int,
-        choices=range(1, 7),
+        choices=range(0, 7),
         metavar="N",
-        help="Phase 編號（1-6）",
+        help="Phase 編號（0-6；Phase 0 為 trading_calendar 預載入）",
     )
 
     # ── status 子命令（不需要執行選項）
@@ -248,7 +248,7 @@ async def _run_collector(args, config, stock_list_cfg) -> None:
         sys.exit(1)
 
     # ── 初始化各元件
-    db = DBWriter(config.global_cfg.db_path)
+    db = create_writer()
     db.init_schema()
 
     rate_limiter = RateLimiter(
@@ -261,7 +261,9 @@ async def _run_collector(args, config, stock_list_cfg) -> None:
     sync_tracker = SyncTracker(db)
 
     # Rust Bridge（Phase 4）
-    rust_bridge = RustBridge(config.global_cfg.rust_binary_path, config.global_cfg.db_path)
+    # database_url 沒傳 → RustBridge 自動讀 DATABASE_URL 環境變數
+    # （對齊 Rust 端 #[arg(long, env = "DATABASE_URL")]）
+    rust_bridge = RustBridge(config.global_cfg.rust_binary_path)
 
     async def rust_runner(mode: str, stock_ids: list[str] | None = None) -> None:
         """Phase 4 呼叫函式，傳入 PhaseExecutor"""
@@ -328,12 +330,13 @@ def cmd_validate(config, stock_list_cfg) -> None:
 
 def cmd_status(config) -> None:
     """顯示 api_sync_progress 的狀態摘要"""
-    db = DBWriter(config.global_cfg.db_path)
+    db = create_writer()
 
     try:
-        # 檢查資料表是否存在（尚未執行 backfill 時為空）
+# 檢查資料表是否存在（尚未執行 backfill 時為空）
         row = db.query_one(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='api_sync_progress'"
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = 'api_sync_progress'"
         )
         if row is None:
             print("資料庫尚未初始化，請先執行 backfill。")
