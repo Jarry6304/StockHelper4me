@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
 );
 
 INSERT INTO schema_metadata (key, value) VALUES
-    ('schema_version', '2.0'),
+    ('schema_version', '3.2'),                       -- m2 PR #2 bump:2.0 → 3.2(blueprint v3.2 r1 動工入口)
     ('migrated_from', 'sqlite_1.1'),
     ('migrated_at', NOW()::TEXT)
 ON CONFLICT (key) DO NOTHING;
