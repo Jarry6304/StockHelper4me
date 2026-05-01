@@ -39,7 +39,7 @@
 | **P0-4** | **Trait 簽名矛盾**:`compute(ohlcv: &OHLCVSeries)` 與 12 個非 OHLCV Core 衝突 | R1 §2.2 | overview §3 + 三子類 §2.1 | 獨立 |
 | **P0-5** | **`price_len` 度量空間未定義**(百分比/絕對/log)+ base price 不明 + 還原版本不明 | R3 §A3 | **僅 D4(traditional_core)**;neely_core 整篇沒有 price_len(monowave 度量靠 ATR) | 獨立(原 r2 標「依賴 P0-2」過度;且 traditional_core 是 P3,本項應 **降為 P3-限定**)|
 | **P0-6** | **Forest overflow 用 power_rating 排序**違反「不選 primary」哲學 | R3 §A5 | `neely_core §十二 12.2-12.3` + §八 Output schema(r2.1 修節編號)| 獨立 |
-| **P0-7** | **dirty queue 觸發契約缺**:Core 不知道何時該重算(**r3.1 補:av3 Test 3 直接 production 證據** — 3363 2026-01-20 / 1312 2023-11-28 stock_dividend 事件 fwd 沒處理,fwd_close=raw_close)| R2 §2.2 + av3 Test 3 | overview §七 + `src/post_process.py`(暫時補丁) | 獨立 |
+| **P0-7** | ✅ **r3.1 完成短期補丁**:`src/post_process.invalidate_fwd_cache` + `phase_executor` 寫 `price_adjustment_events` 後 reset `stock_sync_status.fwd_adj_valid=0`;**長期完整契約已動工**:`cores_overview §7.5 Batch 觸發來源與 dirty 契約`(commit `d4ddffb`)新增 4 視角 / 寫讀契約 / 收尾流程 / 已知漏觸發風險 | R2 §2.2 + av3 Test 3 | overview §七 + `src/post_process.py` | ✅ r3.1 已修(短期 + 長期框架) |
 | **P0-8**(C1)| **tw_market_core §五 5.1 volume 合併物理層 ambiguity**:沒講合併發生在「後復權前」還是「後復權後」(r3 promote)| spec 原文 spot-check | tw_market_core.md §五 5.1 | **P0-2 裡層**,A-V3 結論定案後一併補 |
 | **P0-9**(C2)| **跨 Core warmup_periods 合成規則完全缺**:11 篇 spec 全無 max() / sum() / 各自取的規則(r3 promote)| spec 原文 spot-check | overview §7.3 | 獨立 |
 | **P0-10**(C3)| **NeelyDiagnostics 缺 `dropped_scenario_ids`**:§八 Output 只有 `overflow_triggered: bool`,違反可重現原則(r3 promote;**剛性,無論 P0-6 方案 1/2 都要**)| spec 原文 spot-check | neely_core.md §八 | 與 P0-6 同條 schema 改動 |

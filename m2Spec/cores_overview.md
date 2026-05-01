@@ -32,6 +32,7 @@
 8. [所有 Core 清單](#八所有-core-清單)
 9. [開發優先級](#九開發優先級)
 10. [不獨立成 Core 的清單](#十不獨立成-core-的清單)
+    - 10.0 [Core 邊界判定三原則](#10-0-core-邊界判定三原則)
 11. [跨指標訊號處理原則](#十一跨指標訊號處理原則)
 12. [結構性指標的耦合例外](#十二結構性指標的耦合例外)
 13. [命名規範](#十三命名規範)
@@ -255,6 +256,62 @@ params_hash = blake3(canonical_json(params, sort_keys=ASC))[..16] (hex)
 - 取 blake3 hex 前 16 字元(64 bits,collision 風險可忽略)
 - 保證同一參數組產生同一 hash,供寫入去重與 on-demand 快取查詢
 
+**進 hash 的 Params 欄位**(P1-15 / C5 補強):**所有** `Params` 結構 field 都進 hash,
+包括但不限於:`enum 變體`(如 `BollingerParams.source: PriceSource`)、`anchor 日期`
+(如 `VwapParams.anchor: NaiveDate`)、`mode`、`timeframe`、`thresholds`(如 RSI/MFI 的
+`overbought` / `oversold`)。**不進 hash 的欄位需在 Core spec 個別宣告**(如某 Core 的
+`debug_only` 欄位)。
+
+### 7.5 Batch 觸發來源與 dirty 契約(P0-7 / r3.1 補強)
+
+> 本節定義 dirty queue 的觸發契約 — 何時 Core 會被 batch dispatcher 排程重算。
+> 短期實作見 `src/post_process.invalidate_fwd_cache`(commit `e051216`),長期完整
+> 契約待 m3_compute 動工時落地(r3.1 暫以 collector 端 stock_sync_status 充當)。
+
+#### 7.5.1 四個 dirty 觸發視角
+
+| # | 觸發 | 來源 | 範例 |
+|---|---|---|---|
+| ① | **Bronze 變更** | Collector Phase 2 / 5 / 6 寫入新 raw 資料 | 新除權息事件 → `price_adjustment_events` |
+| ② | **M3 內 Core 互引用** | Wave/Pattern Core 結果改變,影響 trendline_core 等下游 | neely_core scenario_forest 變動 |
+| ③ | **tw_market_core 還原因子變更** | Bronze AF / vf 改動觸發 fwd 表全段重算 | P1-17 修正 stock_dividend vf |
+| ④ | **Bronze 補單**(historical revision) | FinMind 修正過去資料 / Collector 重抓 | par_value_change 補資料 |
+
+第 5 個視角(workflow toml 新增 params_hash)由 on-demand 路徑觸發,不走 batch dirty queue。
+
+#### 7.5.2 寫入 dirty 的契約
+
+- **Collector 端**:Phase 2/5/6 寫 Bronze 後 reset `stock_sync_status.fwd_adj_valid = 0`
+  (現況短期補丁;長期 m3_compute 落地後改寫進 silver-level dirty queue)
+- **Silver builder 端**(blueprint v3.2 規劃):每張 `*_derived` 表加 `is_dirty BOOLEAN` +
+  `dirty_at TIMESTAMPTZ` 欄位;Bronze 變更 trigger 設此 flag
+- **M3 端**:不寫 dirty(M3 是讀者,不是寫者),但 Core 可透過 `core_dependency_graph`
+  通知 Orchestrator 「我的 output 變了」
+
+#### 7.5.3 讀 dirty 的契約
+
+- **Batch dispatcher** 讀 silver dirty 找出待算的 (market, stock_id, date_range),分發給對應 Core
+- **Core 不感知 dirty queue**:Core 是純函式,給定 input + params 永遠產出同樣 output;
+  dirty 純屬 dispatcher 排程資訊
+- **m3_compute 不回寫 silver dirty**:讀完算完寫進 `indicator_values` / `structural_snapshots` /
+  `facts`,不動 silver 的 dirty flag(避免循環依賴)
+
+#### 7.5.4 收尾流程
+
+每個 Core 計算完成後:
+1. 寫進對應目的地表(§7.1 三類)
+2. 更新自己的 `core_version` / `computed_at` 戳記
+3. **不**清 silver dirty flag(由 silver builder 端負責;M3 不碰)
+4. dispatcher 收 Core success → 清 dispatcher 內部隊列
+5. 失敗則 retry(限定次數,失敗計數寫進 `batch_execution_log`)
+
+#### 7.5.5 已知 dirty 漏觸發風險(待修)
+
+- **跨 Core 互引用 (case ②)**:目前 `core_dependency_graph` 是靜態宣告,未做執行時通知
+  → trendline_core 不會自動感知 neely_core 重算 → 需 dispatcher 端依 graph 連動排程
+- **on-demand 路徑 (case 5)**:workflow toml 新增 entry 時尚未自動 backfill 歷史 → 由
+  workflow_registry 的 `last_used_at` cron job 補(r3 §15.6)
+
 ---
 
 ## 八、所有 Core 清單
@@ -331,9 +388,23 @@ P0 通過後才開始 P1。
 
 避免日後重複討論,r3 明確列出**不獨立**成 Core 的項目。
 
+### 10.0 Core 邊界判定三原則(r3.1 抽出)
+
+> 由 r2 §2.3 反向案例(R1 §3.6 institutional_market_daily 外擴 + R3 §A5 forest overflow 內縮)抽出的判定通則。下面表格中「實際處理方式」欄都應對齊此三原則。
+
+1. **可重現原則**:給定相同輸入與 params,任何時候執行都產出相同 Output → 可立 Core
+   - 反例:依靠 cache / 隨機種子 / 系統時間 的 Core 不能立
+2. **無選擇原則**:Core 內部不做「擇一/排序/篩選」決策,所有候選並列輸出
+   - 反例:Forest overflow 用 power_rating 排序丟棄(`neely_core §十二 12.2-12.3` — Track B user 拍板方案 1/2);Fibonacci ratio 多重命中 tiebreak (P1-16)
+3. **無經驗原則**:不需經驗判讀的事實由 Core 機械產出;經驗類由 Aggregation Layer 判讀
+   - 反例:`MACD 顯示動能轉強`(經驗詞)/ `bandwidth_extreme_low`(描述詞,P2 待修)
+
+### 10.1 不獨立成 Core 的清單
+
 | 項目 | 為何不獨立 | 實際處理方式 |
 |---|---|---|
 | **Volume(成交量)** | 已存在於 raw 表(`price_daily_fwd.volume`),無計算邏輯 | Aggregation Layer 直接從 raw 表查 |
+| **全市場三大法人合計** | SUM 可算(SQL view) | r3 §2.5 `total_institutional_view` |
 | **Fibonacci** | Neely Core 內部子模組,輸出在 `Scenario.expected_fib_zones` | 屬 Neely Core 範圍 |
 | **TTM Squeeze 等跨指標訊號** | 違反零耦合原則 | 詳見第十一章 |
 | **MA / SMA / EMA / WMA(同族)** | 演算法相近,差異僅在權重 | 統一為 `ma_core`,以 enum 參數區分子型號 |
