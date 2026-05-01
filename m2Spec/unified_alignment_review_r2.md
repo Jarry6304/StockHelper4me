@@ -1,13 +1,13 @@
-# Cores 全系列規格對齊審查 — 統合報告 r2.1(事實/流程修正版)
+# Cores 全系列規格對齊審查 — 統合報告 r3(C 系列整合版)
 
 > **整合來源**:三份分區審查報告(審查範圍互不重複)
-> **整合日期**:2026-05-01(r2.1 修訂日:2026-05-01)
-> **版本**:**r2.1**(事實/流程修正版,於 r2 基礎上修 7 處事實錯誤 + 5 處流程問題,共 12 處)
-> **版本沿革**:r1(初稿)→ r2(13 處邏輯/引用/數量修正)→ **r2.1(本次,12 處事實/流程修正)**
+> **整合日期**:2026-05-01(r3 修訂日:2026-05-01)
+> **版本**:**r3**(C 系列整合版,於 r2.1 基礎上把 §十一 r3 預備清單的 10 條 gap 正式整合進 P0/P1/P2 表)
+> **版本沿革**:r1(初稿)→ r2(13 處邏輯/引用/數量修正)→ r2.1(12 處事實/流程修正)→ **r3(本次,C 系列 10 條 gap 整合 + 編組重排)**
 > **共同對齊基準**:`cores_overview.md` v2.0 r1 + `collector_rust_restructure_blueprint_v3_2.md` r1
 > **整合方法**:交叉比對 → 依賴關係分析 → 衝突合併 → 阻塞項排序 → overview/blueprint 修正清單
 >
-> **r2.1 修正重點**(詳見 §10.3):基於 11 篇 Core spec 原文 spot-check,修正 r2 對 spec 內容的誤判。新增 C 系列 10 條 r2 漏抓 gap(暫列 §九 r3 預備清單,本版不整合進 P0/P1 表)。
+> **r3 整合重點**(詳見 §10.4):C1/C2/C3 → P0(P0-8/P0-9/P0-10);C4/C5/C6 → P1(P1-14/P1-15/P1-16);C7/C8/C9/C10 → P2(P2-12/P2-13/P2-14/P2-15)。動工順序、依賴鏈、§九 編組同步更新。原 §十一 改為「C 系列整合對應表」保留追溯。
 
 ---
 
@@ -26,35 +26,44 @@
 
 ## 一、TL;DR — 跨報告嚴重度總表
 
-### 1.1 🔴 P0 動工前阻塞項(去重後共 7 項)
+### 1.1 🔴 P0 動工前阻塞項(r3:共 10 項,含 C 系列 promote 3 項)
 
-> **r1 修正**:r1 列 8 項時將 P0-2(A-V3)與 P0-7(Volume 還原)分列,但兩者實為同一阻塞鏈的兩面(A-V3 結論未出 → Volume 還原語意才無法定),合併為 P0-2。
+> **r1 修正**:r1 列 8 項時將 P0-2(A-V3)與 P0-7(Volume 還原)分列,但兩者實為同一阻塞鏈的兩面,合併為 P0-2。
+> **r3 整合**:P0-8 / P0-9 / P0-10 從 r2.1 §十一 C 系列 promote。
 
 | # | 項目 | 來源報告 | 影響範圍 | 依賴 |
 |---|---|---|---|---|
 | **P0-1** | **K-1**:`chip_cores.MarginPoint.margin_maintenance` 欄位未移除(§4.4 line 184)| R1 §2.1(實質確認);R2 §2.3 僅標「無法驗證」,**非實質指出**,僅作旁證 | `chip_cores.md` §4.4 | 獨立 |
-| **P0-2** | **A-V3 + 連動 OHLCVSeries / Volume 還原**:`price_daily_fwd.volume` 是否已調整未驗證,連帶 OHLCVSeries 缺欄位、TW-Market Core volume 合併雙重失真風險 | R2 §2.1 + R3 §A4 | volume Cores 全部 + `OHLCVSeries` schema + TW-Market Core §五 5.1 | **上游阻塞**,影響 P0-3 部分連動 |
+| **P0-2** | **A-V3 + 連動 OHLCVSeries / Volume 還原**:`price_daily_fwd.volume` 是否已調整未驗證,連帶 OHLCVSeries 缺欄位、TW-Market Core volume 合併雙重失真風險 | R2 §2.1 + R3 §A4 | volume Cores 全部 + `OHLCVSeries` schema + TW-Market Core §五 5.1 | **上游阻塞**,影響 P0-3 / P0-8 連動 |
 | **P0-3** | **`_fwd` 表職責邊界**:Silver 已做後復權 vs TW-Market Core §五宣稱要做 | R3 §A1 | D2(`tw_market_core.md`) §五 / §九 | 部分依賴 P0-2 結論 |
 | **P0-4** | **Trait 簽名矛盾**:`compute(ohlcv: &OHLCVSeries)` 與 12 個非 OHLCV Core 衝突 | R1 §2.2 | overview §3 + 三子類 §2.1 | 獨立 |
 | **P0-5** | **`price_len` 度量空間未定義**(百分比/絕對/log)+ base price 不明 + 還原版本不明 | R3 §A3 | **僅 D4(traditional_core)**;neely_core 整篇沒有 price_len(monowave 度量靠 ATR) | 獨立(原 r2 標「依賴 P0-2」過度;且 traditional_core 是 P3,本項應 **降為 P3-限定**)|
 | **P0-6** | **Forest overflow 用 power_rating 排序**違反「不選 primary」哲學 | R3 §A5 | `neely_core §十二 12.2-12.3` + §八 Output schema(r2.1 修節編號)| 獨立 |
 | **P0-7** | **dirty queue 觸發契約缺**:Core 不知道何時該重算 | R2 §2.2 | overview §七 | 獨立 |
+| **P0-8**(C1)| **tw_market_core §五 5.1 volume 合併物理層 ambiguity**:沒講合併發生在「後復權前」還是「後復權後」(r3 promote)| spec 原文 spot-check | tw_market_core.md §五 5.1 | **P0-2 裡層**,A-V3 結論定案後一併補 |
+| **P0-9**(C2)| **跨 Core warmup_periods 合成規則完全缺**:11 篇 spec 全無 max() / sum() / 各自取的規則(r3 promote)| spec 原文 spot-check | overview §7.3 | 獨立 |
+| **P0-10**(C3)| **NeelyDiagnostics 缺 `dropped_scenario_ids`**:§八 Output 只有 `overflow_triggered: bool`,違反可重現原則(r3 promote;**剛性,無論 P0-6 方案 1/2 都要**)| spec 原文 spot-check | neely_core.md §八 | 與 P0-6 同條 schema 改動 |
 
-> **真實依賴關係**(r2.1 修正:P0-5 不屬 P0-2 下游 — neely 沒用 price_len,只有 traditional_core P3 有,P0-5 應降 P3-限定):
+> **真實依賴關係**(r3 更新):
 > ```
-> P0-2 (A-V3) ──→ P0-3 (_fwd 職責中 volume 處理連動)
+> P0-2 (A-V3) ──┬──→ P0-3 (_fwd 職責中 volume 處理連動)
+>               └──→ P0-8 (volume 合併與後復權順序)
 >
-> P0-1 / P0-4 / P0-6 / P0-7  彼此獨立,可並行修正
+> P0-6 ──→ P0-10 (Output schema 同檔案改動)
+>
+> P0-1 / P0-4 / P0-7 / P0-9   彼此獨立,可並行修正
 > P0-5  降 P3-限定(traditional_core 開工時處理,非動工前阻塞)
 > ```
 
-### 1.2 🟠 P1 一致性與完整度問題(r2.1 統一編號:**12 條 P1 + 3 條 P0 集中包帶解 = 15 引用列**)
+### 1.2 🟠 P1 一致性與完整度問題(r3:**15 條 P1 + 3 條 P0 集中包帶解 = 18 引用列**)
 
 > **r1 修正**:
 > - P1-9(R2 §2.4)應為「**部分關閉**」而非完全關閉:R1 雖補上規格審查,但未做欄位級對齊(`valuation_core` 是否消費新增 `market_value_weight` 等)
 > - r1 P1-4(`produce_facts` 無示範)併入 P0 修正集中包(共識點 ③),仍須 D 系列規格內補(見 r2.1 §10.3 B3)
 >
-> **r2.1 修正**:r2 §1.2 「14 項」、§四「13 項」、+「P0 帶解 3 項」三處數量對不上。r2.1 統一表頭計法為「12 條獨立 P1 + 3 條 P0 帶解列(合併 / P1-rem / 自動帶解描述)= 15 引用列」。下表照舊不動,只修標題。
+> **r2.1 修正**:r2 §1.2 「14 項」、§四「13 項」、+「P0 帶解 3 項」三處數量對不上。r2.1 統一表頭計法為「12 條獨立 P1 + 3 條 P0 帶解列 = 15 引用列」。
+>
+> **r3 整合**:從 §十一 C 系列 promote 3 條進 P1 → P1-14(C4 Combined params 拆)/ P1-15(C5 vwap params_hash 演算法)/ P1-16(C6 Fibonacci tiebreak)。新計法:**15 條 P1(P1-1 ~ P1-13 + P1-14 ~ P1-16)+ 3 條 P0 帶解 = 18 引用列**。
 
 | # | 項目 | 來源 | 修正位置 | 狀態 |
 |---|---|---|---|---|
@@ -72,8 +81,11 @@
 | P1-12 | **Combined 模式與 params_hash 去重衝突** | R3 §A7 | D4 §三 + overview §6.5 第 7 條 | **P0 部份帶解,仍須 D 系列規格內補**(D4 Combined Params 結構需拆 frost_params/ramki_params,光改 §6.5 不足)|
 | (P1-rem) | **Fundamental / Environment 規格欄位級對齊未驗** | R2 §2.4 殘餘 | 三子類各 Core 對 blueprint Silver 欄位 | **R1 未涵蓋,r2 補列** |
 | (合併) | `produce_facts` 在 13 個子類 Core 全部沒示範(實際應為 25 個 Core 全無實作示範,r2.1 補)| R1 §3.4 | overview §6.5 第 1 條 + 各 Core spec 各補一個 reference 範例 | **P0 部份帶解,仍須 D 系列規格內補**(§6.5 寫通則,各 Core 仍需個別寫範例)|
+| **P1-14**(C4)| **traditional_core Combined 模式 params_hash collision** — Frost ∪ Ramki forest 沒處理 hash(r3 promote)| spec 原文 spot-check | D4 §三 Combined Params 結構需拆 `engine: Combined { frost_params, ramki_params }` | 獨立 |
+| **P1-15**(C5)| **vwap_core anchor 多錨 + params_hash 演算法定義缺** — overview §7.4 只到「canonical JSON + blake3 前 16」沒列 anchor/timeframe 是否進 hash(r3 promote)| spec 原文 spot-check | overview §7.4 + 各 Core spec 個別寫 | 獨立 |
+| **P1-16**(C6)| **traditional_core Fibonacci ratio tiebreak 缺** — W2 同時退 38.2% 與 50% 哪個先寫 Fact 沒講,**直接違反 r2 §2.3 抽出的「無選擇原則」**(r3 promote)| spec 原文 spot-check | D4 §附錄 C 加 deterministic tiebreak | 與 Core 邊界三原則衝突,**優先處理** |
 
-### 1.3 🟡 P2 措辭/順序/命名不一致(共 11 項)
+### 1.3 🟡 P2 措辭/順序/命名不一致(r3:共 15 項,含 C 系列 promote 4 項)
 
 完整列於 §五。
 
@@ -222,9 +234,11 @@ pub trait CoreCompute: Send + Sync {
 
 ---
 
-## 三、🔴 P0 動工前阻塞項 — 統合修正清單(7 項)
+## 三、🔴 P0 動工前阻塞項 — 統合修正清單(r3:10 項,含 C 系列 promote 3 項)
 
 > **r1 修正**:依**真實依賴鏈**重新組織,而非簡單線性順序。多數 P0 項目可並行修正。
+>
+> **r3 整合**:新增 P0-8(C1)/ P0-9(C2)/ P0-10(C3)三條詳述。
 
 ### 依賴鏈圖
 
@@ -316,6 +330,47 @@ Core 邊界三原則(overview §十) ─── 獨立,可並行
 
 **動作**:overview §十「不獨立成 Core 的清單」前置補「邊界判定三原則」(可重現 / 無選擇 / 無經驗)。
 
+### 修正 P0-8(C1):tw_market_core §五 5.1 volume 合併物理層 ambiguity(r3 promote)
+
+> **問題**:spec §五 5.1 寫 `volume = sum of merged days` 但**沒講合併發生在「後復權前」還是「後復權後」**。先合併再復權對合併前的 sum 套 AF;先復權再合併對已復權的多日 volume 加總,**兩種結果數值不同**。
+
+**動作**(連動 P0-2 A-V3 結論):
+- 若 A-V3 確認 `price_daily_fwd.volume` **已調整**:tw_market_core §五 5.1 補「合併讀已復權 volume 後再 sum,**避免雙重復權**」+ 加分支處理
+- 若 A-V3 確認 **raw**:tw_market_core §五 5.1 補「合併在 raw 端做,後復權只算 OHLC 不動 volume」(交給 Volume Cores 自處)
+
+**先後順序**:A-V3 結論定案後 5 分鐘修文。
+
+### 修正 P0-9(C2):跨 Core warmup_periods 合成規則(r3 promote)
+
+> **問題**:同一 workflow 同時跑 `ma(period=200)`(暖機 800 天)+ `macd(12,26,9)`(暖機 ~50 天)+ `rsi(14)`(暖機 ~30 天),**pipeline 取多少歷史**?11 篇 spec 全無規則。
+
+**動作**:overview **§7.3 補「跨 Core warmup 合成規則」**。建議規則:
+```
+pipeline_warmup = max(core.warmup_periods(params) for core in workflow.cores)
+```
+
+**理由**:max() 確保每個 Core 都暖到;sum() 過大會炸資料窗口;各自取會導致長暖機 Core 早期數值不可靠。
+
+**例外標註**:Wave / Pattern Core 用「全量重算」策略,不適用增量 warmup,以 `core_kind` 標記。
+
+### 修正 P0-10(C3):NeelyDiagnostics 加 `dropped_scenario_ids`(r3 promote;與 P0-6 同檔)
+
+> **問題**:`neely_core.md §八` Output schema 只有 `overflow_triggered: bool`,**沒列哪幾條 scenario 被丟**,違反 §2.3 抽出的「可重現原則」(同樣輸入丟掉的 scenario_ids 應可重現)。
+>
+> **r3 強調**:r2 P0-6 動作把 `dropped_scenario_ids` 列為「方案 1 條件」,**錯**。無論方案 1(power_rating 排序)或方案 2(deterministic 中性鍵),**Output 都該透明化**,否則無法審計。
+
+**動作**(剛性,與 P0-6 同檔同次改動):
+```rust
+pub struct NeelyDiagnostics {
+    pub overflow_triggered: bool,
+    pub overflow_dropped_count: usize,           // r3 加
+    pub overflow_dropped_scenario_ids: Vec<String>,  // r3 加
+    // ... existing fields
+}
+```
+
+§十八 18.4 frontend banner 契約保留不動。
+
 ---
 
 ## 四、🟠 P1 級修正清單(動工同時或 P0 Gate 後立刻處理)
@@ -339,6 +394,9 @@ Core 邊界三原則(overview §十) ─── 獨立,可並行
 | 11 | null 值與錯誤處理通則(各 Core 該宣告) | overview | R1 §6.1 | 否 |
 | 12 | revenue_core.warmup_periods 單位 | RevenueSeries Input 自身 | R1 §3.1 | **是,P0-4 trait 重構自動解** |
 | 13 | Fundamental / Environment 規格欄位級對齊未驗(R2 §2.4 殘餘) | 三子類各 Core 對 blueprint Silver 欄位 | R2 §2.4 | 否,需補審 |
+| **14**(C4)| **traditional_core Combined 模式 params 結構拆**(`engine: Combined { frost_params, ramki_params }`)— r3 promote | D4 §三 | spec spot-check | 否 |
+| **15**(C5)| **vwap params_hash 演算法明示** include 全部 Params 欄位(含 anchor 日期 / mode / timeframe / source)— r3 promote | overview §7.4 + 各 Core spec | spec spot-check | 否 |
+| **16**(C6)| **Fibonacci ratio tiebreak 規則**(deterministic 排序鍵)— r3 promote | D4 §附錄 C | spec spot-check | 否,**違反 Core 邊界三原則「無選擇」優先處理** |
 
 **P0 自動帶解項**(見 §1.2):
 - `produce_facts` 無示範 → 由 §6.5 第 1 條解
@@ -347,7 +405,7 @@ Core 邊界三原則(overview §十) ─── 獨立,可並行
 
 ---
 
-## 五、🟡 P2 級 Polish(可隨下次 PR 帶,共 11 項)
+## 五、🟡 P2 級 Polish(r3:共 15 項,含 C 系列 promote 4 項)
 
 1. Fact statement 統一語言 + 移除描述詞(`short squeeze` / `large transaction` / `extreme high`)— R1 §4.2 / §4.3
 2. environment_cores §一 與 overview §8.6 順序對齊(taiex / us_market 互換)— R1 §4.1
@@ -360,6 +418,10 @@ Core 邊界三原則(overview §十) ─── 獨立,可並行
 9. cores_overview「選項 A」補 trace(B/C 是什麼)— R3 §B1
 10. shared/swing_detector 抽不抽出決議時點 — R3 §B3
 11. shared/macd_compute / shared/rsi_compute 候選清單 + 已知技術債 backlog — R1 §5.1
+12. **(C7)Bollinger PriceSource 進 params_hash 規則明示** — `BollingerParams.source: PriceSource` 7 個 enum 是否進 hash 沒講 → bollinger(20,2,Close) vs bollinger(20,2,Hlc3) 可能 collide(r3 promote)
+13. **(C8)RSI/MFI overbought/oversold thresholds 進 params_hash 明示** — 兩 Core 的 thresholds 是 params with default,不進 hash 會導致「overbought_streak」Fact 不可重現(r3 promote)
+14. **(C9)Pattern Stage 4a/4b timeout / retry / partial-failure semantics** — `indicator_cores_pattern.md §2.3` 只列 stage 順序(r3 promote)
+15. **(C10)OBV anchor reversibility on data re-ingestion** — volume §3.6 只給 default anchor=None,沒講 immutability(r3 promote)
 
 ---
 
@@ -392,19 +454,23 @@ Core 邊界三原則(overview §十) ─── 獨立,可並行
 4. **P0-集中包 §6.5**:M3 寫入契約總則(R1/R2/R3 共識點 ③)
 5. **P0-Core 邊界三原則**(overview §十 + 串接 P1-4 institutional_market_daily 與 P0-6 Forest overflow)
 
+**Track A(可立即啟動,獨立)**(r3 補):
+- **P0-9(C2)跨 Core warmup 合成規則**:overview §7.3 補 max() 規則,獨立可立修
+- **P0-10(C3)NeelyDiagnostics dropped_scenario_ids**:與 P0-6 同檔同次改
+
 **Track B(需 user 決議)**:
-6. **P0-6 Forest overflow**:user 拍板方案 1 vs 方案 2
+6. **P0-6 Forest overflow**:user 拍板方案 1 vs 方案 2(P0-10 schema 改動同檔同次跟著做)
 
 **Track C(依賴 A-V3 結論)**:
-7. **P0-2 A-V3**:blueprint 端先驗證 → 結論定案後連動 P0-3 / P0-5
+7. **P0-2 A-V3**:blueprint 端先驗證 → 結論定案後連動 P0-3 + **P0-8(C1)volume 合併與後復權順序**
 
-### Phase 1:動工同時或 P0 Gate 後立刻處理(13 項,扣除 P0 自動帶解 3 項實質 10 項)
+### Phase 1:動工同時或 P0 Gate 後立刻處理(r3:**16 項 P1 + P0 帶解 3 項 = 19 引用列**)
 
-依 §四 表執行。
+依 §四 表執行。新增 P1-14(C4)/ P1-15(C5)/ P1-16(C6)。
 
-### Phase 2:Polish(11 項,隨下次 PR 帶)
+### Phase 2:Polish(r3:**15 項**)
 
-依 §五 表執行。
+依 §五 表執行。新增 P2-12 ~ P2-15(C7-C10)。
 
 ---
 
@@ -425,17 +491,20 @@ Core 邊界三原則(overview §十) ─── 獨立,可並行
 > **r1 修正**:r1 §九 r2-2 範圍誤含 P0-6(Forest overflow),P0-6 屬 D3 修改不在 overview 範圍。已重新編組。
 >
 > **r2.1 修正**:r2 §九 r2-3 把「K-1 + Silver 表名 + 欄位級對齊」三件規模差 10× 的事併同輪。r2.1 拆 r2-3a(改 1 行)/ r2-3b(三子類表格)/ r2-3c(8 個 Core 補審),原 r2-4 拆 r2-4(TW-Market 端)/ r2-5(Wave 端,P3 限定),節編號 `D3 §6.3 forest overflow` 修正為 `neely_core §十二 12.2-12.3`(實際位置)。
+>
+> **r3 整合**:把 C 系列 10 條 promote 進 r2-X 編組;C1 併進 r2-4(TW-Market)、C3 併進 r2-5(Wave)、C2 併進 r2-2(overview §7.3)、C4-C6 各歸位、C7-C10 進 r2-Polish。
 
 | 輪次 | 範圍 | 目標 |
 |---|---|---|
 | **r2-1**(blueprint 端) | A-V3 驗證結論 + blueprint 附錄 B DDL 補完 | 解 P0-2 + P1-9 |
-| **r2-2**(overview 端) | overview §3(trait)/ §6.5(M3 契約)/ §7.5(dirty)/ §十(Core 邊界) | 解 P0-4 / P0-7 / P0-集中包 / Core 邊界三原則 + 部份帶解 P1-8 / P1-12 / 合併項(仍須各 D 系列規格內補)|
+| **r2-2**(overview 端) | overview §3(trait)/ §6.5(M3 契約)/ §7.5(dirty)/ §十(Core 邊界)/ **§7.3 跨 Core warmup max() 規則(C2)**/ **§7.4 params_hash 演算法(C5)**| 解 P0-4 / P0-7 / P0-集中包 / Core 邊界三原則 / **P0-9** / **P1-15** + 部份帶解 P1-8 / P1-12 / 合併項 |
 | **r2-3a** | chip_cores K-1(§4.4 砍 margin_maintenance,1 行)| 解 P0-1 |
 | **r2-3b** | 三子類 §一 表格全部加 `_derived` 後綴 + 補「Core 讀 Silver」一行 | 解 P1-6 |
 | **r2-3c** | Fundamental / Environment 規格欄位級對齊補審(8 個 Core 對 blueprint Silver 欄位逐欄驗證)| 解 P1-13 (R2 §2.4 殘餘)|
-| **r2-4**(TW-Market 端) | D2 §9.2(_fwd 職責集中說明)+ D2 §五 5.1(volume 合併與後復權順序明示,連動 r3 預備 C1)| 解 P0-3 + r3 預備 C1 |
-| **r2-5**(Wave 端,P3 限定) | D3 §八 加 dropped_scenario_ids(剛性) + D3 §1.2 寫 WaveCore trait signature + D4 §附錄 A §2.x(price_len 度量空間,P3 限定)+ `neely_core §十二 12.2-12.3`(forest overflow)| 解 P0-3 補件 / P0-4 真實 gap / P0-5(P3 開工時)/ P0-6 |
-| **r3**(統合複審) | 全規格交叉驗證 + Polish 落實 + C 系列 10 條 gap 整合(見 §十一)| 解 P2 級全部 + r2.1 漏抓 |
+| **r2-4**(TW-Market 端) | D2 §9.2(_fwd 職責集中說明)+ **D2 §五 5.1(volume 合併與後復權順序明示,P0-8/C1 連動 A-V3)**| 解 P0-3 + **P0-8** |
+| **r2-5**(Wave 端) | **D3 §八 加 `dropped_scenario_ids`(剛性,P0-10/C3)** + D3 §1.2 寫 WaveCore trait signature + `neely_core §十二 12.2-12.3`(forest overflow)+ **D4 §三 Combined Params 拆(P1-14/C4)**| 解 P0-3 補件 / P0-4 真實 gap / P0-6 / **P0-10** / **P1-14** |
+| **r2-6**(P3 限定) | D4 §附錄 A §2.x(price_len 度量空間,P3 限定)+ **D4 §附錄 C Fibonacci tiebreak(P1-16/C6)**| 解 P0-5(P3 開工時)+ **P1-16** |
+| **r3-Polish**(下次 PR 帶) | C7-C10 + 既有 P2 11 項 = 15 項 polish | 解 P2 級全部 |
 
 ---
 
@@ -493,58 +562,84 @@ Core 邊界三原則(overview §十) ─── 獨立,可並行
 | B4 | 共識點 ② 把「12 個非 OHLCV Core 衝突 + Wave/Market 也有問題」並列 | overview §3.3 已 carve-out Wave/Market trait;真實 gap 是 Wave/Market trait signature 沒給(三 spec §1.2 都標「草案」)| §2.1 共識點 ② 開頭加 carve-out 說明 + 修真實 gap |
 | B5 | r2-3 編組散度太大(K-1 改 1 行 vs 欄位級對齊 8 個 Core 同輪)| 規模差 10× | §九 r2-3 拆 r2-3a(K-1)/ r2-3b(表名)/ r2-3c(欄位級對齊),原 r2-4 拆 r2-4(TW-Market)/ r2-5(Wave,P3 限定)|
 
+### 10.4 r3 對 r2.1 的整合修正(C 系列 promote,共 10 處)
+
+> **整合動作**:r2.1 §十一「r3 預備清單」的 10 條 r2 漏抓 gap,本版本(r3)正式 promote 進 P0/P1/P2 表 + 動工編組。
+
+| C 編號 | r3 編號 | 嚴重度 | 修正位置 | 動作摘要 |
+|---|---|---|---|---|
+| **C1** | **P0-8** | 🔴 P0 | tw_market_core §五 5.1 + 連動 P0-2 | volume 合併與後復權順序明示;A-V3 結論定案後 5 分鐘修文 |
+| **C2** | **P0-9** | 🔴 P0 | overview §7.3 補規則 | 跨 Core warmup 合成規則 = max() across cores;Wave/Pattern 例外標 `core_kind=full_recompute` |
+| **C3** | **P0-10** | 🔴 P0 | neely_core §八 Output schema(與 P0-6 同檔)| 加 `overflow_dropped_scenario_ids: Vec<String>` + `overflow_dropped_count: usize`(剛性,無論 P0-6 方案 1/2)|
+| **C4** | **P1-14** | 🟠 P1 | traditional_core §三 | Combined Params 結構拆 `engine: Combined { frost_params, ramki_params }` |
+| **C5** | **P1-15** | 🟠 P1 | overview §7.4 + 各 Core spec | params_hash 演算法明示 include 全部 Params 欄位(anchor / mode / timeframe / source / thresholds 都進 hash)|
+| **C6** | **P1-16** | 🟠 P1(優先)| D4 §附錄 C | Fibonacci ratio 多重命中 deterministic tiebreak;**違反「無選擇原則」優先處理** |
+| **C7** | **P2-12** | 🟡 P2 | indicator_cores_volatility | Bollinger PriceSource 進 params_hash |
+| **C8** | **P2-13** | 🟡 P2 | indicator_cores_momentum + volume | RSI/MFI thresholds 進 params_hash |
+| **C9** | **P2-14** | 🟡 P2 | indicator_cores_pattern §2.3 | Stage 4a/4b timeout/retry/partial-failure semantics |
+| **C10** | **P2-15** | 🟡 P2 | indicator_cores_volume §3.6 | OBV anchor reversibility on data re-ingestion |
+
+**動工順序更新**(§七 已同步):
+- **Track A**(可並行):P0-1 / P0-4 / P0-7 / P0-9(C2)/ P0-集中包 / Core 邊界三原則
+- **Track B**(user 決議):P0-6 + P0-10(C3 同檔同次)
+- **Track C**(依 A-V3):P0-2 → P0-3 + P0-8(C1)
+
 ---
 
-## 十一、r3 預備清單:r2 漏抓的 10 條真實 gap(C 系列)
+## 十一、C 系列整合對應追溯表(r3 從 r2.1 §十一 promote)
 
-> **r2.1 不整合**:本版本只修 A/B 系列(事實/流程錯),C 系列暫存此處作為 r3 整合輸入。三個平行 Explore agent 對 11 篇 Core spec spot-check 揪出,r2 沒列。
+> **歷史保留**:r2.1 把 C1-C10 列為「r3 預備清單」。r3 完成 promote,本節改為**追溯對應表**,讓未來引用「C2」/「P0-9」/「overview §7.3」三種命名都能對得上。
 
-按嚴重度排序。
+| 原 r2.1 編號 | r3 編號 | 嚴重度 | spec 修正位置 | r3 動作位置(章節)|
+|---|---|---|---|---|
+| C1 | P0-8 | 🔴 P0 | tw_market_core §五 5.1 | §1.1 / §三 P0-8 / §九 r2-4 |
+| C2 | P0-9 | 🔴 P0 | cores_overview §7.3 | §1.1 / §三 P0-9 / §九 r2-2 |
+| C3 | P0-10 | 🔴 P0 | neely_core §八 | §1.1 / §三 P0-10 / §九 r2-5 |
+| C4 | P1-14 | 🟠 P1 | traditional_core §三 | §1.2 / §四 #14 / §九 r2-5 |
+| C5 | P1-15 | 🟠 P1 | cores_overview §7.4 | §1.2 / §四 #15 / §九 r2-2 |
+| C6 | P1-16 | 🟠 P1(優先)| traditional_core §附錄 C | §1.2 / §四 #16 / §九 r2-6 |
+| C7 | P2-12 | 🟡 P2 | indicator_cores_volatility | §五 #12 / §九 r3-Polish |
+| C8 | P2-13 | 🟡 P2 | indicator_cores_momentum + volume | §五 #13 / §九 r3-Polish |
+| C9 | P2-14 | 🟡 P2 | indicator_cores_pattern §2.3 | §五 #14 / §九 r3-Polish |
+| C10 | P2-15 | 🟡 P2 | indicator_cores_volume §3.6 | §五 #15 / §九 r3-Polish |
 
-### 🔴 P0 級(影響動工)
+**spec 引用一覽**(用於下次 grep 對齊驗證):
 
-| # | gap | spec 引用 | 嚴重度說明 |
-|---|---|---|---|
-| **C1** | tw_market_core §五 5.1 volume 合併物理層 ambiguity:沒講合併發生在「後復權前」還是「後復權後」 | tw_market_core §五 5.1(volume = sum of merged days,沒講順序)| **比 P0-2 更深一層**;先合併再復權 vs 先復權再合併數值不同;與 P0-2 (A-V3) 連動,A-V3 結論定案後須一併補進 §五 5.1 |
-| **C2** | 跨 Core warmup_periods 合成規則完全缺(ma(period=200) 暖機 800 天 + macd(12,26,9) 暖機 ~50 天 同時跑,pipeline 取多少歷史?)| 11 篇 spec 全無 max() / sum() / 各自取的規則;r2 P1-10 只標「未明定」沒給規則方向 | overview §7.3 補:**建議 max() across all cores in workflow**(取所有 Core 暖機需求最大值,確保各 Core 都暖到)|
-| **C3** | NeelyDiagnostics 缺 dropped_scenario_ids — 真實 P0-6 修正剛性 | neely_core §八 Output schema 只有 `overflow_triggered: bool`,沒列哪幾條 scenario 被丟 | 違反**可重現原則**;**無論方案 1/2 都要加**(r2 P0-6 動作只列入方案 1 條件不對);A5 已修進 §三 P0-6 但這裡再列入 r3 整合 |
-
-### 🟠 P1 級
-
-| # | gap | spec 引用 | 修正位置 |
-|---|---|---|---|
-| **C4** | traditional_core Combined 模式 params_hash collision 細節 | traditional_core §三 3.1 union Frost ∪ Ramki forest 完全沒處理 params_hash | D4 §三 Combined Params 結構需拆 `engine: Combined { frost_params, ramki_params }` |
-| **C5** | vwap_core anchor 多錨 + params_hash 演算法定義缺 | indicator_cores_volume.md §4.7 顯示不同 anchor 不同 hash 但**演算法本身沒定義**;overview §7.4 只到「canonical JSON + blake3 前 16」 | overview §7.4 明示「include 全部 Params 欄位(含 enum、選項、anchor 日期、timeframe)」+ 各 Core spec 個別寫 anchor 是否進 hash |
-| **C6** | traditional_core Fibonacci ratio tiebreak 缺 — **直接違反 r2 §2.3 抽出的「無選擇原則」** | traditional_core §附錄 C.1-C.9 列 30+ Fibonacci targets 標 High/Medium/Low「常見程度」但 W2 同時退 38.2% 與 50% 哪個先寫 Fact 沒講 | D4 §附錄 C 加 tiebreak 規則(如 deterministic 排序鍵)|
-
-### 🟡 P2 級
-
-| # | gap | spec 引用 |
+| spec 文件 | 被觸及的章節 | r3 編號 |
 |---|---|---|
-| **C7** | Bollinger PriceSource 進 params_hash 規則缺 | `BollingerParams.source: PriceSource` 7 個 enum,spec 沒講進不進 hash → bollinger(20,2,Close) vs bollinger(20,2,Hlc3) 可能 collide |
-| **C8** | RSI/MFI overbought/oversold thresholds 是否進 params_hash | RSI(14, 70, 30) vs RSI(14, 80, 20) 「overbought_streak」Fact **不可重現**(threshold 不同 streak 不同)|
-| **C9** | Pattern Stage 4a/4b timeout / retry / partial-failure semantics 缺 | indicator_cores_pattern.md §2.3 只列 stage 順序 |
-| **C10** | OBV anchor reversibility on data re-ingestion 缺 | volume §3.6 只給 default anchor=None,沒講 immutability;歷史補抓多塞 K 棒時是否該 reset OBV anchor 沒講 |
-
-### r3 整合建議
-
-- **C1 / C2 / C3** 進 P0 阻塞清單(C1 連動 P0-2,C2 進 overview §7.3,C3 進 neely_core §八 schema)
-- **C4 / C5 / C6** 進 P1 清單(D4 / overview §7.4 / D4 §附錄 C)
-- **C7 / C8 / C9 / C10** 進 P2 Polish 清單
-
----
-
-## 十二、本次 r2.1 漏抓自我警示
-
-r2.1 只修 A/B 兩系列共 12 處。**仍可能存在的二階遺漏**:
-
-1. 11 篇 Core spec 中,3 個 agent 用 43 條 claim 抽樣驗證(覆蓋約 60-70% 顯眼問題),**未驗到的內部演算法細節**(如 Neely R1-R7 / Z1-Z4 閾值)仍未審
-2. cores_overview 的 §7.4 params_hash 演算法只給「canonical JSON + blake3 前 16 字元」概念,**對應 m2/schema_m2_pg.sql line 49** 用 `VARCHAR(16)`,但 spec 沒講「16 是字元數還是 byte 數」(若 16 byte = 32 hex 字元就 mismatch)
-3. cores_overview §3 trait `compute(ohlcv: &OHLCVSeries)` 跟 §3.3「Wave/Market 不強制」之間的關係沒寫成 associated type 草案,r2.1 §2.1 的範例方案目前**只在統合報告內**,**spec 本身還沒改**
-4. r2.1 全文在 §1.2 / §四 編號統計改了表頭文字,但**表內的編號順序沒重排**,外部引用「P1-7」「P1-12」等仍可能跟 r3 重編號後不一致
-
-下輪 r3 動工時應**先做一次跨 spec 全文 grep**確認:(a) `price_daily_fwd` 出現處的層級(raw/Bronze/Silver) (b) `params_hash` 字長/字元/byte 用語 (c) `dropped_scenario_ids` schema 已加未加 (d) trait signature 已寫未寫。
+| `cores_overview.md` | §3 / §6.5(新)/ §7.3 / §7.4 / §7.5(新)/ §十 | P0-4 / P0-集中包 / P0-9 / P1-15 / P0-7 / P0-Core邊界 |
+| `chip_cores.md` | §4.4 + §一 表格 | P0-1 / P1-6 |
+| `fundamental_cores.md` | §一 表格 + 各 Core 欄位級 | P1-6 / P1-13 |
+| `environment_cores.md` | §一 表格 + 各 Core 欄位級 + §3.1 taiex 資料源 | P1-3 / P1-6 / P1-13 |
+| `tw_market_core.md` | §四 MergeAtLimitPrice / §五 5.1(C1) / §六 6.1 / §九 9.2(新)| P1-7 / **P0-8** / P0-2 / P0-3 |
+| `neely_core.md` | §一 1.2 trait signature / §八 Output(C3)/ §十二 12.2-12.3 forest overflow / §十八 18.4 banner | P0-4 / **P0-10** / P0-6 / (已存) |
+| `traditional_core.md` | §一 1.2 trait / §三 Combined(C4)/ §附錄 A R15 / §附錄 A price_len(P3)/ §附錄 C Fibonacci(C6)| P0-4 / **P1-14** / P1-11 / P0-5 / **P1-16** |
+| `indicator_cores_momentum.md` | RSI thresholds 進 hash | **P2-13** |
+| `indicator_cores_volatility.md` | Bollinger source 進 hash + Fact 極值描述語言 | **P2-12** / P1-8 |
+| `indicator_cores_volume.md` | OBV anchor reversibility / VWAP anchor 進 hash | **P2-15** / P1-15 |
+| `indicator_cores_pattern.md` | §2.3 Stage 4a/4b semantics | **P2-14** / P1-10 |
 
 ---
 
-**(統合報告 r2.1 完)**
+## 十二、r3 漏抓自我警示
+
+r3 完成 C 系列 promote。**仍可能存在的三階遺漏**(r3 → r4 偵測項):
+
+1. 11 篇 Core spec 中,3 個 agent 用 43 條 claim 抽樣驗證(覆蓋約 60-70% 顯眼問題),**未驗到的內部演算法細節**(如 Neely R1-R7 / Z1-Z4 / T1-T10 閾值)仍未審 → **下輪需專門 audit Neely 內部驗證器**
+2. **`params_hash` 16 是字元數 vs byte 數**仍未對齊:overview §7.4 寫「前 16 字元」,m2/schema_m2_pg.sql line 49 用 `VARCHAR(16)`,若實作端取 16 byte = 32 hex 字元就 mismatch → **P1-15(C5)動工時必驗**
+3. cores_overview §3 trait `compute(ohlcv: &OHLCVSeries)` 跟 §3.3「Wave/Market 不強制」之間的關係,**spec 本身還沒改**(只在統合報告 §2.1 給 associated type 草案範例)→ r2-2 真正動工時要把草案落地進 spec
+4. 全文在 §1.2 / §四 / §五 加了「(C-N)→ P-N」雙編號,但**表內的編號順序沒重排**,外部引用既存「P1-7」/「P1-12」維持不變;**新引用建議用 r3 編號**(P0-8/P1-14 等)
+5. r3 動工順序 §七 Track A/B/C 重排,但**沒寫各 PR 切法**(哪幾條同 PR / 哪幾條跨 PR);user 動工前需自行決議
+6. **C 系列 agent 抽樣未涵蓋的 spec 區段**:`indicator_cores_momentum.md` 9 個 Core(macd/rsi/kd/adx/ma/ichimoku/williams_r/cci/coppock)只查 RSI threshold 一條,其他 8 個 Core 內部演算法仍未 spot-check
+
+下輪(r4 / 動工複審)應**先做一次跨 spec 全文 grep**確認:
+- (a) `price_daily_fwd` 出現處的層級(raw/Bronze/Silver)
+- (b) `params_hash` 字長/字元/byte 用語
+- (c) `dropped_scenario_ids` schema 已加未加
+- (d) trait signature 已寫未寫
+- (e) Wave/Pattern Core `core_kind=full_recompute` 標記是否各 spec §1 都加(對應 P0-9 例外)
+- (f) Indicator 9 個 Momentum Core 的演算法細節(P3 後)
+
+---
+
+**(統合報告 r3 完)**
