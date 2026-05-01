@@ -1,5 +1,10 @@
+\encoding UTF8
 -- =============================================================================
 -- A-V3 spot-check: price_daily_fwd.volume 後復權行為驗證
+-- =============================================================================
+-- Windows PowerShell 中文亂碼:跑前先 chcp 65001 切到 UTF-8 console codepage
+--   chcp 65001
+--   psql $env:DATABASE_URL -f scripts\av3_spot_check.sql
 -- =============================================================================
 -- 目的:r2-1 動工項;驗證 collector / Rust 對 volume 後復權的實際行為,
 --      解 P0-2 + P0-8(C1)+ blueprint §4.4 條件 ALTER 決策。

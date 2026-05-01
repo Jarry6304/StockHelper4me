@@ -114,13 +114,15 @@ def _patch_mixed_dividend(db: DBWriter, stock_id: str) -> None:
         ex_date = event["date"]
 
         # 從暫存表查對應的股利政策
+        # 注意:detail->>'X' 回傳 TEXT,須 ::date cast 才能跟 ex_date(date 型別)比對
+        # 否則 PG 17 strict mode 會 raise: operator does not exist: text = date
         policy = db.query_one(
             """
             SELECT * FROM _dividend_policy_staging
             WHERE market = %s AND stock_id = %s
               AND (
-                  detail->>'CashExDividendTradingDate' = %s
-                  OR detail->>'StockExDividendTradingDate' = %s
+                  (detail->>'CashExDividendTradingDate')::date = %s
+                  OR (detail->>'StockExDividendTradingDate')::date = %s
               )
             """,
             ["TW", stock_id, ex_date, ex_date],
