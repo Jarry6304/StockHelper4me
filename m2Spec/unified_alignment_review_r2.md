@@ -436,7 +436,7 @@ pub struct NeelyDiagnostics {
 | **14**(C4)| **traditional_core Combined 模式 params 結構拆**(`engine: Combined { frost_params, ramki_params }`)— r3 promote | D4 §三 | spec spot-check | 否 |
 | **15**(C5)| **vwap params_hash 演算法明示** include 全部 Params 欄位(含 anchor 日期 / mode / timeframe / source)— r3 promote | overview §7.4 + 各 Core spec | spec spot-check | 否 |
 | **16**(C6)| **Fibonacci ratio tiebreak 規則**(deterministic 排序鍵)— r3 promote | D4 §附錄 C | spec spot-check | 否,**違反 Core 邊界三原則「無選擇」優先處理** |
-| **17**(av3)| **`field_mapper.py:194-198` 對 stock_dividend 事件 vf 計算錯誤** — 把 cash + stock dividend 統一寫 vf=1.0(只對 cash 對),導致 stock_dividend 事件 fwd_volume 沒對股本變化調整 | `src/field_mapper.py:194-203` + 須額外讀 stock_dividend 計算正確 vf | av3 Test 3 row 3363 2023-10-17 stock_div=2.64 vf 應 ≈ 0.79 但 DB 寫 1.0 | 否,P0-11 修完 Rust 後此 bug 才會浮現 |
+| **17**(av3)| **`field_mapper.py:194-198` 對 stock_dividend 事件 vf 計算錯誤** — 把 cash + stock dividend 統一寫 vf=1.0(只對 cash 對) | ~~修法~~ **已實作**(commit 6):`post_process._recompute_stock_dividend_vf` 用 vf = 1/(1 + stock_div/10) UPDATE 修正;`scripts/fix_p1_17_stock_dividend_vf.sql` 一次性 backfill 既存資料 | av3 Test 3 預期 vol_ratio:7.61→0.568 / 0.42→0.960 / 2.64→0.791 | ✅ **r3.1 已修**(限制:面額非 10 個股不精確,後續 P2 改成查 par_value 動態算) |
 
 **P0 自動帶解項**(見 §1.2):
 - `produce_facts` 無示範 → 由 §6.5 第 1 條解

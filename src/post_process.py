@@ -30,7 +30,40 @@ def dividend_policy_merge(db: DBWriter, stock_id: str) -> None:
     """
     _patch_mixed_dividend(db, stock_id)
     _detect_capital_increase(db, stock_id)
+    _recompute_stock_dividend_vf(db, stock_id)
     invalidate_fwd_cache(db, stock_id)
+
+
+def _recompute_stock_dividend_vf(db: DBWriter, stock_id: str) -> None:
+    """對 stock_dividend > 0 的 dividend 事件,根據實際 stock_dividend 值重算
+    volume_factor。
+
+    P1-17 修正:`field_mapper.py:194-198` 把 stock_dividend 跟 cash_dividend
+    統一寫 vf=1.0(只對 cash 對),導致 stock_dividend 事件 fwd_volume 沒對
+    股本變化調整,違反 spec `indicator_cores_volume.md §2.4` 假設。
+
+    公式(Taiwan 標準面額 10 元):
+        vf = 1 / (1 + stock_dividend / 10)
+    例:stock_dividend = 2.64 → vf ≈ 0.791;Rust 後復權 fwd_volume = raw / vf
+    = raw × 1.264(post-split equivalent shares)。
+
+    限制:面額非 10 元的個股 par_value_change 後本式不精確。本次接受此近似,
+    後續 P1 issue 處理(可改成查 stock_info_ref.par_value 動態算)。
+    """
+    affected = db.update(
+        "UPDATE price_adjustment_events "
+        "SET volume_factor = 1.0 / (1.0 + stock_dividend / 10.0) "
+        "WHERE market = %s AND stock_id = %s "
+        "AND event_type = 'dividend' "
+        "AND COALESCE(stock_dividend, 0) > 0 "
+        "AND ABS(volume_factor - 1.0) < 0.0001",
+        ['TW', stock_id],
+    )
+    if affected > 0:
+        logger.info(
+            f"[stock_dividend_vf] stock={stock_id} 修正 {affected} 筆 stock_dividend "
+            f"事件的 volume_factor(P1-17)"
+        )
 
 
 def invalidate_fwd_cache(db: DBWriter, stock_id: str) -> None:
