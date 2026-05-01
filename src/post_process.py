@@ -30,6 +30,23 @@ def dividend_policy_merge(db: DBWriter, stock_id: str) -> None:
     """
     _patch_mixed_dividend(db, stock_id)
     _detect_capital_increase(db, stock_id)
+    invalidate_fwd_cache(db, stock_id)
+
+
+def invalidate_fwd_cache(db: DBWriter, stock_id: str) -> None:
+    """price_adjustment_events 改動後 reset stock_sync_status.fwd_adj_valid=0,
+    讓 Rust Phase 4 下次跑時重算這支股票。
+
+    P0-7 短期補丁:r3.1 av3 Test 3 揭露 staleness 實機證據(3363 / 1312
+    stock_dividend 事件 fwd 沒處理)。長期 dirty queue 完整契約落地後可移除。
+    """
+    db.update(
+        "INSERT INTO stock_sync_status (market, stock_id, fwd_adj_valid) "
+        "VALUES (%s, %s, 0) "
+        "ON CONFLICT (market, stock_id) DO UPDATE SET fwd_adj_valid = 0",
+        ['TW', stock_id],
+    )
+    logger.info(f"[fwd_cache_invalidate] stock={stock_id} → fwd_adj_valid=0(Phase 4 將重算)")
 
 
 # =============================================================================
