@@ -33,7 +33,7 @@
 
 | # | 項目 | 來源報告 | 影響範圍 | 依賴 |
 |---|---|---|---|---|
-| **P0-1** | **K-1**:`chip_cores.MarginPoint.margin_maintenance` 欄位未移除(§4.4 line 184)| R1 §2.1(實質確認);R2 §2.3 僅標「無法驗證」,**非實質指出**,僅作旁證 | `chip_cores.md` §4.4 | 獨立 |
+| **P0-1** | ✅ **K-1 已修**(commit `{TBD}`):`chip_cores.MarginPoint.margin_maintenance` 欄位移除(§4.4)+ 補註說明屬 Aggregation Layer 跨股推導,Core 不扛 | R1 §2.1(實質確認);R2 §2.3 僅標「無法驗證」,**非實質指出**,僅作旁證 | `chip_cores.md` §4.4 | ✅ 已 close |
 | **P0-2** | **A-V3 + 連動 OHLCVSeries / Volume 還原**:`price_daily_fwd.volume` 是否已調整未驗證,連帶 OHLCVSeries 缺欄位、TW-Market Core volume 合併雙重失真風險 | R2 §2.1 + R3 §A4 | volume Cores 全部 + `OHLCVSeries` schema + TW-Market Core §五 5.1 | **上游阻塞**,影響 P0-3 / P0-8 連動 |
 | **P0-3** | **`_fwd` 表職責邊界**:Silver 已做後復權 vs TW-Market Core §五宣稱要做 | R3 §A1 | D2(`tw_market_core.md`) §五 / §九 | 部分依賴 P0-2 結論 |
 | **P0-4** | **Trait 簽名矛盾**:`compute(ohlcv: &OHLCVSeries)` 與 12 個非 OHLCV Core 衝突 | R1 §2.2 | overview §3 + 三子類 §2.1 | 獨立 |

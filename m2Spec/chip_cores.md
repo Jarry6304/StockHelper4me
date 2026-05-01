@@ -181,7 +181,8 @@ pub struct MarginPoint {
     pub margin_change_pct: f64,      // 較前日變化%
     pub short_change_pct: f64,
     pub short_to_margin_ratio: f64,  // 券資比%
-    pub margin_maintenance: f64,     // 維持率%(若有)
+    // r3.1 K-1 砍除:margin_maintenance 屬「個股維持率」,FinMind API 不直接回,
+    // 計算需要該股餘額 ÷ 全體擔保品市值,屬 Aggregation Layer 跨股推導,Core 不該扛
 }
 
 pub struct MarginEvent {
