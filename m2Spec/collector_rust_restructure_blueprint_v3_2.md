@@ -292,15 +292,30 @@ rust_compute/
     └── db_io.rs                 # SQL helpers
 ```
 
-### 4.4 條件 ALTER（v3.2 §附錄 B 末段）
+### 4.4 條件 ALTER（A-V3 結論定案後 — r3.1 更新）
 
-依 **A-V3 阻塞驗證**結果，可能對 `price_daily_fwd` 加：
-- `volume_adjusted NUMERIC`
-- `cumulative_adjustment_factor NUMERIC`
-- `is_adjusted BOOLEAN`
-- `adjustment_factor NUMERIC`（單日 AF，方便除錯）
+**A-V3 結論**(2026-05-01 user 本機 PG 17 跑 av3_spot_check.sql):
+- **現金 dividend**: Rust 派 dollar_vol 守恆,spec 假設成立
+- **stock_dividend / split / par_value_change**: Rust **算錯方向**(P0-11 production bug)— Rust line 447 用 AF,但 collector field_mapper 已寫 vf 進 DB 卻被 Rust 忽略
 
-A-V3 沒做完之前，**Rust 端 OHLC 計算先凍結**。
+**決議**:
+- ❌ **不加** `volume_adjusted NUMERIC`(原方案 — 假設 fwd 是 raw,結果 fwd 已調整,不需此欄位)
+- ✅ **加** `cumulative_adjustment_factor NUMERIC`(Wave Cores 用,反推 raw)
+- ✅ **加** `is_adjusted BOOLEAN`(標記是否動過,給 Aggregation Layer 判斷)
+- ✅ **加** `adjustment_factor NUMERIC`(單日 AF,方便除錯)
+- ✅ **新加** `cumulative_volume_factor NUMERIC`(volume 累積 vf,P0-11 修完後 Wave Cores 反推 raw volume 用)
+
+**P0-11 修正動作**(`rust_compute/src/main.rs` 改 4 處,本 commit 已動到):
+1. `AdjEvent` struct 加 `volume_factor: f64`
+2. `load_adj_events` SELECT 補 `volume_factor::float8`
+3. `compute_forward_adjusted` 拆 `price_multiplier`(從 AF) + `volume_multiplier`(從 vf)
+4. `volume / volume_multiplier`(原為 `/multiplier`)
+
+**語意改變**:對現金 dividend,fwd_volume 將 = raw_volume(不再 / AF) → dollar_vol 對現金 dividend 不再守恆,但**反映實際 share 流動性**(OBV / VWAP 用)。對 split,fwd_volume = raw_volume × N(post-split equivalent),物理正確。
+
+**已知遺留 bug(本次不修,進 r3 P1-17)**:`field_mapper.py:194-198` 對 stock_dividend 事件也寫 vf=1.0(把 cash 跟 stock dividend 混為一談)。Test 3 row 3363 2023-10-17 vf 應 ≈ 0.79 但 DB 寫 1.0。
+
+**A-V3 spot-check SQL**:`scripts/av3_spot_check.sql`(已 commit `9dd2da5` + r3.1 修 CASE 順序 commit `f44fc0d`)。
 
 ---
 
@@ -393,7 +408,9 @@ Rust `schema_check.rs` 內 hard-fail 字串對齊到 `'3.2'`。
 | 2 | **F-V1**：確認既有 facts 表 schema | §8.5 | 🟠 高 |
 | 3 | **R-1**：建 `trading_date_ref`（rename + drop column） | §8.2 | 🔴 阻塞 prev_trading_day |
 | 4 | **R-2**：建 `stock_info_ref`（rename + drop columns） | §8.2 | 🔴 阻塞 ETL 起始點 |
-| 5 | **A-V3**：驗證 `price_daily_fwd.volume` 是否已隨除權息調整 | §8.5 | 🔴 阻塞 Rust ALTER |
+| 5 | **A-V3**：~~驗證 `price_daily_fwd.volume` 是否已隨除權息調整~~ **r3.1 已驗** ✓(2026-05-01 user 本機 PG 17 跑 av3_spot_check.sql,verdict:現金 dividend Rust 派 ✓ + 其他事件揭露 P0-11 production bug)| §8.5 | ~~🔴~~ ✅ closed |
+| **5.5** | **P0-11**(av3 揭露,r3.1 新增):Rust `compute_forward_adjusted` 改用 `volume_factor` 不用 `adjustment_factor`(`rust_compute/src/main.rs` 改 4 處 + cargo build + 重跑 Phase 4)| §8.5 衍生 | 🔴 production bug 必修 |
+| **5.6** | **Phase 4 staleness 補丁**:`src/post_process.py:dividend_policy_merge` 結尾加 `_invalidate_fwd_cache` reset `stock_sync_status.fwd_adj_valid=0`,讓新事件觸發 Phase 4 re-run(P0-7 短期補丁,長期仍要 dirty queue 完整契約)| §8.5 衍生 + P0-7 | 🟠 中(避免 stale fwd) |
 | 6 | **G-ATR-1**：atr_core 與 neely_core ATR golden test | §8.5 | 🔴 阻塞 M3 動工（不影響 Collector） |
 | 7 | **W-1**：WaveCore trait 草案固化 | §8.5 | 🔴 阻塞 M3（不影響 Collector） |
 | 8 | **B-1 / B-2**：補 TAIEX OHLCV + 報酬指數並存 | §8.4 | 🟠 |

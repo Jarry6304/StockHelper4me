@@ -39,17 +39,20 @@
 | **P0-4** | **Trait 簽名矛盾**:`compute(ohlcv: &OHLCVSeries)` 與 12 個非 OHLCV Core 衝突 | R1 §2.2 | overview §3 + 三子類 §2.1 | 獨立 |
 | **P0-5** | **`price_len` 度量空間未定義**(百分比/絕對/log)+ base price 不明 + 還原版本不明 | R3 §A3 | **僅 D4(traditional_core)**;neely_core 整篇沒有 price_len(monowave 度量靠 ATR) | 獨立(原 r2 標「依賴 P0-2」過度;且 traditional_core 是 P3,本項應 **降為 P3-限定**)|
 | **P0-6** | **Forest overflow 用 power_rating 排序**違反「不選 primary」哲學 | R3 §A5 | `neely_core §十二 12.2-12.3` + §八 Output schema(r2.1 修節編號)| 獨立 |
-| **P0-7** | **dirty queue 觸發契約缺**:Core 不知道何時該重算 | R2 §2.2 | overview §七 | 獨立 |
+| **P0-7** | **dirty queue 觸發契約缺**:Core 不知道何時該重算(**r3.1 補:av3 Test 3 直接 production 證據** — 3363 2026-01-20 / 1312 2023-11-28 stock_dividend 事件 fwd 沒處理,fwd_close=raw_close)| R2 §2.2 + av3 Test 3 | overview §七 + `src/post_process.py`(暫時補丁) | 獨立 |
 | **P0-8**(C1)| **tw_market_core §五 5.1 volume 合併物理層 ambiguity**:沒講合併發生在「後復權前」還是「後復權後」(r3 promote)| spec 原文 spot-check | tw_market_core.md §五 5.1 | **P0-2 裡層**,A-V3 結論定案後一併補 |
 | **P0-9**(C2)| **跨 Core warmup_periods 合成規則完全缺**:11 篇 spec 全無 max() / sum() / 各自取的規則(r3 promote)| spec 原文 spot-check | overview §7.3 | 獨立 |
 | **P0-10**(C3)| **NeelyDiagnostics 缺 `dropped_scenario_ids`**:§八 Output 只有 `overflow_triggered: bool`,違反可重現原則(r3 promote;**剛性,無論 P0-6 方案 1/2 都要**)| spec 原文 spot-check | neely_core.md §八 | 與 P0-6 同條 schema 改動 |
+| **P0-11**(av3) | **Rust split / par_value_change / capital_increase volume 算錯方向 production bug**:`rust_compute/src/main.rs:447` 對所有事件用 `volume / multiplier`(其中 multiplier 來自 `adjustment_factor`),但 `field_mapper.py:194-203` 寫的 `volume_factor` 對非 dividend 事件 = ap/bp ≈ 1/AF。Rust 完全不讀 vf 欄位,對 split (1→N) backward adj volume 應 ×N (post-split equivalent shares) 卻變 /N(反方向)| av3 Test 5(全市場 dividend 25/par_value 16/split 31 三類事件 af≠vf 100%)+ Rust main.rs:447 | `rust_compute/src/main.rs` AdjEvent struct + load_adj_events SELECT + compute_forward_adjusted | **production bug,r3.1 新增**;A-V3 Test 1-2 cash dividend 沒揭(因 vf=1.0)|
 
-> **真實依賴關係**(r3 更新):
+> **真實依賴關係**(r3.1 更新,加入 av3 揭露的 P0-11):
 > ```
 > P0-2 (A-V3) ──┬──→ P0-3 (_fwd 職責中 volume 處理連動)
 >               └──→ P0-8 (volume 合併與後復權順序)
 >
 > P0-6 ──→ P0-10 (Output schema 同檔案改動)
+>
+> P0-11 (Rust volume bug) — 獨立,需 cargo build + 全 stock 重跑 Phase 4
 >
 > P0-1 / P0-4 / P0-7 / P0-9   彼此獨立,可並行修正
 > P0-5  降 P3-限定(traditional_core 開工時處理,非動工前阻塞)
@@ -265,16 +268,25 @@ Core 邊界三原則(overview §十) ─── 獨立,可並行
 >
 > 因此本項只需砍欄位,enum 對齊不在範圍。
 
-### 修正 P0-2:A-V3(R2 §2.1 + R3 §A4)
+### 修正 P0-2:A-V3(R2 §2.1 + R3 §A4)— **r3.1 結論定案**
 
-**動作**(blueprint 工作):驗證 `price_daily_fwd.volume` 是否已隨除權息調整。
-- 若已調整:OHLCVSeries 加 `cumulative_adjustment_factor` 欄位、TW-Market Core §五 5.1 volume 合併規則加分支處理(避免雙重失真)
-- 若 raw:blueprint §4.4 ALTER `price_daily_fwd` 加 `volume_adjusted` 欄位、Volume Core 改讀此欄位
+> **r3.1 av3 結果(2026-05-01 user 本機 PG 17 跑)**:
+> - **現金 dividend**: Rust 派確認 ✓,`dollar_vol_preserved = 1.0000` 完美(Test 1 4/4 + Test 2 17 筆 dividend 中 15 筆 `vol_ratio = 1/AF`)
+> - **stock_dividend / split / par_value_change**: 🔴 Rust **算錯方向**(P0-11 新增),Rust line 447 用 AF 不是 vf
+> - **spec assumption「volume 已隨除權息調整」**:**僅對現金 dividend 成立**,對其他事件不成立(Rust bug)
+> - **staleness production 證據**(Test 3): 3363 2026-01-20 / 1312 2023-11-28 stock_dividend 事件 fwd 沒處理 → P0-7 升從理論變實機
+>
+> **A-V3 verdict 等於「**現金 dividend Rust 派 ✓ + 其他事件 Rust bug 待修(P0-11)**」**。
 
-**等到 A-V3 結論定案後,連動修正**:
-- D2 §六 6.1 OHLCVSeries 補欄位
-- D2 §五 5.1 補 volume 合併條件分支(**r2.1 補:含 r3 預備 C1「合併與後復權順序」明示**)
-- ~~volume Indicator Core(`obv` / `vwap` / `mfi`)§2.4 加註依賴 A-V3~~ **r2.1 删:`indicator_cores_volume.md §2.4` 已明寫「吃處理過的 volume(已隨除權息調整)」,加註是多餘**
+**已執行**(r3.1):
+- ✅ blueprint §四 4.4: 砍 `volume_adjusted` ALTER, 改加 `cumulative_adjustment_factor`(本 commit 同步動)
+- ✅ D2 §五 5.1 (P0-8/C1) 走「先復權再合併 sum」分支(對齊 Rust 派,合併用 fwd volume)
+- ✅ 新增 P0-11(Rust split volume bug)
+- ✅ P0-7 加實機證據(本 commit §1.1 P0-7 列已補)
+
+**已 close**:
+- ~~D2 §六 6.1 OHLCVSeries 加 `volume_adjusted` 欄位~~(Rust 派下不需)
+- ~~volume Indicator Core §2.4 加註依賴 A-V3~~(spec 已陳述,本來就多餘)
 
 ### 修正 P0-3:`_fwd` 表職責邊界(R3 §A1)
 
@@ -371,6 +383,33 @@ pub struct NeelyDiagnostics {
 
 §十八 18.4 frontend banner 契約保留不動。
 
+### 修正 P0-11(av3 揭露):Rust split / par_value / capital_increase volume bug — **r3.1 新增**
+
+> **問題**:`rust_compute/src/main.rs:447` 對所有事件用 `volume / multiplier`(multiplier 從 `adjustment_factor` 累積),但 `field_mapper.py:194-203` 已寫對的 `volume_factor` 進 `price_adjustment_events.volume_factor` 欄位 — Rust 完全不讀。對 split/par_value 兩派計算結果反方向。
+>
+> **av3 證據**:
+> - Test 5: dividend (af≈1.015 vs vf=1.0) / par_value_change (af=6.53 vs vf=0.27) / split (af=5.87 vs vf=1.09) — 三類事件 af≠vf 100%
+> - Test 4: 0 rows(user 本機沒 backfill 到含 split/par_value 的股票,直接驗證受限)— 但 Test 5 統計足夠
+
+**動作 4 處**(都在 `rust_compute/src/main.rs`):
+1. `AdjEvent` struct 加 `volume_factor: f64` 欄位
+2. `load_adj_events` SELECT 加 `volume_factor::float8`
+3. `compute_forward_adjusted` 拆兩個 multiplier:`price_multiplier`(從 AF) + `volume_multiplier`(從 vf)
+4. `volume = raw_volume / volume_multiplier`(原為 `/multiplier`)
+
+**語意改變**:對現金 dividend,fwd_volume 將 = raw_volume(不再 / AF) → dollar_vol 對現金 dividend 不再守恆,但**反映實際 share 流動性**(OBV / VWAP 用)。對 split,fwd_volume = raw_volume / vf = raw_volume × N(post-split equivalent),物理正確。
+
+**已知遺留 bug(本次不修,進 P1)**:
+- `field_mapper.py:194-198` 對 stock_dividend 事件也寫 vf=1.0(把 cash 跟 stock dividend 混為一談)
+- av3 Test 3 row 3363 2023-10-17 vf 應該是 ~0.79 不是 1.0
+- 本次只修 Rust 讀 vf,**field_mapper 修正獨立 PR 處理**(避免一次改太多)
+- 進 §四 P1-17(新增):「field_mapper.py:194 對 stock_dividend 事件 vf 計算錯誤」
+
+**動工後驗證**(scripts/av3_spot_check.sql 重跑):
+- Test 1 vol_ratio 從 0.924 變 1.0(因 vf=1.0 for dividend)
+- Test 1 dollar_vol_preserved 從 1.0 變 ~AF(>1)
+- Test 4 若 user 補 backfill split 股票,vol_ratio = AF(>1)出現
+
 ---
 
 ## 四、🟠 P1 級修正清單(動工同時或 P0 Gate 後立刻處理)
@@ -397,6 +436,7 @@ pub struct NeelyDiagnostics {
 | **14**(C4)| **traditional_core Combined 模式 params 結構拆**(`engine: Combined { frost_params, ramki_params }`)— r3 promote | D4 §三 | spec spot-check | 否 |
 | **15**(C5)| **vwap params_hash 演算法明示** include 全部 Params 欄位(含 anchor 日期 / mode / timeframe / source)— r3 promote | overview §7.4 + 各 Core spec | spec spot-check | 否 |
 | **16**(C6)| **Fibonacci ratio tiebreak 規則**(deterministic 排序鍵)— r3 promote | D4 §附錄 C | spec spot-check | 否,**違反 Core 邊界三原則「無選擇」優先處理** |
+| **17**(av3)| **`field_mapper.py:194-198` 對 stock_dividend 事件 vf 計算錯誤** — 把 cash + stock dividend 統一寫 vf=1.0(只對 cash 對),導致 stock_dividend 事件 fwd_volume 沒對股本變化調整 | `src/field_mapper.py:194-203` + 須額外讀 stock_dividend 計算正確 vf | av3 Test 3 row 3363 2023-10-17 stock_div=2.64 vf 應 ≈ 0.79 但 DB 寫 1.0 | 否,P0-11 修完 Rust 後此 bug 才會浮現 |
 
 **P0 自動帶解項**(見 §1.2):
 - `produce_facts` 無示範 → 由 §6.5 第 1 條解
@@ -562,11 +602,13 @@ pub struct NeelyDiagnostics {
 | B4 | 共識點 ② 把「12 個非 OHLCV Core 衝突 + Wave/Market 也有問題」並列 | overview §3.3 已 carve-out Wave/Market trait;真實 gap 是 Wave/Market trait signature 沒給(三 spec §1.2 都標「草案」)| §2.1 共識點 ② 開頭加 carve-out 說明 + 修真實 gap |
 | B5 | r2-3 編組散度太大(K-1 改 1 行 vs 欄位級對齊 8 個 Core 同輪)| 規模差 10× | §九 r2-3 拆 r2-3a(K-1)/ r2-3b(表名)/ r2-3c(欄位級對齊),原 r2-4 拆 r2-4(TW-Market)/ r2-5(Wave,P3 限定)|
 
-### 10.4 r3 對 r2.1 的整合修正(C 系列 promote,共 10 處)
+### 10.4 r3 對 r2.1 的整合修正(C 系列 promote,共 10 處 + r3.1 av3 新增 2 條)
 
 > **整合動作**:r2.1 §十一「r3 預備清單」的 10 條 r2 漏抓 gap,本版本(r3)正式 promote 進 P0/P1/P2 表 + 動工編組。
+>
+> **r3.1 av3 動工新增**:user 本機 PG 17 跑 av3_spot_check.sql 揭露 Rust split volume bug + field_mapper stock_dividend bug,新增 P0-11 + P1-17。
 
-| C 編號 | r3 編號 | 嚴重度 | 修正位置 | 動作摘要 |
+| 編號 | r3 編號 | 嚴重度 | 修正位置 | 動作摘要 |
 |---|---|---|---|---|
 | **C1** | **P0-8** | 🔴 P0 | tw_market_core §五 5.1 + 連動 P0-2 | volume 合併與後復權順序明示;A-V3 結論定案後 5 分鐘修文 |
 | **C2** | **P0-9** | 🔴 P0 | overview §7.3 補規則 | 跨 Core warmup 合成規則 = max() across cores;Wave/Pattern 例外標 `core_kind=full_recompute` |
@@ -578,11 +620,14 @@ pub struct NeelyDiagnostics {
 | **C8** | **P2-13** | 🟡 P2 | indicator_cores_momentum + volume | RSI/MFI thresholds 進 params_hash |
 | **C9** | **P2-14** | 🟡 P2 | indicator_cores_pattern §2.3 | Stage 4a/4b timeout/retry/partial-failure semantics |
 | **C10** | **P2-15** | 🟡 P2 | indicator_cores_volume §3.6 | OBV anchor reversibility on data re-ingestion |
+| **(av3-1)** | **P0-11** | 🔴 P0(production bug)| `rust_compute/src/main.rs` AdjEvent + load_adj_events + compute_forward_adjusted | Rust 改用 `volume_factor` 不用 `adjustment_factor`(4 處改);user 須 cargo build + 重跑 Phase 4 |
+| **(av3-2)** | **P1-17** | 🟠 P1(P0-11 後浮現)| `src/field_mapper.py:194-203` | stock_dividend 事件 vf 計算錯誤(混淆 cash 跟 stock dividend);需根據 stock_dividend 值算正確 vf |
 
 **動工順序更新**(§七 已同步):
 - **Track A**(可並行):P0-1 / P0-4 / P0-7 / P0-9(C2)/ P0-集中包 / Core 邊界三原則
 - **Track B**(user 決議):P0-6 + P0-10(C3 同檔同次)
 - **Track C**(依 A-V3):P0-2 → P0-3 + P0-8(C1)
+- **Track D**(av3 production bug):**P0-11**(獨立,優先)+ P1-17(P0-11 後處理)
 
 ---
 
