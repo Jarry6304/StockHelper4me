@@ -82,18 +82,26 @@ SELECT
     f.volume                                                      AS fwd_vol,
     ROUND((f.volume::numeric / NULLIF(r.volume, 0)), 6)           AS vol_ratio,
     CASE
-        WHEN COALESCE(pae.stock_dividend, 0) = 0
-         AND COALESCE(pae.cash_dividend, 0)  > 0
-         AND ABS((f.volume::numeric / NULLIF(r.volume, 0))
-                  - (1.0 / NULLIF(f.close / r.close, 0))) < 0.005
-            THEN '✓ Rust 派(現金 div volume / AF)'
-        WHEN COALESCE(pae.stock_dividend, 0) = 0
-         AND COALESCE(pae.cash_dividend, 0)  > 0
-         AND ABS((f.volume::numeric / NULLIF(r.volume, 0)) - 1.0) < 0.001
-            THEN '✓ field_mapper 派(現金 div volume 不動)'
+        -- 除權息日當天 fwd = raw(Rust「先 push 再更新 multiplier」設計)
+        WHEN ABS((f.close / NULLIF(r.close, 0)) - 1.0) < 0.0005
+         AND ABS((f.volume::numeric / NULLIF(r.volume, 0)) - 1.0) < 0.0005
+            THEN 'no-adj-day(除權息日當天/最新日)'
+        -- dollar_vol 守恆 → Rust 派
+        WHEN ABS(((f.close * f.volume - r.close * r.volume))::numeric
+                  / NULLIF(r.close * r.volume, 0)) < 0.001
+            THEN '✓ Rust 派(volume / AF, dollar_vol 守恆)'
+        -- volume 不動 + stock_dividend > 0 → P1-17 殘餘
+        WHEN ABS((f.volume::numeric / NULLIF(r.volume, 0)) - 1.0) < 0.001
+         AND COALESCE(pae.stock_dividend, 0) > 0
+            THEN '⚠ P1-17:stock_div 但 volume 沒調(field_mapper bug)'
+        -- volume 不動 + 純現金 div → field_mapper 派
+        WHEN ABS((f.volume::numeric / NULLIF(r.volume, 0)) - 1.0) < 0.001
+         AND COALESCE(pae.cash_dividend, 0) > 0
+            THEN '✓ field_mapper 派(cash div volume 不動)'
+        -- 股本變動事件 volume 已調
         WHEN COALESCE(pae.stock_dividend, 0) > 0
          OR pae.event_type IN ('split', 'capital_reduction', 'par_value_change', 'capital_increase')
-            THEN '股本變動事件(兩派一致 volume / AF)'
+            THEN '股本變動事件 volume 已 / vf'
         ELSE '?'
     END                                                           AS faction_verdict
 FROM price_adjustment_events pae
