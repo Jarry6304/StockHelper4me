@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-const EXPECTED_SCHEMA_VERSION: &str = "2.0";
+const EXPECTED_SCHEMA_VERSION: &str = "3.2";
 
 #[derive(Parser, Debug)]
 #[command(name = "tw_stock_compute", about = "台股後復權計算與 K 線聚合")]
@@ -155,7 +155,7 @@ fn mask_url(url: &str) -> String {
 ///
 /// schema_metadata 表由 alembic baseline 建立：
 ///   CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-///   INSERT INTO schema_metadata VALUES ('schema_version', '2.0');
+///   INSERT INTO schema_metadata VALUES ('schema_version', '3.2');  -- m2 PR #2 bump from 2.0
 async fn assert_schema_version(pool: &PgPool) -> Result<()> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM schema_metadata WHERE key = 'schema_version'",

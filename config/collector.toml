@@ -80,37 +80,37 @@ phases = [0, 1, 2, 3, 4, 5, 6]
 name         = "stock_info"
 dataset      = "TaiwanStockInfo"
 param_mode   = "all_market"
-target_table = "stock_info"
+target_table = "stock_info_ref"
 phase        = 1
 enabled      = true
 is_backer    = false
 segment_days = 0
-field_rename = {"type" = "market_type", "industry_category" = "industry", "date" = "_data_update_date"}
-notes        = "上市上櫃股票基本資料；API 的 date 是『資料更新日』，pack 進 detail.data_update_date；updated_at 由 schema DEFAULT NOW() 填同步時刻（與 _merge_delist_date 一致）"
+field_rename = {"date" = "_data_update_date"}
+notes        = "上市上櫃股票基本資料；v3.2 R-2 後 DB column type/industry_category 跟 API field 同名,不需 rename；API 的 date 是『資料更新日』pack 進 detail.data_update_date；updated_at 由 schema DEFAULT NOW() 填"
 
 [[api]]
 name           = "stock_delisting"
 dataset        = "TaiwanStockDelisting"
 param_mode     = "all_market"
-target_table   = "stock_info"
+target_table   = "stock_info_ref"
 phase          = 1
 enabled        = true
 is_backer      = false
 segment_days   = 0
 backfill_start_override = "2022-01-01"
 merge_strategy = "update_delist_date"
-notes          = "下市櫃清單，合併寫入 stock_info.delist_date"
+notes          = "下市櫃清單，合併寫入 stock_info_ref.delisting_date(v3.2 R-2 後欄位名)"
 
 [[api]]
 name         = "trading_calendar"
 dataset      = "TaiwanStockTradingDate"
 param_mode   = "all_market"
-target_table = "trading_calendar"
+target_table = "trading_date_ref"
 phase        = 0
 enabled      = true
 is_backer    = true
 segment_days = 0
-notes        = "交易日曆；API 只回 date 欄位。獨立為 Phase 0 因為 Phase 5 institutional aggregator 依賴本表過濾 FinMind 週六鬼資料"
+notes        = "交易日曆(v3.2 R-1 後表名 trading_date_ref);API 只回 date 欄位。獨立為 Phase 0 因為 Phase 5 institutional aggregator 依賴本表過濾 FinMind 週六鬼資料"
 
 [[api]]
 name         = "market_index_tw"
@@ -206,6 +206,22 @@ detail_fields    = ["_limit_up", "_limit_down", "_stock_name"]
 computed_fields  = ["adjustment_factor", "volume_factor"]
 notes        = "面額變更；無需 data_id"
 
+# v3.2 B-4(blueprint §四 + §附錄 B):個股暫停交易事件
+# 用途:prev_trading_day(stock_id, date) 模組 + tw_market_core 個股級交易缺口
+# FinMind TaiwanStockSuspended 一般回 (date, stock_id, suspension_time, resumption_date,
+# resumption_time, reason);date → suspension_date 由 field_rename 映射
+[[api]]
+name         = "stock_suspension"
+dataset      = "TaiwanStockSuspended"
+param_mode   = "all_market_no_id"
+target_table = "stock_suspension_events"
+phase        = 2
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"date" = "suspension_date"}
+notes        = "個股暫停交易事件;v3.2 B-4 新表;無需 data_id;FinMind TaiwanStockSuspended 回個股級事件"
+
 # =============================================================================
 # Phase 3：RAW PRICE（日K + 漲跌停）
 # =============================================================================
@@ -256,6 +272,21 @@ segment_days = 365
 field_rename = {}
 aggregation  = "pivot_institutional"
 notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營），需 pivot 為 1 列"
+
+# v3.2 B-5(blueprint §附錄 B):借券成交明細
+# 用途:margin_core SBL 6 欄來源(blueprint §2.6.1 加 SBL 6 欄到 margin_daily_derived)
+# FinMind TaiwanStockSecuritiesLending 一般回 (date, stock_id, transaction_type, volume,
+# fee_rate, close, original_return_date, original_lending_period)
+[[api]]
+name         = "securities_lending"
+dataset      = "TaiwanStockSecuritiesLending"
+param_mode   = "per_stock"
+target_table = "securities_lending_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+notes        = "借券成交明細;v3.2 B-5 新表;PK 5 欄(議借/競價 × fee_rate);同股同日多筆;未來餵 margin_daily_derived SBL 6 欄"
 
 [[api]]
 name         = "margin_daily"
@@ -457,3 +488,18 @@ is_backer    = false
 segment_days = 365
 field_rename = {"fear_greed" = "score", "fear_greed_emotion" = "label"}
 notes        = "CNN 恐懼貪婪指數；實測欄位為 fear_greed / fear_greed_emotion"
+
+# v3.2 B-6(blueprint §六 + §6.2):景氣指標(月頻)
+# v3.2 反方審查 Q2 拍板降為 reference 級別(不算 Core,但仍持久化供 Aggregation Layer 共享)
+# FinMind TaiwanBusinessIndicator 一般回 (date, leading, coincident, lagging,
+# monitoring, monitoring_color);市場 default 'tw' 由 schema 補
+[[api]]
+name         = "business_indicator"
+dataset      = "TaiwanBusinessIndicator"
+param_mode   = "all_market"
+target_table = "business_indicator_tw"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+notes        = "景氣指標(月頻);v3.2 B-6 新表;每月 1 筆;reference 級不算 Core"
