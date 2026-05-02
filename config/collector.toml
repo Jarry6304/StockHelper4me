@@ -273,6 +273,21 @@ field_rename = {}
 aggregation  = "pivot_institutional"
 notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營），需 pivot 為 1 列"
 
+# v3.2 B-5(blueprint §附錄 B):借券成交明細
+# 用途:margin_core SBL 6 欄來源(blueprint §2.6.1 加 SBL 6 欄到 margin_daily_derived)
+# FinMind TaiwanStockSecuritiesLending 一般回 (date, stock_id, transaction_type, volume,
+# fee_rate, close, original_return_date, original_lending_period)
+[[api]]
+name         = "securities_lending"
+dataset      = "TaiwanStockSecuritiesLending"
+param_mode   = "per_stock"
+target_table = "securities_lending_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+notes        = "借券成交明細;v3.2 B-5 新表;PK 5 欄(議借/競價 × fee_rate);同股同日多筆;未來餵 margin_daily_derived SBL 6 欄"
+
 [[api]]
 name         = "margin_daily"
 dataset      = "TaiwanStockMarginPurchaseShortSale"
@@ -473,3 +488,18 @@ is_backer    = false
 segment_days = 365
 field_rename = {"fear_greed" = "score", "fear_greed_emotion" = "label"}
 notes        = "CNN 恐懼貪婪指數；實測欄位為 fear_greed / fear_greed_emotion"
+
+# v3.2 B-6(blueprint §六 + §6.2):景氣指標(月頻)
+# v3.2 反方審查 Q2 拍板降為 reference 級別(不算 Core,但仍持久化供 Aggregation Layer 共享)
+# FinMind TaiwanBusinessIndicator 一般回 (date, leading, coincident, lagging,
+# monitoring, monitoring_color);市場 default 'tw' 由 schema 補
+[[api]]
+name         = "business_indicator"
+dataset      = "TaiwanBusinessIndicator"
+param_mode   = "all_market"
+target_table = "business_indicator_tw"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+notes        = "景氣指標(月頻);v3.2 B-6 新表;每月 1 筆;reference 級不算 Core"
