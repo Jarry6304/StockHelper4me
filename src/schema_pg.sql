@@ -880,17 +880,20 @@ CREATE INDEX IF NOT EXISTS idx_mmmd_dirty
     ON market_margin_maintenance_derived (dirty_at) WHERE is_dirty = TRUE;
 
 -- 14. business_indicator_derived(NEW per §6.3)
+-- 注意:spec §6.3 DDL 寫 bare leading / coincident / lagging,但 PG 保留字
+-- (TRIM(LEADING ...))不能裸用。Bronze business_indicator_tw 早已加 `_indicator`
+-- 後綴(line 204-205 hotfix),Silver 對齊 Bronze 1:1 不用 rename。
 CREATE TABLE IF NOT EXISTS business_indicator_derived (
-    market              TEXT NOT NULL DEFAULT 'tw',
-    stock_id            TEXT NOT NULL DEFAULT '_market_',
-    date                DATE NOT NULL,
-    leading             NUMERIC(10, 4),
-    coincident          NUMERIC(10, 4),
-    lagging             NUMERIC(10, 4),
-    monitoring          INT,
-    monitoring_color    TEXT,
-    is_dirty            BOOLEAN NOT NULL DEFAULT FALSE,
-    dirty_at            TIMESTAMPTZ,
+    market                  TEXT NOT NULL DEFAULT 'tw',
+    stock_id                TEXT NOT NULL DEFAULT '_market_',
+    date                    DATE NOT NULL,
+    leading_indicator       NUMERIC(10, 4),
+    coincident_indicator    NUMERIC(10, 4),
+    lagging_indicator       NUMERIC(10, 4),
+    monitoring              INT,
+    monitoring_color        TEXT,
+    is_dirty                BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                TIMESTAMPTZ,
     PRIMARY KEY (market, stock_id, date)
 );
 CREATE INDEX IF NOT EXISTS idx_bid_dirty

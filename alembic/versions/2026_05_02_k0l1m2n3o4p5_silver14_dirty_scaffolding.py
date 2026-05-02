@@ -51,8 +51,8 @@ User 操作流程:
   1. git pull
   2. alembic upgrade head           # 14 張 Silver + 3 fwd ALTER 落地
   3. python -c "from silver import orchestrator"   # 確認 import 通
-  4. psql $DATABASE_URL -c "\dt *_derived"          # 看 13 張 *_derived
-  5. psql $DATABASE_URL -c "\d institutional_daily_derived"  # 確認 dirty 欄位
+  4. psql $DATABASE_URL -c "\\dt *_derived"         # 看 13 張 *_derived
+  5. psql $DATABASE_URL -c "\\d institutional_daily_derived"  # 確認 dirty 欄位
 
 Rollback:downgrade DROP 14 張 + 3 張 fwd 砍 dirty 欄位。資料安全(本 PR 不寫資料)。
 ==============================================================================
@@ -292,18 +292,22 @@ SILVER_TABLES_DDL = [
     """,
 
     # ─── 14. business_indicator_derived(NEW per spec §6.3)────────────────
+    # 注意:spec §6.3 DDL 寫 bare `leading` / `coincident` / `lagging`,但 PG
+    # 保留字(TRIM(LEADING ...))不能裸用,Bronze 端 business_indicator_tw 早已
+    # 加 `_indicator` 後綴(schema_pg.sql line 204-205 hotfix 註解)。Silver 對齊
+    # Bronze convention,Bronze→Silver 1:1 不用 rename。
     """
     CREATE TABLE IF NOT EXISTS business_indicator_derived (
-        market              TEXT NOT NULL DEFAULT 'tw',
-        stock_id            TEXT NOT NULL DEFAULT '_market_',
-        date                DATE NOT NULL,
-        leading             NUMERIC(10, 4),
-        coincident          NUMERIC(10, 4),
-        lagging             NUMERIC(10, 4),
-        monitoring          INT,
-        monitoring_color    TEXT,
-        is_dirty            BOOLEAN NOT NULL DEFAULT FALSE,
-        dirty_at            TIMESTAMPTZ,
+        market                  TEXT NOT NULL DEFAULT 'tw',
+        stock_id                TEXT NOT NULL DEFAULT '_market_',
+        date                    DATE NOT NULL,
+        leading_indicator       NUMERIC(10, 4),
+        coincident_indicator    NUMERIC(10, 4),
+        lagging_indicator       NUMERIC(10, 4),
+        monitoring              INT,
+        monitoring_color        TEXT,
+        is_dirty                BOOLEAN NOT NULL DEFAULT FALSE,
+        dirty_at                TIMESTAMPTZ,
         PRIMARY KEY (market, stock_id, date)
     )
     """,

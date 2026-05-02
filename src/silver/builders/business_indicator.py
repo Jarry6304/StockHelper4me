@@ -7,9 +7,10 @@ business_indicator_tw (Bronze) → business_indicator_derived (Silver)。
 spec §6.3:Silver 等同 Bronze 加 dirty,**不做衍生計算**(streak/3m_avg/changed
 都由 Aggregation Layer 即時算)。
 
-注意:Bronze 欄名 `leading_indicator` / `coincident_indicator` / `lagging_indicator`
-       (避 PG 保留字)→ Silver 對應欄名 `leading` / `coincident` / `lagging`
-       (per spec §6.3 DDL)。Builder 需做 rename。
+欄名對映:Bronze 與 Silver 都用 `leading_indicator` / `coincident_indicator` /
+        `lagging_indicator`(避 PG 保留字 LEADING)。spec §6.3 DDL 寫 bare
+        `leading` 但 PG 不收,Bronze 早已加 `_indicator` 後綴 hotfix,Silver
+        對齊 Bronze 1:1,builder 不需做 rename。
 
 留 **PR #19c** 動工。
 """
@@ -30,5 +31,5 @@ def run(
     full_rebuild: bool = False,
 ) -> dict[str, Any]:
     raise NotImplementedError(
-        f"{NAME} builder 留 PR #19c 動工。Bronze leading_indicator → Silver leading rename。"
+        f"{NAME} builder 留 PR #19c 動工。Bronze→Silver 1:1 直拷(欄名一致)。"
     )
