@@ -558,6 +558,105 @@ CREATE INDEX IF NOT EXISTS idx_api_progress_status
 
 
 -- =============================================================================
+-- v3.2 PR #18 Bronze reverse-pivot 表(blueprint §六 #11 / §十 PR #5)
+-- =============================================================================
+-- 5 張 Bronze raw 表,從 v2.0 pivot/pack 表反推。Coexist with legacy v2.0 表;
+-- _legacy_v2 rename 留到 T0+21(blueprint §八.2)。
+-- 與 alembic migration j9k0l1m2n3o4 保持同步;與 scripts/_reverse_pivot_lib.py
+-- 的 SPECS 對齊欄名(SPECS 是 single source of truth)。
+
+-- 三大法人(每法人 1 行,1 row 變 5 row)
+CREATE TABLE IF NOT EXISTS institutional_investors_tw (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    investor_type  TEXT NOT NULL,
+    buy            BIGINT,
+    sell           BIGINT,
+    name           TEXT,
+    PRIMARY KEY (market, stock_id, date, investor_type)
+);
+CREATE INDEX IF NOT EXISTS idx_institutional_investors_tw_stock_date_desc
+    ON institutional_investors_tw (stock_id, date DESC);
+
+
+-- 融資融券(14 raw fields,detail 攤平)
+CREATE TABLE IF NOT EXISTS margin_purchase_short_sale_tw (
+    market               TEXT NOT NULL,
+    stock_id             TEXT NOT NULL,
+    date                 DATE NOT NULL,
+    margin_purchase      BIGINT,
+    margin_sell          BIGINT,
+    margin_balance       BIGINT,
+    short_sale           BIGINT,
+    short_cover          BIGINT,
+    short_balance        BIGINT,
+    margin_cash_repay    BIGINT,
+    margin_prev_balance  BIGINT,
+    margin_limit         BIGINT,
+    short_cash_repay     BIGINT,
+    short_prev_balance   BIGINT,
+    short_limit          BIGINT,
+    offset_loan_short    BIGINT,
+    note                 TEXT,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_margin_purchase_short_sale_tw_stock_date_desc
+    ON margin_purchase_short_sale_tw (stock_id, date DESC);
+
+
+-- 外資持股(11 raw fields,detail 攤平)
+CREATE TABLE IF NOT EXISTS foreign_investor_share_tw (
+    market                  TEXT NOT NULL,
+    stock_id                TEXT NOT NULL,
+    date                    DATE NOT NULL,
+    foreign_holding_shares  BIGINT,
+    foreign_holding_ratio   NUMERIC(8, 4),
+    remaining_shares        BIGINT,
+    remain_ratio            NUMERIC(8, 4),
+    upper_limit_ratio       NUMERIC(8, 4),
+    cn_upper_limit          NUMERIC(8, 4),
+    total_issued            BIGINT,
+    declare_date            DATE,
+    intl_code               TEXT,
+    stock_name              TEXT,
+    note                    TEXT,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_foreign_investor_share_tw_stock_date_desc
+    ON foreign_investor_share_tw (stock_id, date DESC);
+
+
+-- 當沖(4 raw fields,detail 攤平)
+CREATE TABLE IF NOT EXISTS day_trading_tw (
+    market             TEXT NOT NULL,
+    stock_id           TEXT NOT NULL,
+    date               DATE NOT NULL,
+    day_trading_buy    BIGINT,
+    day_trading_sell   BIGINT,
+    day_trading_flag   TEXT,
+    volume             BIGINT,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_day_trading_tw_stock_date_desc
+    ON day_trading_tw (stock_id, date DESC);
+
+
+-- 估值 PER / PBR / 殖利率(3 raw fields,無 detail)
+CREATE TABLE IF NOT EXISTS valuation_per_tw (
+    market          TEXT NOT NULL,
+    stock_id        TEXT NOT NULL,
+    date            DATE NOT NULL,
+    per             NUMERIC(10, 4),
+    pbr             NUMERIC(10, 4),
+    dividend_yield  NUMERIC(8, 4),
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_valuation_per_tw_stock_date_desc
+    ON valuation_per_tw (stock_id, date DESC);
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 
