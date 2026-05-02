@@ -23,7 +23,59 @@
   - `claude/collector-schema-mapping-2YF5U` / `claude/continue-work-dvkRv` / `claude/setup-agent-review-mcp-berOR`(v1.5/v1.6 探勘)
   - `claude/review-collector-spec-Gktcf`(早期 review 分支)
   - `collector`(早期 PR #4)
-- **PR**:v1.9 + v1.9.1 PR 開於 initial-setup-RhLKU 分支
+- **PR**:v1.9 + v1.9.1 + v1.10 PR 開於 initial-setup-RhLKU 分支
+
+---
+
+## v1.10 — PR #18 Bronze 5 reverse-pivot 落地(2026-05-02 後續)
+
+接 v1.9.1 後動工 PR #18(blueprint v3.2 r1 §六 #11 / §十 PR #5)。本 session 完成 5 張 v2.0 pivot/pack 表 → v3.2 Bronze raw 反推 + alembic 落地 + round-trip 驗證器。
+
+### A. 共用 helper:`scripts/_reverse_pivot_lib.py`
+
+`SPECS` dict + `ReversePivotSpec` dataclass + 5 公開函式:
+
+| function | 用途 |
+|---|---|
+| `fetch_legacy_pivot` | 從 legacy 表 SELECT(自動 strip `source` 等 control 欄) |
+| `reverse_pivot_rows` | legacy 寬列 → Bronze 瘦/平列(兩 mode) |
+| `upsert_bronze` | 批次 UPSERT 到 Bronze(走 db.upsert + bronze_pk) |
+| `repivot_for_verify` | Bronze → legacy 寬列(round-trip 驗證用,mirror aggregators) |
+| `assert_round_trip` | NULL-aware + 1e-9 容差 + dict normalize 比對,回 diff report |
+
+加 `run_reverse_pivot()` 一站式 runner,5 個 script 都是 thin wrapper(~25 行)。lib 邏輯通過 7 個合成資料邊界測試:Decimal vs float、NULL vs all-None dict、partial detail dict、空 dict 等。
+
+### B. 5 張 Bronze 反推契約
+
+| legacy | bronze | mode | 預期 row 比 |
+|---|---|---|---|
+| institutional_daily | institutional_investors_tw | investor_pivot | 1 → 最多 5(每法人 1 列) |
+| margin_daily | margin_purchase_short_sale_tw | detail_unpack | 1 → 1(8 detail key 攤平成欄) |
+| foreign_holding | foreign_investor_share_tw | detail_unpack | 1 → 1(9 detail key 攤平) |
+| day_trading | day_trading_tw | detail_unpack | 1 → 1(2 detail key 攤平) |
+| valuation_daily | valuation_per_tw | detail_unpack | 1 → 1(無 detail) |
+
+institutional 反推已由用戶本機 prototype 驗證 1775 ↔ 8875 ↔ 1775 100% round-trip(v1.9.1 結束時驗的)。本 session lib 化後 4 張延伸表待用戶本機跑全市場驗證。
+
+### C. alembic migration `j9k0l1m2n3o4`
+
+單一 migration `2026_05_02_j9k0l1m2n3o4_b_pr18_bronze5_reverse_pivot.py` 同時建 5 張 Bronze + 5 個 `idx_<table>_stock_date_desc` 索引(給 PR #19 Silver builder reads)。Coexist 模式:legacy v2.0 表保留;`_legacy_v2` rename 留到 T0+21(blueprint §八.2,後續 PR #21+)。`schema_pg.sql` 同步附 5 張 DDL 在尾段。
+
+### D. 驗證器 `scripts/verify_pr18_bronze.py`
+
+5 張一次跑完印 status table,任一 FAIL → exit 1 + 印各表前 5 筆 diff(missing / extra / value_diffs)。push 前必跑 5/5 OK。
+
+### E. PR #18.5 留 follow-up(不阻塞 PR #18 close)
+
+3 張表 (`holding_shares_per` / `financial_statement` / `monthly_revenue`) 因 detail JSONB unpack 不可逆(level taxonomy 未知 / 中→英 origin_name 對應丟失 / FinMind 月營收 1 row/股/月)走 Option A 全量重抓(~30-40h calendar-time @ 1600 reqs/hr)。獨立 PR 異步處理。
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`j9k0l1m2n3o4`(待用戶本機 `alembic upgrade head` 落地)
+- 5 張 Bronze schema 已寫(scripts + migration + schema_pg.sql 三邊對齊)
+- institutional 反推用戶本機驗過;4 張延伸待用戶 `python scripts/verify_pr18_bronze.py` 全市場跑
+- Silver 14 張 + dirty queue + Bronze→Silver trigger 留 PR #19 動工
+- v3.2 r1 PR sequencing:#17 ✅ → **#18 ⏳ 本 session 待 user verify** → #18.5 → #19 → #20 → #21
 
 ---
 
@@ -344,6 +396,13 @@ Rust `process_stock` 全量重算是必要設計（multiplier 倒推），但 Py
 | `scripts/test_28_apis.py` | 28 支 API 連線健檢（urllib + tomllib，零依賴） | 需要 token |
 | `scripts/av3_spot_check.sql` | av3 fwd 後復權驗證(Test 1~6 + 5b)+ 75 處中文段全用 COPY...TO STDOUT 走 server transcode | 不直接跑,改用 wrapper 👇 |
 | `scripts/run_av3.ps1` 🆕 v1.9 | PowerShell wrapper:三層 console UTF-8 + LC_MESSAGES=C + temp file roundtrip 完整修中文亂碼 | `.\scripts\run_av3.ps1` |
+| `scripts/_reverse_pivot_lib.py` 🆕 v1.10 | PR #18 共用 helper:SPECS dict + 5 函式(fetch / reverse / upsert / repivot / assert)。`run_reverse_pivot()` 一站式 runner | 給 5 個 reverse_pivot_*.py 呼叫,不直接跑 |
+| `scripts/reverse_pivot_institutional.py` 🆕 v1.10 | institutional_daily → institutional_investors_tw(1 → 最多 5 法人列) | `python scripts/reverse_pivot_institutional.py --stocks 2330 --dry-run` |
+| `scripts/reverse_pivot_valuation.py` 🆕 v1.10 | valuation_daily → valuation_per_tw(最簡 3 欄 1:1) | `python scripts/reverse_pivot_valuation.py` |
+| `scripts/reverse_pivot_day_trading.py` 🆕 v1.10 | day_trading → day_trading_tw(2 stored + 2 detail unpack) | `python scripts/reverse_pivot_day_trading.py` |
+| `scripts/reverse_pivot_margin.py` 🆕 v1.10 | margin_daily → margin_purchase_short_sale_tw(6 stored + 8 detail unpack) | `python scripts/reverse_pivot_margin.py` |
+| `scripts/reverse_pivot_foreign_holding.py` 🆕 v1.10 | foreign_holding → foreign_investor_share_tw(2 stored + 9 detail unpack) | `python scripts/reverse_pivot_foreign_holding.py` |
+| `scripts/verify_pr18_bronze.py` 🆕 v1.10 | PR #18 5 張 Bronze 反推聚合驗證,印 status table。push 前必跑 5/5 OK | `python scripts/verify_pr18_bronze.py` |
 
 ---
 
@@ -416,19 +475,27 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 user 已指定下個 session 直接動工 #1**:PR #18 Bronze 6 raw 拆,~2 天 work。
-> v1.9 PR (#16) 已開,maintainer review 平行進行不阻塞。
+> **🎯 user 本機驗證 PR #18 + 開 PR #19**。v1.10 lib + 4 script + alembic + verifier 已落地,
+> 等用戶本機 `alembic upgrade head` + `python scripts/verify_pr18_bronze.py` 5/5 OK 後 push。
 
-1. **🎯 PR #18 動工**(blueprint §六 #11:Bronze 6 raw 拆 + Option B reverse-pivot prototype),~2 天 work
-   - 對應 blueprint §8.1 兩條路線:
-     - **Option B(優先)**:institutional / margin / foreign_holding / day_trading / valuation 5 張用 reverse-pivot 從 v2.0 legacy 表反推 raw byte
-     - **Option A**:holding_shares_per / financial_statement / monthly_revenue 3 張重抓 FinMind raw(pack JSONB unpack 困難)
-   - 動工前先 prototype 1 張 reverse-pivot(建議 `institutional_daily`,因為 pivot 邏輯最透明,在 `src/aggregators.py:pivot_institutional`)驗證可行,再展全 5 張
-   - 寫 `scripts/reverse_pivot_institutional.py`:對 stock 2330 SELECT pivot 後資料 → 反推 5 row × N 日 → INSERT 到 v3.2 Bronze `institutional_investors_tw` → 對得上原 pivot 即驗證通過
-2. **v1.9 + v1.9.1 PR review + merge**(initial-setup-RhLKU 分支累積 ~24 commit,涵蓋 PR #17 (B-3) + R-1 漏改 + P1 dividend AF + PowerShell 亂碼戰役 + m2 blueprint Hard 階段 amend + 24 檔 backfill verify)。等 maintainer review,平行不阻塞 PR #18 動工。
-3. ~~**stock list 補完**~~ ✅ v1.9.1 已處理(24 檔 split/par_value backfill + av3 Test 4 完整通過,詳見 §「v1.9.1 補丁」§A)
-4. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
-5. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
-6. **CLAUDE.md 章節重組**(本檔已超過 600 行,v1.4-v1.7 詳解可繼續搬 docs/claude_history.md)
-7. **inspect_db.py 升 PG 版**(v2.0 後該腳本已不可用)
-8. **m2 PR #19 / #20 / #21**(Silver 14 + dirty + orchestrator + M3 prep,blueprint §十 PR 切法)
+1. **🎯 PR #18 本機驗證 + push**(本 session 完成 v1.10 code,user 本機跑驗證):
+   - `alembic upgrade head`(建 5 張 Bronze)
+   - `python scripts/reverse_pivot_institutional.py`(lib 化後重跑,對齊用戶本機 prototype 結果)
+   - `python scripts/verify_pr18_bronze.py`(5/5 OK)
+   - `alembic downgrade -1 && alembic upgrade head`(rollback smoke)
+   - `git push -u origin claude/initial-setup-RhLKU`(或從 init-project-setup-yGset cherry-pick)
+2. **PR #19 動工**(Silver 14 表 + dirty queue + Bronze→Silver trigger),blueprint §十 PR #8(~3 天 work)
+   - 14 張 Silver `*_derived` 表(對應 PR #18 5 張 Bronze + B-1/B-2/B-4/B-5/B-6 共 11 張 Bronze 的派生)
+   - `silver/builders/*.py` per-table builder + `silver/orchestrator.py`
+   - Bronze→Silver dirty trigger DDL(blueprint §5.5;PR #18 已加註但 trigger 留 PR #19 才 activate)
+   - Phase 7a/7b/7c 排程整合
+3. **PR #18.5 Option A 重抓 3 張表**(holding_shares_per / financial_statement / monthly_revenue)
+   - 3 張 Bronze 新 alembic migration `k0l1m2n3o4p5_pr18_5_bronze3_refetch.py`
+   - 用戶本機跑 30-40h FinMind 全量重抓
+   - 不阻塞 PR #19;PR #19 期間 Silver 對這 3 張用 legacy v2.0 fallback,等 PR #18.5 完成後切換
+4. **v1.9 + v1.9.1 + v1.10 PR review + merge**(initial-setup-RhLKU 分支累積 ~30+ commit)。等 maintainer review,平行進行。
+5. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
+6. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
+7. **CLAUDE.md 章節重組**(本檔已超過 700 行,v1.4-v1.7 詳解可繼續搬 docs/claude_history.md)
+8. **inspect_db.py 升 PG 版**(v2.0 後該腳本已不可用)
+9. **m2 PR #20 / #21**(orchestrator go-live + Silver views + legacy_v2 rename + M3 prep,blueprint §十 PR 切法)
