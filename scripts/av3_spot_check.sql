@@ -78,7 +78,7 @@ SELECT
     pae.event_type,
     COALESCE(pae.cash_dividend, 0)                                AS cash_div,
     COALESCE(pae.stock_dividend, 0)                               AS stock_div,
-    pae.adjustment_factor                                         AS af_in_pae,
+    f.adjustment_factor                                           AS af_in_fwd,
     pae.volume_factor                                             AS vf_in_pae,
     r.close                                                       AS raw_close,
     f.close                                                       AS fwd_close,
@@ -127,7 +127,7 @@ ORDER BY pae.date;
 SELECT
     pae.market, pae.stock_id, pae.date AS event_date, pae.event_type,
     pae.cash_dividend, pae.stock_dividend,
-    pae.adjustment_factor                                         AS af_in_pae,
+    f.adjustment_factor                                           AS af_in_fwd,
     pae.volume_factor                                             AS vf_in_pae,
     r.volume                                                      AS raw_vol,
     f.volume                                                      AS fwd_vol,
@@ -151,7 +151,7 @@ LIMIT 10;
 
 SELECT
     pae.market, pae.stock_id, pae.date AS event_date, pae.event_type,
-    pae.adjustment_factor                                         AS af_in_pae,
+    f.adjustment_factor                                           AS af_in_fwd,
     pae.volume_factor                                             AS vf_in_pae,
     r.close                                                       AS raw_close,
     f.close                                                       AS fwd_close,
@@ -169,25 +169,49 @@ LIMIT 20;
 
 \echo ''
 \echo '##############################################################'
-\echo '# Test 5: adjustment_factor vs volume_factor 是否一致'
+\echo '# Test 5: PR #17 後 fwd 4 個新欄是否寫入有值(per event_type)'
 \echo '##############################################################'
-\echo 'pae 表同時有 adjustment_factor 跟 volume_factor 兩欄;'
-\echo '若兩者不同,代表 collector 寫表時就分開了,但 Rust 只讀 AF → volume_factor 沒被消費'
+\echo 'fwd 表新欄:cumulative_adjustment_factor(累積 AF)/ cumulative_volume_factor'
+\echo '         (累積 vf)/ is_adjusted(該日是否動過)/ adjustment_factor(單日 AF)'
+\echo '預期:事件日當天 fwd.adjustment_factor != 1.0,且 pae.volume_factor 不等於它(P0-11 後拆兩 multiplier)'
 \echo ''
 
 SELECT
-    event_type,
+    pae.event_type,
     COUNT(*)                                                      AS event_count,
-    SUM(CASE WHEN ABS(adjustment_factor - volume_factor) < 0.0001 THEN 1 ELSE 0 END)
-                                                                  AS af_eq_vf_count,
-    SUM(CASE WHEN ABS(adjustment_factor - volume_factor) >= 0.0001 THEN 1 ELSE 0 END)
-                                                                  AS af_diff_vf_count,
-    ROUND(AVG(adjustment_factor)::numeric, 4)                     AS avg_af,
-    ROUND(AVG(volume_factor)::numeric, 4)                         AS avg_vf
-FROM price_adjustment_events
-WHERE adjustment_factor != 1.0 OR volume_factor != 1.0
-GROUP BY event_type
-ORDER BY event_type;
+    SUM(CASE WHEN f.is_adjusted = TRUE THEN 1 ELSE 0 END)         AS days_marked_adjusted,
+    SUM(CASE WHEN f.adjustment_factor IS NOT NULL THEN 1 ELSE 0 END)
+                                                                  AS days_with_af_written,
+    ROUND(AVG(f.adjustment_factor)::numeric, 4)                   AS avg_fwd_af,
+    ROUND(AVG(pae.volume_factor)::numeric, 4)                     AS avg_pae_vf,
+    SUM(CASE WHEN ABS(f.adjustment_factor - pae.volume_factor) >= 0.0001 THEN 1 ELSE 0 END)
+                                                                  AS days_af_diff_vf
+FROM price_adjustment_events pae
+JOIN price_daily_fwd f
+    ON f.market = pae.market AND f.stock_id = pae.stock_id AND f.date = pae.date
+WHERE f.adjustment_factor IS NOT NULL AND f.adjustment_factor != 1.0
+GROUP BY pae.event_type
+ORDER BY pae.event_type;
+
+\echo ''
+\echo '# Test 5b: 4 個新欄全表 sanity(整體寫入率,不只事件日)'
+\echo ''
+
+SELECT
+    COUNT(*)                                                      AS total_fwd_rows,
+    SUM(CASE WHEN cumulative_adjustment_factor IS NOT NULL THEN 1 ELSE 0 END)
+                                                                  AS rows_with_cum_af,
+    SUM(CASE WHEN cumulative_volume_factor IS NOT NULL THEN 1 ELSE 0 END)
+                                                                  AS rows_with_cum_vf,
+    SUM(CASE WHEN is_adjusted = TRUE THEN 1 ELSE 0 END)           AS rows_marked_adjusted,
+    SUM(CASE WHEN adjustment_factor IS NOT NULL THEN 1 ELSE 0 END)
+                                                                  AS rows_with_single_af,
+    -- sanity:cum_af 應該對 2330 是 1.0822(2019-01-02 起點)
+    ROUND(MAX(cumulative_adjustment_factor)::numeric, 4)          AS max_cum_af,
+    ROUND(MIN(CASE WHEN cumulative_adjustment_factor != 0 THEN cumulative_adjustment_factor END)::numeric, 4)
+                                                                  AS min_cum_af
+FROM price_daily_fwd
+WHERE market = 'TW' AND stock_id = '2330';
 
 
 \echo ''
