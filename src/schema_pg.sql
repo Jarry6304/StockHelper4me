@@ -657,6 +657,266 @@ CREATE INDEX IF NOT EXISTS idx_valuation_per_tw_stock_date_desc
 
 
 -- =============================================================================
+-- v3.2 PR #19a Silver `*_derived` 14 張 + dirty 欄位 + fwd ALTER
+-- =============================================================================
+-- per spec §2.3 canonical 清單。每張共通結構:source 表欄 + dirty 欄位 + 部分索引
+-- (ON dirty_at WHERE is_dirty = TRUE,給 orchestrator pull queue 用)。
+-- 與 alembic k0l1m2n3o4p5 對齊;Bronze→Silver trigger DDL 留 PR #20 enable。
+
+-- 1. price_limit_merge_events(Rust 計算,schema TBD per PR #20)
+CREATE TABLE IF NOT EXISTS price_limit_merge_events (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    merge_type     TEXT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_plme_dirty
+    ON price_limit_merge_events (dirty_at) WHERE is_dirty = TRUE;
+
+-- 2. monthly_revenue_derived
+CREATE TABLE IF NOT EXISTS monthly_revenue_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    revenue        NUMERIC(20, 2),
+    revenue_mom    NUMERIC(10, 4),
+    revenue_yoy    NUMERIC(10, 4),
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_mr_dirty
+    ON monthly_revenue_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 3. valuation_daily_derived(+market_value_weight per §2.6.4)
+CREATE TABLE IF NOT EXISTS valuation_daily_derived (
+    market               TEXT NOT NULL,
+    stock_id             TEXT NOT NULL,
+    date                 DATE NOT NULL,
+    per                  NUMERIC(10, 4),
+    pbr                  NUMERIC(10, 4),
+    dividend_yield       NUMERIC(8, 4),
+    market_value_weight  NUMERIC(10, 6),
+    is_dirty             BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at             TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_vd_dirty
+    ON valuation_daily_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 4. financial_statement_derived
+CREATE TABLE IF NOT EXISTS financial_statement_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    type           TEXT NOT NULL,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date, type),
+    CONSTRAINT chk_fin_derived_type CHECK (type IN ('income', 'balance', 'cashflow'))
+);
+CREATE INDEX IF NOT EXISTS idx_fs_dirty
+    ON financial_statement_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 5. institutional_daily_derived(+gov_bank_net per §2.6.2)
+CREATE TABLE IF NOT EXISTS institutional_daily_derived (
+    market                      TEXT NOT NULL,
+    stock_id                    TEXT NOT NULL,
+    date                        DATE NOT NULL,
+    foreign_buy                 BIGINT,
+    foreign_sell                BIGINT,
+    foreign_dealer_self_buy     BIGINT,
+    foreign_dealer_self_sell    BIGINT,
+    investment_trust_buy        BIGINT,
+    investment_trust_sell       BIGINT,
+    dealer_buy                  BIGINT,
+    dealer_sell                 BIGINT,
+    dealer_hedging_buy          BIGINT,
+    dealer_hedging_sell         BIGINT,
+    gov_bank_net                BIGINT,
+    is_dirty                    BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                    TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_id_dirty
+    ON institutional_daily_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 6. margin_daily_derived(+SBL 6 欄 per §2.6.1)
+CREATE TABLE IF NOT EXISTS margin_daily_derived (
+    market                                  TEXT NOT NULL,
+    stock_id                                TEXT NOT NULL,
+    date                                    DATE NOT NULL,
+    margin_purchase                         BIGINT,
+    margin_sell                             BIGINT,
+    margin_balance                          BIGINT,
+    short_sale                              BIGINT,
+    short_cover                             BIGINT,
+    short_balance                           BIGINT,
+    detail                                  JSONB,
+    margin_short_sales_short_sales          BIGINT,
+    margin_short_sales_short_covering       BIGINT,
+    margin_short_sales_current_day_balance  BIGINT,
+    sbl_short_sales_short_sales             BIGINT,
+    sbl_short_sales_returns                 BIGINT,
+    sbl_short_sales_current_day_balance     BIGINT,
+    is_dirty                                BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                                TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_md_dirty
+    ON margin_daily_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 7. foreign_holding_derived
+CREATE TABLE IF NOT EXISTS foreign_holding_derived (
+    market                  TEXT NOT NULL,
+    stock_id                TEXT NOT NULL,
+    date                    DATE NOT NULL,
+    foreign_holding_shares  BIGINT,
+    foreign_holding_ratio   NUMERIC(8, 4),
+    detail                  JSONB,
+    is_dirty                BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_fh_dirty
+    ON foreign_holding_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 8. holding_shares_per_derived
+CREATE TABLE IF NOT EXISTS holding_shares_per_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_hsp_dirty
+    ON holding_shares_per_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 9. day_trading_derived
+CREATE TABLE IF NOT EXISTS day_trading_derived (
+    market             TEXT NOT NULL,
+    stock_id           TEXT NOT NULL,
+    date               DATE NOT NULL,
+    day_trading_buy    BIGINT,
+    day_trading_sell   BIGINT,
+    detail             JSONB,
+    is_dirty           BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at           TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_dt_dirty
+    ON day_trading_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 10. taiex_index_derived(對應 market_ohlcv_tw)
+CREATE TABLE IF NOT EXISTS taiex_index_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    open           NUMERIC(15, 4),
+    high           NUMERIC(15, 4),
+    low            NUMERIC(15, 4),
+    close          NUMERIC(15, 4),
+    volume         BIGINT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_tid_dirty
+    ON taiex_index_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 11. us_market_index_derived(對應 market_index_us)
+CREATE TABLE IF NOT EXISTS us_market_index_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    open           NUMERIC(15, 4),
+    high           NUMERIC(15, 4),
+    low            NUMERIC(15, 4),
+    close          NUMERIC(15, 4),
+    volume         BIGINT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_usmid_dirty
+    ON us_market_index_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 12. exchange_rate_derived(PK 含 currency,不是 stock_id)
+CREATE TABLE IF NOT EXISTS exchange_rate_derived (
+    market         TEXT NOT NULL,
+    date           DATE NOT NULL,
+    currency       TEXT NOT NULL,
+    rate           NUMERIC(15, 6),
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, date, currency)
+);
+CREATE INDEX IF NOT EXISTS idx_erd_dirty
+    ON exchange_rate_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 13. market_margin_maintenance_derived(+2 欄 per §2.6.3)
+CREATE TABLE IF NOT EXISTS market_margin_maintenance_derived (
+    market                          TEXT NOT NULL,
+    date                            DATE NOT NULL,
+    ratio                           NUMERIC(8, 2),
+    total_margin_purchase_balance   BIGINT,
+    total_short_sale_balance        BIGINT,
+    is_dirty                        BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                        TIMESTAMPTZ,
+    PRIMARY KEY (market, date)
+);
+CREATE INDEX IF NOT EXISTS idx_mmmd_dirty
+    ON market_margin_maintenance_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 14. business_indicator_derived(NEW per §6.3)
+CREATE TABLE IF NOT EXISTS business_indicator_derived (
+    market              TEXT NOT NULL DEFAULT 'tw',
+    stock_id            TEXT NOT NULL DEFAULT '_market_',
+    date                DATE NOT NULL,
+    leading             NUMERIC(10, 4),
+    coincident          NUMERIC(10, 4),
+    lagging             NUMERIC(10, 4),
+    monitoring          INT,
+    monitoring_color    TEXT,
+    is_dirty            BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at            TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_bid_dirty
+    ON business_indicator_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- ─── 3 張 fwd 表加 dirty 欄位 + index(PR #17 已建表,本次只 ALTER)─────────
+ALTER TABLE price_daily_fwd
+    ADD COLUMN IF NOT EXISTS is_dirty BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS dirty_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_price_daily_fwd_dirty
+    ON price_daily_fwd (dirty_at) WHERE is_dirty = TRUE;
+
+ALTER TABLE price_weekly_fwd
+    ADD COLUMN IF NOT EXISTS is_dirty BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS dirty_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_price_weekly_fwd_dirty
+    ON price_weekly_fwd (dirty_at) WHERE is_dirty = TRUE;
+
+ALTER TABLE price_monthly_fwd
+    ADD COLUMN IF NOT EXISTS is_dirty BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS dirty_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_price_monthly_fwd_dirty
+    ON price_monthly_fwd (dirty_at) WHERE is_dirty = TRUE;
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 
