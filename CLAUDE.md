@@ -358,8 +358,16 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-1. **v1.9 PR review + merge**(tblnC 分支累積 ~16 commit,涵蓋 PR #17 (B-3) + R-1 漏改 + P1 dividend AF + PowerShell 亂碼戰役 + m2 blueprint Hard 階段 amend)。PR 已開,等 maintainer review。
-2. **PR #18 動工**(blueprint §六 #11:Bronze 6 raw 拆 + Option B reverse-pivot prototype),~2 天 work
+> **🎯 user 已指定下個 session 直接動工 #1**:PR #18 Bronze 6 raw 拆,~2 天 work。
+> v1.9 PR (#16) 已開,maintainer review 平行進行不阻塞。
+
+1. **🎯 PR #18 動工**(blueprint §六 #11:Bronze 6 raw 拆 + Option B reverse-pivot prototype),~2 天 work
+   - 對應 blueprint §8.1 兩條路線:
+     - **Option B(優先)**:institutional / margin / foreign_holding / day_trading / valuation 5 張用 reverse-pivot 從 v2.0 legacy 表反推 raw byte
+     - **Option A**:holding_shares_per / financial_statement / monthly_revenue 3 張重抓 FinMind raw(pack JSONB unpack 困難)
+   - 動工前先 prototype 1 張 reverse-pivot(建議 `institutional_daily`,因為 pivot 邏輯最透明,在 `src/aggregators.py:pivot_institutional`)驗證可行,再展全 5 張
+   - 寫 `scripts/reverse_pivot_institutional.py`:對 stock 2330 SELECT pivot 後資料 → 反推 5 row × N 日 → INSERT 到 v3.2 Bronze `institutional_investors_tw` → 對得上原 pivot 即驗證通過
+2. **v1.9 PR (#16) review + merge**(tblnC 分支累積 ~16 commit,涵蓋 PR #17 (B-3) + R-1 漏改 + P1 dividend AF + PowerShell 亂碼戰役 + m2 blueprint Hard 階段 amend)。等 maintainer review,平行不阻塞 PR #18 動工。
 3. **stock list 補完**(av3 Test 3/4 揭露 user `stock_info_ref` 沒收錄 8932/5278/5314/6763/3363 等股票,phase 4 全市場 backfill 沒涵蓋 → 要把這些補進)
 4. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
 5. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
