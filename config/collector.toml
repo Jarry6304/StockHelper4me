@@ -219,8 +219,8 @@ phase        = 2
 enabled      = true
 is_backer    = false
 segment_days = 365
-field_rename = {"date" = "suspension_date"}
-notes        = "個股暫停交易事件;v3.2 B-4 新表;無需 data_id;FinMind TaiwanStockSuspended 回個股級事件"
+field_rename = {"date" = "suspension_date", "suspension_time" = "suspension_time", "resumption_date" = "resumption_date", "resumption_time" = "resumption_time"}
+notes        = "個股暫停交易事件;v3.2 B-4 新表;無需 data_id;FinMind TaiwanStockSuspended 回個股級事件;同名 3 欄顯式 rename 消 SchemaValidation novel warning"
 
 # =============================================================================
 # Phase 3：RAW PRICE（日K + 漲跌停）

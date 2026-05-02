@@ -36,6 +36,21 @@ class FieldMapper:
         # 同 session 內 novel fields 警告去重快取：(api_name, frozenset(novel_keys)) 集合
         # 避免每個 segment 都重印一次相同警告（noise 太多會吃掉真正重要的 log）
         self._seen_novel: set[tuple[str, frozenset[str]]] = set()
+        # source 欄位是否存在於 target_table 的快取(避免每筆都查 information_schema)
+        self._has_source_cache: dict[str, bool] = {}
+
+    def _table_has_source(self, target_table: str | None) -> bool:
+        """檢查 target_table 是否有 source 欄位(v3.2 新 Bronze 表沒有)。"""
+        if not target_table or self.db is None:
+            return True  # 退回原行為(怕外部單元測試 db=None)
+        if target_table in self._has_source_cache:
+            return self._has_source_cache[target_table]
+        try:
+            has = "source" in self.db._table_columns(target_table)
+        except Exception:
+            has = True  # 表不存在或查詢失敗 → 退回原行為由 upsert 端過濾
+        self._has_source_cache[target_table] = has
+        return has
 
     def transform(
         self,
@@ -90,7 +105,11 @@ class FieldMapper:
 
             # 步驟 5：附加固定欄位
             row["market"]  = "TW"
-            row["source"]  = "finmind"
+            # source 只在 target_table 真的有此欄位時才加;v3.2 起新 Bronze 表
+            # (stock_suspension_events / securities_lending_tw / market_ohlcv_tw 等)
+            # 設計簡潔不放 source,blueprint §五 拍板。避免 upsert 略過 warning。
+            if self._table_has_source(api_config.target_table):
+                row["source"]  = "finmind"
 
             results.append(row)
 
