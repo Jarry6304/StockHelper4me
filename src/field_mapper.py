@@ -36,6 +36,21 @@ class FieldMapper:
         # 同 session 內 novel fields 警告去重快取：(api_name, frozenset(novel_keys)) 集合
         # 避免每個 segment 都重印一次相同警告（noise 太多會吃掉真正重要的 log）
         self._seen_novel: set[tuple[str, frozenset[str]]] = set()
+        # source 欄位是否存在於 target_table 的快取(避免每筆都查 information_schema)
+        self._has_source_cache: dict[str, bool] = {}
+
+    def _table_has_source(self, target_table: str | None) -> bool:
+        """檢查 target_table 是否有 source 欄位(v3.2 新 Bronze 表沒有)。"""
+        if not target_table or self.db is None:
+            return True  # 退回原行為(怕外部單元測試 db=None)
+        if target_table in self._has_source_cache:
+            return self._has_source_cache[target_table]
+        try:
+            has = "source" in self.db._table_columns(target_table)
+        except Exception:
+            has = True  # 表不存在或查詢失敗 → 退回原行為由 upsert 端過濾
+        self._has_source_cache[target_table] = has
+        return has
 
     def transform(
         self,
@@ -90,7 +105,11 @@ class FieldMapper:
 
             # 步驟 5：附加固定欄位
             row["market"]  = "TW"
-            row["source"]  = "finmind"
+            # source 只在 target_table 真的有此欄位時才加;v3.2 起新 Bronze 表
+            # (stock_suspension_events / securities_lending_tw / market_ohlcv_tw 等)
+            # 設計簡潔不放 source,blueprint §五 拍板。避免 upsert 略過 warning。
+            if self._table_has_source(api_config.target_table):
+                row["source"]  = "finmind"
 
             results.append(row)
 
@@ -165,10 +184,15 @@ class FieldMapper:
         規則來自 tw_stock_architecture_review_v1.1 §3.4。
 
         支援的計算欄位：
-          adjustment_factor：價格調整因子（before_price / after_price）
           volume_factor：    成交量調整因子
           cash_dividend：    現金股利（從 dividend 事件拆分）
           stock_dividend：   股票股利（從 dividend 事件拆分）
+
+        v3.2 PR #17 (B-3) 砍掉:
+          adjustment_factor：events 表已砍此欄,Rust 端在 process_stock 內現算
+                            (用 before_price / reference_price 反推)。
+                            collector.toml 對 4 個 events 來源的 computed_fields
+                            清單也已同步移除 'adjustment_factor'。
 
         Args:
             api_config: API 設定（含 computed_fields 清單）
@@ -176,31 +200,20 @@ class FieldMapper:
         """
         fields = api_config.computed_fields
 
-        # ── 計算 adjustment_factor（價格調整因子）
-        if "adjustment_factor" in fields:
-            bp = row.get("before_price")
-            ap = row.get("after_price")
-            if bp and ap and float(ap) != 0:
-                row["adjustment_factor"] = float(bp) / float(ap)
-            else:
-                row["adjustment_factor"] = 1.0
-                if bp is not None or ap is not None:
-                    logger.warning(
-                        f"Cannot compute AF: before={bp}, after={ap}. "
-                        f"stock={row.get('stock_id')}, date={row.get('date')}"
-                    )
-
         # ── 計算 volume_factor（成交量調整因子）
+        # v3.2 PR #17:after_price 已砍,改用 reference_price(equivalent for vf)
         if "volume_factor" in fields:
             et = row.get("event_type", "")
             if et == "dividend":
                 # 除權息不影響股本，volume_factor = 1.0
+                # (P1-17 修正:stock_dividend 的真實 vf 由 post_process
+                #  _recompute_stock_dividend_vf 重算)
                 row["volume_factor"] = 1.0
             else:
-                # 減資、分割等：成交量因子 = after_price / before_price
+                # 減資、分割、面額變更等：vf = reference_price / before_price
                 bp = row.get("before_price", 0)
-                ap = row.get("after_price", 0)
-                row["volume_factor"] = float(ap) / float(bp) if bp != 0 else 1.0
+                rp = row.get("reference_price", 0)
+                row["volume_factor"] = float(rp) / float(bp) if bp else 1.0
 
         # ── 計算 cash_dividend / stock_dividend（除權息事件）
         if "cash_dividend" in fields or "stock_dividend" in fields:

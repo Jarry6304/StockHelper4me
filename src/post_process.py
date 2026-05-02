@@ -5,11 +5,14 @@ Phase 2 後處理模組：TaiwanStockDividend 合併邏輯。
 
 執行時機：Phase 2 中 dividend_result 與 dividend_policy 都完成後執行。
 
-兩個職責：
+職責：
   1. 修補「權息」混合事件的 cash_dividend / stock_dividend 拆分
      （field_mapper 在遇到「權息」時設為 NULL，此處補齊）
   2. 偵測純現增事件（TaiwanStockDividendResult 無對應記錄的情況），
-     寫入 price_adjustment_events，AF 計算延後至 Rust Phase 4（step 1.5）
+     寫入 price_adjustment_events，AF 計算延後至 Rust Phase 4（記憶體版,
+     v3.2 PR #17 後不再 UPDATE 寫回 events 表）
+  3. 修正 stock_dividend 事件的 volume_factor(P1-17 補丁)
+  4. reset stock_sync_status.fwd_adj_valid 觸發 Phase 4 重算(P0-7 短期補丁)
 """
 
 import json
@@ -230,10 +233,12 @@ def _detect_capital_increase(db: DBWriter, stock_id: str) -> None:
             f"Pure capital increase detected: {stock_id} on {ex_date}, "
             f"subscription_price={subscription_price}, "
             f"subscription_rate={subscription_rate}. "
-            f"AF deferred to Rust Phase 4 (step 1.5)."
+            f"AF deferred to Rust Phase 4 (in-memory)."
         )
 
-        # 插入暫時記錄，AF=1.0 為佔位符，待 Rust Phase 4 補算
+        # 插入暫時記錄。v3.2 PR #17 後 events 表砍 adjustment_factor / after_price /
+        # source 欄,AF 由 Rust patch_capital_increase_af 在記憶體現算
+        # (從 detail.subscription_price + raw_prices 反推),不再 UPDATE 寫回 DB。
         db.insert(
             "price_adjustment_events",
             {
@@ -241,10 +246,8 @@ def _detect_capital_increase(db: DBWriter, stock_id: str) -> None:
                 "stock_id":          stock_id,
                 "date":              ex_date,
                 "event_type":        "capital_increase",
-                "before_price":      None,     # 需從 price_daily 補查
-                "after_price":       None,     # 需計算
-                "adjustment_factor": 1.0,      # 暫用，待 Rust Phase 4 修正
-                "volume_factor":     1.0,      # 暫用
+                "before_price":      None,     # 需從 price_daily 補查(留 Rust 內聯處理)
+                "volume_factor":     1.0,      # capital_increase 預設 vf=1.0
                 "detail":            json.dumps(
                     {
                         "subscription_price":          subscription_price,
@@ -256,7 +259,6 @@ def _detect_capital_increase(db: DBWriter, stock_id: str) -> None:
                     },
                     ensure_ascii=False,
                 ),
-                "source": "finmind",
             },
         )
 

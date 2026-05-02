@@ -140,10 +140,10 @@ is_backer    = true
 segment_days = 0
 backfill_start_override = "2022-01-01"
 event_type   = "dividend"
-field_rename = {"stock_or_cache_dividend" = "_event_subtype", "stock_and_cache_dividend" = "_combined_dividend", "max_price" = "_max_price", "min_price" = "_min_price", "open_price" = "_open_price"}
-detail_fields    = ["_event_subtype", "_combined_dividend", "_max_price", "_min_price", "_open_price"]
-computed_fields  = ["adjustment_factor", "volume_factor", "cash_dividend", "stock_dividend"]
-notes        = "除權息結果。API 直接 column: before_price/after_price/reference_price 已對齊 DB"
+field_rename = {"stock_or_cache_dividend" = "_event_subtype", "stock_and_cache_dividend" = "_combined_dividend", "after_price" = "_after_price", "max_price" = "_max_price", "min_price" = "_min_price", "open_price" = "_open_price"}
+detail_fields    = ["_event_subtype", "_combined_dividend", "_after_price", "_max_price", "_min_price", "_open_price"]
+computed_fields  = ["volume_factor", "cash_dividend", "stock_dividend"]
+notes        = "除權息結果。v3.2 PR #17 後 events 表已砍 after_price 欄,改 pack 進 detail JSON;adjustment_factor 由 Rust 在記憶體現算"
 
 [[api]]
 name         = "dividend_policy"
@@ -171,10 +171,10 @@ is_backer    = true
 segment_days = 0
 backfill_start_override = "2020-01-01"
 event_type   = "capital_reduction"
-field_rename = {"ClosingPriceonTheLastTradingDay" = "before_price", "PostReductionReferencePrice" = "after_price", "OpeningReferencePrice" = "reference_price", "ReasonforCapitalReduction" = "_reason", "LimitUp" = "_limit_up", "LimitDown" = "_limit_down", "ExrightReferencePrice" = "_exright_ref"}
-detail_fields    = ["_reason", "_limit_up", "_limit_down", "_exright_ref"]
-computed_fields  = ["adjustment_factor", "volume_factor"]
-notes        = "減資參考價"
+field_rename = {"ClosingPriceonTheLastTradingDay" = "before_price", "PostReductionReferencePrice" = "_after_price", "OpeningReferencePrice" = "reference_price", "ReasonforCapitalReduction" = "_reason", "LimitUp" = "_limit_up", "LimitDown" = "_limit_down", "ExrightReferencePrice" = "_exright_ref"}
+detail_fields    = ["_after_price", "_reason", "_limit_up", "_limit_down", "_exright_ref"]
+computed_fields  = ["volume_factor"]
+notes        = "減資參考價。v3.2 PR #17:after_price → detail._after_price;AF 由 Rust 內現算"
 
 [[api]]
 name         = "split_price"
@@ -186,10 +186,10 @@ enabled      = true
 is_backer    = false
 segment_days = 365
 event_type   = "split"
-field_rename = {"open_price" = "reference_price", "type" = "_split_type", "max_price" = "_max_price", "min_price" = "_min_price"}
-detail_fields    = ["_split_type", "_max_price", "_min_price"]
-computed_fields  = ["adjustment_factor", "volume_factor"]
-notes        = "分割參考價；API 回 (date, stock_id, type, before_price, after_price, max_price, min_price, open_price)；無需 data_id"
+field_rename = {"open_price" = "reference_price", "after_price" = "_after_price", "type" = "_split_type", "max_price" = "_max_price", "min_price" = "_min_price"}
+detail_fields    = ["_after_price", "_split_type", "_max_price", "_min_price"]
+computed_fields  = ["volume_factor"]
+notes        = "分割參考價;v3.2 PR #17:after_price → detail._after_price;AF 由 Rust 內現算"
 
 [[api]]
 name         = "par_value_change"
@@ -201,10 +201,10 @@ enabled      = true
 is_backer    = false
 segment_days = 365
 event_type   = "par_value_change"
-field_rename = {"before_close" = "before_price", "after_ref_close" = "after_price", "after_ref_open" = "reference_price", "after_ref_max" = "_limit_up", "after_ref_min" = "_limit_down", "stock_name" = "_stock_name"}
-detail_fields    = ["_limit_up", "_limit_down", "_stock_name"]
-computed_fields  = ["adjustment_factor", "volume_factor"]
-notes        = "面額變更；無需 data_id"
+field_rename = {"before_close" = "before_price", "after_ref_close" = "_after_price", "after_ref_open" = "reference_price", "after_ref_max" = "_limit_up", "after_ref_min" = "_limit_down", "stock_name" = "_stock_name"}
+detail_fields    = ["_after_price", "_limit_up", "_limit_down", "_stock_name"]
+computed_fields  = ["volume_factor"]
+notes        = "面額變更;v3.2 PR #17:after_price → detail._after_price;AF 由 Rust 內現算"
 
 # v3.2 B-4(blueprint §四 + §附錄 B):個股暫停交易事件
 # 用途:prev_trading_day(stock_id, date) 模組 + tw_market_core 個股級交易缺口
@@ -219,8 +219,8 @@ phase        = 2
 enabled      = true
 is_backer    = false
 segment_days = 365
-field_rename = {"date" = "suspension_date"}
-notes        = "個股暫停交易事件;v3.2 B-4 新表;無需 data_id;FinMind TaiwanStockSuspended 回個股級事件"
+field_rename = {"date" = "suspension_date", "suspension_time" = "suspension_time", "resumption_date" = "resumption_date", "resumption_time" = "resumption_time"}
+notes        = "個股暫停交易事件;v3.2 B-4 新表;無需 data_id;FinMind TaiwanStockSuspended 回個股級事件;同名 3 欄顯式 rename 消 SchemaValidation novel warning"
 
 # =============================================================================
 # Phase 3：RAW PRICE（日K + 漲跌停）

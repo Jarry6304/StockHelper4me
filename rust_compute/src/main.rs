@@ -26,11 +26,43 @@ struct Args {
 #[derive(Debug, Clone)]
 struct DailyPrice { date: NaiveDate, open: f64, high: f64, low: f64, close: f64, volume: i64 }
 
+/// 還原因子事件(v3.2 PR #17 後砍 events.adjustment_factor 欄,改在 Rust 內現算)
+///
+/// AF 計算 priority(對 non capital_increase):
+///   1. before_price + reference_price 都有值 → af = before / reference(API 精確值)
+///   2. dividend 事件 fallback:用 cash + stock 公式
+///        p_after = (before - cash) / (1 + stock / 10)
+///        af = before / p_after
+///      適用情境:純股票股利 events FinMind API 不回 reference_price,Priority 1 fail
+///   3. capital_increase:由 patch_capital_increase_af 從 detail.subscription_price 反推
 #[derive(Debug, Clone)]
-struct AdjEvent { date: NaiveDate, event_type: String, adjustment_factor: f64, volume_factor: f64, detail: Option<String> }
+struct AdjEvent {
+    date: NaiveDate,
+    event_type: String,
+    before_price: Option<f64>,
+    reference_price: Option<f64>,
+    cash_dividend: Option<f64>,
+    stock_dividend: Option<f64>,
+    /// 計算後的 AF(transient,不存 DB)。SELECT 進來時 = 1.0,
+    /// process_stock 內由 derive_simple_event_af + patch_capital_increase_af 填值
+    af: f64,
+    volume_factor: f64,
+    detail: Option<String>,
+}
 
+/// v3.2 PR #17 加 4 欄:cumulative_adjustment_factor / cumulative_volume_factor /
+/// is_adjusted / adjustment_factor。給 Wave Cores 反推 raw 用。
 #[derive(Debug, Clone)]
-struct FwdDailyPrice { stock_id: String, date: NaiveDate, open: f64, high: f64, low: f64, close: f64, volume: i64 }
+struct FwdDailyPrice {
+    stock_id: String,
+    date: NaiveDate,
+    open: f64, high: f64, low: f64, close: f64,
+    volume: i64,
+    cum_adj_factor: f64,
+    cum_vol_factor: f64,
+    is_adjusted: bool,
+    adj_factor: f64,
+}
 
 #[derive(Serialize)]
 struct Summary {
@@ -67,7 +99,7 @@ async fn main() -> Result<()> {
     assert_schema_version(&pool).await?;
 
     let stock_ids = resolve_stock_ids(&pool, &args).await?;
-    let trading_dates = load_trading_calendar(&pool).await?;
+    let trading_dates = load_trading_dates(&pool).await?;
 
     let mut processed  = 0usize;
     let mut skipped    = 0usize;
@@ -193,13 +225,14 @@ async fn resolve_stock_ids(pool: &PgPool, args: &Args) -> Result<Vec<String>> {
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-async fn load_trading_calendar(pool: &PgPool) -> Result<Vec<NaiveDate>> {
+async fn load_trading_dates(pool: &PgPool) -> Result<Vec<NaiveDate>> {
+    // v3.2 R-1 已改名 trading_calendar → trading_date_ref(commit 05b9101)
     let rows: Vec<(NaiveDate,)> = sqlx::query_as(
-        "SELECT date FROM trading_calendar WHERE market = 'TW' ORDER BY date",
+        "SELECT date FROM trading_date_ref WHERE market = 'TW' ORDER BY date",
     )
     .fetch_all(pool)
     .await
-    .context("載入交易日曆失敗")?;
+    .context("載入 trading_date_ref 失敗")?;
     Ok(rows.into_iter().map(|(d,)| d).collect())
 }
 
@@ -222,14 +255,19 @@ async fn load_raw_prices(
     Ok(rows.into_iter().map(|(date, open, high, low, close, volume)| DailyPrice { date, open, high, low, close, volume }).collect())
 }
 
-/// detail JSONB 讀成 TEXT，Rust 端再 parse
+/// detail JSONB 讀成 TEXT，Rust 端再 parse。
+/// v3.2 PR #17:不再 SELECT adjustment_factor 欄(已砍),改 SELECT
+/// before_price + reference_price + volume_factor + detail。AF 在記憶體現算。
+/// PR #17 P1 fallback:加 cash_dividend + stock_dividend 給 dividend AF fallback 公式用。
 async fn load_adj_events(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     market: &str,
     stock_id: &str,
 ) -> Result<Vec<AdjEvent>> {
-    let rows: Vec<(NaiveDate, String, f64, f64, Option<String>)> = sqlx::query_as(
-        "SELECT date, event_type, adjustment_factor::float8, volume_factor::float8, detail::text
+    let rows: Vec<(NaiveDate, String, Option<f64>, Option<f64>, Option<f64>, Option<f64>, f64, Option<String>)> = sqlx::query_as(
+        "SELECT date, event_type, before_price::float8, reference_price::float8,
+                cash_dividend::float8, stock_dividend::float8,
+                volume_factor::float8, detail::text
            FROM price_adjustment_events
           WHERE market = $1 AND stock_id = $2
           ORDER BY date",
@@ -238,51 +276,93 @@ async fn load_adj_events(
     .fetch_all(tx.as_mut())
     .await
     .with_context(|| format!("讀取 price_adjustment_events 失敗：{stock_id}"))?;
-    Ok(rows.into_iter().map(|(date, event_type, af, vf, detail)| AdjEvent {
-        date, event_type, adjustment_factor: af, volume_factor: vf, detail
+    Ok(rows.into_iter().map(|(date, event_type, before_price, reference_price, cash_dividend, stock_dividend, vf, detail)| AdjEvent {
+        date, event_type, before_price, reference_price, cash_dividend, stock_dividend,
+        af: 1.0, volume_factor: vf, detail
     }).collect())
 }
 
-async fn patch_capital_increase_af(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    market: &str,
-    stock_id: &str,
-    raw_prices: &[DailyPrice],
-    events: &mut Vec<AdjEvent>,
-) -> Result<usize> {
+/// 對非 capital_increase 事件,反推 AF。Priority:
+///   1. before_price + reference_price 都有值且 reference_price 可信 →
+///         af = before / reference(API 精確值)
+///   2. dividend events fallback:用 cash + stock 公式
+///         p_after = (before - cash) / (1 + stock / 10)
+///         af = before / p_after
+///      退化情境:
+///         純現金股利:af = before / (before - cash)        (stock=0)
+///         純股票股利:af = 1 + stock / 10                  (cash=0)
+///         混合:     af = before * (1 + stock/10) / (before - cash)
+///
+/// reference_price 不可信偵測(觸發 Priority 1 fallthrough):
+///   FinMind TaiwanStockDividendResult 對「純股票股利」(cash=0, stock>0)
+///   直接把 reference_price 設成 = before_price(沒做真除權計算),導致 bp / rp = 1.0
+///   錯誤。對這種 row 認定 reference_price 不可靠,走 Priority 2 公式。
+///
+/// 對混合 dividend(cash>0 + stock>0)reference_price 是真除權息後參考價,
+/// 信任 Priority 1(處理 ETF 配息等公式無法精確算的情境)。
+fn derive_simple_event_af(events: &mut [AdjEvent], raw_prices: &[DailyPrice]) {
+    for event in events.iter_mut() {
+        if event.event_type == "capital_increase" { continue; }
+
+        // Priority 1: API 給的 before / reference 直接反推(加 sanity check)
+        if let (Some(bp), Some(rp)) = (event.before_price, event.reference_price) {
+            if rp > 0.0 && bp > 0.0 {
+                let cash = event.cash_dividend.unwrap_or(0.0);
+                let stock = event.stock_dividend.unwrap_or(0.0);
+                let bp_eq_rp = (bp - rp).abs() < 0.0001;
+                let unreliable = event.event_type == "dividend"
+                    && stock > 0.0
+                    && cash == 0.0
+                    && bp_eq_rp;
+                if !unreliable {
+                    event.af = bp / rp;
+                    continue;
+                }
+                // unreliable → fallthrough 到 Priority 2
+            }
+        }
+
+        // Priority 2: dividend fallback 公式
+        if event.event_type == "dividend" {
+            let bp_opt = event.before_price.or_else(|| {
+                raw_prices.iter()
+                    .filter(|p| p.date < event.date)
+                    .last()
+                    .map(|p| p.close)
+            });
+            if let Some(bp) = bp_opt {
+                if bp > 0.0 {
+                    let cash = event.cash_dividend.unwrap_or(0.0);
+                    let stock = event.stock_dividend.unwrap_or(0.0);
+                    if cash > 0.0 || stock > 0.0 {
+                        let p_after = (bp - cash) / (1.0 + stock / 10.0);
+                        if p_after > 0.0 {
+                            event.af = bp / p_after;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 對 capital_increase 事件從 detail.subscription_price + raw_prices 反推 AF。
+///
+/// v3.2 PR #17:events.adjustment_factor 欄已砍,本函數從原本「UPDATE DB」
+/// 改為「純記憶體更新 event.af」(blueprint §六 #5「Rust patch_capital_increase_af
+/// 改寫到 Silver 內部」落地)。detail 仍可選擇性寫回(p_pre / after_price /
+/// af_computed_by 給除錯用),本 PR 暫不寫(events.detail 改動會 trigger 整檔
+/// fwd dirty,長期 dirty queue 上線後可考慮恢復寫 detail)。
+fn patch_capital_increase_af(raw_prices: &[DailyPrice], events: &mut [AdjEvent]) -> usize {
     let mut patched = 0usize;
     for event in events.iter_mut() {
         if event.event_type != "capital_increase" { continue; }
-        let detail_str = match &event.detail { Some(s) => s.clone(), None => continue };
-        let Some((af, p_pre, after_price)) = compute_capital_increase_af(raw_prices, event.date, &detail_str) else { continue };
-
-        let new_detail: Value = {
-            let mut d: Value = serde_json::from_str(&detail_str).unwrap_or(Value::Null);
-            if let Some(obj) = d.as_object_mut() {
-                obj.remove("status");
-                obj.insert("p_pre".into(), p_pre.into());
-                obj.insert("after_price".into(), after_price.into());
-                obj.insert("af_computed_by".into(), "rust_phase4".into());
-            }
-            d
-        };
-
-        sqlx::query(
-            "UPDATE price_adjustment_events
-                SET adjustment_factor = $1, detail = $2::jsonb
-              WHERE market = $3 AND stock_id = $4 AND date = $5 AND event_type = 'capital_increase'",
-        )
-        .bind(af)
-        .bind(new_detail.to_string())
-        .bind(market).bind(stock_id).bind(event.date)
-        .execute(tx.as_mut())
-        .await
-        .with_context(|| format!("UPDATE capital_increase AF 失敗：{stock_id} {}", event.date))?;
-
-        event.adjustment_factor = af;
+        let detail_str = match &event.detail { Some(s) => s, None => continue };
+        let Some((af, _p_pre, _after_price)) = compute_capital_increase_af(raw_prices, event.date, detail_str) else { continue };
+        event.af = af;
         patched += 1;
     }
-    Ok(patched)
+    patched
 }
 
 async fn upsert_daily_fwd(
@@ -294,20 +374,31 @@ async fn upsert_daily_fwd(
         .bind(market).bind(stock_id).execute(tx.as_mut()).await.context("DELETE price_daily_fwd 失敗")?;
     if fwd_prices.is_empty() { return Ok(()); }
 
-    let dates:   Vec<NaiveDate> = fwd_prices.iter().map(|p| p.date).collect();
-    let opens:   Vec<f64>       = fwd_prices.iter().map(|p| p.open).collect();
-    let highs:   Vec<f64>       = fwd_prices.iter().map(|p| p.high).collect();
-    let lows:    Vec<f64>       = fwd_prices.iter().map(|p| p.low).collect();
-    let closes:  Vec<f64>       = fwd_prices.iter().map(|p| p.close).collect();
-    let volumes: Vec<i64>       = fwd_prices.iter().map(|p| p.volume).collect();
+    let dates:    Vec<NaiveDate> = fwd_prices.iter().map(|p| p.date).collect();
+    let opens:    Vec<f64>       = fwd_prices.iter().map(|p| p.open).collect();
+    let highs:    Vec<f64>       = fwd_prices.iter().map(|p| p.high).collect();
+    let lows:     Vec<f64>       = fwd_prices.iter().map(|p| p.low).collect();
+    let closes:   Vec<f64>       = fwd_prices.iter().map(|p| p.close).collect();
+    let volumes:  Vec<i64>       = fwd_prices.iter().map(|p| p.volume).collect();
+    let cum_afs:  Vec<f64>       = fwd_prices.iter().map(|p| p.cum_adj_factor).collect();
+    let cum_vfs:  Vec<f64>       = fwd_prices.iter().map(|p| p.cum_vol_factor).collect();
+    let is_adjs:  Vec<bool>      = fwd_prices.iter().map(|p| p.is_adjusted).collect();
+    let adj_fs:   Vec<f64>       = fwd_prices.iter().map(|p| p.adj_factor).collect();
 
     sqlx::query(
-        "INSERT INTO price_daily_fwd (market, stock_id, date, open, high, low, close, volume)
-         SELECT $1, $2, UNNEST($3::date[]), UNNEST($4::float8[]), UNNEST($5::float8[]),
-                UNNEST($6::float8[]), UNNEST($7::float8[]), UNNEST($8::bigint[])",
+        "INSERT INTO price_daily_fwd
+                (market, stock_id, date, open, high, low, close, volume,
+                 cumulative_adjustment_factor, cumulative_volume_factor,
+                 is_adjusted, adjustment_factor)
+         SELECT $1, $2,
+                UNNEST($3::date[]),  UNNEST($4::float8[]),  UNNEST($5::float8[]),
+                UNNEST($6::float8[]), UNNEST($7::float8[]), UNNEST($8::bigint[]),
+                UNNEST($9::float8[]), UNNEST($10::float8[]),
+                UNNEST($11::bool[]),  UNNEST($12::float8[])",
     )
     .bind(market).bind(stock_id)
     .bind(&dates).bind(&opens).bind(&highs).bind(&lows).bind(&closes).bind(&volumes)
+    .bind(&cum_afs).bind(&cum_vfs).bind(&is_adjs).bind(&adj_fs)
     .execute(tx.as_mut()).await.context("INSERT price_daily_fwd 失敗")?;
     Ok(())
 }
@@ -410,7 +501,8 @@ async fn process_stock(
     }
 
     let mut events = load_adj_events(&mut tx, market, stock_id).await?;
-    let af_patched = patch_capital_increase_af(&mut tx, market, stock_id, &raw_prices, &mut events).await?;
+    derive_simple_event_af(&mut events, &raw_prices);
+    let af_patched = patch_capital_increase_af(&raw_prices, &mut events);
 
     let fwd_prices = compute_forward_adjusted(stock_id, &raw_prices, &events);
     let weeks  = aggregate_weekly(&fwd_prices, trading_dates);
@@ -448,8 +540,8 @@ fn compute_forward_adjusted(stock_id: &str, raw_prices: &[DailyPrice], events: &
     let mut event_af: HashMap<NaiveDate, f64> = HashMap::new();
     let mut event_vf: HashMap<NaiveDate, f64> = HashMap::new();
     for e in events {
-        if (e.adjustment_factor - 1.0).abs() > 1e-12 {
-            *event_af.entry(e.date).or_insert(1.0) *= e.adjustment_factor;
+        if (e.af - 1.0).abs() > 1e-12 {
+            *event_af.entry(e.date).or_insert(1.0) *= e.af;
         }
         if (e.volume_factor - 1.0).abs() > 1e-12 {
             *event_vf.entry(e.date).or_insert(1.0) *= e.volume_factor;
@@ -459,6 +551,11 @@ fn compute_forward_adjusted(stock_id: &str, raw_prices: &[DailyPrice], events: &
     let mut volume_multiplier = 1.0_f64;
     let mut result: Vec<FwdDailyPrice> = Vec::with_capacity(raw_prices.len());
     for price in raw_prices.iter().rev() {
+        // PR #17 4 個 derived 欄(spec §3.2 + blueprint §5.2 amend)
+        let single_af = event_af.get(&price.date).copied().unwrap_or(1.0);
+        let is_adj = (price_multiplier  - 1.0).abs() > 1e-12
+                  || (volume_multiplier - 1.0).abs() > 1e-12;
+
         result.push(FwdDailyPrice {
             stock_id: stock_id.to_string(), date: price.date,
             open:   (price.open   * price_multiplier * 100.0).round() / 100.0,
@@ -466,6 +563,10 @@ fn compute_forward_adjusted(stock_id: &str, raw_prices: &[DailyPrice], events: &
             low:    (price.low    * price_multiplier * 100.0).round() / 100.0,
             close:  (price.close  * price_multiplier * 100.0).round() / 100.0,
             volume: (price.volume as f64 / volume_multiplier).round() as i64,
+            cum_adj_factor: price_multiplier,
+            cum_vol_factor: volume_multiplier,
+            is_adjusted:    is_adj,
+            adj_factor:     single_af,
         });
         // 先 push 再更新 multiplier:除權息日當日 raw 已是除權息後,不該再乘該日 AF/vf
         if let Some(&af) = event_af.get(&price.date) { price_multiplier  *= af; }

@@ -2,9 +2,9 @@
 -- =============================================================================
 -- A-V3 spot-check: price_daily_fwd.volume 後復權行為驗證
 -- =============================================================================
--- Windows PowerShell 中文亂碼:跑前先 chcp 65001 切到 UTF-8 console codepage
---   chcp 65001
---   psql $env:DATABASE_URL -f scripts\av3_spot_check.sql
+-- Windows PowerShell 中文亂碼:用 wrapper script 一次設好三層 encoding
+--   .\scripts\run_av3.ps1
+-- 直接跑 psql -f 會撞到 PS console codepage cp950 vs psql UTF-8 輸出 mismatch
 -- =============================================================================
 -- 目的:r2-1 動工項;驗證 collector / Rust 對 volume 後復權的實際行為,
 --      解 P0-2 + P0-8(C1)+ blueprint §4.4 條件 ALTER 決策。
@@ -25,15 +25,15 @@
 --
 -- =============================================================================
 
-\echo ''
-\echo '##############################################################'
-\echo '# Test 1: 2330 已知 4 個黃金日(CLAUDE.md 後復權驗證資料對齊)'
-\echo '##############################################################'
-\echo '預期 close_ratio = fwd/raw,跟 CLAUDE.md 表對得上'
-\echo '預期 vol_ratio = fwd/raw:'
-\echo '  若 = 1.0 → volume 沒動(實務派)'
-\echo '  若 = raw/fwd_close 的反比(即 1/close_ratio)→ Rust 派(volume / multiplier)'
-\echo ''
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '# Test 1: 2330 已知 4 個黃金日(CLAUDE.md 後復權驗證資料對齊)') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '預期 close_ratio = fwd/raw,跟 CLAUDE.md 表對得上') TO STDOUT;
+COPY (SELECT '預期 vol_ratio = fwd/raw:') TO STDOUT;
+COPY (SELECT '  若 = 1.0 → volume 沒動(實務派)') TO STDOUT;
+COPY (SELECT '  若 = raw/fwd_close 的反比(即 1/close_ratio)→ Rust 派(volume / multiplier)') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
 
 SELECT
     r.date,
@@ -64,21 +64,21 @@ WHERE r.market = 'TW'
 ORDER BY r.date;
 
 
-\echo ''
-\echo '##############################################################'
-\echo '# Test 2: 2330 全部除權息事件的當日 volume 行為'
-\echo '##############################################################'
-\echo '對純現金 dividend(stock_dividend = 0):'
-\echo '  Rust 派:fwd_vol < raw_vol (vol_ratio = 1/AF)'
-\echo '  實務派:fwd_vol = raw_vol (vol_ratio = 1.0)'
-\echo ''
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '# Test 2: 2330 全部除權息事件的當日 volume 行為') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '對純現金 dividend(stock_dividend = 0):') TO STDOUT;
+COPY (SELECT '  Rust 派:fwd_vol < raw_vol (vol_ratio = 1/AF)') TO STDOUT;
+COPY (SELECT '  實務派:fwd_vol = raw_vol (vol_ratio = 1.0)') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
 
 SELECT
     pae.date                                                      AS event_date,
     pae.event_type,
     COALESCE(pae.cash_dividend, 0)                                AS cash_div,
     COALESCE(pae.stock_dividend, 0)                               AS stock_div,
-    pae.adjustment_factor                                         AS af_in_pae,
+    f.adjustment_factor                                           AS af_in_fwd,
     pae.volume_factor                                             AS vf_in_pae,
     r.close                                                       AS raw_close,
     f.close                                                       AS fwd_close,
@@ -116,18 +116,18 @@ WHERE pae.market = 'TW' AND pae.stock_id = '2330'
 ORDER BY pae.date;
 
 
-\echo ''
-\echo '##############################################################'
-\echo '# Test 3: 找全市場有 stock_dividend > 0 的事件(volume 調整最敏感)'
-\echo '##############################################################'
-\echo '對股票股利,vol_ratio 應 ≈ 1/(1+stock_dividend/10)'
-\echo '若 vol_ratio = 1.0 → 連股本變動都沒動 volume(嚴重 bug)'
-\echo ''
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '# Test 3: 找全市場有 stock_dividend > 0 的事件(volume 調整最敏感)') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '對股票股利,vol_ratio 應 ≈ 1/(1+stock_dividend/10)') TO STDOUT;
+COPY (SELECT '若 vol_ratio = 1.0 → 連股本變動都沒動 volume(嚴重 bug)') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
 
 SELECT
     pae.market, pae.stock_id, pae.date AS event_date, pae.event_type,
     pae.cash_dividend, pae.stock_dividend,
-    pae.adjustment_factor                                         AS af_in_pae,
+    f.adjustment_factor                                           AS af_in_fwd,
     pae.volume_factor                                             AS vf_in_pae,
     r.volume                                                      AS raw_vol,
     f.volume                                                      AS fwd_vol,
@@ -142,16 +142,16 @@ ORDER BY pae.date DESC
 LIMIT 10;
 
 
-\echo ''
-\echo '##############################################################'
-\echo '# Test 4: split / capital_reduction / capital_increase 事件'
-\echo '##############################################################'
-\echo '這些是「股本變動」事件,volume 一定要調(兩派都同意)'
-\echo ''
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '# Test 4: split / capital_reduction / capital_increase 事件') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '這些是「股本變動」事件,volume 一定要調(兩派都同意)') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
 
 SELECT
     pae.market, pae.stock_id, pae.date AS event_date, pae.event_type,
-    pae.adjustment_factor                                         AS af_in_pae,
+    f.adjustment_factor                                           AS af_in_fwd,
     pae.volume_factor                                             AS vf_in_pae,
     r.close                                                       AS raw_close,
     f.close                                                       AS fwd_close,
@@ -167,33 +167,57 @@ ORDER BY pae.event_type, pae.date DESC
 LIMIT 20;
 
 
-\echo ''
-\echo '##############################################################'
-\echo '# Test 5: adjustment_factor vs volume_factor 是否一致'
-\echo '##############################################################'
-\echo 'pae 表同時有 adjustment_factor 跟 volume_factor 兩欄;'
-\echo '若兩者不同,代表 collector 寫表時就分開了,但 Rust 只讀 AF → volume_factor 沒被消費'
-\echo ''
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '# Test 5: PR #17 後 fwd 4 個新欄是否寫入有值(per event_type)') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT 'fwd 表新欄:cumulative_adjustment_factor(累積 AF)/ cumulative_volume_factor') TO STDOUT;
+COPY (SELECT '         (累積 vf)/ is_adjusted(該日是否動過)/ adjustment_factor(單日 AF)') TO STDOUT;
+COPY (SELECT '預期:事件日當天 fwd.adjustment_factor != 1.0,且 pae.volume_factor 不等於它(P0-11 後拆兩 multiplier)') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
 
 SELECT
-    event_type,
+    pae.event_type,
     COUNT(*)                                                      AS event_count,
-    SUM(CASE WHEN ABS(adjustment_factor - volume_factor) < 0.0001 THEN 1 ELSE 0 END)
-                                                                  AS af_eq_vf_count,
-    SUM(CASE WHEN ABS(adjustment_factor - volume_factor) >= 0.0001 THEN 1 ELSE 0 END)
-                                                                  AS af_diff_vf_count,
-    ROUND(AVG(adjustment_factor)::numeric, 4)                     AS avg_af,
-    ROUND(AVG(volume_factor)::numeric, 4)                         AS avg_vf
-FROM price_adjustment_events
-WHERE adjustment_factor != 1.0 OR volume_factor != 1.0
-GROUP BY event_type
-ORDER BY event_type;
+    SUM(CASE WHEN f.is_adjusted = TRUE THEN 1 ELSE 0 END)         AS days_marked_adjusted,
+    SUM(CASE WHEN f.adjustment_factor IS NOT NULL THEN 1 ELSE 0 END)
+                                                                  AS days_with_af_written,
+    ROUND(AVG(f.adjustment_factor)::numeric, 4)                   AS avg_fwd_af,
+    ROUND(AVG(pae.volume_factor)::numeric, 4)                     AS avg_pae_vf,
+    SUM(CASE WHEN ABS(f.adjustment_factor - pae.volume_factor) >= 0.0001 THEN 1 ELSE 0 END)
+                                                                  AS days_af_diff_vf
+FROM price_adjustment_events pae
+JOIN price_daily_fwd f
+    ON f.market = pae.market AND f.stock_id = pae.stock_id AND f.date = pae.date
+WHERE f.adjustment_factor IS NOT NULL AND f.adjustment_factor != 1.0
+GROUP BY pae.event_type
+ORDER BY pae.event_type;
+
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '# Test 5b: 4 個新欄全表 sanity(整體寫入率,不只事件日)') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
+
+SELECT
+    COUNT(*)                                                      AS total_fwd_rows,
+    SUM(CASE WHEN cumulative_adjustment_factor IS NOT NULL THEN 1 ELSE 0 END)
+                                                                  AS rows_with_cum_af,
+    SUM(CASE WHEN cumulative_volume_factor IS NOT NULL THEN 1 ELSE 0 END)
+                                                                  AS rows_with_cum_vf,
+    SUM(CASE WHEN is_adjusted = TRUE THEN 1 ELSE 0 END)           AS rows_marked_adjusted,
+    SUM(CASE WHEN adjustment_factor IS NOT NULL THEN 1 ELSE 0 END)
+                                                                  AS rows_with_single_af,
+    -- sanity:cum_af 應該對 2330 是 1.0822(2019-01-02 起點)
+    ROUND(MAX(cumulative_adjustment_factor)::numeric, 4)          AS max_cum_af,
+    ROUND(MIN(CASE WHEN cumulative_adjustment_factor != 0 THEN cumulative_adjustment_factor END)::numeric, 4)
+                                                                  AS min_cum_af
+FROM price_daily_fwd
+WHERE market = 'TW' AND stock_id = '2330';
 
 
-\echo ''
-\echo '##############################################################'
-\echo '# Test 6: 2330 最新日(應 ratio = 1.0,sanity check)'
-\echo '##############################################################'
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
+COPY (SELECT '# Test 6: 2330 最新日(應 ratio = 1.0,sanity check)') TO STDOUT;
+COPY (SELECT '##############################################################') TO STDOUT;
 
 WITH latest AS (
     SELECT MAX(date) AS d FROM price_daily WHERE market='TW' AND stock_id='2330'
@@ -217,24 +241,33 @@ JOIN price_daily r     ON r.date = l.d AND r.market='TW' AND r.stock_id='2330'
 JOIN price_daily_fwd f ON f.date = l.d AND f.market='TW' AND f.stock_id='2330';
 
 
-\echo ''
-\echo '=============================================================='
-\echo '判讀指南'
-\echo '=============================================================='
-\echo ''
-\echo '若 Test 1 + Test 2 + Test 3 + Test 4 整體 verdict 一致:'
-\echo '  → A-V3 verdict 確認哪一派,blueprint §4.4 ALTER 依此決策'
-\echo ''
-\echo '若 Test 2 顯示「現金 dividend 也走 Rust 派」:'
-\echo '  → field_mapper.py:194-203 的 volume_factor 邏輯實際沒被用到(Rust 只讀 AF)'
-\echo '  → 這是 v1.x 收尾不乾淨,可砍 volume_factor 欄位'
-\echo '  → 或者改 Rust 用 volume_factor 而非 AF(學術派 vs 實務派決議)'
-\echo ''
-\echo '若 Test 5 顯示 af_diff_vf_count > 0:'
-\echo '  → collector 確實有兩個不同 factor 但 Rust 忽略 volume_factor'
-\echo '  → P0-8/C1 的 spec 修正需明示「volume 用哪個 factor」'
-\echo ''
-\echo '若 Test 6 sanity = FAIL:'
-\echo '  → 最新日 fwd ≠ raw,Rust binary 出錯,先解這個再做其他事'
-\echo ''
-\echo '把整份輸出 paste 回來,我會根據結果產 r2-1 完工報告 + 連動修 blueprint §4.4 + spec'
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '==============================================================') TO STDOUT;
+COPY (SELECT '判讀指南(PR #17 後 r3.1 + P0-11 + P1-17 落地版)') TO STDOUT;
+COPY (SELECT '==============================================================') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '【Test 1】2330 4 個關鍵日 close_ratio 對齊 CLAUDE.md 預期(1.0822/1.0822/1.0769/1.0000):') TO STDOUT;
+COPY (SELECT '  ✅ 通過 = 後復權主邏輯 + cum_af 倒推全對') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '【Test 2】2330 17 個現金 dividend events 全 vol_ratio = 1.0:') TO STDOUT;
+COPY (SELECT '  ✅ 通過 = P0-11 後 convention 對(現金 dividend vf=1 → fwd_vol = raw_vol,') TO STDOUT;
+COPY (SELECT '         反映實際 share 流動性,不再強守 dollar_vol invariant)') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '【Test 3】stock_dividend > 0 事件 vol_ratio < 1.0 ≈ 1/(1+stock_div/10):') TO STDOUT;
+COPY (SELECT '  ✅ 通過 = P1-17 修法生效(post_process._recompute_stock_dividend_vf)') TO STDOUT;
+COPY (SELECT '  ⚠ 若 vol_ratio = 1.0 → 該股 fwd 表還沒被 PR #17 後 Rust 重算過(stock 不在') TO STDOUT;
+COPY (SELECT '     stock_info_ref 或 phase 4 沒涵蓋)') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '【Test 4】split / capital_reduction / capital_increase vol_ratio ≈ 1/vf:') TO STDOUT;
+COPY (SELECT '  ✅ 通過 = P0-11 修法生效(Rust 拆 price_multiplier / volume_multiplier)') TO STDOUT;
+COPY (SELECT '  ⚠ 若 vol_ratio = 1.0 → 同 Test 3 ⚠') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '【Test 5】事件日當天 fwd.adjustment_factor != pae.volume_factor(per event_type):') TO STDOUT;
+COPY (SELECT '  ✅ days_af_diff_vf > 0 = P0-11 拆兩 multiplier 證據') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '【Test 5b】2330 fwd 表 4 個新欄寫入率 + cum_af 範圍:') TO STDOUT;
+COPY (SELECT '  ✅ rows_with_cum_af = total_fwd_rows = PR #17 alembic + Rust upsert 全部生效') TO STDOUT;
+COPY (SELECT '  ✅ max_cum_af = 1.0822 對齊 CLAUDE.md 2019-01-02 預期值') TO STDOUT;
+COPY (SELECT '') TO STDOUT;
+COPY (SELECT '【Test 6】2330 最新日 ratio = 1.0:') TO STDOUT;
+COPY (SELECT '  ✅ sanity OK = Rust 從序列尾端倒推 multiplier 終點正確') TO STDOUT;

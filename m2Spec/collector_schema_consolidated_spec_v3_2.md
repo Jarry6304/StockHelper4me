@@ -234,21 +234,32 @@ ALTER TABLE valuation_daily_derived
 CREATE TABLE price_adjustment_events (
     market              TEXT NOT NULL,
     stock_id            TEXT NOT NULL,
-    event_date          DATE NOT NULL,
-    event_type          TEXT NOT NULL,           -- 'dividend_cash' / 'dividend_stock' / 'capital_reduction' / 'split' / 'par_value_change'
+    date                DATE NOT NULL,           -- 注意:欄名 date 而非 event_date(v2.0 baseline 慣例)
+    event_type          TEXT NOT NULL,           -- 'dividend' / 'capital_reduction' / 'split' / 'par_value_change' / 'capital_increase'
     before_price        NUMERIC,                 -- 事件前收盤價
-    reference_price     NUMERIC,                 -- 減除後參考價(主要還原因子輸入)
-    cash_dividend       NUMERIC,
-    stock_dividend      NUMERIC,
-    PRIMARY KEY (market, stock_id, event_date, event_type)
+    reference_price     NUMERIC,                 -- 減除後參考價(AF 反推主要輸入)
+    volume_factor       NUMERIC NOT NULL DEFAULT 1.0,  -- P0-11 後 Rust compute_forward_adjusted 必要輸入
+    cash_dividend       NUMERIC,                 -- dividend 事件用
+    stock_dividend      NUMERIC,                 -- dividend 事件用
+    detail              JSONB,                   -- pack _after_price + capital_increase 計算需要的 subscription_price 等
+    PRIMARY KEY (market, stock_id, date, event_type),
+    CONSTRAINT chk_event_type CHECK (
+        event_type IN ('dividend', 'capital_reduction', 'split',
+                       'par_value_change', 'capital_increase')
+    )
 );
-CREATE INDEX idx_pae_date ON price_adjustment_events(market, stock_id, event_date);
+CREATE INDEX idx_pae_event_type_date ON price_adjustment_events(event_type, date DESC);
 ```
 
 **砍掉(對比 v3.1)**:
-- ❌ `after_price`(可選,Beta 不抓)
-- ❌ `adjustment_factor`(違反 Medallion,改在 Silver 算)
-- ❌ `source_dataset`(用 event_type 推導)
+- ❌ `after_price`(Beta 不抓;collector field_rename 改 pack 進 detail JSON)
+- ❌ `adjustment_factor`(違反 Medallion,改在 Silver / Rust 算)
+- ❌ `source_dataset`(用 event_type 推導;原 schema 為 `source` 欄)
+
+**保留(P0-11 / P1-17 後事實校正,r3.1 補)**:
+- ✅ `volume_factor`(av3 揭露 P0-11 production bug:Rust 必須讀 vf 才能正確處理 split / par_value 的 volume 方向;cash dividend 為 1.0;stock_dividend 由 post_process `_recompute_stock_dividend_vf` 用 P1-17 公式重算)
+- ✅ `detail` JSONB(pack 各事件的 source-specific 欄位 + capital_increase 必要的 subscription_price / subscription_rate_raw)
+- ✅ `event_type` CHECK 五種:dividend(現金/股票/權息混合三合一,由 cash_dividend / stock_dividend 區分)/ capital_reduction / split / par_value_change / capital_increase
 
 ---
 

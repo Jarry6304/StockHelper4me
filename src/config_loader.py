@@ -317,7 +317,7 @@ def _validate(config: CollectorConfig) -> None:
     2. phase 值必須在合法範圍內
     3. param_mode 必須是四種之一
     4. per_stock 類型若無 fixed_stock_ids，必須依賴 stock_list
-    5. 有 computed_fields 的必須包含 adjustment_factor（Phase 2）
+    5. Phase 2 events API 的 computed_fields 必須含 volume_factor（P0-11 後 Rust 必要）
     6. segment_days 為 0 或正整數
     7. field_rename 中以 _ 開頭的 value 會導向 detail JSON（僅記錄）
     """
@@ -357,12 +357,19 @@ def _validate(config: CollectorConfig) -> None:
             # 依賴 stock_list.toml，此處只記錄，不報錯
             pass
 
-        # 規則 5：有 computed_fields 的 Phase 2 API 必須含 adjustment_factor
-        if api.computed_fields and api.phase == 2:
-            if "adjustment_factor" not in api.computed_fields:
+        # 規則 5：Phase 2 events 必須含 volume_factor in computed_fields
+        # v3.2 PR #17 後 adjustment_factor 已從 events 表砍欄,Rust 內現算;
+        # volume_factor 仍由 field_mapper 寫進 events 表(P0-11 後 Rust 必要輸入)
+        if (
+            api.computed_fields
+            and api.phase == 2
+            and api.target_table == "price_adjustment_events"
+        ):
+            if "volume_factor" not in api.computed_fields:
                 errors.append(
-                    f"規則5：{api.name}（Phase 2）有 computed_fields "
-                    f"但缺少 adjustment_factor"
+                    f"規則5:{api.name}(Phase 2 events)有 computed_fields "
+                    f"但缺少 volume_factor(P0-11 後 Rust compute_forward_adjusted "
+                    f"必要輸入)"
                 )
 
         # 規則 6：segment_days 必須是 0 或正整數
