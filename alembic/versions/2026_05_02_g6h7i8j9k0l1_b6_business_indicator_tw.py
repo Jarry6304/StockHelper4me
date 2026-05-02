@@ -34,18 +34,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """建 business_indicator_tw 表(月頻,單市場 'tw')。"""
+    """建 business_indicator_tw 表(月頻,單市場 'tw')。
+
+    🔧 hotfix:`leading` 是 PostgreSQL 保留字(TRIM(LEADING ...))不能當欄位名,
+    rename 為 `leading_indicator`。`coincident` / `lagging` 不是保留字,但為一致
+    性都加 `_indicator` 後綴。
+    """
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS business_indicator_tw (
-            market              TEXT NOT NULL DEFAULT 'tw',
-            date                DATE NOT NULL,           -- 月初
-            leading             NUMERIC(10, 4),
-            coincident          NUMERIC(10, 4),
-            lagging             NUMERIC(10, 4),
-            monitoring          INT,                     -- 綜合分數
-            monitoring_color    TEXT,                    -- R / YR / G / YB / B
-            detail              JSONB,
+            market                  TEXT NOT NULL DEFAULT 'tw',
+            date                    DATE NOT NULL,           -- 月初
+            leading_indicator       NUMERIC(10, 4),
+            coincident_indicator    NUMERIC(10, 4),
+            lagging_indicator       NUMERIC(10, 4),
+            monitoring              INT,                     -- 綜合分數
+            monitoring_color        TEXT,                    -- R / YR / G / YB / B
+            detail                  JSONB,
             PRIMARY KEY (market, date)
         )
         """
