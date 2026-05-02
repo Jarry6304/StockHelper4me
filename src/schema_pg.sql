@@ -153,6 +153,27 @@ CREATE INDEX IF NOT EXISTS idx_sse_stock_date
     ON stock_suspension_events(market, stock_id, suspension_date DESC);
 
 
+-- 借券成交明細(v3.2 B-5 新表;blueprint §附錄 B)
+-- 用途:margin_core 借券關鍵欄位來源(SBL 6 欄餵 margin_daily_derived)
+-- PK 5 欄:同股同日「議借」+「競價」各自獨立,且各 fee_rate 一筆
+CREATE TABLE IF NOT EXISTS securities_lending_tw (
+    market                  TEXT NOT NULL,
+    stock_id                TEXT NOT NULL,
+    date                    DATE NOT NULL,
+    transaction_type        TEXT NOT NULL,        -- 議借 / 競價
+    volume                  BIGINT,
+    fee_rate                NUMERIC(8, 4),
+    close                   NUMERIC(15, 4),
+    original_return_date    DATE,
+    original_lending_period INT,
+    detail                  JSONB,
+    PRIMARY KEY (market, stock_id, date, transaction_type, fee_rate)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sbl_stock_date
+    ON securities_lending_tw(market, stock_id, date DESC);
+
+
 -- =============================================================================
 -- Phase 3 — RAW PRICE(原始日 K + 漲跌停)
 -- =============================================================================

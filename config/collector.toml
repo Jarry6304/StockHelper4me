@@ -273,6 +273,21 @@ field_rename = {}
 aggregation  = "pivot_institutional"
 notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營），需 pivot 為 1 列"
 
+# v3.2 B-5(blueprint §附錄 B):借券成交明細
+# 用途:margin_core SBL 6 欄來源(blueprint §2.6.1 加 SBL 6 欄到 margin_daily_derived)
+# FinMind TaiwanStockSecuritiesLending 一般回 (date, stock_id, transaction_type, volume,
+# fee_rate, close, original_return_date, original_lending_period)
+[[api]]
+name         = "securities_lending"
+dataset      = "TaiwanStockSecuritiesLending"
+param_mode   = "per_stock"
+target_table = "securities_lending_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+notes        = "借券成交明細;v3.2 B-5 新表;PK 5 欄(議借/競價 × fee_rate);同股同日多筆;未來餵 margin_daily_derived SBL 6 欄"
+
 [[api]]
 name         = "margin_daily"
 dataset      = "TaiwanStockMarginPurchaseShortSale"
