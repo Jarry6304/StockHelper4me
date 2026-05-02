@@ -201,15 +201,17 @@ CREATE INDEX IF NOT EXISTS idx_sbl_stock_date
 -- 景氣指標(v3.2 B-6 新表;blueprint §六 + §6.2)
 -- 月頻指標,單市場 'tw';v3.2 反方審查 Q2 拍板降為 reference 級別(不算 Core)
 -- 砍 v3.1 提案的 leading_notrend / coincident_notrend / lagging_notrend(總經學家用,Beta 不需)
+-- 🔧 hotfix:leading / coincident / lagging 加 _indicator 後綴
+-- 「leading」是 PG 保留字(TRIM(LEADING ...))不能直接當欄位名,所以全部統一加後綴
 CREATE TABLE IF NOT EXISTS business_indicator_tw (
-    market              TEXT NOT NULL DEFAULT 'tw',
-    date                DATE NOT NULL,           -- 月初
-    leading             NUMERIC(10, 4),
-    coincident          NUMERIC(10, 4),
-    lagging             NUMERIC(10, 4),
-    monitoring          INT,                     -- 綜合分數
-    monitoring_color    TEXT,                    -- R / YR / G / YB / B
-    detail              JSONB,
+    market                  TEXT NOT NULL DEFAULT 'tw',
+    date                    DATE NOT NULL,           -- 月初
+    leading_indicator       NUMERIC(10, 4),
+    coincident_indicator    NUMERIC(10, 4),
+    lagging_indicator       NUMERIC(10, 4),
+    monitoring              INT,                     -- 綜合分數
+    monitoring_color        TEXT,                    -- R / YR / G / YB / B
+    detail                  JSONB,
     PRIMARY KEY (market, date)
 );
 
