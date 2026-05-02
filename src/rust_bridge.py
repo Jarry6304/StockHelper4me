@@ -27,8 +27,8 @@ from pathlib import Path
 
 logger = logging.getLogger("collector.rust_bridge")
 
-# 與 Rust binary 約定的 schema 版本號（v2.0 = PG/sqlx 版）
-EXPECTED_SCHEMA_VERSION = "2.0"
+# 與 Rust binary 約定的 schema 版本號（v3.2 = m2 Bronze/Reference/Silver/M3 四層 Medallion）
+EXPECTED_SCHEMA_VERSION = "3.2"
 
 
 class RustComputeError(Exception):
