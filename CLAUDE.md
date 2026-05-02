@@ -7,12 +7,22 @@
 
 ## 分支狀態
 
-- **開發分支**：`claude/initial-setup-RhLKU`(**v1.9.1 active**;tblnC 已 merge 進來,加 24 檔 split/par_value backfill 驗 av3 Test 4 完整覆蓋 + discover SQL + fix_p1_17 deprecate)
-- **過去分支**:
-  - `claude/review-todo-list-tblnC`(v1.9 main session,PR #17 (B-3) + R-1 漏改 + P1 dividend AF + PowerShell 亂碼戰役;已 merge 進 initial-setup-RhLKU)
-  - `claude/restructure-collector-architecture-t9ScN`(v1.8 收尾,m2 重構藍圖 + r3 spec audit + av3)
-  - `claude/m2-architecture-design-3Q3Fd`(user 主分支,Easy 階段 PR #10~#16 已合 + B-6 LEADING hotfix)
-- **目標分支**:`m1/postgres-migration`(v1.7 PR 已合)
+> 2026-05-02 剪枝後僅留 4 條 remote(從 19 → 4)。所有已 merge / 已被 supersede 的 claude/* 工作分支已從 origin 刪除,歷史保留在 `claude/initial-setup-RhLKU` 的 commit log。
+
+- **開發分支**:`claude/initial-setup-RhLKU`(**v1.9.1 active**)— 從 v1.5 到 v1.9.1 全部歷史 commit 都在這條,v1.9 (PR #17 主體) 是從 tblnC merge 進來的
+- **目標分支**:`m1/postgres-migration`(v1.7 baseline,stale)
+- **m2 spec 源**:`m2/neo-pipeline-spec-origin`(原始 m2 spec 上傳源,歷史保留)
+- **GitHub default**:`main`(內容極舊,僅初版 spec)
+- **已刪 remote 分支**(歷史 commit 都已 merge 進 initial-setup-RhLKU):
+  - `claude/review-todo-list-tblnC`(v1.9 main session)
+  - `claude/restructure-collector-architecture-t9ScN`(v1.8 收尾,PR #9)
+  - `claude/m2-architecture-design-3Q3Fd`(user 主分支,Easy 階段 PR #10~#16)
+  - `claude/m2-pr2-schema-bump-3.2` ~ `claude/m2-pr6-b6-businessindicator`(PR #10 ~ #14)
+  - `claude/hotfix-b6-leading-keyword`(PR #15)
+  - `claude/review-collector-dependencies-n03rE`(v1.7 PR)
+  - `claude/collector-schema-mapping-2YF5U` / `claude/continue-work-dvkRv` / `claude/setup-agent-review-mcp-berOR`(v1.5/v1.6 探勘)
+  - `claude/review-collector-spec-Gktcf`(早期 review 分支)
+  - `collector`(早期 PR #4)
 - **PR**:v1.9 + v1.9.1 PR 開於 initial-setup-RhLKU 分支
 
 ---
