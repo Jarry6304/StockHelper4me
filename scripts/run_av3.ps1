@@ -19,6 +19,7 @@ $origOutEnc   = [Console]::OutputEncoding
 $origInEnc    = [Console]::InputEncoding
 $origPsEnc    = $OutputEncoding
 $origPgEnc    = $env:PGCLIENTENCODING
+$origLcMsg    = $env:LC_MESSAGES
 
 try {
     # 設好 console UTF-8(影響 Get-Content → console 顯示那段)
@@ -27,6 +28,9 @@ try {
     [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new()
     $OutputEncoding           = [System.Text.UTF8Encoding]::new()
     $env:PGCLIENTENCODING     = "UTF8"
+    # 強制 psql 用英文 message(避開 zh-TW message catalog .mo 檔的 cp950 編碼,
+    # 否則 (N rows) 本地化的「N 筆資料」會變亂碼「N �����」)
+    $env:LC_MESSAGES          = "C"
 
     # psql 直接寫 file,byte 完全不經 PS pipe(byte-level 已驗證 file 是 UTF-8)
     psql $env:DATABASE_URL -f scripts\av3_spot_check.sql -o $tempFile
@@ -51,5 +55,10 @@ finally {
         $env:PGCLIENTENCODING = $origPgEnc
     } else {
         Remove-Item env:PGCLIENTENCODING -ErrorAction SilentlyContinue
+    }
+    if ($origLcMsg) {
+        $env:LC_MESSAGES = $origLcMsg
+    } else {
+        Remove-Item env:LC_MESSAGES -ErrorAction SilentlyContinue
     }
 }
