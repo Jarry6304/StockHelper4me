@@ -206,6 +206,22 @@ detail_fields    = ["_limit_up", "_limit_down", "_stock_name"]
 computed_fields  = ["adjustment_factor", "volume_factor"]
 notes        = "面額變更；無需 data_id"
 
+# v3.2 B-4(blueprint §四 + §附錄 B):個股暫停交易事件
+# 用途:prev_trading_day(stock_id, date) 模組 + tw_market_core 個股級交易缺口
+# FinMind TaiwanStockSuspended 一般回 (date, stock_id, suspension_time, resumption_date,
+# resumption_time, reason);date → suspension_date 由 field_rename 映射
+[[api]]
+name         = "stock_suspension"
+dataset      = "TaiwanStockSuspended"
+param_mode   = "all_market_no_id"
+target_table = "stock_suspension_events"
+phase        = 2
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"date" = "suspension_date"}
+notes        = "個股暫停交易事件;v3.2 B-4 新表;無需 data_id;FinMind TaiwanStockSuspended 回個股級事件"
+
 # =============================================================================
 # Phase 3：RAW PRICE（日K + 漲跌停）
 # =============================================================================

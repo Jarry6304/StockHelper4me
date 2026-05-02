@@ -134,6 +134,25 @@ CREATE TABLE IF NOT EXISTS _dividend_policy_staging (
 );
 
 
+-- 個股暫停交易事件(v3.2 B-4 新表;blueprint §四 + §附錄 B)
+-- 用途:prev_trading_day(stock_id, date) 模組 + tw_market_core 個股級交易缺口識別
+-- 取代 v3.1 提案的 tw_market_event_log(只保留個股暫停)
+CREATE TABLE IF NOT EXISTS stock_suspension_events (
+    market              TEXT NOT NULL,
+    stock_id            TEXT NOT NULL,
+    suspension_date     DATE NOT NULL,
+    suspension_time     TEXT,                      -- 暫停時間
+    resumption_date     DATE,                      -- 復牌日
+    resumption_time     TEXT,
+    reason              TEXT,                      -- 暫停原因
+    detail              JSONB,                     -- 額外 metadata
+    PRIMARY KEY (market, stock_id, suspension_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sse_stock_date
+    ON stock_suspension_events(market, stock_id, suspension_date DESC);
+
+
 -- =============================================================================
 -- Phase 3 — RAW PRICE(原始日 K + 漲跌停)
 -- =============================================================================
