@@ -93,6 +93,28 @@ CREATE INDEX IF NOT EXISTS idx_market_index_tw_id_date
     ON market_index_tw (stock_id, date DESC);
 
 
+-- 台股大盤 OHLCV(v3.2 B-1/B-2 — TAIEX / TPEx 日頻;與 market_index_tw 並存)
+-- 來源:TaiwanStockTotalReturnIndex(close)+ TaiwanVariousIndicators5Seconds
+-- (intraday 5-sec aggregate to daily OHLCV);Bronze layer raw,無衍生欄位
+-- 注意:multi-source merge 邏輯留待 PR #17 重構 phase_executor 時實作
+CREATE TABLE IF NOT EXISTS market_ohlcv_tw (
+    market          TEXT NOT NULL,
+    stock_id        TEXT NOT NULL,         -- TAIEX | TPEx
+    date            DATE NOT NULL,
+    open            NUMERIC(15, 4),
+    high            NUMERIC(15, 4),
+    low             NUMERIC(15, 4),
+    close           NUMERIC(15, 4),
+    volume          BIGINT,
+    detail          JSONB,
+    source          TEXT NOT NULL DEFAULT 'finmind',
+    PRIMARY KEY (market, stock_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_ohlcv_tw_id_date
+    ON market_ohlcv_tw (stock_id, date DESC);
+
+
 -- =============================================================================
 -- Phase 2 — EVENTS(除權息 / 減資 / 分割 / 面額變更 / 純現增)
 -- =============================================================================
