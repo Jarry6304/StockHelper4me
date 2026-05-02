@@ -29,8 +29,11 @@ try {
     $OutputEncoding           = [System.Text.UTF8Encoding]::new()
     $env:PGCLIENTENCODING     = "UTF8"
 
-    # 跑 av3 SQL(SQL 內 \encoding UTF8 確保 psql ↔ PG server 對齊)
-    psql $env:DATABASE_URL -f scripts\av3_spot_check.sql
+    # 不用 psql -f,改用 PS Get-Content force UTF-8 讀檔 → pipe 給 psql stdin
+    # 原因:psql -f 在 Windows 對 SQL 檔 byte 的 encoding handling 有怪事,
+    # \echo 中文會亂碼(SELECT 結果 OK 因為走 PG server 那條路)。
+    # PS 端 force -Encoding UTF8 讀檔保證 byte stream 正確。
+    Get-Content -Raw -Encoding UTF8 scripts\av3_spot_check.sql | psql $env:DATABASE_URL
 }
 finally {
     # 還原(避免污染 user shell)
