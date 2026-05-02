@@ -1,20 +1,93 @@
 # CLAUDE.md — tw-stock-collector Session 銜接文件
 
 > 這份文件記錄本專案的完整實作歷程與架構決策，供下次 session 自動載入後直接銜接，無需重新閱讀 git log。
-> 最後更新：2026-05-02（**v1.8**）
+> 最後更新：2026-05-02（**v1.9**）
 
 ---
 
 ## 分支狀態
 
-- **開發分支**：`claude/restructure-collector-architecture-t9ScN`（**v1.8 active**；m2 重構 + r3 spec audit + av3 實機驗證 + 完整修復）
-- **過去分支**：`claude/review-collector-dependencies-n03rE`（v1.7 收尾）
-- **目標分支**：`m1/postgres-migration`（v1.7 PR 已合）
-- **PR**：v1.8 PR 開於 t9ScN 分支,涵蓋以下大項
+- **開發分支**：`claude/review-todo-list-tblnC`(**v1.9 active**;PR #17 (B-3) + R-1 漏改修補 + P1 dividend AF 修補 + PowerShell 亂碼戰役)
+- **過去分支**:
+  - `claude/restructure-collector-architecture-t9ScN`(v1.8 收尾,m2 重構藍圖 + r3 spec audit + av3)
+  - `claude/m2-architecture-design-3Q3Fd`(user 主分支,Easy 階段 PR #10~#16 已合 + B-6 LEADING hotfix)
+- **目標分支**:`m1/postgres-migration`(v1.7 PR 已合)
+- **PR**:v1.9 PR 開於 tblnC 分支,涵蓋以下大項
 
 ---
 
-## v1.8 大項總覽（2026-05-01 ~ 2026-05-02）
+## v1.9 大項總覽(2026-05-02)
+
+本 session 主要做了 5 件事:
+
+### 1. m2 Hard 階段動工前 spec 審查 + 3 處 amend
+
+對 blueprint v3.2 r1 Hard 階段(PR #17~#21)在 av3/r3.1/P0-11/P1-17 修法後做 spec staleness audit,結論:不需重設,但動工前需補 3 處 amend。一次落地(commit `f46d50d`):
+- **§3.1**:加 silver builder 入口/出口契約表 + 3 條紀律
+- **§5.2**:同步 ALTER `price_daily_fwd` 加 4 欄 DDL(per §4.4 r3.1)
+- **§5.5**:Bronze→Silver dirty trigger DDL 範例 + 後復權 trigger
+- **§六**:加 5.7 row 描述長期 dirty queue 上線排程
+
+### 2. PR #17 (B-3) 主體:events 砍 3 + fwd 加 4 + Rust 拆 multiplier
+
+Hard 階段第 1 個 PR,把 av3 / r3.1 / P0-11 修正後的事實落地到 schema + production code:
+
+| commit | 內容 |
+|---|---|
+| `f215d5b` | rust_bridge `EXPECTED_SCHEMA_VERSION` `2.0`→`3.2`(`db1a7f6` schema bump 漏改 Python 端 1 行) |
+| `4eddd1c` | **PR #17 主體**:events 砍 `adjustment_factor`/`after_price`/`source` + fwd 加 `cumulative_adjustment_factor`/`cumulative_volume_factor`/`is_adjusted`/`adjustment_factor` 4 欄 + Rust 拆 multiplier + alembic migration `i8j9k0l1m2n3` |
+| `7db9c42` | **R-1 漏改修補**:R-1 PR (`05b9101`) 只改了 alembic + schema_pg.sql,Rust binary `load_trading_dates`(原 `load_trading_calendar`)沒同步,user 跑 Phase 4 撞「relation trading_calendar does not exist」 |
+| `d2b081f` | Merge user 主分支(R-1/R-2/B-4/B-5/B-6 + B-6 LEADING hotfix)進 review-todo-list-tblnC,兩端工作互補無衝突 |
+| `ac7c980` | follow-up:`config_loader.py` 規則 5 改成要求 `volume_factor`(原強制 `adjustment_factor` 已砍欄);av3 SQL 4 處 `pae.adjustment_factor` 改用 `f.adjustment_factor` |
+| `ccfe13e` | av3 verdict 段對齊 r3.1 + PR #17 + P0-11 + P1-17 後事實 |
+
+### 3. P1 dividend AF 修補(reference_price 偷懶)
+
+PR #17 後 av3 Test 3 揭露:純股票股利 events(`cash=0`, `stock>0`)的 `af_in_fwd = 1.0`,close_ratio 接近 1.0(該事件沒被套進 multiplier)。
+
+**Root cause(SQL diagnostic 揭露)**:FinMind `TaiwanStockDividendResult` 對純股票股利**直接把 `reference_price` 設成 `= before_price`**(沒做真除權計算),Rust Priority 1 算 `af = bp/rp = 78.8/78.8 = 1.0` 數學上對但語意錯。
+
+3 輪修法:
+
+| commit | 內容 |
+|---|---|
+| `a5e089f` | v1:加 dividend Priority 2 fallback 公式,但條件 `Some(bp)` 沒生效(誤以為 before_price NULL) |
+| `1974fa9` | v2:before_price 改從 raw_prices lookup,但 Priority 1 仍先觸發 af=1.0 |
+| `c8367f8` | **v3 主修**:Priority 1 加 sanity check — `event_type='dividend' AND stock>0 AND cash=0 AND bp==rp` → fallthrough Priority 2 用 `af = 1 + stock/10` 公式 |
+
+**驗證**(av3 Test 3 重跑後):
+- 3363 2026-01-20: cash=0 stock=7.61 → af = **1.7610** ✓
+- 3363 2023-10-17: cash=0 stock=2.64 → af = **1.2640** ✓
+- 1312 2023-11-28: cash=0 stock=0.42 → af = **1.0420** ✓
+- 8932/5278 等混合 dividend Priority 1 維持(cash>0 不觸發 sanity check)
+
+`vf_in_pae * af_in_fwd = 1.0` 倒數守恆驗證:0.5679 × 1.7610 = 1.0000 ✓
+
+### 4. PowerShell 中文亂碼戰役(5 輪修法)
+
+User 在 zh-TW Windows 11 (cp950 ACP) PowerShell 5.1 跑 av3 SQL,中文 verdict / 章節標題 / `(N 筆資料)` 全部亂碼。經過 5 輪攻防:
+
+| 嘗試 | 結果 |
+|---|---|
+| chcp 65001 + Console.OutputEncoding=UTF8 | SELECT verdict 中文 OK,`\echo` 中文亂 |
+| `\echo` 全換 `COPY (SELECT '...') TO STDOUT;` | 仍亂(PS 5.x 對 native command stdout pipe 大 byte stream encoding bug) |
+| Get-Content -Encoding UTF8 pipe 給 psql stdin | 仍亂(同 PS pipe bug) |
+| **`psql -o tempFile` + Get-Content -Encoding UTF8 讀檔顯示** | ✅ 99% 對(只剩 `(N 筆資料)` 亂) |
+| **`$env:LC_MESSAGES = "C"` 強制 psql 用英文 message** | ✅ **100% 對**(`(N rows)` 純 ASCII) |
+
+**Byte-level diagnostic 證實**(commit `6222834`):psql `-o file` 寫的是純 UTF-8 byte(byte 81 = `E5 B7 B2 = 已`)。問題在 PS 5.x 對 native command stdout pipe 的 encoding handling,不是 psql.exe transcode bug。
+
+最終 wrapper(commit `3c3d8a0`):`scripts/run_av3.ps1`,試圖三層 console UTF-8 + LC_MESSAGES=C + temp file roundtrip,完整 finally 區塊還原 user shell。
+
+### 5. av3 結論段對齊 r3.1 + a0a5ddf SQL transform
+
+`scripts/av3_spot_check.sql` 75 處 `\echo` 一次性轉 `COPY (SELECT '...') TO STDOUT`(`a0a5ddf`),雖然後續發現 `\echo` 在新 wrapper 下也 work,但 COPY 形式保留(對 stdin/file 兩條 path 都 work,更 portable)。
+
+判讀指南(commit `ccfe13e`)整段重寫對齊 r3.1 + PR #17 + P0-11 + P1-17 落地版,砍掉過時的 `P0-8/C1` / 「Test 6 sanity FAIL」等錯誤判讀。
+
+---
+
+## v1.8 大項總覽(2026-05-01 ~ 2026-05-02)
 
 本 session 主要做了 4 件事：
 
@@ -167,6 +240,8 @@ for price in raw_prices.iter().rev() {
 
 > **v1.8 已處理**:~~Rust split/par_value/cap_inc volume 算錯方向(P0-11)~~ commit `c71d422`、~~Phase 4 staleness(P0-7 短期補丁)~~ commit `e051216`、~~field_mapper stock_dividend vf 計算(P1-17)~~ commit `608d275`、~~av3 Test 2 SQL CASE 誤判~~ commit `a2c94c2`、~~cores_overview §7.5 dirty queue 契約 + §10.0 Core 邊界三原則~~ commit `d029be3`
 
+> **v1.9 已處理**:~~PR #17 (B-3) events 砍 3 + fwd 加 4 + Rust 拆 multiplier~~ commit `4eddd1c`、~~rust_bridge schema version 對齊 3.2~~ commit `f215d5b`、~~R-1 漏改 Rust trading_calendar→trading_date_ref~~ commit `7db9c42`、~~config rule 5 + av3 SQL 過時欄~~ commit `ac7c980`、~~P1 dividend AF reference_price 偷懶 sanity check~~ commit `c8367f8`、~~PowerShell 中文亂碼 wrapper 5 輪修法~~ commit `3c3d8a0`、~~m2 blueprint Hard 階段 3 處 amend~~ commit `f46d50d`
+
 ### ~~🔴 待 user 驗證：v1.6 schema 變更後的重跑~~（v1.7 已重跑驗證）
 
 v1.7 review #3 + #4 過程中 user 在本機跑過 `python src\main.py status` + 全表體檢 + Phase 1 重跑（`stock_info` 含 detail 欄位寫入），確認舊 v1.6 schema 變更也都生效。`api_sync_progress` 343 segment 全部健康（completed 322 / empty 21 / failed 0 / pending 0）。
@@ -209,6 +284,8 @@ Rust `process_stock` 全量重算是必要設計（multiplier 倒推），但 Py
 | `scripts/inspect_db.py` | 檢視 db 各表筆數 + 特定股票詳細內容 + Phase 6 全市場資料 + 後復權驗證 | `python scripts/inspect_db.py 2330` |
 | `scripts/drop_table.py` | schema 變更後 drop 指定表（避免重灌全套） | `python scripts/drop_table.py institutional_market_daily` |
 | `scripts/test_28_apis.py` | 28 支 API 連線健檢（urllib + tomllib，零依賴） | 需要 token |
+| `scripts/av3_spot_check.sql` | av3 fwd 後復權驗證(Test 1~6 + 5b)+ 75 處中文段全用 COPY...TO STDOUT 走 server transcode | 不直接跑,改用 wrapper 👇 |
+| `scripts/run_av3.ps1` 🆕 v1.9 | PowerShell wrapper:三層 console UTF-8 + LC_MESSAGES=C + temp file roundtrip 完整修中文亂碼 | `.\scripts\run_av3.ps1` |
 
 ---
 
@@ -281,11 +358,11 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-1. **v1.8 PR review + merge**(t9ScN 分支累積 8+ commit,涵蓋 m2 重構藍圖 / r3 spec audit / av3 實機驗證 / 完整修復)
-2. **跑 `scripts/fix_p1_17_stock_dividend_vf.sql`** + 全市場 Phase 4 重跑 + av3_spot_check 重跑驗證 P1-17 修正後 stock_dividend vol_ratio 確實 < 1.0
-3. **Backfill 含 split / par_value 的股票**(如 6505 等)讓 av3 Test 4 有資料能驗證 split 事件 volume 行為
-4. **m2 collector 重構動工**(blueprint v3.2 r1 第 1 個 PR:K-1 + schema_metadata bump 到 3.2 + alembic migration 入口,~0.5 天)
-5. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
-6. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
-7. **CLAUDE.md 章節重組**(本檔已超過 500 行,v1.4-v1.6 詳解可搬 docs/ 子目錄)
-8. **inspect_db.py 升 PG 版**(v2.0 後該腳本已不可用)
+1. **v1.9 PR review + merge**(tblnC 分支累積 ~16 commit,涵蓋 PR #17 (B-3) + R-1 漏改 + P1 dividend AF + PowerShell 亂碼戰役 + m2 blueprint Hard 階段 amend)。PR 已開,等 maintainer review。
+2. **PR #18 動工**(blueprint §六 #11:Bronze 6 raw 拆 + Option B reverse-pivot prototype),~2 天 work
+3. **stock list 補完**(av3 Test 3/4 揭露 user `stock_info_ref` 沒收錄 8932/5278/5314/6763/3363 等股票,phase 4 全市場 backfill 沒涵蓋 → 要把這些補進)
+4. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
+5. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
+6. **CLAUDE.md 章節重組**(本檔已超過 600 行,v1.4-v1.7 詳解可繼續搬 docs/claude_history.md)
+7. **inspect_db.py 升 PG 版**(v2.0 後該腳本已不可用)
+8. **m2 PR #19 / #20 / #21**(Silver 14 + dirty + orchestrator + M3 prep,blueprint §十 PR 切法)
