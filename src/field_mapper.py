@@ -184,10 +184,15 @@ class FieldMapper:
         規則來自 tw_stock_architecture_review_v1.1 §3.4。
 
         支援的計算欄位：
-          adjustment_factor：價格調整因子（before_price / after_price）
           volume_factor：    成交量調整因子
           cash_dividend：    現金股利（從 dividend 事件拆分）
           stock_dividend：   股票股利（從 dividend 事件拆分）
+
+        v3.2 PR #17 (B-3) 砍掉:
+          adjustment_factor：events 表已砍此欄,Rust 端在 process_stock 內現算
+                            (用 before_price / reference_price 反推)。
+                            collector.toml 對 4 個 events 來源的 computed_fields
+                            清單也已同步移除 'adjustment_factor'。
 
         Args:
             api_config: API 設定（含 computed_fields 清單）
@@ -195,31 +200,20 @@ class FieldMapper:
         """
         fields = api_config.computed_fields
 
-        # ── 計算 adjustment_factor（價格調整因子）
-        if "adjustment_factor" in fields:
-            bp = row.get("before_price")
-            ap = row.get("after_price")
-            if bp and ap and float(ap) != 0:
-                row["adjustment_factor"] = float(bp) / float(ap)
-            else:
-                row["adjustment_factor"] = 1.0
-                if bp is not None or ap is not None:
-                    logger.warning(
-                        f"Cannot compute AF: before={bp}, after={ap}. "
-                        f"stock={row.get('stock_id')}, date={row.get('date')}"
-                    )
-
         # ── 計算 volume_factor（成交量調整因子）
+        # v3.2 PR #17:after_price 已砍,改用 reference_price(equivalent for vf)
         if "volume_factor" in fields:
             et = row.get("event_type", "")
             if et == "dividend":
                 # 除權息不影響股本，volume_factor = 1.0
+                # (P1-17 修正:stock_dividend 的真實 vf 由 post_process
+                #  _recompute_stock_dividend_vf 重算)
                 row["volume_factor"] = 1.0
             else:
-                # 減資、分割等：成交量因子 = after_price / before_price
+                # 減資、分割、面額變更等：vf = reference_price / before_price
                 bp = row.get("before_price", 0)
-                ap = row.get("after_price", 0)
-                row["volume_factor"] = float(ap) / float(bp) if bp != 0 else 1.0
+                rp = row.get("reference_price", 0)
+                row["volume_factor"] = float(rp) / float(bp) if bp else 1.0
 
         # ── 計算 cash_dividend / stock_dividend（除權息事件）
         if "cash_dividend" in fields or "stock_dividend" in fields:

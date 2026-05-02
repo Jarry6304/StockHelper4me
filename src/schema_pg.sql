@@ -120,20 +120,22 @@ CREATE INDEX IF NOT EXISTS idx_market_ohlcv_tw_id_date
 -- =============================================================================
 
 -- 價格調整事件(五種 event_type 共用一張表)
+-- v3.2 PR #17 (B-3) 砍 3 欄:adjustment_factor / after_price / source
+--   * adjustment_factor:Rust 內現算(用 before_price + reference_price 反推)
+--   * after_price:      Beta 不抓
+--   * source:           用 event_type 推導
+-- volume_factor 保留:P0-11 後 Rust compute_forward_adjusted 必要輸入
 CREATE TABLE IF NOT EXISTS price_adjustment_events (
     market              TEXT NOT NULL,
     stock_id            TEXT NOT NULL,
     date                DATE NOT NULL,
     event_type          TEXT NOT NULL,
     before_price        NUMERIC(15, 4),
-    after_price         NUMERIC(15, 4),
     reference_price     NUMERIC(15, 4),
-    adjustment_factor   NUMERIC(20, 10) NOT NULL DEFAULT 1.0,  -- 後復權乘數
     volume_factor       NUMERIC(20, 10) NOT NULL DEFAULT 1.0,
     cash_dividend       NUMERIC(15, 6),
     stock_dividend      NUMERIC(15, 6),
     detail              JSONB,
-    source              TEXT NOT NULL DEFAULT 'finmind',
     PRIMARY KEY (market, stock_id, date, event_type),
     CONSTRAINT chk_event_type CHECK (
         event_type IN ('dividend', 'capital_reduction', 'split',
@@ -251,15 +253,21 @@ CREATE TABLE IF NOT EXISTS price_limit (
 -- =============================================================================
 
 -- 後復權日 K
+-- v3.2 PR #17 (B-3) 加 4 欄:Rust 算完 multiplier 後落地此處,Wave Cores /
+-- Aggregation Layer 反推 raw 用(blueprint §5.2 amend + §4.4 r3.1)
 CREATE TABLE IF NOT EXISTS price_daily_fwd (
-    market          TEXT NOT NULL,
-    stock_id        TEXT NOT NULL,
-    date            DATE NOT NULL,
-    open            NUMERIC(15, 4),
-    high            NUMERIC(15, 4),
-    low             NUMERIC(15, 4),
-    close           NUMERIC(15, 4),
-    volume          BIGINT,
+    market                       TEXT NOT NULL,
+    stock_id                     TEXT NOT NULL,
+    date                         DATE NOT NULL,
+    open                         NUMERIC(15, 4),
+    high                         NUMERIC(15, 4),
+    low                          NUMERIC(15, 4),
+    close                        NUMERIC(15, 4),
+    volume                       BIGINT,
+    cumulative_adjustment_factor NUMERIC(20, 10),  -- 反推 raw price
+    cumulative_volume_factor     NUMERIC(20, 10),  -- 反推 raw volume(P0-11 split 必要)
+    is_adjusted                  BOOLEAN NOT NULL DEFAULT FALSE,  -- 該日是否動過
+    adjustment_factor            NUMERIC(20, 10),  -- 單日 AF,除錯用
     PRIMARY KEY (market, stock_id, date)
 );
 
