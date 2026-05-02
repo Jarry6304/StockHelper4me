@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
     assert_schema_version(&pool).await?;
 
     let stock_ids = resolve_stock_ids(&pool, &args).await?;
-    let trading_dates = load_trading_calendar(&pool).await?;
+    let trading_dates = load_trading_dates(&pool).await?;
 
     let mut processed  = 0usize;
     let mut skipped    = 0usize;
@@ -221,13 +221,14 @@ async fn resolve_stock_ids(pool: &PgPool, args: &Args) -> Result<Vec<String>> {
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-async fn load_trading_calendar(pool: &PgPool) -> Result<Vec<NaiveDate>> {
+async fn load_trading_dates(pool: &PgPool) -> Result<Vec<NaiveDate>> {
+    // v3.2 R-1 已改名 trading_calendar → trading_date_ref(commit 05b9101)
     let rows: Vec<(NaiveDate,)> = sqlx::query_as(
-        "SELECT date FROM trading_calendar WHERE market = 'TW' ORDER BY date",
+        "SELECT date FROM trading_date_ref WHERE market = 'TW' ORDER BY date",
     )
     .fetch_all(pool)
     .await
-    .context("載入交易日曆失敗")?;
+    .context("載入 trading_date_ref 失敗")?;
     Ok(rows.into_iter().map(|(d,)| d).collect())
 }
 
