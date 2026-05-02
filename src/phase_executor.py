@@ -364,7 +364,7 @@ class PhaseExecutor:
         aggregator 不做過濾、保留全部 rows。
         """
         if not hasattr(self, "_trading_dates_cache"):
-            rows = self.db.query("SELECT date FROM trading_calendar")
+            rows = self.db.query("SELECT date FROM trading_date_ref")  # v3.2 R-1: trading_calendar → trading_date_ref
             # psycopg3 從 Postgres DATE 欄位回傳 datetime.date，
             # 但 FinMind rows 的 date 是 str（"2024-01-15"），
             # 統一轉成 str 避免 set membership check 永遠 False
@@ -379,23 +379,25 @@ class PhaseExecutor:
 
     def _merge_delist_date(self, rows: list[dict]) -> None:
         """
-        特殊合併策略：只更新 stock_info 表的 delist_date 欄位。
+        特殊合併策略：只更新 stock_info_ref 表的 delisting_date 欄位。
         用於 TaiwanStockDelisting 的資料處理。
+
+        v3.2 R-2:stock_info → stock_info_ref;delist_date → delisting_date。
 
         Args:
             rows: 已映射的資料列
         """
         for row in rows:
             stock_id   = row.get("stock_id")
-            delist_date = row.get("date") or row.get("delist_date")
-            if not stock_id or not delist_date:
+            delisting_date = row.get("date") or row.get("delisting_date") or row.get("delist_date")
+            if not stock_id or not delisting_date:
                 continue
 
             self.db.update(
                 """
-                UPDATE stock_info
-                SET delist_date = %s, updated_at = NOW()
+                UPDATE stock_info_ref
+                SET delisting_date = %s, updated_at = NOW()
                 WHERE market = 'TW' AND stock_id = %s
                 """,
-                [delist_date, stock_id],
+                [delisting_date, stock_id],
             )

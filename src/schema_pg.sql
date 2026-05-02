@@ -42,28 +42,39 @@ ON CONFLICT (key) DO NOTHING;
 -- Phase 1 — META(基礎資料)
 -- =============================================================================
 
--- 股票基本資料
-CREATE TABLE IF NOT EXISTS stock_info (
-    market          TEXT NOT NULL,
-    stock_id        TEXT NOT NULL,
-    stock_name      TEXT,
-    market_type     TEXT,                  -- twse | otc | emerging
-    industry        TEXT,
-    listing_date    DATE,                  -- SQLite TEXT -> Postgres DATE
-    delist_date     DATE,                  -- 同上
-    par_value       NUMERIC(10, 2),        -- SQLite REAL -> NUMERIC,避免浮點誤差
-    detail          JSONB,                 -- SQLite TEXT JSON -> JSONB
-    source          TEXT NOT NULL DEFAULT 'finmind',
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+-- 股票基本資料(v3.2:stock_info → stock_info_ref;對應 blueprint §5.2)
+-- 欄位 rename:market_type → type / industry → industry_category / delist_date → delisting_date
+-- 🟡 listing_date / par_value / detail / source / updated_at 暫保留(stock_resolver.min_listing_days 等
+-- collector 既有依賴),後續 PR 視 collector 重構決定砍除
+CREATE TABLE IF NOT EXISTS stock_info_ref (
+    market              TEXT NOT NULL,
+    stock_id            TEXT NOT NULL,
+    stock_name          TEXT,
+    type                TEXT,                  -- twse | tpex | emerging(原 market_type)
+    industry_category   TEXT,                  -- FinMind 主檔粗分類(原 industry)
+    listing_date        DATE,                  -- 🟡 collector min_listing_days 依賴,暫保留
+    delisting_date      DATE,                  -- NULL = 仍上市(原 delist_date)
+    par_value           NUMERIC(10, 2),        -- 🟡 暫保留
+    detail              JSONB,                 -- 🟡 v1.7 packs data_update_date,暫保留
+    source              TEXT NOT NULL DEFAULT 'finmind',  -- 🟡 暫保留
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- 🟡 ETL 內部,暫保留
     PRIMARY KEY (market, stock_id)
 );
 
+-- v3.2 §5.2 規定的 partial indexes
+CREATE INDEX IF NOT EXISTS idx_sir_active
+    ON stock_info_ref(market, stock_id)
+    WHERE delisting_date IS NULL;
+CREATE INDEX IF NOT EXISTS idx_sir_industry
+    ON stock_info_ref(industry_category)
+    WHERE industry_category IS NOT NULL;
 
--- 交易日曆
-CREATE TABLE IF NOT EXISTS trading_calendar (
-    market          TEXT NOT NULL,
-    date            DATE NOT NULL,
-    source          TEXT NOT NULL DEFAULT 'finmind',
+
+-- 交易日曆(v3.2:trading_calendar → trading_date_ref;對應 blueprint §5.1)
+-- 設計:row 存在 = 交易日,不存在 = 非交易日 → 砍 source 欄位(僅 'finmind' 無區別性)
+CREATE TABLE IF NOT EXISTS trading_date_ref (
+    market  TEXT NOT NULL,
+    date    DATE NOT NULL,
     PRIMARY KEY (market, date)
 );
 

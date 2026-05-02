@@ -80,37 +80,37 @@ phases = [0, 1, 2, 3, 4, 5, 6]
 name         = "stock_info"
 dataset      = "TaiwanStockInfo"
 param_mode   = "all_market"
-target_table = "stock_info"
+target_table = "stock_info_ref"
 phase        = 1
 enabled      = true
 is_backer    = false
 segment_days = 0
-field_rename = {"type" = "market_type", "industry_category" = "industry", "date" = "_data_update_date"}
-notes        = "上市上櫃股票基本資料；API 的 date 是『資料更新日』，pack 進 detail.data_update_date；updated_at 由 schema DEFAULT NOW() 填同步時刻（與 _merge_delist_date 一致）"
+field_rename = {"date" = "_data_update_date"}
+notes        = "上市上櫃股票基本資料；v3.2 R-2 後 DB column type/industry_category 跟 API field 同名,不需 rename；API 的 date 是『資料更新日』pack 進 detail.data_update_date；updated_at 由 schema DEFAULT NOW() 填"
 
 [[api]]
 name           = "stock_delisting"
 dataset        = "TaiwanStockDelisting"
 param_mode     = "all_market"
-target_table   = "stock_info"
+target_table   = "stock_info_ref"
 phase          = 1
 enabled        = true
 is_backer      = false
 segment_days   = 0
 backfill_start_override = "2022-01-01"
 merge_strategy = "update_delist_date"
-notes          = "下市櫃清單，合併寫入 stock_info.delist_date"
+notes          = "下市櫃清單，合併寫入 stock_info_ref.delisting_date(v3.2 R-2 後欄位名)"
 
 [[api]]
 name         = "trading_calendar"
 dataset      = "TaiwanStockTradingDate"
 param_mode   = "all_market"
-target_table = "trading_calendar"
+target_table = "trading_date_ref"
 phase        = 0
 enabled      = true
 is_backer    = true
 segment_days = 0
-notes        = "交易日曆；API 只回 date 欄位。獨立為 Phase 0 因為 Phase 5 institutional aggregator 依賴本表過濾 FinMind 週六鬼資料"
+notes        = "交易日曆(v3.2 R-1 後表名 trading_date_ref);API 只回 date 欄位。獨立為 Phase 0 因為 Phase 5 institutional aggregator 依賴本表過濾 FinMind 週六鬼資料"
 
 [[api]]
 name         = "market_index_tw"
