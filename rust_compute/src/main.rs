@@ -283,33 +283,47 @@ async fn load_adj_events(
 }
 
 /// 對非 capital_increase 事件,反推 AF。Priority:
-///   1. before_price + reference_price 都有值 → af = before / reference(API 精確值)
-///   2. dividend events fallback:用 cash + stock 公式(純股票股利 API 常不回 price 三欄)
+///   1. before_price + reference_price 都有值且 reference_price 可信 →
+///         af = before / reference(API 精確值)
+///   2. dividend events fallback:用 cash + stock 公式
 ///         p_after = (before - cash) / (1 + stock / 10)
 ///         af = before / p_after
 ///      退化情境:
 ///         純現金股利:af = before / (before - cash)        (stock=0)
 ///         純股票股利:af = 1 + stock / 10                  (cash=0)
 ///         混合:     af = before * (1 + stock/10) / (before - cash)
-///      before_price source priority:
-///         a. events.before_price(API 給)
-///         b. fallback:price_daily 找事件日前一交易日的 close(P1 修法後新加)
+///
+/// reference_price 不可信偵測(觸發 Priority 1 fallthrough):
+///   FinMind TaiwanStockDividendResult 對「純股票股利」(cash=0, stock>0)
+///   直接把 reference_price 設成 = before_price(沒做真除權計算),導致 bp / rp = 1.0
+///   錯誤。對這種 row 認定 reference_price 不可靠,走 Priority 2 公式。
+///
+/// 對混合 dividend(cash>0 + stock>0)reference_price 是真除權息後參考價,
+/// 信任 Priority 1(處理 ETF 配息等公式無法精確算的情境)。
 fn derive_simple_event_af(events: &mut [AdjEvent], raw_prices: &[DailyPrice]) {
     for event in events.iter_mut() {
         if event.event_type == "capital_increase" { continue; }
 
-        // Priority 1: API 給的 before / reference 直接反推
+        // Priority 1: API 給的 before / reference 直接反推(加 sanity check)
         if let (Some(bp), Some(rp)) = (event.before_price, event.reference_price) {
             if rp > 0.0 && bp > 0.0 {
-                event.af = bp / rp;
-                continue;
+                let cash = event.cash_dividend.unwrap_or(0.0);
+                let stock = event.stock_dividend.unwrap_or(0.0);
+                let bp_eq_rp = (bp - rp).abs() < 0.0001;
+                let unreliable = event.event_type == "dividend"
+                    && stock > 0.0
+                    && cash == 0.0
+                    && bp_eq_rp;
+                if !unreliable {
+                    event.af = bp / rp;
+                    continue;
+                }
+                // unreliable → fallthrough 到 Priority 2
             }
         }
 
-        // Priority 2: dividend fallback(純股票股利 API 三欄都不回 走這條)
+        // Priority 2: dividend fallback 公式
         if event.event_type == "dividend" {
-            // before_price 優先 events 表;沒有就從 price_daily 找事件日前一交易日 close
-            // (raw_prices 已 ORDER BY date,filter < event.date 取 last 即前一交易日)
             let bp_opt = event.before_price.or_else(|| {
                 raw_prices.iter()
                     .filter(|p| p.date < event.date)
