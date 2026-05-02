@@ -1,3 +1,10 @@
+# av3 / discover / fix log dumps(root level only;scripts/*.txt 不在此規則內)
+/av3_*.txt
+/discover*.txt
+/fix_p1_17_log.txt
+/p1_17_result.txt
+/test.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

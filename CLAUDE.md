@@ -1,18 +1,19 @@
 # CLAUDE.md — tw-stock-collector Session 銜接文件
 
 > 這份文件記錄本專案的完整實作歷程與架構決策，供下次 session 自動載入後直接銜接，無需重新閱讀 git log。
-> 最後更新：2026-05-02（**v1.9**）
+> 最後更新：2026-05-02（**v1.9.1**）
 
 ---
 
 ## 分支狀態
 
-- **開發分支**：`claude/review-todo-list-tblnC`(**v1.9 active**;PR #17 (B-3) + R-1 漏改修補 + P1 dividend AF 修補 + PowerShell 亂碼戰役)
+- **開發分支**：`claude/initial-setup-RhLKU`(**v1.9.1 active**;tblnC 已 merge 進來,加 24 檔 split/par_value backfill 驗 av3 Test 4 完整覆蓋 + discover SQL + fix_p1_17 deprecate)
 - **過去分支**:
+  - `claude/review-todo-list-tblnC`(v1.9 main session,PR #17 (B-3) + R-1 漏改 + P1 dividend AF + PowerShell 亂碼戰役;已 merge 進 initial-setup-RhLKU)
   - `claude/restructure-collector-architecture-t9ScN`(v1.8 收尾,m2 重構藍圖 + r3 spec audit + av3)
   - `claude/m2-architecture-design-3Q3Fd`(user 主分支,Easy 階段 PR #10~#16 已合 + B-6 LEADING hotfix)
 - **目標分支**:`m1/postgres-migration`(v1.7 PR 已合)
-- **PR**:v1.9 PR 開於 tblnC 分支,涵蓋以下大項
+- **PR**:v1.9 + v1.9.1 PR 開於 initial-setup-RhLKU 分支
 
 ---
 
@@ -84,6 +85,53 @@ User 在 zh-TW Windows 11 (cp950 ACP) PowerShell 5.1 跑 av3 SQL,中文 verdict 
 `scripts/av3_spot_check.sql` 75 處 `\echo` 一次性轉 `COPY (SELECT '...') TO STDOUT`(`a0a5ddf`),雖然後續發現 `\echo` 在新 wrapper 下也 work,但 COPY 形式保留(對 stdin/file 兩條 path 都 work,更 portable)。
 
 判讀指南(commit `ccfe13e`)整段重寫對齊 r3.1 + PR #17 + P0-11 + P1-17 落地版,砍掉過時的 `P0-8/C1` / 「Test 6 sanity FAIL」等錯誤判讀。
+
+---
+
+## v1.9.1 補丁(2026-05-02 後續 session)
+
+接續 v1.9 main session,在 `claude/initial-setup-RhLKU` 分支補完 av3 Test 4 完整覆蓋驗證,並把 tblnC merge 進來統一分支。
+
+### A. 24 檔 split / par_value backfill 完成(解 v1.9 todo #3「stock list 補完」)
+
+之前 av3 Test 4 只 join 到 10 個事件(7 split + 1 cap_red + 2 cap_inc),揭露 16 / 31 個 par_value / split 事件對應股票不在 user `stock_info_ref` 收錄。
+
+本 session 跑 `scripts/discover_split_candidates.sql` 列出 24 缺檔:
+- **par_value**: 2327 / 6919 / 4763 / 8476 / 3093 / 5536 / 6613 / 6415 / 6531 / 8070
+- **split**: 3086 / 8937 / 7780 / 8422 / 00715L / 0052 / 00674R / 00631L / 00706L / 00673R / 0050 / 00663L / 00676R / 00632R
+
+User 一次 `python src\main.py backfill --stocks <24 ids> --phases 1,2,3,4` 跑完。
+
+**驗證**(av3 Test 4 重跑):
+
+| event_type | events 變化 |
+|---|---|
+| split | 7 → 17 |
+| capital_increase | 2 → 3 |
+| capital_reduction | 1 → 3 |
+| par_value_change | 6 → 16 |
+
+**數學核對**(精確匹配 P1-17 公式 + cumulative vf 設計):
+- 2327 2024-08-15 stock_div=121.48(超大案)→ vf_in_pae=0.0760 ≈ 1/12.148 ✓,subsequent split+par_value 同日 vf=0.25 各一 → vol_ratio=16 ✓
+- 4763 2024-09-12 stock_div=0.15 → vf=0.9852 ✓,subsequent vf=0.1 各一 → vol_ratio=100 ✓
+- 8476 2024-07-09 stock_div=0.02 → vf=0.9980 ✓,subsequent vf=0.5 各一 → vol_ratio=4 ✓
+- 8932 2025-09-08 cash=0.28 stock=0.04 → vf=0.9958 ✓,subsequent split vf=0.5 → vol_ratio=2.0 ✓
+
+### B. 新工具 `scripts/discover_split_candidates.sql`(commit `0d650c0` + `b88a882`)
+
+盤點 av3 Test 4 backfill 候選 SQL:6 步驟列 pae 各 event_type 統計、與 price_daily / price_daily_fwd join 涵蓋率、缺檔 stock_id 清單(LIMIT 50)、6505 對照組驗證。`b88a882` 修兩個 schema 落差 bug:
+- `stock_info` → `stock_info_ref`(R-2 後表名,PR #11)
+- `pae.adjustment_factor` → 砍掉(PR #17 後該欄在 pae 已不存在)
+
+### C. `scripts/fix_p1_17_stock_dividend_vf.sql` deprecated(commit `b88a882`)
+
+UPDATE 0 row 證明 post_process `_recompute_stock_dividend_vf` 路徑早已自動修對既存資料。檔案保留 + 加 DEPRECATED header 供事件考古,不再使用。
+
+### D. 分支整合 + 清掉 log dump
+
+- `f83adf9` Merge tblnC 22 commits 進 initial-setup-RhLKU(0 衝突,merge base = `0d650c0`,兩邊改檔完全沒交集)
+- 清掉 tblnC merge 進來的 10 個 log .txt(`av3_*.txt` / `discover.txt` / `fix_p1_17_log.txt` / `p1_17_result.txt` / `test.txt`)
+- `.gitignore` 補 root-level `/av3_*.txt` 等規則防未來再進
 
 ---
 
@@ -367,8 +415,8 @@ python scripts\inspect_db.py 2330
      - **Option A**:holding_shares_per / financial_statement / monthly_revenue 3 張重抓 FinMind raw(pack JSONB unpack 困難)
    - 動工前先 prototype 1 張 reverse-pivot(建議 `institutional_daily`,因為 pivot 邏輯最透明,在 `src/aggregators.py:pivot_institutional`)驗證可行,再展全 5 張
    - 寫 `scripts/reverse_pivot_institutional.py`:對 stock 2330 SELECT pivot 後資料 → 反推 5 row × N 日 → INSERT 到 v3.2 Bronze `institutional_investors_tw` → 對得上原 pivot 即驗證通過
-2. **v1.9 PR (#16) review + merge**(tblnC 分支累積 ~16 commit,涵蓋 PR #17 (B-3) + R-1 漏改 + P1 dividend AF + PowerShell 亂碼戰役 + m2 blueprint Hard 階段 amend)。等 maintainer review,平行不阻塞 PR #18 動工。
-3. **stock list 補完**(av3 Test 3/4 揭露 user `stock_info_ref` 沒收錄 8932/5278/5314/6763/3363 等股票,phase 4 全市場 backfill 沒涵蓋 → 要把這些補進)
+2. **v1.9 + v1.9.1 PR review + merge**(initial-setup-RhLKU 分支累積 ~24 commit,涵蓋 PR #17 (B-3) + R-1 漏改 + P1 dividend AF + PowerShell 亂碼戰役 + m2 blueprint Hard 階段 amend + 24 檔 backfill verify)。等 maintainer review,平行不阻塞 PR #18 動工。
+3. ~~**stock list 補完**~~ ✅ v1.9.1 已處理(24 檔 split/par_value backfill + av3 Test 4 完整通過,詳見 §「v1.9.1 補丁」§A)
 4. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
 5. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
 6. **CLAUDE.md 章節重組**(本檔已超過 600 行,v1.4-v1.7 詳解可繼續搬 docs/claude_history.md)
