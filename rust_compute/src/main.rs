@@ -28,17 +28,21 @@ struct DailyPrice { date: NaiveDate, open: f64, high: f64, low: f64, close: f64,
 
 /// 還原因子事件(v3.2 PR #17 後砍 events.adjustment_factor 欄,改在 Rust 內現算)
 ///
-/// 對 dividend / split / par_value_change / capital_reduction:
-///   af = before_price / reference_price (在 process_stock 內算,寫入下方 af 欄)
-/// 對 capital_increase:
-///   af 由 patch_capital_increase_af 從 detail.subscription_price + 對前一日
-///   raw_price 反推(原本 UPDATE 寫回 DB,本 PR 改純記憶體)
+/// AF 計算 priority(對 non capital_increase):
+///   1. before_price + reference_price 都有值 → af = before / reference(API 精確值)
+///   2. dividend 事件 fallback:用 cash + stock 公式
+///        p_after = (before - cash) / (1 + stock / 10)
+///        af = before / p_after
+///      適用情境:純股票股利 events FinMind API 不回 reference_price,Priority 1 fail
+///   3. capital_increase:由 patch_capital_increase_af 從 detail.subscription_price 反推
 #[derive(Debug, Clone)]
 struct AdjEvent {
     date: NaiveDate,
     event_type: String,
     before_price: Option<f64>,
     reference_price: Option<f64>,
+    cash_dividend: Option<f64>,
+    stock_dividend: Option<f64>,
     /// 計算後的 AF(transient,不存 DB)。SELECT 進來時 = 1.0,
     /// process_stock 內由 derive_simple_event_af + patch_capital_increase_af 填值
     af: f64,
@@ -254,13 +258,15 @@ async fn load_raw_prices(
 /// detail JSONB 讀成 TEXT，Rust 端再 parse。
 /// v3.2 PR #17:不再 SELECT adjustment_factor 欄(已砍),改 SELECT
 /// before_price + reference_price + volume_factor + detail。AF 在記憶體現算。
+/// PR #17 P1 fallback:加 cash_dividend + stock_dividend 給 dividend AF fallback 公式用。
 async fn load_adj_events(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     market: &str,
     stock_id: &str,
 ) -> Result<Vec<AdjEvent>> {
-    let rows: Vec<(NaiveDate, String, Option<f64>, Option<f64>, f64, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(NaiveDate, String, Option<f64>, Option<f64>, Option<f64>, Option<f64>, f64, Option<String>)> = sqlx::query_as(
         "SELECT date, event_type, before_price::float8, reference_price::float8,
+                cash_dividend::float8, stock_dividend::float8,
                 volume_factor::float8, detail::text
            FROM price_adjustment_events
           WHERE market = $1 AND stock_id = $2
@@ -270,19 +276,46 @@ async fn load_adj_events(
     .fetch_all(tx.as_mut())
     .await
     .with_context(|| format!("讀取 price_adjustment_events 失敗：{stock_id}"))?;
-    Ok(rows.into_iter().map(|(date, event_type, before_price, reference_price, vf, detail)| AdjEvent {
-        date, event_type, before_price, reference_price, af: 1.0, volume_factor: vf, detail
+    Ok(rows.into_iter().map(|(date, event_type, before_price, reference_price, cash_dividend, stock_dividend, vf, detail)| AdjEvent {
+        date, event_type, before_price, reference_price, cash_dividend, stock_dividend,
+        af: 1.0, volume_factor: vf, detail
     }).collect())
 }
 
-/// 對非 capital_increase 事件,從 before_price / reference_price 反推 AF。
-/// 同 v2.0 field_mapper.py:_compute 的計算邏輯但搬到 Rust 內(blueprint §4.4)。
+/// 對非 capital_increase 事件,反推 AF。Priority:
+///   1. before_price + reference_price 都有值 → af = before / reference(API 精確值)
+///   2. dividend events fallback:用 cash + stock 公式(純股票股利 API 不回 reference_price)
+///         p_after = (before - cash) / (1 + stock / 10)
+///         af = before / p_after
+///      退化情境:
+///         純現金股利:af = before / (before - cash)        (stock=0)
+///         純股票股利:af = 1 + stock / 10                  (cash=0)
+///         混合:     af = before * (1 + stock/10) / (before - cash)
 fn derive_simple_event_af(events: &mut [AdjEvent]) {
     for event in events.iter_mut() {
-        if event.event_type == "capital_increase" { continue; }  // 由 patch_capital_increase_af 處理
+        if event.event_type == "capital_increase" { continue; }
+
+        // Priority 1: API 給的 before / reference 直接反推
         if let (Some(bp), Some(rp)) = (event.before_price, event.reference_price) {
             if rp > 0.0 && bp > 0.0 {
                 event.af = bp / rp;
+                continue;
+            }
+        }
+
+        // Priority 2: dividend fallback(純股票股利 API 沒 reference_price 走這條)
+        if event.event_type == "dividend" {
+            if let Some(bp) = event.before_price {
+                if bp > 0.0 {
+                    let cash = event.cash_dividend.unwrap_or(0.0);
+                    let stock = event.stock_dividend.unwrap_or(0.0);
+                    if cash > 0.0 || stock > 0.0 {
+                        let p_after = (bp - cash) / (1.0 + stock / 10.0);
+                        if p_after > 0.0 {
+                            event.af = bp / p_after;
+                        }
+                    }
+                }
             }
         }
     }
