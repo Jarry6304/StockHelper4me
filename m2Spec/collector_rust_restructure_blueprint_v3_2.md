@@ -189,6 +189,21 @@ src/
 └── rust_bridge.py               # 不變,只是 Phase 4 的 stock_ids 來源改從 silver dirty queue 讀
 ```
 
+**Silver builder 入口/出口契約**(每個 `silver/builders/*.py` 須遵守):
+
+| 階段 | 入口 | 出口 |
+|---|---|---|
+| **讀取** | `SELECT … FROM <silver_table> WHERE is_dirty = TRUE` 拿 (market, stock_id, date_range) | — |
+| **計算** | 從對應 Bronze 表 SELECT raw + 必要 ref 表 join | — |
+| **後復權專屬** | (`institutional` / `valuation` / `taiex_index` 等需 fwd 對齊的 builder)透過 `rust_bridge.run_phase4(stock_ids)` 取 `(price_multiplier, volume_multiplier)` per (stock, date),不自己算 AF | — |
+| **寫入** | — | `INSERT … ON CONFLICT … DO UPDATE` 到 `<silver_table>_derived`(同 PK + dirty 欄位 reset) |
+| **dirty 重置** | — | 同 transaction 內 `UPDATE <silver_table> SET is_dirty=FALSE, dirty_at=NULL WHERE …` |
+
+**契約紀律**:
+- builder 不直接讀 `price_adjustment_events`,要 fwd 一律走 Rust;這對齊 `cores_overview.md` §10.0「無選擇」原則(計算路徑唯一)
+- builder 內不可 INSERT 到非 `_derived` 表;Bronze 寫入只在 `bronze/phase_executor.py`
+- builder 失敗時 `is_dirty` **不** reset,留給下次 orchestrator 重試;對齊 `cores_overview.md` §7.5 dirty 契約
+
 ### 3.2 `aggregators.py` 砍除
 
 | 現行函數 | v3.2 處置 | 搬遷目的地 |
@@ -348,6 +363,21 @@ ALTER TABLE price_adjustment_events
 --     reference_price, cash_dividend, stock_dividend, detail JSONB
 ```
 
+**同步 ALTER `price_daily_fwd`** (對齊 §4.4 r3.1 結論,4 加 1 不加):
+
+```sql
+-- PR #3(B-3) 同步加,Silver 內部 AF 計算結果落地於此
+ALTER TABLE price_daily_fwd
+    ADD COLUMN cumulative_adjustment_factor NUMERIC,  -- Wave Cores 反推 raw price
+    ADD COLUMN cumulative_volume_factor     NUMERIC,  -- P0-11 修完後反推 raw volume(對 split/par_value 必要)
+    ADD COLUMN is_adjusted                  BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN adjustment_factor            NUMERIC;  -- 單日 AF,除錯用
+
+-- ❌ 不加:volume_adjusted(av3 揭露假設不成立 — fwd_volume 對現金 dividend = raw,不需此 flag)
+```
+
+依據:`m2Spec/unified_alignment_review_r2.md` r3.1 段已拍板。Rust `compute_forward_adjusted` 在 commit `c71d422` 已拆 `price_multiplier`(從 AF) + `volume_multiplier`(從 vf),但目前算完丟棄 — PR #3 落地後讓其寫入這 4 欄,Wave Cores / Aggregation Layer 才能反推 raw。
+
 ### 5.3 既有 6 張 raw 改名拆 Silver（Phase 7 動工前）
 
 ```sql
@@ -384,6 +414,73 @@ ALTER TABLE <silver_table>
 CREATE INDEX idx_<table>_dirty ON <silver_table>(is_dirty) WHERE is_dirty = TRUE;
 ```
 
+**Bronze → Silver dirty trigger DDL 範例**(對齊 `cores_overview.md` §7.5.2「Bronze 變更 trigger 設此 flag」):
+
+```sql
+-- 通用 trigger function(每張 Silver 表共用,builder 透過參數傳 silver_table 名)
+CREATE OR REPLACE FUNCTION trg_mark_silver_dirty()
+RETURNS TRIGGER AS $$
+DECLARE
+    silver_table TEXT := TG_ARGV[0];
+BEGIN
+    EXECUTE format(
+        'INSERT INTO %I (market, stock_id, date, is_dirty, dirty_at)
+         VALUES ($1, $2, $3, TRUE, NOW())
+         ON CONFLICT (market, stock_id, date) DO UPDATE
+            SET is_dirty = TRUE, dirty_at = NOW()',
+        silver_table
+    ) USING NEW.market, NEW.stock_id, NEW.date;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 每張 Bronze → Silver 對應加一份 trigger(institutional 為例)
+CREATE TRIGGER mark_institutional_derived_dirty
+AFTER INSERT OR UPDATE ON institutional_investors_tw   -- Bronze
+FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('institutional_daily_derived');
+
+-- 同 pattern:
+--   margin_*_tw                  → margin_daily_derived
+--   foreign_holding_tw            → foreign_holding_derived
+--   day_trading_tw                → day_trading_derived
+--   valuation_tw                  → valuation_derived
+--   holding_shares_per_tw         → holding_shares_per_derived
+--   monthly_revenue_tw            → monthly_revenue_derived
+--   financial_statement_tw        → financial_statement_derived
+--   market_ohlcv_tw               → taiex_index_derived
+--   us_market_index_tw            → us_market_index_derived
+--   exchange_rate_tw              → exchange_rate_derived
+--   market_margin_maintenance_tw  → market_margin_derived
+--   business_indicator_tw         → business_indicator_derived
+--   securities_lending_tw         → margin_daily_derived(同 SBL 整合到 margin)
+
+-- 後復權 trigger(price_adjustment_events 寫入 → 整檔 Silver fwd 全 dirty)
+-- 注意:這個觸發點不只標單日,要把該 stock_id 全段歷史 Silver fwd 全標 dirty
+-- (因 multiplier 倒推,新除權息會回頭改全段歷史值)
+CREATE OR REPLACE FUNCTION trg_mark_fwd_silver_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE price_daily_fwd
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    -- weekly / monthly_fwd 同步
+    UPDATE price_weekly_fwd  SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    UPDATE price_monthly_fwd SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER mark_fwd_dirty_on_event
+AFTER INSERT OR UPDATE ON price_adjustment_events
+FOR EACH ROW EXECUTE FUNCTION trg_mark_fwd_silver_dirty();
+```
+
+**動工順序**:DDL 落地分兩階段
+1. PR #19 動工:14 張 Silver `is_dirty` / `dirty_at` 欄位 + index 全建好,但**不啟用 trigger**(避免 Bronze 雙寫期間每筆 Bronze upsert 都觸發)
+2. PR #20 動工(orchestrator 上線同 commit):trigger CREATE,並同步砍 §5.6 短期補丁(post_process.invalidate_fwd_cache)
+
 ### 5.6 Silver Views 3 張
 
 照 v3.2 §2.5 + §附錄 B 直接 CREATE VIEW。
@@ -411,6 +508,7 @@ Rust `schema_check.rs` 內 hard-fail 字串對齊到 `'3.2'`。
 | 5 | **A-V3**：~~驗證 `price_daily_fwd.volume` 是否已隨除權息調整~~ **r3.1 已驗** ✓(2026-05-01 user 本機 PG 17 跑 av3_spot_check.sql,verdict:現金 dividend Rust 派 ✓ + 其他事件揭露 P0-11 production bug)| §8.5 | ~~🔴~~ ✅ closed |
 | **5.5** | **P0-11**(av3 揭露,r3.1 新增):Rust `compute_forward_adjusted` 改用 `volume_factor` 不用 `adjustment_factor`(`rust_compute/src/main.rs` 改 4 處 + cargo build + 重跑 Phase 4)| §8.5 衍生 | 🔴 production bug 必修 |
 | **5.6** | **Phase 4 staleness 補丁**:`src/post_process.py:dividend_policy_merge` 結尾加 `_invalidate_fwd_cache` reset `stock_sync_status.fwd_adj_valid=0`,讓新事件觸發 Phase 4 re-run(P0-7 短期補丁,長期仍要 dirty queue 完整契約)| §8.5 衍生 + P0-7 | 🟠 中(避免 stale fwd) |
+| **5.7** | **長期 dirty queue 上線(PR #20 同 commit)**:Silver 14 張 `is_dirty` 欄位 + Bronze→Silver trigger DDL(§5.5 範例)落地;`src/post_process.py:_invalidate_fwd_cache` 與 `phase_executor` reset `fwd_adj_valid=0` 路徑 mark deprecated 但保留 1~2 sprint 相容期;orchestrator 上線且 1 週內無歧義 dirty 重算驗證後,同 commit 砍 5.6 補丁路徑(對齊 cores_overview §7.5 + §10.0 唯一計算路徑原則)| §8.7 + P0-7 close | 🔴 PR #20 動工硬阻塞 |
 | 6 | **G-ATR-1**：atr_core 與 neely_core ATR golden test | §8.5 | 🔴 阻塞 M3 動工（不影響 Collector） |
 | 7 | **W-1**：WaveCore trait 草案固化 | §8.5 | 🔴 阻塞 M3（不影響 Collector） |
 | 8 | **B-1 / B-2**：補 TAIEX OHLCV + 報酬指數並存 | §8.4 | 🟠 |
