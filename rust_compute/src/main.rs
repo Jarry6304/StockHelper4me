@@ -284,14 +284,17 @@ async fn load_adj_events(
 
 /// 對非 capital_increase 事件,反推 AF。Priority:
 ///   1. before_price + reference_price 都有值 → af = before / reference(API 精確值)
-///   2. dividend events fallback:用 cash + stock 公式(純股票股利 API 不回 reference_price)
+///   2. dividend events fallback:用 cash + stock 公式(純股票股利 API 常不回 price 三欄)
 ///         p_after = (before - cash) / (1 + stock / 10)
 ///         af = before / p_after
 ///      退化情境:
 ///         純現金股利:af = before / (before - cash)        (stock=0)
 ///         純股票股利:af = 1 + stock / 10                  (cash=0)
 ///         混合:     af = before * (1 + stock/10) / (before - cash)
-fn derive_simple_event_af(events: &mut [AdjEvent]) {
+///      before_price source priority:
+///         a. events.before_price(API 給)
+///         b. fallback:price_daily 找事件日前一交易日的 close(P1 修法後新加)
+fn derive_simple_event_af(events: &mut [AdjEvent], raw_prices: &[DailyPrice]) {
     for event in events.iter_mut() {
         if event.event_type == "capital_increase" { continue; }
 
@@ -303,9 +306,17 @@ fn derive_simple_event_af(events: &mut [AdjEvent]) {
             }
         }
 
-        // Priority 2: dividend fallback(純股票股利 API 沒 reference_price 走這條)
+        // Priority 2: dividend fallback(純股票股利 API 三欄都不回 走這條)
         if event.event_type == "dividend" {
-            if let Some(bp) = event.before_price {
+            // before_price 優先 events 表;沒有就從 price_daily 找事件日前一交易日 close
+            // (raw_prices 已 ORDER BY date,filter < event.date 取 last 即前一交易日)
+            let bp_opt = event.before_price.or_else(|| {
+                raw_prices.iter()
+                    .filter(|p| p.date < event.date)
+                    .last()
+                    .map(|p| p.close)
+            });
+            if let Some(bp) = bp_opt {
                 if bp > 0.0 {
                     let cash = event.cash_dividend.unwrap_or(0.0);
                     let stock = event.stock_dividend.unwrap_or(0.0);
@@ -476,7 +487,7 @@ async fn process_stock(
     }
 
     let mut events = load_adj_events(&mut tx, market, stock_id).await?;
-    derive_simple_event_af(&mut events);
+    derive_simple_event_af(&mut events, &raw_prices);
     let af_patched = patch_capital_increase_af(&raw_prices, &mut events);
 
     let fwd_prices = compute_forward_adjusted(stock_id, &raw_prices, &events);
