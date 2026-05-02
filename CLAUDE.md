@@ -23,7 +23,97 @@
   - `claude/collector-schema-mapping-2YF5U` / `claude/continue-work-dvkRv` / `claude/setup-agent-review-mcp-berOR`(v1.5/v1.6 探勘)
   - `claude/review-collector-spec-Gktcf`(早期 review 分支)
   - `collector`(早期 PR #4)
-- **PR**:v1.9 + v1.9.1 + v1.10 PR 開於 initial-setup-RhLKU 分支
+- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 PR 開於 initial-setup-RhLKU 分支
+
+---
+
+## v1.11 — PR #19a Silver 14 表 scaffolding(2026-05-02 後續)
+
+接 v1.10 PR #18 後動工 PR #19(blueprint v3.2 r1 §五 §5.5 + §十 PR #8)。完整 PR #19 scope 估 3 天太大塞不進一個 session,本 session 切 PR #19a 純 scaffolding,後續切兩段:
+
+| 切片 | 範圍 | 估時 | 風險 |
+|---|---|---|---|
+| **PR #19a 本 session** ✅ | 14 張 Silver `*_derived` schema + 3 張 fwd ALTER 加 dirty 欄位 + silver/ 套件骨架 + 13 個 builder stub + bronze/dirty_marker stub | 半天 | 低(全 additive,builder 全 raise NotImplementedError) |
+| PR #19b 下 session | 5 個簡單 builder(institutional / valuation / day_trading / margin / foreign_holding,因 Bronze 已 PR #18 落地有真資料可驗) | ~1 天 | 中 |
+| PR #19c 再下 session | 剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI + bronze/phase_executor 拆段 | ~1.5 天 | 高(部分依賴 PR #18.5 Bronze 重抓) |
+
+### A. alembic migration `k0l1m2n3o4p5_silver14_dirty_scaffolding`
+
+單一 migration 同時建 14 張 Silver `*_derived` 表 + 14 個 partial index `WHERE is_dirty = TRUE` + 3 張 fwd 表 ALTER ADD COLUMN(dirty 欄位 + 對應 index)。schema_pg.sql 同步附 DDL 在尾段。
+
+14 張 Silver 對映 spec §2.3 canonical 清單:
+1. `price_limit_merge_events`(Rust 計算,schema TBD per PR #20)
+2. `monthly_revenue_derived`
+3. `valuation_daily_derived`(+market_value_weight)
+4. `financial_statement_derived`(PK 含 type)
+5. `institutional_daily_derived`(+gov_bank_net)
+6. `margin_daily_derived`(+SBL 6 欄)
+7. `foreign_holding_derived`
+8. `holding_shares_per_derived`
+9. `day_trading_derived`
+10. `taiex_index_derived`
+11. `us_market_index_derived`
+12. `exchange_rate_derived`(PK 含 currency,不是 stock_id)
+13. `market_margin_maintenance_derived`(PK 含 market+date,+2 欄)
+14. `business_indicator_derived`(NEW per spec §6.3)
+
+### B. silver/ 套件骨架(`src/silver/`)
+
+```
+src/silver/
+├── __init__.py
+├── _common.py             # filter_to_trading_days(從 aggregators.py 搬)+ SilverBuilder protocol
+├── orchestrator.py        # Phase 7a/7b/7c 排程 skeleton(run() raise NotImplementedError)
+└── builders/
+    ├── __init__.py        # BUILDERS dict 註冊 13 個 builder
+    ├── institutional.py   ← PR #19b
+    ├── margin.py          ← PR #19b
+    ├── foreign_holding.py ← PR #19b
+    ├── day_trading.py     ← PR #19b
+    ├── valuation.py       ← PR #19b
+    ├── holding_shares_per.py  ← PR #19c(依賴 PR #18.5 重抓)
+    ├── monthly_revenue.py     ← PR #19c(同上)
+    ├── financial_statement.py ← PR #19c(7b 階段,同上)
+    ├── taiex_index.py     ← PR #19c
+    ├── us_market_index.py ← PR #19c
+    ├── exchange_rate.py   ← PR #19c
+    ├── market_margin.py   ← PR #19c
+    └── business_indicator.py  ← PR #19c
+```
+
+每個 builder stub expose `NAME / SILVER_TABLE / BRONZE_TABLES / run()`,run() 全 raise `NotImplementedError(f"{NAME} builder 留 PR #19b/c 動工。...")`。orchestrator `BUILDERS` dict 統一註冊,動工時直接 import + replace stub。
+
+### C. bronze/dirty_marker.py(短期路徑 stub)
+
+`BRONZE_TO_SILVER` dict 對映 14 + 1(price_adjustment_events → 4 張 fwd 一起 dirty)= 15 entries。`mark_silver_dirty(db, bronze_table, rows)` API surface 定下,PR #19a 階段 no-op return 0。PR #19b/#19c 補實際 INSERT/UPDATE 邏輯;PR #20 trigger 上線後改 deprecated no-op。
+
+### D. 不啟用 trigger(PR #20 才 enable)
+
+per blueprint §5.7 step-1 vs step-2 設計:本 PR 只建 schema,Bronze→Silver trigger DDL 留 PR #20 一起 CREATE + ENABLE,避免 Bronze 雙寫期間每筆 upsert 都觸發級聯。
+
+### E. 驗證(用戶本機)
+
+```powershell
+git pull
+alembic upgrade head                                         # k0l1m2n3o4p5
+psql $env:DATABASE_URL -c "\dt *_derived"                    # 13 張 *_derived
+psql $env:DATABASE_URL -c "\d institutional_daily_derived"   # 確認 dirty 欄位 + gov_bank_net
+psql $env:DATABASE_URL -c "\d price_daily_fwd"               # 確認新加 is_dirty/dirty_at
+
+# import 通驗證(沙箱已驗 import + 13 builders 全 raise NotImplementedError ✓)
+python -c "from silver import orchestrator; print(orchestrator.PHASE_7A_BUILDERS)"
+python -c "from silver.builders import BUILDERS; print(sorted(BUILDERS))"
+python -c "from bronze.dirty_marker import BRONZE_TO_SILVER; print(len(BRONZE_TO_SILVER))"
+
+alembic downgrade -1 && alembic upgrade head                # rollback smoke
+```
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`k0l1m2n3o4p5`
+- 14 張 Silver 表 schema 落地;13 builder stub + orchestrator skeleton 在 src/silver/
+- bronze/dirty_marker.py API surface 定;Bronze→Silver trigger 留 PR #20
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → **#19a ✅ → #19b ⏳ next** → #19c → #20
 
 ---
 
@@ -475,24 +565,32 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 user 本機驗證 PR #18 + 開 PR #19**。v1.10 lib + 4 script + alembic + verifier 已落地,
-> 等用戶本機 `alembic upgrade head` + `python scripts/verify_pr18_bronze.py` 5/5 OK 後 push。
+> **🎯 PR #19a scaffolding 已落地,本機驗證 + push 完接 PR #19b**。
+> PR #19a 全 additive(builder 全 raise NotImplementedError),用戶本機驗 alembic upgrade + import 通即可。
 
-1. **🎯 PR #18 本機驗證 + push**(本 session 完成 v1.10 code,user 本機跑驗證):
-   - `alembic upgrade head`(建 5 張 Bronze)
-   - `python scripts/reverse_pivot_institutional.py`(lib 化後重跑,對齊用戶本機 prototype 結果)
-   - `python scripts/verify_pr18_bronze.py`(5/5 OK)
+1. **🎯 PR #19a 本機驗證 + push**(本 session 完成 v1.11 scaffolding,user 本機跑驗證):
+   - `alembic upgrade head`(k0l1m2n3o4p5 — 14 張 *_derived + 3 fwd ALTER)
+   - `psql $env:DATABASE_URL -c "\dt *_derived"`(看 13 張)
+   - `python -c "from silver.builders import BUILDERS; print(sorted(BUILDERS))"`(13 個註冊)
    - `alembic downgrade -1 && alembic upgrade head`(rollback smoke)
-   - `git push -u origin claude/initial-setup-RhLKU`(或從 init-project-setup-yGset cherry-pick)
-2. **PR #19 動工**(Silver 14 表 + dirty queue + Bronze→Silver trigger),blueprint §十 PR #8(~3 天 work)
-   - 14 張 Silver `*_derived` 表(對應 PR #18 5 張 Bronze + B-1/B-2/B-4/B-5/B-6 共 11 張 Bronze 的派生)
-   - `silver/builders/*.py` per-table builder + `silver/orchestrator.py`
-   - Bronze→Silver dirty trigger DDL(blueprint §5.5;PR #18 已加註但 trigger 留 PR #19 才 activate)
-   - Phase 7a/7b/7c 排程整合
+   - `git push`(本 session 已 commit + push 到 init-project-setup-yGset)
+2. **PR #19b 動工**(5 個簡單 builder,因 Bronze 已 PR #18 落地有真資料可驗)
+   - `silver/builders/{institutional,valuation,day_trading,margin,foreign_holding}.py` 補實作
+   - 邏輯參考 `src/aggregators.py:aggregate_*` 正向 pivot,但要從 Bronze 讀 + 寫 Silver + reset dirty
+   - 驗證:builder 跑完後對 v2.0 legacy 表(institutional_daily 等)做 round-trip,等值 = 對(類似 verify_pr18_bronze 驗證思路)
 3. **PR #18.5 Option A 重抓 3 張表**(holding_shares_per / financial_statement / monthly_revenue)
-   - 3 張 Bronze 新 alembic migration `k0l1m2n3o4p5_pr18_5_bronze3_refetch.py`
+   - 3 張 Bronze 新 alembic migration
    - 用戶本機跑 30-40h FinMind 全量重抓
-   - 不阻塞 PR #19;PR #19 期間 Silver 對這 3 張用 legacy v2.0 fallback,等 PR #18.5 完成後切換
+   - 不阻塞 PR #19b;PR #19c 才需要這 3 張 Bronze 真資料
+4. **PR #19c 動工**(剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI)
+   - holding_shares_per / monthly_revenue / financial_statement(依 PR #18.5)
+   - taiex_index / us_market_index / exchange_rate / market_margin / business_indicator
+   - `silver/orchestrator.py` 補 asyncio.gather 7a 平行 + 7b 序列 + 7c 走 rust_bridge
+   - `src/main.py` 加 `silver phase 7a/7b/7c` 子命令
+   - `bronze/phase_executor.py` 從 src/phase_executor.py 拆出
+5. **PR #20 動工**(Bronze→Silver trigger CREATE + ENABLE)
+   - blueprint §5.5 DDL trg_mark_silver_dirty + 14 個 CREATE TRIGGER
+   - 砍 §5.6 短期補丁 post_process.invalidate_fwd_cache(PR #19c 起 dirty queue 接管)
 4. **v1.9 + v1.9.1 + v1.10 PR review + merge**(initial-setup-RhLKU 分支累積 ~30+ commit)。等 maintainer review,平行進行。
 5. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
 6. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
