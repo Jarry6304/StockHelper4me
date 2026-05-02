@@ -92,20 +92,19 @@ def _query_from_db(stock_list_cfg: StockListConfig, db: DBWriter) -> list[str]:
     conditions: list[str] = []
     params: list = []
 
-    # 市場類型篩選
+    # 市場類型篩選(v3.2 R-2:market_type → type)
     if stock_list_cfg.market_type:
         placeholders = ", ".join(["%s"] * len(stock_list_cfg.market_type))
-        conditions.append(f"market_type IN ({placeholders})")
+        conditions.append(f"type IN ({placeholders})")
         params.extend(stock_list_cfg.market_type)
 
-    # 排除已下市/下櫃
+    # 排除已下市/下櫃(v3.2 R-2:delist_date → delisting_date)
     if stock_list_cfg.exclude_delisted:
-        conditions.append("delist_date IS NULL")
+        conditions.append("delisting_date IS NULL")
 
-    # 排除 ETF（依命名慣例：股票代碼為 4 碼數字的通常是 ETF，
-    # 但更可靠的方式是看 industry 欄位）
+    # 排除 ETF(v3.2 R-2:industry → industry_category)
     if stock_list_cfg.exclude_etf:
-        conditions.append("(industry != 'ETF' OR industry IS NULL)")
+        conditions.append("(industry_category != 'ETF' OR industry_category IS NULL)")
 
     # 排除權證（台灣權證代碼通常為 6 碼，第 1 碼為 0）
     if stock_list_cfg.exclude_warrant:
@@ -123,11 +122,11 @@ def _query_from_db(stock_list_cfg: StockListConfig, db: DBWriter) -> list[str]:
         )
         params.append(stock_list_cfg.min_listing_days)
 
-    # 組裝 SQL
+    # 組裝 SQL(v3.2 R-2:stock_info → stock_info_ref)
     where_clause = " AND ".join(conditions) if conditions else "1=1"
     sql = f"""
         SELECT stock_id
-        FROM stock_info
+        FROM stock_info_ref
         WHERE {where_clause}
         ORDER BY stock_id
     """
