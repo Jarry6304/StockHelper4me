@@ -83,7 +83,6 @@ SELECT
     pae.stock_id,
     pae.event_type,
     pae.date,
-    pae.adjustment_factor,
     pae.volume_factor,
     CASE WHEN r.stock_id IS NULL THEN 'price_daily 缺' ELSE 'OK' END        AS price_daily_status,
     CASE WHEN f.stock_id IS NULL THEN 'price_daily_fwd 缺' ELSE 'OK' END    AS fwd_status
@@ -93,7 +92,7 @@ LEFT JOIN price_daily_fwd f ON f.market = pae.market AND f.stock_id = pae.stock_
 WHERE pae.event_type IN ('split', 'capital_reduction', 'par_value_change', 'capital_increase')
   AND (r.stock_id IS NULL OR f.stock_id IS NULL)
 ORDER BY pae.event_type, pae.date DESC
-LIMIT 30;
+LIMIT 50;
 
 
 \echo ''
@@ -104,7 +103,7 @@ LIMIT 30;
 SELECT
     stock_id, date, event_type,
     cash_dividend, stock_dividend,
-    adjustment_factor, volume_factor
+    volume_factor
 FROM price_adjustment_events
 WHERE stock_id = '6505'
 ORDER BY date DESC
@@ -117,9 +116,9 @@ LIMIT 20;
 \echo '##############################################################'
 
 SELECT
-    'stock_info'    AS table_name,
-    COUNT(*)        AS rows
-FROM stock_info WHERE stock_id = '6505'
+    'stock_info_ref'    AS table_name,
+    COUNT(*)            AS rows
+FROM stock_info_ref WHERE stock_id = '6505'
 UNION ALL
 SELECT 'price_daily', COUNT(*) FROM price_daily WHERE stock_id = '6505'
 UNION ALL
