@@ -23,7 +23,79 @@
   - `claude/collector-schema-mapping-2YF5U` / `claude/continue-work-dvkRv` / `claude/setup-agent-review-mcp-berOR`(v1.5/v1.6 探勘)
   - `claude/review-collector-spec-Gktcf`(早期 review 分支)
   - `collector`(早期 PR #4)
-- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 PR 開於 initial-setup-RhLKU 分支
+- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 + v1.13 PR 開於 initial-setup-RhLKU 分支
+
+---
+
+## v1.13 — PR #18.5 Bronze refetch 3 張 schema + dual-write entries(2026-05-02 後續)
+
+接 PR #19b 後處理 Option A 重抓的 3 張表(blueprint §八.1 + CLAUDE.md v1.10 §E follow-up)。
+原因 detail JSONB unpack 不可逆:
+- holding_shares_per:HoldingSharesLevel taxonomy 在 v2.0 detail 內,反推不知 level 完整集合
+- financial_statement:中→英 origin_name 對應在 pack 過程丟失
+- monthly_revenue:FinMind 1 row/股/月 不回更細粒度(其實可解 pivot 但保守歸 Option A)
+
+### A. alembic migration `l1m2n3o4p5q6_pr18_5_bronze3_refetch`
+
+3 張 Bronze raw 表:
+
+| Bronze | PK | 邏輯 |
+|---|---|---|
+| `holding_shares_per_tw` | (market, stock_id, date, holding_shares_level) | 1 row per level(field_mapper 直拷,無 aggregation) |
+| `financial_statement_tw` | (market, stock_id, date, event_type, origin_name) | event_type ∈ {income, balance, cashflow}— reuse pae convention,3 個 FinMind dataset 統一進這張 |
+| `monthly_revenue_tw` | (market, stock_id, date) | raw FinMind 欄名(revenue_year / revenue_month — 不在 Bronze 改名,Silver builder PR #19c 才 rename → revenue_yoy / revenue_mom) |
+
+每張加 `idx_<table>_stock_date_desc(stock_id, date DESC)` 給 PR #19c Silver builder。
+schema_pg.sql 同步附 DDL;coexist 模式,legacy v2.0 表 T0+21 後砍。
+
+### B. collector.toml dual-write 5 個新 entries
+
+| name | dataset | target_table | event_type | 備註 |
+|---|---|---|---|---|
+| holding_shares_per_v3 | TaiwanStockHoldingSharesPer | holding_shares_per_tw | — | 1 row/level |
+| monthly_revenue_v3 | TaiwanStockMonthRevenue | monthly_revenue_tw | — | raw FinMind 欄名 |
+| financial_income_v3 | TaiwanStockFinancialStatements | financial_statement_tw | `income` | 走 field_mapper 既有 event_type 注入機制 |
+| financial_balance_v3 | TaiwanStockBalanceSheet | financial_statement_tw | `balance` | 同上 |
+| financial_cashflow_v3 | TaiwanStockCashFlowsStatement | financial_statement_tw | `cashflow` | 同上 |
+
+per blueprint §八.2 dual-write 設計:v2.0 entries(holding_shares_per / monthly_revenue / financial_{income,balance,cashflow})保留 `enabled = true`,user 跑 `backfill --phases 5` 兩條 path 同時填,T0+21 後砍 v2.0。
+
+### C. ⚠️ 首次 backfill ~30-40h calendar-time
+
+新 5 個 entries 共 1700+ stocks × 21 年 segments @ 1600 reqs/h ≈ 30-40h。**user 規劃日曆時間**再跑首次 backfill。
+
+延後選項:把 5 個新 entries 的 `enabled` 改 false,等準備好再 true。
+
+### D. User 操作流程(本機)
+
+```powershell
+git pull
+alembic upgrade head                                     # l1m2n3o4p5q6 — 3 張 Bronze
+psql $env:DATABASE_URL -c "\dt *_tw"                     # 看到加 3 張(8 張總共)
+
+# 規劃 30-40h 後跑(也可先 --stocks 2330 smoke test 30 分鐘):
+python src/main.py backfill --phases 5 --stocks 2330    # 單股 smoke
+python src/main.py backfill --phases 5                   # 全市場(30-40h)
+
+# 驗證 row count:
+psql $env:DATABASE_URL -c "
+SELECT 'holding_shares_per_tw' AS t, COUNT(*) FROM holding_shares_per_tw
+UNION ALL SELECT 'financial_statement_tw', COUNT(*) FROM financial_statement_tw
+UNION ALL SELECT 'monthly_revenue_tw', COUNT(*) FROM monthly_revenue_tw
+"
+```
+
+### E. 沙箱限制
+
+- 沙箱無 FinMind 連線,無法跑驗證(pip install -e . + alembic upgrade 可在沙箱驗,但 backfill 必須本機)
+- alembic migration syntax 沙箱已驗 OK
+- collector.toml entries 結構對齊既有 v2.0 entries 的格式,user 本機跑 `python src/main.py validate` 應通
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`l1m2n3o4p5q6`(3 張 Bronze schema 已落,資料待 user 30-40h 重抓)
+- collector.toml dual-write 5 entries 上線(enabled=true)
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → **#18.5 ⏳ schema 落地待 user 重抓** → #19c → #20
 
 ---
 
@@ -648,18 +720,16 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 PR #19b code 已落地,user 本機驗 5/5 OK 後接 PR #19c / PR #18.5**。
-> 本 session 同時做:pyproject.toml(解 src layout import friction)+ 5 個 simple builder 實作 + verifier。
+> **🎯 PR #18.5 schema + dual-write entries 已落地,user 規劃 30-40h backfill 後接 PR #19c**。
+> #18.5 沒有沙箱可驗的部分(無 FinMind 連線),純 alembic + collector.toml 改動;backfill 是 calendar-time 阻塞。
 
-1. **🎯 PR #19b 本機驗證 + push**(本 session 完成 v1.12 code,user 本機跑驗證):
-   - `pip install -e .`(一次性,後續 `python -c "from silver ..."` 從任何路徑都通)
-   - `python scripts/verify_pr19b_silver.py`(5/5 OK 對 v2.0 legacy 等值)
-   - `psql $env:DATABASE_URL -c "SELECT COUNT(*) FROM institutional_daily_derived"` 等
+1. **🎯 PR #18.5 本機 backfill + push**(本 session 完成 v1.13 schema/config,user 本機跑重抓):
+   - `alembic upgrade head`(l1m2n3o4p5q6 — 3 張 Bronze schema)
+   - `python src/main.py backfill --phases 5 --stocks 2330`(smoke test ~5 分鐘)
+   - `python src/main.py backfill --phases 5`(全市場 30-40h)
+   - 驗證 3 張 Bronze row count
    - `git push`(本 session 已 commit + push 到 init-project-setup-yGset)
-2. **PR #18.5 Option A 重抓 3 張表**(holding_shares_per / financial_statement / monthly_revenue)
-   - 3 張 Bronze 新 alembic migration
-   - 用戶本機跑 30-40h FinMind 全量重抓
-   - 不阻塞 PR #19c 動工(其他 5 個 7a builder 不依賴這 3 張)
+2. **PR #19c 動工**(可與 PR #18.5 backfill 平行):剩 8 個 builder + orchestrator + Phase 7 CLI
 3. **PR #19c 動工**(剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI)
    - holding_shares_per / monthly_revenue / financial_statement(依 PR #18.5)
    - taiex_index / us_market_index / exchange_rate / market_margin / business_indicator
