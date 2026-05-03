@@ -420,6 +420,88 @@ aggregation  = "pack_financial"
 stmt_type    = "cashflow"
 notes        = "現金流量表"
 
+
+# =============================================================================
+# v3.2 PR #18.5 Bronze refetch dual-write entries(blueprint §八.1 Option A)
+# =============================================================================
+# 5 個 entry 對映 PR #18.5 alembic l1m2n3o4p5q6 落地的 3 張 Bronze raw 表。
+# 與上方 v2.0 entries 並存(dual-write window T0~T0+21 per blueprint §八.2),
+# 每次 backfill 時兩條 path 同時填,T0+21 後砍 v2.0 entries。
+#
+# 注意:首次跑 `python src/main.py backfill --phases 5` 會觸發 ~30-40h calendar-time
+# 重抓(1700+ stocks × 5 個新 entries × 21 年 segments @ 1600 reqs/h)。後續
+# incremental 模式只抓最近資料,負擔小。
+# 用戶想推遲首次重抓:把下面 5 個 enabled 改 false,等準備好再切回 true。
+
+# Bronze 1:holding_shares_per_tw — 1 row/level(無 aggregation)
+[[api]]
+name         = "holding_shares_per_v3"
+dataset      = "TaiwanStockHoldingSharesPer"
+param_mode   = "per_stock"
+target_table = "holding_shares_per_tw"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 365
+field_rename = {"HoldingSharesLevel" = "holding_shares_level"}
+notes        = "PR #18.5 v3.2 Bronze raw — 1 row per holding level(無 aggregation,detail JSONB 攤平到 PK 欄)"
+
+# Bronze 2-1:financial_income → financial_statement_tw,event_type='income'
+[[api]]
+name         = "financial_income_v3"
+dataset      = "TaiwanStockFinancialStatements"
+param_mode   = "per_stock"
+target_table = "financial_statement_tw"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 0
+field_rename = {}
+event_type   = "income"
+notes        = "PR #18.5 v3.2 Bronze raw 損益表 — 1 row per origin_name(無 aggregation)"
+
+# Bronze 2-2:financial_balance → financial_statement_tw,event_type='balance'
+[[api]]
+name         = "financial_balance_v3"
+dataset      = "TaiwanStockBalanceSheet"
+param_mode   = "per_stock"
+target_table = "financial_statement_tw"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 0
+field_rename = {}
+event_type   = "balance"
+notes        = "PR #18.5 v3.2 Bronze raw 資產負債表"
+
+# Bronze 2-3:financial_cashflow → financial_statement_tw,event_type='cashflow'
+[[api]]
+name         = "financial_cashflow_v3"
+dataset      = "TaiwanStockCashFlowsStatement"
+param_mode   = "per_stock"
+target_table = "financial_statement_tw"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 0
+field_rename = {}
+event_type   = "cashflow"
+notes        = "PR #18.5 v3.2 Bronze raw 現金流量表"
+
+# Bronze 3:monthly_revenue_tw — raw FinMind 欄名(無 detail JSONB)
+[[api]]
+name         = "monthly_revenue_v3"
+dataset      = "TaiwanStockMonthRevenue"
+param_mode   = "per_stock"
+target_table = "monthly_revenue_tw"
+phase        = 5
+enabled      = true
+is_backer    = true
+segment_days = 0
+field_rename = {}
+notes        = "PR #18.5 v3.2 Bronze raw 月營收 — raw 欄名(revenue_year/revenue_month,Silver builder 才 rename 為 yoy/mom)"
+
+
 # =============================================================================
 # Phase 6：MACRO（總體指標）
 # =============================================================================

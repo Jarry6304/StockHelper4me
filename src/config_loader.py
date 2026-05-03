@@ -323,16 +323,20 @@ def _validate(config: CollectorConfig) -> None:
     """
     errors: list[str] = []
 
-    # 規則 1：dataset 唯一性（同 dataset 不同 target_table 除外）
-    seen: dict[str, str] = {}  # dataset -> target_table
+    # 規則 1:(dataset, target_table) 組合不可重複
+    # 意圖(per docstring 註解):同一 dataset → 不同 target_table 允許(dual-write
+    # 場景,PR #18.5 後 v2.0 + v3.2 Bronze 並寫;原 code 寫反了 — 條件 `!=`
+    # 反而禁止 dual-write,2026-05-02 修為對齊 comment 意圖)
+    # 真正該防的是「兩個 entry 完全相同(dataset+target)」的 accidental dup
+    seen_pairs: set[tuple[str, str]] = set()
     for api in config.apis:
-        key = api.dataset
-        if key in seen and seen[key] != api.target_table:
+        key = (api.dataset, api.target_table)
+        if key in seen_pairs:
             errors.append(
-                f"規則1：dataset '{api.dataset}' 重複，"
-                f"且 target_table 不同（{seen[key]} vs {api.target_table}）"
+                f"規則1:(dataset, target_table) 組合重複:"
+                f"'{api.dataset}' → '{api.target_table}'(兩個 entry 完全一樣)"
             )
-        seen[key] = api.target_table
+        seen_pairs.add(key)
 
     for api in config.apis:
         # 規則 2：phase 合法範圍
