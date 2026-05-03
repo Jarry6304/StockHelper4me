@@ -1,23 +1,24 @@
 """
 silver/_common.py
 =================
-Silver builder 共用工具。
+Silver builder 共用工具(blueprint §三 builder 入口/出口契約 + helper)。
 
-PR #19a 落地:
-  - filter_to_trading_days(rows, trading_dates, label) — 從 src/aggregators.py 搬來,
-    給 institutional / institutional_market builder 用,過濾 FinMind 週六回的鬼資料
-  - SilverBuilder protocol — builder 共通介面契約
+PR #19a 落地:filter_to_trading_days + SilverBuilder protocol。
+PR #19b 補齊 4 個共用 helper(本檔):
+  - get_trading_dates(db) — 一次讀 trading_calendar 給 institutional builder 用
+  - fetch_bronze(db, table, stock_ids, where) — 統一 SELECT bronze 模式
+  - upsert_silver(db, table, rows, pk_cols) — UPSERT 包 is_dirty=FALSE / dirty_at=NULL
+  - reset_dirty(db, table, pks) — 顯式 reset(若 row 已存在 + 被 trigger 標 dirty)
 
-PR #19b 起會在這裡加:
-  - get_trading_dates(db) — 一次讀 trading_date_ref 給 builder 用
-  - select_dirty_pks(db, table) — pull dirty queue 的共通 SQL
-  - reset_dirty(db, table, pks) — 同 transaction reset is_dirty/dirty_at
+PR #19c 會在這裡再加:
+  - select_dirty_pks(db, silver_table, stock_ids) — pull dirty queue 的 SQL
+  - 若 builder 失敗,is_dirty 不 reset(對齊 cores_overview §7.5 dirty 契約)
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Iterable, Protocol, runtime_checkable
 
 logger = logging.getLogger("collector.silver._common")
 
@@ -38,9 +39,9 @@ class SilverBuilder(Protocol):
       4. UPSERT 到 *_derived(同 transaction reset is_dirty/dirty_at)
     """
 
-    name: str                # builder 唯一識別,e.g. "institutional"
-    silver_table: str        # 目標 Silver 表
-    bronze_tables: list[str] # 來源 Bronze 表(可多張)
+    NAME: str                # builder 唯一識別,e.g. "institutional"
+    SILVER_TABLE: str        # 目標 Silver 表
+    BRONZE_TABLES: list[str] # 來源 Bronze 表(可多張)
 
     def run(
         self,
@@ -54,7 +55,6 @@ class SilverBuilder(Protocol):
                 "name": str,
                 "rows_read": int,
                 "rows_written": int,
-                "rows_dirty_reset": int,
                 "elapsed_ms": int,
             }
         """
@@ -72,7 +72,7 @@ def filter_to_trading_days(
 ) -> list[dict[str, Any]]:
     """過濾掉 date 不在 trading_dates 集合內的 rows,並記錄被丟掉的日期。
 
-    安全閥:trading_dates 為空(trading_date_ref 還沒灌資料)時不過濾,
+    安全閥:trading_dates 為空(trading_calendar 還沒灌資料)時不過濾,
     避免把整批資料都當鬼資料丟掉。
 
     Note:
@@ -81,7 +81,7 @@ def filter_to_trading_days(
     """
     if not trading_dates:
         logger.warning(
-            f"[{label}] trading_dates 為空(trading_date_ref 表未填充?)"
+            f"[{label}] trading_dates 為空(trading_calendar 表未填充?)"
             f",跳過非交易日過濾"
         )
         return rows
@@ -100,3 +100,101 @@ def filter_to_trading_days(
             f"已過濾:{sorted(dropped_dates)}"
         )
     return kept
+
+
+# =============================================================================
+# PR #19b 新 helper
+# =============================================================================
+
+def get_trading_dates(db: Any) -> set[str]:
+    """從 trading_calendar 一次讀全部 date(string yyyy-mm-dd format)。
+
+    給 institutional builder 用(過濾 FinMind 週六鬼資料)。
+    若 trading_calendar 還沒填,回空 set,呼叫端的 filter 會走 safety bypass。
+    """
+    rows = db.query("SELECT date FROM trading_calendar")
+    return {str(r["date"]) for r in rows} if rows else set()
+
+
+def fetch_bronze(
+    db: Any,
+    table: str,
+    *,
+    stock_ids: list[str] | None = None,
+    where: str | None = None,
+    params: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """統一 SELECT Bronze 模式。stock_ids 與 where 兩條過濾路徑可合用(AND)。
+
+    回傳 dict list(psycopg dict_row)。caller 自行 transform 進 Silver shape。
+    """
+    sql = f"SELECT * FROM {table}"
+    where_parts = []
+    all_params: list[Any] = list(params) if params else []
+    if stock_ids:
+        placeholders = ",".join(["%s"] * len(stock_ids))
+        where_parts.append(f"stock_id IN ({placeholders})")
+        all_params.extend(stock_ids)
+    if where:
+        where_parts.append(f"({where})")
+    if where_parts:
+        sql += " WHERE " + " AND ".join(where_parts)
+    sql += " ORDER BY market, stock_id, date"
+    return db.query(sql, all_params if all_params else None)
+
+
+def upsert_silver(
+    db: Any,
+    table: str,
+    rows: list[dict[str, Any]],
+    pk_cols: list[str],
+    *,
+    batch_size: int = 1000,
+    reset_dirty_on_write: bool = True,
+) -> int:
+    """批次 UPSERT 到 Silver 表。回傳寫入列數。
+
+    reset_dirty_on_write=True(預設):每筆寫入時自動 set is_dirty=FALSE / dirty_at=NULL,
+    對應 builder 完成後重置 dirty queue 的契約(blueprint §三)。
+    若 row dict 沒明確帶 is_dirty / dirty_at,在這裡補上(讓 caller 不用每筆塞)。
+    """
+    if not rows:
+        return 0
+
+    if reset_dirty_on_write:
+        for r in rows:
+            r.setdefault("is_dirty", False)
+            r.setdefault("dirty_at", None)
+
+    total = 0
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        total += db.upsert(table, batch, pk_cols)
+    return total
+
+
+def reset_dirty(
+    db: Any,
+    table: str,
+    pks: list[dict[str, Any]],
+    pk_cols: Iterable[str],
+) -> int:
+    """顯式 reset 一批 PK 的 is_dirty / dirty_at(builder 完成後呼叫)。
+
+    用於 row 已 UPSERT 過(state 還在)但 dirty 標記是 trigger 後加的 case。
+    upsert_silver 預設 reset_dirty_on_write=True 已涵蓋大多數情境;
+    本 helper 保留給特殊路徑(如 builder 只 UPDATE 部分欄)用。
+    """
+    if not pks:
+        return 0
+    pk_list = list(pk_cols)
+    where_clause = " AND ".join(f"{c} = %s" for c in pk_list)
+    sql = (
+        f"UPDATE {table} SET is_dirty = FALSE, dirty_at = NULL "
+        f"WHERE {where_clause}"
+    )
+    affected = 0
+    for pk_row in pks:
+        params = [pk_row[c] for c in pk_list]
+        affected += db.update(sql, params)
+    return affected
