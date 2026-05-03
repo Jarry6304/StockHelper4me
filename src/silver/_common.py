@@ -5,7 +5,7 @@ Silver builder 共用工具(blueprint §三 builder 入口/出口契約 + helper
 
 PR #19a 落地:filter_to_trading_days + SilverBuilder protocol。
 PR #19b 補齊 4 個共用 helper(本檔):
-  - get_trading_dates(db) — 一次讀 trading_calendar 給 institutional builder 用
+  - get_trading_dates(db) — 一次讀 trading_date_ref 給 institutional builder 用
   - fetch_bronze(db, table, stock_ids, where) — 統一 SELECT bronze 模式
   - upsert_silver(db, table, rows, pk_cols) — UPSERT 包 is_dirty=FALSE / dirty_at=NULL
   - reset_dirty(db, table, pks) — 顯式 reset(若 row 已存在 + 被 trigger 標 dirty)
@@ -72,7 +72,7 @@ def filter_to_trading_days(
 ) -> list[dict[str, Any]]:
     """過濾掉 date 不在 trading_dates 集合內的 rows,並記錄被丟掉的日期。
 
-    安全閥:trading_dates 為空(trading_calendar 還沒灌資料)時不過濾,
+    安全閥:trading_dates 為空(trading_date_ref 還沒灌資料)時不過濾,
     避免把整批資料都當鬼資料丟掉。
 
     Note:
@@ -81,7 +81,7 @@ def filter_to_trading_days(
     """
     if not trading_dates:
         logger.warning(
-            f"[{label}] trading_dates 為空(trading_calendar 表未填充?)"
+            f"[{label}] trading_dates 為空(trading_date_ref 表未填充?)"
             f",跳過非交易日過濾"
         )
         return rows
@@ -107,12 +107,12 @@ def filter_to_trading_days(
 # =============================================================================
 
 def get_trading_dates(db: Any) -> set[str]:
-    """從 trading_calendar 一次讀全部 date(string yyyy-mm-dd format)。
+    """從 trading_date_ref 一次讀全部 date(string yyyy-mm-dd format)。
 
     給 institutional builder 用(過濾 FinMind 週六鬼資料)。
-    若 trading_calendar 還沒填,回空 set,呼叫端的 filter 會走 safety bypass。
+    若 trading_date_ref 還沒填,回空 set,呼叫端的 filter 會走 safety bypass。
     """
-    rows = db.query("SELECT date FROM trading_calendar")
+    rows = db.query("SELECT date FROM trading_date_ref")
     return {str(r["date"]) for r in rows} if rows else set()
 
 
