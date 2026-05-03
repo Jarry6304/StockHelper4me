@@ -18,6 +18,8 @@ PR #19c 會在這裡再加:
 from __future__ import annotations
 
 import logging
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Iterable, Protocol, runtime_checkable
 
 logger = logging.getLogger("collector.silver._common")
@@ -67,7 +69,7 @@ class SilverBuilder(Protocol):
 
 def filter_to_trading_days(
     rows: list[dict[str, Any]],
-    trading_dates: set[str],
+    trading_dates: set,
     label: str,
 ) -> list[dict[str, Any]]:
     """過濾掉 date 不在 trading_dates 集合內的 rows,並記錄被丟掉的日期。
@@ -106,14 +108,17 @@ def filter_to_trading_days(
 # PR #19b 新 helper
 # =============================================================================
 
-def get_trading_dates(db: Any) -> set[str]:
-    """從 trading_date_ref 一次讀全部 date(string yyyy-mm-dd format)。
+def get_trading_dates(db: Any) -> set[date]:
+    """從 trading_date_ref 一次讀全部 date(回傳 datetime.date 物件 set)。
 
     給 institutional builder 用(過濾 FinMind 週六鬼資料)。
     若 trading_date_ref 還沒填,回空 set,呼叫端的 filter 會走 safety bypass。
+
+    Note:psycopg 對 PG DATE 欄位回 datetime.date 物件,Bronze 讀進來的 date 也是
+    date 物件;set 保持 date 型別,filter 用 `d in trading_dates` 自然比對。
     """
     rows = db.query("SELECT date FROM trading_date_ref")
-    return {str(r["date"]) for r in rows} if rows else set()
+    return {r["date"] for r in rows} if rows else set()
 
 
 def fetch_bronze(
@@ -157,6 +162,10 @@ def upsert_silver(
     reset_dirty_on_write=True(預設):每筆寫入時自動 set is_dirty=FALSE / dirty_at=NULL,
     對應 builder 完成後重置 dirty queue 的契約(blueprint §三)。
     若 row dict 沒明確帶 is_dirty / dirty_at,在這裡補上(讓 caller 不用每筆塞)。
+
+    對 dict-valued 欄(典型 = `detail` JSONB)自動把內容轉 JSON-safe 型別
+    (Decimal → float / date → ISO str),解 psycopg 對 NUMERIC / DATE 回的
+    Decimal / date 物件 json.dumps 不認的問題。
     """
     if not rows:
         return 0
@@ -166,11 +175,34 @@ def upsert_silver(
             r.setdefault("is_dirty", False)
             r.setdefault("dirty_at", None)
 
+    # Walk dict-valued columns,把 Decimal / date 等轉 JSON-safe 型別
+    for r in rows:
+        for k, v in list(r.items()):
+            if isinstance(v, dict):
+                r[k] = _to_jsonb_safe(v)
+
     total = 0
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i + batch_size]
         total += db.upsert(table, batch, pk_cols)
     return total
+
+
+def _to_jsonb_safe(value: Any) -> Any:
+    """遞迴把 dict / list / scalar 轉成 JSON-safe 型別。
+
+    給 psycopg 自動 JSONB 序列化用 — Decimal / date / datetime 不在 Python
+    json stdlib 預設處理範圍,需先轉 float / ISO 字串。
+    """
+    if isinstance(value, dict):
+        return {k: _to_jsonb_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_jsonb_safe(v) for v in value]
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
 
 
 def reset_dirty(
