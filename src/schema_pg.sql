@@ -960,6 +960,8 @@ CREATE INDEX IF NOT EXISTS idx_financial_statement_tw_stock_date_desc
 
 
 -- 月營收(raw FinMind 欄名;Silver builder 才 rename revenue_year → revenue_yoy 等)
+-- create_time 用 TEXT(per PR #18.5 hotfix m2n3o4p5q6r7):FinMind 對某些 row 回 ""
+-- 不是 NULL,Bronze raw 保留原始字串,Silver builder cast 用 NULLIF(...)::TIMESTAMPTZ
 CREATE TABLE IF NOT EXISTS monthly_revenue_tw (
     market         TEXT NOT NULL,
     stock_id       TEXT NOT NULL,
@@ -968,7 +970,7 @@ CREATE TABLE IF NOT EXISTS monthly_revenue_tw (
     revenue_year   NUMERIC(10, 4),
     revenue_month  NUMERIC(10, 4),
     country        TEXT,
-    create_time    TIMESTAMPTZ,
+    create_time    TEXT,
     PRIMARY KEY (market, stock_id, date)
 );
 CREATE INDEX IF NOT EXISTS idx_monthly_revenue_tw_stock_date_desc
