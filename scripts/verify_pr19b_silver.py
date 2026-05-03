@@ -209,6 +209,32 @@ def main() -> int:
 
     db = create_writer()
     try:
+        # 0. Sanity:Bronze 全空時提早報錯,不要默默 0/5 FAIL(過去用戶踩過 trap:
+        #    PR #18 rollback smoke 會清空 Bronze,需先跑 verify_pr18_bronze.py --write 重填)
+        if not args.skip_build:
+            empty_bronzes: list[str] = []
+            for spec in VERIFY_SPECS:
+                bronze_table = spec.builder.BRONZE_TABLES[0]
+                row = db.query_one(f"SELECT COUNT(*) AS cnt FROM {bronze_table}")
+                if row and row["cnt"] == 0:
+                    empty_bronzes.append(bronze_table)
+            if empty_bronzes:
+                print()
+                print("=" * 80)
+                print("Bronze 表是空的,builder 會讀 0 行寫 0 行 → 全 FAIL。")
+                print("=" * 80)
+                print("空 Bronze 表:")
+                for t in empty_bronzes:
+                    print(f"  - {t}")
+                print()
+                print("修法:先跑 verify_pr18_bronze.py --write 從 v2.0 legacy 反推填回 Bronze:")
+                print()
+                print("  python scripts/verify_pr18_bronze.py --write")
+                print("  python scripts/verify_pr19b_silver.py")
+                print()
+                print("(常見成因:alembic downgrade -1 rollback smoke 會 DROP 5 張 Bronze)")
+                return 1
+
         # 1. 跑 5 個 builder(除非 --skip-build)
         if not args.skip_build:
             print("=" * 80)
