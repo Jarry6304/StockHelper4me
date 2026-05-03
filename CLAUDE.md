@@ -100,7 +100,8 @@ psql $env:DATABASE_URL -c "\dt *_derived"                    # 13 張 *_derived
 psql $env:DATABASE_URL -c "\d institutional_daily_derived"   # 確認 dirty 欄位 + gov_bank_net
 psql $env:DATABASE_URL -c "\d price_daily_fwd"               # 確認新加 is_dirty/dirty_at
 
-# import 通驗證(沙箱已驗 import + 13 builders 全 raise NotImplementedError ✓)
+# ⚠️ src layout:python -c 從 repo root 跑要設 PYTHONPATH(或之後 PR 補 pyproject.toml + pip install -e .)
+$env:PYTHONPATH = "src"
 python -c "from silver import orchestrator; print(orchestrator.PHASE_7A_BUILDERS)"
 python -c "from silver.builders import BUILDERS; print(sorted(BUILDERS))"
 python -c "from bronze.dirty_marker import BRONZE_TO_SILVER; print(len(BRONZE_TO_SILVER))"
