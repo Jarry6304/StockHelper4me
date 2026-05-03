@@ -920,6 +920,62 @@ CREATE INDEX IF NOT EXISTS idx_price_monthly_fwd_dirty
 
 
 -- =============================================================================
+-- v3.2 PR #18.5 Bronze refetch 3 張(blueprint §八.1 Option A)
+-- =============================================================================
+-- 因 detail JSONB unpack 不可逆(level taxonomy 未知 / 中→英 origin_name 對應丟失 /
+-- FinMind 月營收 1 row/股/月),3 張表走 Option A 從 FinMind 全量重抓 raw bytes
+-- (~30-40h calendar-time)。Coexist with v2.0 表(holding_shares_per /
+-- financial_statement / monthly_revenue);_legacy_v2 rename + DROP 留 T0+21 / T0+60。
+-- 對應 alembic l1m2n3o4p5q6 + collector.toml dual-write entries。
+
+-- 股權分散表(每 level 1 row;FinMind raw)
+CREATE TABLE IF NOT EXISTS holding_shares_per_tw (
+    market               TEXT NOT NULL,
+    stock_id             TEXT NOT NULL,
+    date                 DATE NOT NULL,
+    holding_shares_level TEXT NOT NULL,
+    people               BIGINT,
+    percent              NUMERIC(8, 4),
+    unit                 BIGINT,
+    PRIMARY KEY (market, stock_id, date, holding_shares_level)
+);
+CREATE INDEX IF NOT EXISTS idx_holding_shares_per_tw_stock_date_desc
+    ON holding_shares_per_tw (stock_id, date DESC);
+
+
+-- 財報三表合一(event_type ∈ income/balance/cashflow,reuse pae convention)
+CREATE TABLE IF NOT EXISTS financial_statement_tw (
+    market      TEXT NOT NULL,
+    stock_id    TEXT NOT NULL,
+    date        DATE NOT NULL,
+    event_type  TEXT NOT NULL,
+    type        TEXT,
+    origin_name TEXT NOT NULL,
+    value       NUMERIC(20, 4),
+    PRIMARY KEY (market, stock_id, date, event_type, origin_name),
+    CONSTRAINT chk_fs_tw_event_type CHECK (event_type IN ('income', 'balance', 'cashflow'))
+);
+CREATE INDEX IF NOT EXISTS idx_financial_statement_tw_stock_date_desc
+    ON financial_statement_tw (stock_id, date DESC);
+
+
+-- 月營收(raw FinMind 欄名;Silver builder 才 rename revenue_year → revenue_yoy 等)
+CREATE TABLE IF NOT EXISTS monthly_revenue_tw (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    revenue        NUMERIC(20, 2),
+    revenue_year   NUMERIC(10, 4),
+    revenue_month  NUMERIC(10, 4),
+    country        TEXT,
+    create_time    TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_monthly_revenue_tw_stock_date_desc
+    ON monthly_revenue_tw (stock_id, date DESC);
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 
