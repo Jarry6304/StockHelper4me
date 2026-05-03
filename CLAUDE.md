@@ -23,7 +23,89 @@
   - `claude/collector-schema-mapping-2YF5U` / `claude/continue-work-dvkRv` / `claude/setup-agent-review-mcp-berOR`(v1.5/v1.6 探勘)
   - `claude/review-collector-spec-Gktcf`(早期 review 分支)
   - `collector`(早期 PR #4)
-- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 PR 開於 initial-setup-RhLKU 分支
+- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 PR 開於 initial-setup-RhLKU 分支
+
+---
+
+## v1.12 — PR #19b Silver 5 builder + pyproject.toml(2026-05-02 後續)
+
+接 PR #19a scaffolding 後動工 PR #19b:5 個簡單 builder 從 stub 升實作,
+並一次解掉 src layout 的 import friction(pyproject.toml + pip install -e .)。
+
+### A. pyproject.toml(setuptools src layout)
+
+```
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where   = ["src"]
+include = ["silver*", "bronze*"]
+```
+
+`pip install -e .` 後:
+- silver / silver.builders / bronze 套件 importable
+- src/ 內 loose modules(api_client / db / main / phase_executor / ...)
+  也 importable(setuptools editable .pth 把 src/ 加進 sys.path)
+- 沙箱 + 用戶本機從 repo root 之外跑 `python -c "from silver ..."` 直接通,
+  不再需要 `$env:PYTHONPATH = "src"`
+
+alembic.ini `prepend_sys_path = .` 保留(讓 alembic env.py 仍可從 root 跑)。
+Console script entry point 暫不加(`python src/main.py` 仍是 CLI 入口),
+留待後續 PR 評估是否升級為 `tw-stock-collector` 全域 command。
+
+### B. 5 個 Silver builder 實作(institutional / margin / foreign_holding / day_trading / valuation)
+
+每個 builder 對應 PR #18 落地的 Bronze 表(已有真資料可驗 round-trip):
+
+| builder | Silver 寫入 | Bronze 來源 | 邏輯 |
+|---|---|---|---|
+| institutional | institutional_daily_derived | institutional_investors_tw | pivot 5 投資人 row → 1 寬 row(10 buy/sell);gov_bank_net=NULL(PR #19c) |
+| margin | margin_daily_derived | margin_purchase_short_sale_tw | 6 stored + detail JSONB 重 pack(8 keys)+ 3 margin_short_sales_* 別名 = short_*;3 SBL 欄 NULL(PR #19c 接 securities_lending_tw) |
+| foreign_holding | foreign_holding_derived | foreign_investor_share_tw | 2 stored + detail JSONB 重 pack(9 keys) |
+| day_trading | day_trading_derived | day_trading_tw | 2 stored + detail JSONB 重 pack(2 keys);day_trading_ratio 衍生欄留 PR #19c 7b |
+| valuation | valuation_daily_derived | valuation_per_tw | 3 stored 1:1;market_value_weight=NULL(PR #19c 跨表 join) |
+
+### C. silver/_common.py 補 4 個 helper(builder 共用)
+
+- `get_trading_dates(db)` — 一次讀 trading_calendar(institutional 過濾鬼資料用)
+- `fetch_bronze(db, table, stock_ids=, where=)` — 統一 SELECT Bronze
+- `upsert_silver(db, table, rows, pk_cols)` — 批次 UPSERT 包 is_dirty=FALSE / dirty_at=NULL
+- `reset_dirty(db, table, pks, pk_cols)` — 顯式 reset(備用,trigger 路徑會用)
+
+### D. 驗證器 `scripts/verify_pr19b_silver.py`
+
+5 個 builder 跑完(full_rebuild=True),對 v2.0 legacy 表逐 PK 比對:
+- stored cols 數值 1e-9 容差
+- detail JSONB normalize 後等值(reuse `_reverse_pivot_lib._values_equal`)
+- 排除 PR #19b 暫不填的 Silver 專屬欄(institutional.gov_bank_net /
+  valuation.market_value_weight / margin SBL 6 欄)
+
+預期 5/5 OK(對 v2.0 legacy 等值)。
+
+### E. 沙箱合成資料測試已通
+
+5 個 builder transform 邏輯通過合成資料測試:
+- institutional 4 row → 2 wide row(2 個 date,各 1 wide);
+- margin 16 cols 含 3 alias 對齊 short_*;
+- foreign_holding / day_trading detail JSONB 正確 pack;
+- valuation 3 cols + market_value_weight=NULL。
+
+### F. 用戶本機驗證(預期全綠)
+
+```powershell
+git pull
+pip install -e .                                       # 一次性,後續無需 PYTHONPATH
+alembic upgrade head                                   # k0 已落,no-op
+python scripts/verify_pr19b_silver.py                  # 5/5 OK 對 v2.0 legacy 等值
+psql $env:DATABASE_URL -c "SELECT COUNT(*) FROM institutional_daily_derived"
+```
+
+### 已知狀態(下次 session 起點)
+
+- 5 個 Silver 表寫入(對 v2.0 legacy 等值);8 個 builder + dirty queue + Phase 7 留 PR #19c
+- pyproject.toml 落地,sys.path 不再卡 src layout
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → **#19b ⏳ 待 user verify** → #19c → #20
 
 ---
 
@@ -100,8 +182,8 @@ psql $env:DATABASE_URL -c "\dt *_derived"                    # 13 張 *_derived
 psql $env:DATABASE_URL -c "\d institutional_daily_derived"   # 確認 dirty 欄位 + gov_bank_net
 psql $env:DATABASE_URL -c "\d price_daily_fwd"               # 確認新加 is_dirty/dirty_at
 
-# ⚠️ src layout:python -c 從 repo root 跑要設 PYTHONPATH(或之後 PR 補 pyproject.toml + pip install -e .)
-$env:PYTHONPATH = "src"
+# pyproject.toml 已落地(v1.12),只要跑過一次 pip install -e . 之後永久 importable
+pip install -e .                                            # 一次性,後續無需設 PYTHONPATH
 python -c "from silver import orchestrator; print(orchestrator.PHASE_7A_BUILDERS)"
 python -c "from silver.builders import BUILDERS; print(sorted(BUILDERS))"
 python -c "from bronze.dirty_marker import BRONZE_TO_SILVER; print(len(BRONZE_TO_SILVER))"
@@ -566,33 +648,31 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 PR #19a scaffolding 已落地,本機驗證 + push 完接 PR #19b**。
-> PR #19a 全 additive(builder 全 raise NotImplementedError),用戶本機驗 alembic upgrade + import 通即可。
+> **🎯 PR #19b code 已落地,user 本機驗 5/5 OK 後接 PR #19c / PR #18.5**。
+> 本 session 同時做:pyproject.toml(解 src layout import friction)+ 5 個 simple builder 實作 + verifier。
 
-1. **🎯 PR #19a 本機驗證 + push**(本 session 完成 v1.11 scaffolding,user 本機跑驗證):
-   - `alembic upgrade head`(k0l1m2n3o4p5 — 14 張 *_derived + 3 fwd ALTER)
-   - `psql $env:DATABASE_URL -c "\dt *_derived"`(看 13 張)
-   - `python -c "from silver.builders import BUILDERS; print(sorted(BUILDERS))"`(13 個註冊)
-   - `alembic downgrade -1 && alembic upgrade head`(rollback smoke)
+1. **🎯 PR #19b 本機驗證 + push**(本 session 完成 v1.12 code,user 本機跑驗證):
+   - `pip install -e .`(一次性,後續 `python -c "from silver ..."` 從任何路徑都通)
+   - `python scripts/verify_pr19b_silver.py`(5/5 OK 對 v2.0 legacy 等值)
+   - `psql $env:DATABASE_URL -c "SELECT COUNT(*) FROM institutional_daily_derived"` 等
    - `git push`(本 session 已 commit + push 到 init-project-setup-yGset)
-2. **PR #19b 動工**(5 個簡單 builder,因 Bronze 已 PR #18 落地有真資料可驗)
-   - `silver/builders/{institutional,valuation,day_trading,margin,foreign_holding}.py` 補實作
-   - 邏輯參考 `src/aggregators.py:aggregate_*` 正向 pivot,但要從 Bronze 讀 + 寫 Silver + reset dirty
-   - 驗證:builder 跑完後對 v2.0 legacy 表(institutional_daily 等)做 round-trip,等值 = 對(類似 verify_pr18_bronze 驗證思路)
-3. **PR #18.5 Option A 重抓 3 張表**(holding_shares_per / financial_statement / monthly_revenue)
+2. **PR #18.5 Option A 重抓 3 張表**(holding_shares_per / financial_statement / monthly_revenue)
    - 3 張 Bronze 新 alembic migration
    - 用戶本機跑 30-40h FinMind 全量重抓
-   - 不阻塞 PR #19b;PR #19c 才需要這 3 張 Bronze 真資料
-4. **PR #19c 動工**(剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI)
+   - 不阻塞 PR #19c 動工(其他 5 個 7a builder 不依賴這 3 張)
+3. **PR #19c 動工**(剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI)
    - holding_shares_per / monthly_revenue / financial_statement(依 PR #18.5)
    - taiex_index / us_market_index / exchange_rate / market_margin / business_indicator
+   - margin / valuation / institutional / day_trading 補 PR #19b 暫不填的衍生欄
+     (gov_bank_net / market_value_weight / SBL 6 欄 / day_trading_ratio)
    - `silver/orchestrator.py` 補 asyncio.gather 7a 平行 + 7b 序列 + 7c 走 rust_bridge
    - `src/main.py` 加 `silver phase 7a/7b/7c` 子命令
    - `bronze/phase_executor.py` 從 src/phase_executor.py 拆出
-5. **PR #20 動工**(Bronze→Silver trigger CREATE + ENABLE)
+4. **PR #20 動工**(Bronze→Silver trigger CREATE + ENABLE + price_adjustment_events 1:4 fanout 整合測試)
    - blueprint §5.5 DDL trg_mark_silver_dirty + 14 個 CREATE TRIGGER
    - 砍 §5.6 短期補丁 post_process.invalidate_fwd_cache(PR #19c 起 dirty queue 接管)
-4. **v1.9 + v1.9.1 + v1.10 PR review + merge**(initial-setup-RhLKU 分支累積 ~30+ commit)。等 maintainer review,平行進行。
+   - 整合測試:INSERT INTO price_adjustment_events → 4 fwd 表 is_dirty=TRUE
+5. **v1.9~v1.12 PR review + merge**(initial-setup-RhLKU 分支累積 ~40+ commit)。等 maintainer review,平行進行。
 5. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
 6. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
 7. **CLAUDE.md 章節重組**(本檔已超過 700 行,v1.4-v1.7 詳解可繼續搬 docs/claude_history.md)
