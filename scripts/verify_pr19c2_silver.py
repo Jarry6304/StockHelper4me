@@ -163,9 +163,11 @@ def main() -> int:
             empty: list[str] = []
             for spec in VERIFY_SPECS:
                 bt = spec.builder.BRONZE_TABLES[0]
+                # 用 = ANY(%s) 對 list,psycopg3 自動展 array;原 IN %s 會被 psycopg3
+                # 翻成 IN $1(single placeholder)PG 不收
                 row = db.query_one(
-                    f"SELECT COUNT(*) AS cnt FROM {bt} WHERE stock_id IN %s",
-                    [tuple(stock_ids)],
+                    f"SELECT COUNT(*) AS cnt FROM {bt} WHERE stock_id = ANY(%s)",
+                    [stock_ids],
                 )
                 if row and row["cnt"] == 0:
                     empty.append(bt)
