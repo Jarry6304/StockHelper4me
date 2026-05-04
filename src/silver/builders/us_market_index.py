@@ -49,9 +49,11 @@ def run(
     stock_ids: list[str] | None = None,
     full_rebuild: bool = False,
 ) -> dict[str, Any]:
+    """注意 stock_ids 對 market-level 表(stock_id ∈ {SPY, ^VIX})無意義,一律全讀。"""
     start = time.monotonic()
 
-    bronze = fetch_bronze(db, "market_index_us", stock_ids=stock_ids)
+    # 不 forward stock_ids — market_index_us 是美股指數表(SPY / ^VIX sentinel)
+    bronze = fetch_bronze(db, "market_index_us")
     silver = _build_silver_rows(bronze)
     written = upsert_silver(
         db, SILVER_TABLE, silver,

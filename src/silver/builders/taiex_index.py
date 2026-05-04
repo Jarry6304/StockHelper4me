@@ -51,9 +51,15 @@ def run(
     stock_ids: list[str] | None = None,
     full_rebuild: bool = False,
 ) -> dict[str, Any]:
+    """注意 stock_ids 對 market-level 表(stock_id ∈ {TAIEX, TPEx})無意義,一律全讀。
+
+    若 user 傳 --stocks 2330 給 silver phase 7a,本 builder 該照 read 全市場
+    指數(2330 不在 TAIEX/TPEx 集合內,如果 forward stock_ids 會空表)。
+    """
     start = time.monotonic()
 
-    bronze = fetch_bronze(db, "market_ohlcv_tw", stock_ids=stock_ids)
+    # 不 forward stock_ids — market_ohlcv_tw 是市場級指數表
+    bronze = fetch_bronze(db, "market_ohlcv_tw")
     silver = _build_silver_rows(bronze)
     written = upsert_silver(
         db, SILVER_TABLE, silver,
