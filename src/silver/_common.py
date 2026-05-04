@@ -128,10 +128,15 @@ def fetch_bronze(
     stock_ids: list[str] | None = None,
     where: str | None = None,
     params: list[Any] | None = None,
+    order_by: str = "market, stock_id, date",
 ) -> list[dict[str, Any]]:
     """統一 SELECT Bronze 模式。stock_ids 與 where 兩條過濾路徑可合用(AND)。
 
     回傳 dict list(psycopg dict_row)。caller 自行 transform 進 Silver shape。
+
+    order_by:預設 "market, stock_id, date" 對應 stock-level Bronze。market-level
+    表(exchange_rate / market_margin_maintenance / business_indicator_tw,沒
+    stock_id 欄)需明確傳 order_by 覆蓋,e.g. "market, date, currency"。
     """
     sql = f"SELECT * FROM {table}"
     where_parts = []
@@ -144,7 +149,7 @@ def fetch_bronze(
         where_parts.append(f"({where})")
     if where_parts:
         sql += " WHERE " + " AND ".join(where_parts)
-    sql += " ORDER BY market, stock_id, date"
+    sql += f" ORDER BY {order_by}"
     return db.query(sql, all_params if all_params else None)
 
 

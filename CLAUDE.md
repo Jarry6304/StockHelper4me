@@ -23,7 +23,64 @@
   - `claude/collector-schema-mapping-2YF5U` / `claude/continue-work-dvkRv` / `claude/setup-agent-review-mcp-berOR`(v1.5/v1.6 探勘)
   - `claude/review-collector-spec-Gktcf`(早期 review 分支)
   - `collector`(早期 PR #4)
-- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 + v1.13 PR 開於 initial-setup-RhLKU 分支
+- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 + v1.13 + v1.14 PR 開於 initial-setup-RhLKU 分支
+
+---
+
+## v1.14 — PR #19c-1 Silver 5 market-level builder(2026-05-04)
+
+接 PR #18.5 schema + smoke test 後動工 PR #19c。完整 PR #19c 太大切兩段:
+
+| 切片 | 範圍 | 估時 |
+|---|---|---|
+| **PR #19c-1 本 session** ✅ | 5 個 market-level builder(taiex_index / us_market_index / exchange_rate / market_margin / business_indicator)+ verify_pr19c_silver.py + fetch_bronze 補 order_by 參數 | ~半天 |
+| PR #19c-2 下 session | 3 個 PR #18.5 依賴 builder(holding_shares_per / monthly_revenue / financial_statement)+ orchestrator 真實邏輯 + CLI 整合 + bronze/phase_executor 拆段 + PR #19b 衍生欄補齊(gov_bank_net / SBL 6 / market_value_weight / day_trading_ratio) | ~1 天 |
+
+### A. 5 個 Silver builder 實作
+
+| builder | Silver 寫入 | Bronze 來源 | 邏輯 |
+|---|---|---|---|
+| taiex_index | taiex_index_derived | market_ohlcv_tw | OHLCV 1:1 + detail JSONB 直拷 |
+| us_market_index | us_market_index_derived | market_index_us | OHLCV 1:1(v2.0 legacy 表名,v3.2 後可能 rename us_market_index_tw) |
+| exchange_rate | exchange_rate_derived | exchange_rate(legacy)| PK 含 currency 維度 (market, date, currency);rate + detail 1:1 |
+| market_margin | market_margin_maintenance_derived | market_margin_maintenance | ratio 1:1;`total_margin_purchase_balance` / `total_short_sale_balance` 衍生欄 = NULL(留 PR #19c-2 接 TaiwanStockTotalMarginPurchaseShortSale Bronze) |
+| business_indicator | business_indicator_derived | business_indicator_tw | 5 stored 1:1(`leading_indicator` 等避 PG 保留字後綴 PR #19a hotfix);PK 從 (market, date) → (market, '_market_', date)注入 sentinel stock_id |
+
+### B. fetch_bronze 加 order_by 參數
+
+`silver/_common.py:fetch_bronze` 原本 ORDER BY 寫死 `market, stock_id, date`,對 market-level 表(無 stock_id 欄)會炸。新增 order_by kwarg 預設保留舊行為,market-level 三 builder 明確傳 `"market, date"` 或 `"market, date, currency"` 覆蓋。
+
+### C. 驗證器 scripts/verify_pr19c_silver.py
+
+對齊 PR #19b verifier 模式,但比對對象從 v2.0 legacy 表改成 Bronze(因為 5 個 market-level Silver 是 1:1 直拷 Bronze,無 pivot/pack 過程):
+
+- taiex_index / us_market_index / exchange_rate:OHLCV / rate + detail JSONB 等值
+- market_margin:ratio 等值;skip 2 個 PR #19c-1 暫不填的衍生欄
+- business_indicator:Bronze (market, date) ←→ Silver (market, '_market_', date),透過 `silver_stock_id_const = "_market_"` 在比對時加 sentinel 對齊
+
+加 Bronze 空表 sanity check(對齊 verify_pr19b 同 trap)— 各表來源不同(market_ohlcv_tw 在 Phase 1 / market_index_us 在 Phase 6),空表時直接點明該跑哪個 Phase。
+
+### D. 沙箱合成資料測試
+
+5 個 builder transform 邏輯通過合成資料測試:
+- taiex_index / us_market_index OHLCV pass-through ✓
+- exchange_rate PK 含 currency ✓
+- market_margin 2 衍生欄 = None ✓
+- business_indicator stock_id = '_market_' sentinel + Decimal value pass-through ✓
+
+### E. 用戶本機驗證(預期全綠)
+
+```powershell
+git pull
+pip install -e .                                       # 已落地,no-op
+python scripts/verify_pr19c_silver.py                  # 5/5 OK
+```
+
+### 已知狀態(下次 session 起點)
+
+- 5 個 market-level Silver 表寫入 ✓
+- 3 個 PR #18.5 依賴 builder + orchestrator 真實邏輯 + CLI + 衍生欄補齊留 PR #19c-2
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️ schema OK / smoke test 通 → **#19c-1 ⏳ 待 user verify** → #19c-2 → #20
 
 ---
 
@@ -720,16 +777,23 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 PR #18.5 schema + dual-write entries 已落地,user 規劃 30-40h backfill 後接 PR #19c**。
-> #18.5 沒有沙箱可驗的部分(無 FinMind 連線),純 alembic + collector.toml 改動;backfill 是 calendar-time 阻塞。
+> **🎯 PR #19c-1 5 個 market-level builder 已落地,user verify 後接 PR #19c-2**。
+> 5 個 market-level builder 對齊 Bronze 1:1,pyproject 已落地不再卡 import friction。
 
-1. **🎯 PR #18.5 本機 backfill + push**(本 session 完成 v1.13 schema/config,user 本機跑重抓):
-   - `alembic upgrade head`(l1m2n3o4p5q6 — 3 張 Bronze schema)
-   - `python src/main.py backfill --phases 5 --stocks 2330`(smoke test ~5 分鐘)
-   - `python src/main.py backfill --phases 5`(全市場 30-40h)
-   - 驗證 3 張 Bronze row count
+1. **🎯 PR #19c-1 本機驗證 + push**(本 session 完成 v1.14 code,user 本機跑驗證):
+   - `python scripts/verify_pr19c_silver.py`(5/5 OK 對 Bronze 等值)
    - `git push`(本 session 已 commit + push 到 init-project-setup-yGset)
-2. **PR #19c 動工**(可與 PR #18.5 backfill 平行):剩 8 個 builder + orchestrator + Phase 7 CLI
+2. **PR #19c-2 動工**(剩 3 個 PR #18.5 依賴 builder + orchestrator + CLI 整合)
+   - 3 個 builder(holding_shares_per / monthly_revenue / financial_statement)— Bronze 已 PR #18.5 smoke test 3 stocks 通過,可開發 + 驗 round-trip
+   - `silver/orchestrator.py` 補 asyncio.gather 7a 平行 + 7b 序列 + 7c 走 rust_bridge
+   - `src/main.py` 加 `silver phase 7a/7b/7c` 子命令
+   - `bronze/phase_executor.py` 從 src/phase_executor.py 拆出
+   - 補 PR #19b / PR #19c-1 暫不填的衍生欄:
+     - institutional.gov_bank_net(需新增 GovernmentBankBuySell Bronze 來源)
+     - margin SBL 6 cols(integrate securities_lending_tw aggregation)
+     - valuation.market_value_weight(join price_daily + stock_info_ref 發行股數)
+     - day_trading_ratio(7b 階段 join price_daily volume)
+     - market_margin total_*_balance 2 cols(新增 TotalMarginPurchaseShortSale Bronze)
 3. **PR #19c 動工**(剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI)
    - holding_shares_per / monthly_revenue / financial_statement(依 PR #18.5)
    - taiex_index / us_market_index / exchange_rate / market_margin / business_indicator
