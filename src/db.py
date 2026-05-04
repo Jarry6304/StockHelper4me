@@ -732,6 +732,18 @@ def create_writer(connection_url: str | None = None) -> DBWriter:
     Raises:
         RuntimeError: 環境變數缺失且未提供 connection_url
     """
+    # 鏡像 alembic/env.py:載 .env 檔(若存在),讓 verify_*.py / main.py 等
+    # 入口不必各自手動 load_dotenv。load_dotenv 預設不覆蓋已存在的環境變數,
+    # 所以 PowerShell `$env:DATABASE_URL=...` 仍優先。
+    try:
+        from dotenv import load_dotenv
+
+        env_path = Path(__file__).resolve().parent.parent / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
+    except ImportError:
+        pass  # python-dotenv 是 hard dep,但 import 失敗時退回純 os.environ
+
     if os.getenv("TWSTOCK_USE_SQLITE") == "1":
         sqlite_path = os.getenv("SQLITE_PATH", "data/tw_stock.db")
         return SqliteWriter(sqlite_path)
