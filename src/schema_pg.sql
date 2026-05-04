@@ -978,6 +978,169 @@ CREATE INDEX IF NOT EXISTS idx_monthly_revenue_tw_stock_date_desc
 
 
 -- =============================================================================
+-- Bronze→Silver dirty trigger(PR #20 / alembic n3o4p5q6r7s8;blueprint v3.2 §5.5)
+-- =============================================================================
+-- 6 個 trigger function + 15 個 trigger;Bronze upsert 自動 mark Silver row dirty。
+-- 詳細說明 + Bronze ↔ Silver 對映 + PK shape 變體見 alembic migration header。
+
+-- 通用 3-col PK (market, stock_id, date) Silver 表;TG_ARGV[0] = silver 表名
+CREATE OR REPLACE FUNCTION trg_mark_silver_dirty()
+RETURNS TRIGGER AS $$
+DECLARE
+    silver_table TEXT := TG_ARGV[0];
+BEGIN
+    EXECUTE format(
+        'INSERT INTO %I (market, stock_id, date, is_dirty, dirty_at)
+         VALUES ($1, $2, $3, TRUE, NOW())
+         ON CONFLICT (market, stock_id, date) DO UPDATE
+            SET is_dirty = TRUE, dirty_at = NOW()',
+        silver_table
+    ) USING NEW.market, NEW.stock_id, NEW.date;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- financial_statement:Bronze.event_type ↔ Silver.type(4-col PK)
+CREATE OR REPLACE FUNCTION trg_mark_financial_stmt_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO financial_statement_derived
+        (market, stock_id, date, type, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, NEW.stock_id, NEW.date, NEW.event_type, TRUE, NOW())
+    ON CONFLICT (market, stock_id, date, type) DO UPDATE
+        SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- exchange_rate:PK 含 currency 不含 stock_id
+CREATE OR REPLACE FUNCTION trg_mark_exchange_rate_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO exchange_rate_derived
+        (market, date, currency, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, NEW.date, NEW.currency, TRUE, NOW())
+    ON CONFLICT (market, date, currency) DO UPDATE
+        SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- market_margin:2-col PK,無 stock_id
+CREATE OR REPLACE FUNCTION trg_mark_market_margin_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO market_margin_maintenance_derived
+        (market, date, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, NEW.date, TRUE, NOW())
+    ON CONFLICT (market, date) DO UPDATE
+        SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- business_indicator:Bronze 2-col PK → Silver 3-col PK 用 sentinel '_market_'
+CREATE OR REPLACE FUNCTION trg_mark_business_indicator_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO business_indicator_derived
+        (market, stock_id, date, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, '_market_', NEW.date, TRUE, NOW())
+    ON CONFLICT (market, stock_id, date) DO UPDATE
+        SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- price_adjustment_events:該 stock_id 全段歷史 fwd 4 張表整檔 dirty
+-- 理由:multiplier 倒推設計,新除權息會回頭改全段歷史值,不只標單日
+CREATE OR REPLACE FUNCTION trg_mark_fwd_silver_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE price_daily_fwd
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    UPDATE price_weekly_fwd
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    UPDATE price_monthly_fwd
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    UPDATE price_limit_merge_events
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 10 個 generic trigger
+CREATE TRIGGER mark_institutional_derived_dirty
+    AFTER INSERT OR UPDATE ON institutional_investors_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('institutional_daily_derived');
+
+CREATE TRIGGER mark_margin_derived_from_margin_dirty
+    AFTER INSERT OR UPDATE ON margin_purchase_short_sale_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('margin_daily_derived');
+
+CREATE TRIGGER mark_margin_derived_from_sbl_dirty
+    AFTER INSERT OR UPDATE ON securities_lending_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('margin_daily_derived');
+
+CREATE TRIGGER mark_foreign_holding_derived_dirty
+    AFTER INSERT OR UPDATE ON foreign_investor_share_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('foreign_holding_derived');
+
+CREATE TRIGGER mark_holding_shares_per_derived_dirty
+    AFTER INSERT OR UPDATE ON holding_shares_per_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('holding_shares_per_derived');
+
+CREATE TRIGGER mark_day_trading_derived_dirty
+    AFTER INSERT OR UPDATE ON day_trading_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('day_trading_derived');
+
+CREATE TRIGGER mark_valuation_derived_dirty
+    AFTER INSERT OR UPDATE ON valuation_per_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('valuation_daily_derived');
+
+CREATE TRIGGER mark_monthly_revenue_derived_dirty
+    AFTER INSERT OR UPDATE ON monthly_revenue_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('monthly_revenue_derived');
+
+CREATE TRIGGER mark_taiex_index_derived_dirty
+    AFTER INSERT OR UPDATE ON market_ohlcv_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('taiex_index_derived');
+
+CREATE TRIGGER mark_us_market_index_derived_dirty
+    AFTER INSERT OR UPDATE ON market_index_us
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('us_market_index_derived');
+
+-- 5 個 special trigger
+CREATE TRIGGER mark_financial_stmt_derived_dirty
+    AFTER INSERT OR UPDATE ON financial_statement_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_financial_stmt_dirty();
+
+CREATE TRIGGER mark_exchange_rate_derived_dirty
+    AFTER INSERT OR UPDATE ON exchange_rate
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_exchange_rate_dirty();
+
+CREATE TRIGGER mark_market_margin_derived_dirty
+    AFTER INSERT OR UPDATE ON market_margin_maintenance
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_market_margin_dirty();
+
+CREATE TRIGGER mark_business_indicator_derived_dirty
+    AFTER INSERT OR UPDATE ON business_indicator_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_business_indicator_dirty();
+
+CREATE TRIGGER mark_fwd_dirty_on_event
+    AFTER INSERT OR UPDATE ON price_adjustment_events
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_fwd_silver_dirty();
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 

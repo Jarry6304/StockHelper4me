@@ -236,11 +236,9 @@ class PhaseExecutor:
                     # PK 從 schema 動態查（DBWriter._table_pks），schema 是 single source of truth
                     pks = self.db._table_pks(api_config.target_table)
                     self.db.upsert(api_config.target_table, rows, primary_keys=pks)
-                    # P0-7 短期補丁(r3.1):price_adjustment_events 寫入後 reset
-                    # stock_sync_status.fwd_adj_valid 觸發 Phase 4 重算
-                    if api_config.target_table == "price_adjustment_events":
-                        from post_process import invalidate_fwd_cache
-                        invalidate_fwd_cache(self.db, stock_id)
+                    # PR #20:trg_mark_fwd_silver_dirty 接管 fwd 全段歷史 dirty 標記
+                    # (price_adjustment_events 寫入 → fwd 4 表 is_dirty=TRUE)。
+                    # 原本的 invalidate_fwd_cache 短期補丁路徑見 post_process.py(deprecated)。
 
                 # 更新進度
                 status = "empty" if not rows else "completed"

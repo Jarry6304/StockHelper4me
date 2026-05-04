@@ -132,7 +132,9 @@ class SilverOrchestrator:
         for phase in phases:
             logger.info(f"[Phase {phase}] start")
             if phase == "7c":
-                results[phase] = await self._run_7c(stock_ids=stock_ids)
+                results[phase] = await self._run_7c(
+                    stock_ids=stock_ids, full_rebuild=full_rebuild,
+                )
             else:
                 results[phase] = self._run_builders(
                     PHASE_GROUPS[phase],
@@ -191,16 +193,59 @@ class SilverOrchestrator:
                 # 失敗的 builder 不 reset is_dirty,下次 phase 再被選中重試。
         return out
 
-    async def _run_7c(self, *, stock_ids: list[str] | None) -> dict[str, Any]:
-        """7c:呼叫 rust_bridge 跑 tw_market_core 後復權 + 漲跌停 merge。"""
+    async def _run_7c(
+        self, *, stock_ids: list[str] | None, full_rebuild: bool,
+    ) -> dict[str, Any]:
+        """7c:呼叫 rust_bridge 跑 tw_market_core 後復權 + 漲跌停 merge。
+
+        stock_ids 解讀(PR #20 dirty queue 接管後):
+          - 用戶明確傳 list:pass through 給 Rust(manual ops / 開發測試)
+          - None + full_rebuild=False:從 `price_daily_fwd.is_dirty=TRUE` 拉
+            DISTINCT stock_id 派 Rust(走 dirty queue;blueprint §5.7 設計)
+          - None + full_rebuild=True:從 `price_daily_fwd` 拉所有 DISTINCT stock_id
+            派 Rust(全市場重算)
+
+        移除前路徑(PR #19):None 直接 pass None 給 Rust → Rust 內部 SELECT
+        `stock_sync_status.fwd_adj_valid=0`。PR #20 後該路徑由 trigger +
+        orchestrator 接管,Rust 不再依賴 fwd_adj_valid。
+        """
         if self.rust_bridge is None:
             raise RuntimeError(
                 "Phase 7c 需要 rust_bridge,但 SilverOrchestrator 初始化時未傳。"
                 "請在建構時傳 RustBridge instance。"
             )
-        logger.info("  [7c] dispatching to rust_bridge.run_phase4(...)")
+
+        if stock_ids is None:
+            stock_ids = self._fetch_dirty_fwd_stocks(full_rebuild=full_rebuild)
+            if not stock_ids:
+                msg = ("無 dirty stock(全市場重算)" if full_rebuild
+                       else "price_daily_fwd.is_dirty queue 為空")
+                logger.info(f"  [7c] {msg},skip Rust dispatch")
+                return {"rust": None, "status": "ok", "reason": "no_stocks", "n_stocks": 0}
+
+        logger.info(
+            f"  [7c] dispatching to rust_bridge.run_phase4(stocks={len(stock_ids)})"
+        )
         rust_result = await self.rust_bridge.run_phase4(
             stock_ids=stock_ids,
             mode="backfill",
         )
-        return {"rust": rust_result, "status": "ok"}
+        return {
+            "rust": rust_result, "status": "ok", "n_stocks": len(stock_ids),
+        }
+
+    def _fetch_dirty_fwd_stocks(self, *, full_rebuild: bool) -> list[str]:
+        """從 price_daily_fwd 拉待算 stock_id 清單(PR #20 dirty queue pull)。
+
+        full_rebuild=False:`WHERE is_dirty = TRUE`(走 dirty queue)
+        full_rebuild=True: 全部 DISTINCT stock_id(全市場重算;ignore is_dirty)
+
+        PostgresWriter 走 query() 回 list[dict],抽出 stock_id 欄。
+        """
+        sql = (
+            "SELECT DISTINCT stock_id FROM price_daily_fwd"
+            + ("" if full_rebuild else " WHERE is_dirty = TRUE")
+            + " ORDER BY stock_id"
+        )
+        rows = self.db.query(sql)
+        return [r["stock_id"] for r in rows]

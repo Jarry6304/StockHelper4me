@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.16，最新 2026-05-04）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.17，最新 2026-05-04）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-RhLKU`，alembic head `m2n3o4p5q6r7_pr18_5_create_time_text`（2026-05-04）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-RhLKU`，alembic head `n3o4p5q6r7s8_pr20_silver_dirty_triggers`（2026-05-04）。
 
 ---
 
@@ -55,6 +55,7 @@ python scripts/verify_pr18_bronze.py        # Bronze 5 張反推 round-trip(5/5 
 python scripts/verify_pr19b_silver.py       # Silver 5 個簡單 builder 對 v2.0 legacy 等值
 python scripts/verify_pr19c_silver.py       # Silver 5 個 market-level builder
 python scripts/verify_pr19c2_silver.py      # Silver 3 個 PR #18.5 依賴 builder(預設 1101,2317,2330)
+python scripts/verify_pr20_triggers.py      # PR #20:Bronze→Silver dirty trigger 整合測試(15 trigger)
 python scripts/test_28_apis.py              # 28 支 API 連線健檢(需 FINMIND_TOKEN)
 python scripts/inspect_db.py 2330           # ⚠️ v1.6 之前的 SQLite hardcode,v2.0 後不可用,改用 check_all_tables.py
 ```
@@ -166,7 +167,121 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ⏳ next`。下個 session 主任務見「下次 session 建議優先序」段。
+當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ⏳ 待 user verify → #21`。下個 session 主任務見「下次 session 建議優先序」段。
+
+---
+
+## v1.17 — PR #20 Bronze→Silver dirty trigger ENABLE(2026-05-04)
+
+接 PR #19c-3 後動工 PR #20(blueprint v3.2 r1 §5.5 + §5.7)。
+PR #19a 落了 14 張 Silver `*_derived` schema + dirty 欄位 + partial index 但
+**不啟用 trigger**(避免 Bronze 雙寫期間每筆 upsert 都觸發級聯)。本 PR 把
+Bronze→Silver dirty trigger 接上,讓 dirty queue 真正生效。
+
+### A. alembic migration `n3o4p5q6r7s8_pr20_silver_dirty_triggers`
+
+6 個 trigger function + 15 個 CREATE TRIGGER。Bronze 表 PK shape 不齊,4 個變體
++ fwd 全段歷史 mark 各自一個 function。
+
+| function | 涵蓋 | 形狀 |
+|---|---|---|
+| `trg_mark_silver_dirty(silver_table)` | 10 generic 3-col | (market, stock_id, date) UPSERT 進 silver_table |
+| `trg_mark_financial_stmt_dirty()` | financial_statement | 4-col PK,Bronze.event_type ↔ Silver.type |
+| `trg_mark_exchange_rate_dirty()` | exchange_rate | (market, date, currency)無 stock_id |
+| `trg_mark_market_margin_dirty()` | market_margin_maintenance | (market, date)2-col |
+| `trg_mark_business_indicator_dirty()` | business_indicator | Bronze 2-col → Silver 注 sentinel `'_market_'` |
+| `trg_mark_fwd_silver_dirty()` | price_adjustment_events | UPDATE 4 fwd 表整檔 dirty(全段歷史 mark) |
+
+15 個 trigger:10 generic + 5 special。pae 1:4 fanout 處理「multiplier 倒推設計,
+新除權息會回頭改全段歷史值」的硬約束。
+
+### B. §5.6 短期補丁路徑 deprecate + cut
+
+- `post_process.invalidate_fwd_cache`:加 `DeprecationWarning`(寫入仍照舊以
+  避免 emergency manual ops 直接斷掉),PR #21 完全移除。
+- `phase_executor._run_phase`:price_adjustment_events 寫入後**移除**
+  `invalidate_fwd_cache(stock_id)` call(trigger 接管,call 是 redundant)。
+- `post_process.dividend_policy_merge`:同樣移除 `invalidate_fwd_cache(db, stock_id)`
+  call(trigger 接管)。
+- `bronze/dirty_marker.mark_silver_dirty`:由 stub no-op 改為 deprecated 路徑,
+  emit `DeprecationWarning`,PR #21 移除。
+
+短期補丁路徑由 trigger 接管的證明:av3 揭露的 staleness production bug
+(3363 / 1312 stock_dividend 事件 fwd 沒處理)在 PR #20 後由
+`trg_mark_fwd_silver_dirty` 直接處理 — pae INSERT/UPDATE → 4 fwd 表整檔 dirty
+→ Phase 7c orchestrator 從 `price_daily_fwd.is_dirty=TRUE` 拉清單派 Rust。
+
+### C. orchestrator 7c 改走 dirty queue
+
+`silver/orchestrator.SilverOrchestrator._run_7c` 行為變更:
+
+| stock_ids | full_rebuild | 行為 |
+|---|---|---|
+| 明確傳 list | any | pass through(manual ops / 開發測試) |
+| None | False | `SELECT DISTINCT stock_id FROM price_daily_fwd WHERE is_dirty=TRUE` 拉清單派 Rust |
+| None | True | `SELECT DISTINCT stock_id FROM price_daily_fwd` 全部派 Rust(全市場重算) |
+
+dirty queue 為空 → skip Rust dispatch + log,不 raise。
+
+PR #19c-3 的 `_run_7c(stock_ids)` 現在多收 `full_rebuild` 參數;run() 多帶一條
+傳遞路徑。
+
+### D. 整合測試 `scripts/verify_pr20_triggers.py`
+
+15 個 subtest 對映 15 個 trigger:
+- 10 generic 3-col Bronze → 同 PK Silver
+- financial_statement(event_type → type)
+- exchange_rate(currency PK)
+- market_margin(2-col PK)
+- business_indicator(注 sentinel '_market_')
+- price_adjustment_events → 4 fwd 表整檔 dirty(pre-INSERT 8 row × 4 表,驗 trigger 後全部 dirty)
+
+Sentinel PK 慣例:`market="TW"`, `stock_id="__PR20__"`, `date="1900-01-01"`,
+fwd 用 `"__PR20_FWD__"`;date 早於 FinMind 起算 1990 不衝突真實資料。
+每 subtest 跑完先清 Silver 再清 Bronze(只有 INSERT/UPDATE 觸發 trigger,
+DELETE 不觸發,cleanup 不會回頭再 mark)。
+
+### E. schema_pg.sql sync
+
+trigger DDL(6 function + 15 CREATE TRIGGER)同步 append 到 `src/schema_pg.sql`
+尾段。docker compose 啟動新 PG 17 instance 時 `01-schema.sql` 會直接帶到。
+
+### F. 沙箱限制 + user 本機驗證
+
+沙箱無 PG instance,無法跑 `alembic upgrade head` 或 verifier。已驗:
+- alembic migration AST 解析 ✓
+- migration `revision` / `down_revision` chain 正確(`m2n3o4p5q6r7 → n3o4p5q6r7s8`)✓
+- 6 functions / 10+5 triggers / 15 unique bronze tables / 15 unique trigger names ✓
+- 4 個觸碰的 Python 檔(orchestrator / post_process / phase_executor / dirty_marker)AST 解析 ✓
+
+User 本機驗證流程:
+
+```powershell
+git pull
+alembic upgrade head                                # n3o4p5q6r7s8
+psql $env:DATABASE_URL -c "
+SELECT trigger_name, event_object_table FROM information_schema.triggers
+WHERE trigger_name LIKE 'mark_%' ORDER BY trigger_name
+"   # 應看到 15 個 trigger
+psql $env:DATABASE_URL -c "
+SELECT routine_name FROM information_schema.routines
+WHERE routine_name LIKE 'trg_mark_%' ORDER BY routine_name
+"   # 應看到 6 個 function
+python scripts/verify_pr20_triggers.py              # 預期 16/16 OK(15 trigger + fwd)
+alembic downgrade -1 && alembic upgrade head       # rollback smoke
+```
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`n3o4p5q6r7s8`(待 user 本機 `alembic upgrade head`)
+- 15 個 Bronze→Silver dirty trigger 上線;dirty queue 接管 §5.6 短期補丁路徑
+- `invalidate_fwd_cache` / `mark_silver_dirty` deprecated 但保留 1~2 sprint
+- orchestrator 7c 改走 dirty queue pull
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓)→ #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → **#20 ⏳ 待 user verify** → #21 next
+
+下個 session 建議:
+1. PR #20 user 本機驗證 — `verify_pr20_triggers.py` 16/16 OK(若有 FAIL 修)
+2. **PR #21**:衍生欄補齊 + market_ohlcv_tw dual-source merge + bronze/phase_executor 拆段 + `invalidate_fwd_cache` / `mark_silver_dirty` 完全移除(PR #20 觀察 1~2 sprint 後)
 
 ---
 
