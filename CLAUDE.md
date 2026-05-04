@@ -1,7 +1,172 @@
-# CLAUDE.md — tw-stock-collector Session 銜接文件
+# CLAUDE.md
 
-> 這份文件記錄本專案的完整實作歷程與架構決策，供下次 session 自動載入後直接銜接，無需重新閱讀 git log。
-> 最後更新：2026-05-02（**v1.9.1**）
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.16，最新 2026-05-04）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+
+---
+
+## 專案概要
+
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-RhLKU`，alembic head `m2n3o4p5q6r7_pr18_5_create_time_text`（2026-05-04）。
+
+---
+
+## 常用指令
+
+### 環境
+
+```bash
+pip install -e .                          # editable install:silver/ + bronze/ + src/ loose modules 全部 importable
+pip install -e ".[dev]"                   # 加 pytest / pytest-asyncio
+docker compose up -d                      # 起本地 Postgres 17(或用 OS service)
+cp .env.example .env                      # 填入 FINMIND_TOKEN + DATABASE_URL
+alembic upgrade head                      # 遷移 schema 到最新版
+cd rust_compute && cargo build --release  # 編 Phase 4/7c 用的 binary
+```
+
+### Bronze 收集（Phase 1-6 / `src/main.py`）
+
+```bash
+python src/main.py validate                              # 驗證 collector.toml 格式
+python src/main.py status                                # api_sync_progress 摘要(5 種 status)
+python src/main.py backfill                              # 全量回補(估 ~107h @ 1600 reqs/h)
+python src/main.py backfill --phases 1,2,3,4             # 只跑 Phase 1-4
+python src/main.py backfill --stocks 2330,2317           # 開發測試:覆蓋股票清單
+python src/main.py incremental                           # 日常排程
+python src/main.py phase 4                               # 只跑單一 Phase(0-6)
+python src/main.py --verbose backfill --stocks 2330 --dry-run   # debug
+```
+
+### Silver 計算（Phase 7 dirty-driven）
+
+```bash
+python src/main.py silver phase 7a [--stocks 2330] [--full-rebuild]   # 12 個獨立 builder
+python src/main.py silver phase 7b [--stocks 2330] [--full-rebuild]   # 跨表依賴(financial_statement)
+python src/main.py silver phase 7c [--stocks 2330]                    # tw_market_core Rust(rust_bridge.run_phase4)
+```
+
+`--full-rebuild` 目前是唯一支援的模式;dirty queue pull 留 PR #20+。
+
+### 驗證腳本（push 前必跑）
+
+```bash
+python scripts/verify_pr18_bronze.py        # Bronze 5 張反推 round-trip(5/5 OK)
+python scripts/verify_pr19b_silver.py       # Silver 5 個簡單 builder 對 v2.0 legacy 等值
+python scripts/verify_pr19c_silver.py       # Silver 5 個 market-level builder
+python scripts/verify_pr19c2_silver.py      # Silver 3 個 PR #18.5 依賴 builder(預設 1101,2317,2330)
+python scripts/test_28_apis.py              # 28 支 API 連線健檢(需 FINMIND_TOKEN)
+python scripts/inspect_db.py 2330           # ⚠️ v1.6 之前的 SQLite hardcode,v2.0 後不可用,改用 check_all_tables.py
+```
+
+### 測試
+
+```bash
+pytest                                # 全套 unit test(沒有專屬 lint)
+pytest scripts/test_db.py -v          # 單檔
+```
+
+完整腳本說明見下方「helper 腳本清單」段。
+
+---
+
+## 架構
+
+### Medallion 層級（v3.2 r1）
+
+| 層 | 內容 | 寫入 path | 主要 module |
+|---|---|---|---|
+| Bronze | FinMind raw 資料(8 張 `*_tw` 表 + 5 個 PR #18.5 dual-write entries) | Phase 1-6 collector | `phase_executor.py` + `field_mapper.py` + `aggregators.py` |
+| Reference | `stock_info_ref` / `trading_date_ref` 等不變維度 | Phase 1 | 同上 |
+| Silver | 14 張 `*_derived`(13 個 Python builder + `price_limit_merge_events` Rust)+ 4 張 `price_*_fwd`(Rust) | Phase 7a/7b/7c dirty-driven | `silver/orchestrator.py` + `silver/builders/*.py` + Rust |
+| M3 | 下游波浪 / indicator core(規格在 `m2Spec/`,未動工) | — | — |
+
+### Phase 1-6（Bronze 收集）
+
+```
+Phase 0  trading_calendar 預載入(每 phase 都用得到)
+Phase 1  META          stock_info_ref / trading_date_ref / market_index_tw
+Phase 2  EVENTS        price_adjustment_events(除權息/減資/分割/面額/現增)
+Phase 3  RAW PRICE     price_daily / price_limit
+Phase 4  RUST 後復權    price_*_fwd × 3(派 rust_bridge.run_phase4)
+Phase 5  CHIP/FUND     5 類法人 / 融資融券 / 財報 / 月營收
+Phase 6  MACRO         SPY / VIX / 匯率 / 業務指標
+```
+
+Phase 1 完成後會 `_refresh_stock_list()`（先雞後蛋）。`api_sync_progress.status` 5 種：`pending / completed / failed / empty / schema_mismatch`（CHECK 由 alembic `a1b2c3d4e5f6` 落下）。
+
+### Phase 7（Silver 計算）
+
+```
+Phase 7a  12 個獨立 builder           — 串列(PostgresWriter 單 connection,thread-safety 限制)
+Phase 7b  跨表依賴 builder             — financial_statement(對齊 monthly_revenue)
+Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_events(走 rust_bridge)
+```
+
+`SilverOrchestrator.run(phases, stock_ids, full_rebuild)` 行為：
+- `NotImplementedError` → `status="skipped"`，不中斷其他 builder
+- 一般 `Exception` → `status="failed"` + reason，**也不中斷**（對齊 `cores_overview §7.5` dirty 契約：失敗 builder 不 reset `is_dirty`，留下次重試）
+
+### 模組地圖（`src/`）
+
+| 模組 | 職責 |
+|---|---|
+| `main.py` | CLI（argparse subparsers + asyncio dispatch；`_run_collector` vs `_run_silver` 分流） |
+| `config_loader.py` | TOML 解析 + validation（規則 5 要求 `volume_factor`） |
+| `phase_executor.py` | Phase 1-6 排程；mode 從 CLI runtime 傳入（不從 `config.execution.mode` 讀） |
+| `api_client.py` + `rate_limiter.py` | aiohttp FinMind client + token bucket（含 429 cooldown） |
+| `field_mapper.py` | API → schema 映射 + detail JSONB pack；回 `(rows, schema_mismatch)` tuple |
+| `db.py` | `DBWriter` Protocol + `PostgresWriter`（生產）/ `SqliteWriter`（過渡，`TWSTOCK_USE_SQLITE=1`） |
+| `aggregators.py` | Phase 5/6 聚合：法人 pivot、財報 pack、`_filter_to_trading_days()` |
+| `post_process.py` | 除權息事件衍生（`_recompute_stock_dividend_vf` SQL 修 P1-17）+ Phase 4 staleness 短期補丁 |
+| `rust_bridge.py` | 派 Phase 4/7c 給 Rust binary；assert `schema_version="3.2"` |
+| `silver/orchestrator.py` + `silver/builders/` | Phase 7 dirty-driven Silver 計算（13 builders） |
+| `silver/_common.py` | builder 共用：`fetch_bronze` / `upsert_silver` / `reset_dirty` / `get_trading_dates` |
+| `bronze/dirty_marker.py` | Bronze→Silver dirty 標記 API surface（PR #20 trigger 上線後 deprecated） |
+
+### Rust（`rust_compute/`，sqlx + Postgres）
+
+- Binary `tw_stock_compute`，入口 `src/main.rs`，呼叫端 `src/rust_bridge.py`
+- 後復權迴圈核心：**先 push 再更新 multiplier**（除息日當日 raw 已是除息後，不可再乘該日 AF）
+- 拆兩個 multiplier（v1.8）：`price_multiplier`（從 AF）+ `volume_multiplier`（從 vf）
+- Phase 4 永遠全量重算（multiplier 倒推，partial 邏輯上錯）；Python `_mode` 對 Rust 端是 no-op
+
+---
+
+## 關鍵慣例（不要改）
+
+完整 25 條見下方「## 關鍵架構決策（不要改）」表。動工前必看的硬規則：
+
+- `FieldMapper(db=db)` 一定要帶 db — schema 用來補欄位豁免名單，避免「與 DB 同名直接入庫」誤報 novel
+- `field_mapper.transform()` 回 `(rows, schema_mismatch: bool)` tuple — 上層用來 mark_schema_mismatch
+- `db.upsert()` 自帶欄位過濾 — API 新增欄位不炸；Silver 寫入走 `silver/_common.upsert_silver()`（包 `is_dirty=FALSE`）
+- `_table_pks` 動態查 `information_schema` — schema 是 single source of truth，phase_executor / sync_tracker 不再硬編碼
+- `stock_info.updated_at` 走 schema `DEFAULT NOW()` + upsert UPDATE 強制 NOW()（兩條 path 都套）
+- Rust 後復權兩條鐵律：「先 push 再更新 multiplier」 + 「price/volume multiplier 拆兩個」
+- `EXPECTED_SCHEMA_VERSION = "3.2"`（`rust_bridge.py:31`）— schema 升版時 Rust + Python 兩端一起改
+- PostgresWriter 單 connection — Phase 7a builder 串列跑（concurrent thread access 踩 psycopg thread-safety）
+- Phase 4 必須傳 `stock_ids` — `stock_sync_status` 沒人寫入，Rust 取不到清單
+- Windows binary path 由 `rust_bridge.py` 自動補 `.exe`（`asyncio.create_subprocess_exec` 不像 shell 自動補）
+- `cooldown_on_429_sec` 存在 `RateLimiter` 實例上（api_client 從這裡讀，不是從 config 重讀）
+
+---
+
+## 規格與歷史檔
+
+| 路徑 | 內容 |
+|---|---|
+| `collectorSpec/tw_stock_collector_program_spec_v1.2_p{1,2,3}.md` | v1.2 collector 程式規格（架構 / Rate Limiter / Phase Executor / Sync Tracker / CLI） |
+| `m2Spec/collector_schema_consolidated_spec_v3_2.md` | v3.2 r1 schema 整合規格（4 層 Medallion + 14 Silver） |
+| `m2Spec/collector_rust_restructure_blueprint_v3_2.md` | Rust + collector 重構藍圖（PR #17 → #21 切法） |
+| `m2Spec/cores_overview.md` | M3 計算層總覽（§7.5 dirty queue 契約 / §10.0 Core 邊界三原則） |
+| `m2Spec/{tw_market,traditional,neely,fundamental,chip,environment}_core.md` | 各 core 計算規格 |
+| `m2Spec/indicator_cores_{momentum,pattern,volatility,volume}.md` | indicator 計算規格 |
+| `m2Spec/unified_alignment_review_r2.md` | 11 篇 core spec 審查整合（r1 → r3.1，含 av3 結論） |
+| `docs/schema_reference.md` / `docs/collectors.md` | DB schema 與 collector 細節 |
+| `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
+| `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
+
+當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ⏳ next`。下個 session 主任務見「下次 session 建議優先序」段。
 
 ---
 
