@@ -121,6 +121,7 @@ VERIFY_SPECS: list[VerifySpec] = [
         pk_cols      = ("market", "stock_id", "date"),
         compare_cols = ("day_trading_buy", "day_trading_sell"),
         detail_col   = "detail",
+        skip_silver_cols = ("day_trading_ratio",),    # PR #21-A 新增,legacy 無對應
     ),
     VerifySpec(
         name         = "valuation",

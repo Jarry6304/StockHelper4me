@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.17，最新 2026-05-04）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.18，最新 2026-05-04）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-RhLKU`，alembic head `n3o4p5q6r7s8_pr20_silver_dirty_triggers`（2026-05-04）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-RhLKU`，alembic head `o4p5q6r7s8t9_pr21_a_day_trading_ratio`（2026-05-04）。
 
 ---
 
@@ -167,7 +167,147 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ⏳ 待 user verify → #21`。下個 session 主任務見「下次 session 建議優先序」段。
+當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ⏳ 待 user verify → #21-B`。下個 session 主任務見「下次 session 建議優先序」段。
+
+---
+
+## v1.18 — PR #21-A 兩個衍生欄補齊 + 雜項收尾(2026-05-04 後續)
+
+接 PR #20 user 本機 `verify_pr20_triggers.py` **15/15 OK**(commit `57b2a6c` 補
+`db.create_writer` load_dotenv 同步落地)後動工 PR #21。完整 PR #21 scope 切
+兩段:
+
+| 切片 | 範圍 | 估時 | 阻塞 |
+|---|---|---|---|
+| **PR #21-A 本 session** ✅ | 2 個 builder-only 衍生欄(`market_value_weight` + `day_trading_ratio`)+ B-1/B-2 雜項收尾(SCHEMA_VERSION drift / CLAUDE.md 下次 session 段落 / db.create_writer load_dotenv) | ~半天 | 低 |
+| PR #21-B 下 session | 3 個需新 Bronze 的衍生欄(`gov_bank_net` / `total_*_balance` / SBL `sbl_short_sales_*`)+ 30~40h calendar-time backfill;走 PR #18.5 dual-write pattern | ~1 天 + backfill | 中 |
+
+### A. `valuation.market_value_weight`(spec §2.6.4)
+
+公式:`(close × total_issued) / SUM_market_date(close × total_issued)`,範圍
+[0, 1]。`close` 取 `price_daily`,`total_issued` 取 `foreign_investor_share_tw`。
+INNER JOIN 分母,LEFT JOIN 分子(stock 沒 close 或沒 total_issued → mv = NULL
+→ weight = NULL,不貢獻分母)。
+
+關鍵設計:**分母永遠對全市場聚合**(不受 `--stocks` 過濾影響),這樣 partial
+backfill 也能算出正確的 weight。實作走 2 query 拼接:
+
+```sql
+-- query A:全市場 total per (market, date)— 永遠不過濾 stock_id
+SELECT v.market, v.date, SUM(pd.close * fis.total_issued) AS total_mv
+FROM valuation_per_tw v
+JOIN price_daily pd USING (market, stock_id, date)
+JOIN foreign_investor_share_tw fis USING (market, stock_id, date)
+GROUP BY v.market, v.date
+
+-- query B:per-stock(可過濾 stock_id)
+SELECT v.market, v.stock_id, v.date, v.per, v.pbr, v.dividend_yield,
+       (pd.close * fis.total_issued) AS mv
+FROM valuation_per_tw v
+LEFT JOIN price_daily pd ON ...
+LEFT JOIN foreign_investor_share_tw fis ON ...
+WHERE v.stock_id IN (...)   -- 只在 stock_ids 給的時候加
+```
+
+Python 端 `_build_silver_rows(per_stock, market_totals)` stitch:
+`weight = mv / market_totals[(market, date)]`,total > 0 才算。
+
+### B. `day_trading.day_trading_ratio`(spec §7.4)
+
+公式:`(buy + sell) × 100 / volume`,單位 %。volume 取 `day_trading_tw.volume`
+(Bronze raw FinMind 已含,不必跨表 join `price_daily.volume`)— 確認過兩邊
+語意一致。
+
+實作純 Python `_compute_ratio(buy, sell, volume)`:
+- 任一 NULL → None
+- volume <= 0 → None
+- 其他 → `(buy + sell) * 100 / volume`
+
+### C. alembic `o4p5q6r7s8t9_pr21_a_day_trading_ratio`
+
+PR #19a silver14 schema 漏了 `day_trading_derived.day_trading_ratio` column
+(其他 4 個衍生欄如 `gov_bank_net` / `market_value_weight` / `total_*_balance` /
+SBL 6 都有先放佔位 column,只是 PR #19b/c 寫 NULL)。本 migration 補:
+
+```sql
+ALTER TABLE day_trading_derived
+    ADD COLUMN IF NOT EXISTS day_trading_ratio NUMERIC(10, 4);
+```
+
+`schema_pg.sql` 同步 inline 加進 day_trading_derived DDL。
+
+### D. verifier 更新
+
+`scripts/verify_pr19b_silver.py` 的 day_trading VerifySpec 加
+`skip_silver_cols=("day_trading_ratio",)`(legacy v2.0 表無對應欄)。
+valuation 那組已有 `skip_silver_cols=("market_value_weight",)`,不變。
+
+### E. B-1 + B-2 雜項收尾(同 PR)
+
+- **`SCHEMA_VERSION` drift**:`src/db.py:54` 一直留在 `"2.0"`,但 PG 端早被
+  alembic `c2d3e4f5g6h7` bump 到 `"3.2"`(rust_bridge `EXPECTED_SCHEMA_VERSION`
+  也是 `"3.2"`)。本 commit 把 db.py 那行對齊 + 同步更新 rust_bridge.py:133
+  docstring example 的 stale `"2.0"`。
+- **CLAUDE.md「下次 session 建議優先序」重寫**:原段落是 PR #19 收尾時寫的
+  狀態,推 PR #20 為下個任務 + 1267~1284 行有上次 edit 的重複 bullet 殘留。
+  全段重寫對齊 v1.18 後事實。
+- **prelude `verify_pr20_triggers.py` 預期 16/16 → 15/15**:fwd 是 1 個 subtest
+  不是 2 個,我寫 PR #20 v1.17 段時多算。
+
+### F. 沙箱已驗
+
+- builder AST 解析 ✓ + 兩個 _compute_* helper smoke test 全綠:
+  - `_compute_ratio(100, 200, 1000) == 30.0` 等 6 個 case ✓
+  - `_build_silver_rows` stitch 正確算出 weight = 0.5 / 0.25 / None 三 case ✓
+- alembic chain `n3o4p5q6r7s8 → o4p5q6r7s8t9` ✓
+
+User 本機驗證流程:
+
+```powershell
+git pull
+alembic upgrade head                                  # o4p5q6r7s8t9
+python src/main.py silver phase 7a --stocks 2330 --full-rebuild
+# 預期:valuation / day_trading 兩個 builder OK,Silver 表新欄位有值
+
+# spot-check 數值合理性
+psql $env:DATABASE_URL -c "
+SELECT stock_id, date, per, pbr, market_value_weight
+FROM valuation_daily_derived
+WHERE market='TW' AND stock_id='2330'
+ORDER BY date DESC LIMIT 5
+"
+psql $env:DATABASE_URL -c "
+SELECT stock_id, date, day_trading_buy, day_trading_sell, day_trading_ratio
+FROM day_trading_derived
+WHERE market='TW' AND stock_id='2330'
+ORDER BY date DESC LIMIT 5
+"
+python scripts/verify_pr19b_silver.py                # 仍 5/5 OK(skip 新欄)
+```
+
+### G. PR #21-B 留 follow-up(下 session 動工)
+
+3 個衍生欄需新 Bronze 表 + collector.toml dual-write entry + 30~40h backfill。
+走 PR #18.5 同 pattern:
+
+| 衍生欄 | 新 Bronze 表 | FinMind dataset |
+|---|---|---|
+| `institutional.gov_bank_net` | `government_bank_buy_sell_tw` | `TaiwanStockGovernmentBankBuySell`(候選名,需確認) |
+| `market_margin.total_margin_purchase_balance` / `total_short_sale_balance` | `total_margin_purchase_short_sale_tw` | `TaiwanStockTotalMarginPurchaseShortSale` |
+| `margin.sbl_short_sales_*`(3 欄) | (待研究)| 現 `securities_lending_tw` 是 trade-level transaction,缺 daily 累計;可能要新 `TaiwanStockShortSaleBalance` 之類 |
+
+User 本機需排 30~40h 跑首次 backfill,流程同 v1.13 PR #18.5。
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`o4p5q6r7s8t9`(待 user 本機 `alembic upgrade head`)
+- 5 衍生欄缺口:2 補(market_value_weight / day_trading_ratio)+ 3 留 PR #21-B
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓)→ #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15)→ **#21-A ⏳ 待 user verify** → #21-B → #22
+
+下個 session 建議:
+1. PR #21-A user 本機驗證 — `silver phase 7a` + spot-check 兩欄數值合理性
+2. **PR #21-B** 動工:3 條新 Bronze + 30~40h backfill 計畫(需 user 排日曆時間)
+3. 平行可動:bronze/phase_executor.py 拆段 / B-1/B-2 收尾 market_ohlcv_tw dual-source
 
 ---
 
@@ -267,7 +407,7 @@ psql $env:DATABASE_URL -c "
 SELECT routine_name FROM information_schema.routines
 WHERE routine_name LIKE 'trg_mark_%' ORDER BY routine_name
 "   # 應看到 6 個 function
-python scripts/verify_pr20_triggers.py              # 預期 16/16 OK(15 trigger + fwd)
+python scripts/verify_pr20_triggers.py              # 預期 15/15 OK(10 generic + 4 special + fwd 全段歷史)
 alembic downgrade -1 && alembic upgrade head       # rollback smoke
 ```
 
@@ -279,9 +419,13 @@ alembic downgrade -1 && alembic upgrade head       # rollback smoke
 - orchestrator 7c 改走 dirty queue pull
 - v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓)→ #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → **#20 ⏳ 待 user verify** → #21 next
 
-下個 session 建議:
-1. PR #20 user 本機驗證 — `verify_pr20_triggers.py` 16/16 OK(若有 FAIL 修)
-2. **PR #21**:衍生欄補齊 + market_ohlcv_tw dual-source merge + bronze/phase_executor 拆段 + `invalidate_fwd_cache` / `mark_silver_dirty` 完全移除(PR #20 觀察 1~2 sprint 後)
+user 本機驗收結果(2026-05-04):**verify_pr20_triggers.py 15/15 OK** ✅
+(alembic upgrade head 跑了 m2n3o4p5q6r7 → n3o4p5q6r7s8;一同 commit `57b2a6c`
+補了 `db.create_writer` load_dotenv,verify_*.py 入口免再手動 `$env:DATABASE_URL`)。
+
+下個 session 建議:**PR #21**:衍生欄補齊 + market_ohlcv_tw dual-source merge
++ bronze/phase_executor 拆段 + `invalidate_fwd_cache` / `mark_silver_dirty` 完全
+移除(PR #20 觀察 1~2 sprint 後);詳見「下次 session 建議優先序」段。
 
 ---
 
@@ -1222,63 +1366,54 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 PR #19 三段全部完成(#19a + #19b + #19c-1/-2/-3),user 本機 12/12 OK 驗過。**
-> 下個階段建議:**PR #20 trigger ENABLE**(Bronze→Silver dirty queue 上線),
-> 是 v3.2 dirty queue 上線的硬阻塞,優先級最高。
+> **🎯 v1.18 PR #21-A 已 land(2026-05-04)**:`market_value_weight` +
+> `day_trading_ratio` 兩個 builder-only 衍生欄補完;3 條需新 Bronze 的衍生欄
+> 留 PR #21-B。
+> 下階段主軸:**PR #21-B 新 Bronze 補完剩 3 條衍生欄**,需 user 排 30~40h
+> backfill 計畫(走 PR #18.5 同 pattern)。
 
-### 動工順序
+### 阻塞性排序
 
-1. **🎯 PR #20 — trigger ENABLE**(下個 session 主任務,~半天)
-   - blueprint §5.5 DDL `trg_mark_silver_dirty` + 14 個 `CREATE TRIGGER`
-   - 包含 fwd 4 張表的「全段歷史 dirty」 trigger(price_adjustment_events 寫入
-     → 4 fwd 表整檔 is_dirty=TRUE)
-   - 砍 §5.6 短期補丁 `post_process.invalidate_fwd_cache`(dirty queue 接管)
-   - 整合測試:INSERT 一筆 price_adjustment_events → 驗 4 fwd 表 + 對應 stock_id
-     的 7a/7b derived 表全標 dirty(SQL assertion)
-   - 砍 bronze/dirty_marker.py 的 stub no-op 改為 deprecated log
+1. **🎯 PR #21-A user 本機驗證**(~30 分鐘)
+   - `alembic upgrade head` → `o4p5q6r7s8t9`
+   - `python src/main.py silver phase 7a --stocks 2330 --full-rebuild`
+   - psql spot-check `valuation_daily_derived.market_value_weight` 範圍 [0,1]
+     合理 + `day_trading_derived.day_trading_ratio` 約 0~50% 區間
+   - `python scripts/verify_pr19b_silver.py` 仍 5/5 OK
 
-2. **衍生欄補齊**(可與 PR #20 平行 / 後跟,部分需新 Bronze + alembic)
-   - institutional.gov_bank_net(新 GovernmentBankBuySell Bronze + alembic)
-   - margin SBL 6 cols(integrate `securities_lending_tw`,Bronze 已存在,只需
-     builder 內部 aggregation logic)
-   - valuation.market_value_weight(join price_daily + stock_info_ref 發行股數)
-   - day_trading_ratio(join price_daily volume,7b 階段)
-   - market_margin total_*_balance(新 TotalMarginPurchaseShortSale Bronze + alembic)
+2. **🎯 PR #21-B — 3 條新 Bronze + 衍生欄補齊**(下個 session 主任務,~1 天 + backfill)
+   - `institutional.gov_bank_net` ← `TaiwanStockGovernmentBankBuySell`(候選名)
+   - `market_margin.total_margin_purchase_balance` / `total_short_sale_balance`
+     ← `TaiwanStockTotalMarginPurchaseShortSale`
+   - `margin.sbl_short_sales_*`(3 欄)— 需研究 FinMind 哪個 dataset 提供
+     daily 借券累計(現 `securities_lending_tw` 是 trade-level)
+   - 三條都需新 Bronze 表 + alembic + collector.toml dual-write + builder 修
+   - 規模:3 entries × 1700+ stocks × 21 年 ≈ 30~40h calendar-time @ 1600 reqs/h
+     (對齊 v1.13 PR #18.5 流程)
 
-3. **bronze/phase_executor.py 從 src/phase_executor.py 拆出**(blueprint §三 結構工)
+3. **PR #21 收尾** — 砍 §5.6 deprecated 路徑
+   - 觀察 1~2 sprint dirty queue 無歧義後,砍 `post_process.invalidate_fwd_cache`
+     函式本體 + `bronze/dirty_marker.mark_silver_dirty` no-op
+   - Rust binary 改讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`
+     (orchestrator path 已接,Rust 自接是收尾用 — 兩端任一條 path work 就夠)
 
-4. **B-1/B-2 收尾** — market_ohlcv_tw dual-source merge(TaiwanStockTotalReturnIndex
-   + TaiwanVariousIndicators5Seconds → daily OHLCV);完成後 taiex_index_derived
-   有資料
+4. **bronze/phase_executor.py 從 src/phase_executor.py 拆出**(blueprint §三
+   結構工 — phase 1-6 屬 bronze,phase 7 屬 silver,目前都擠在 src/ 根)
 
-5. **asyncio.gather 7a 平行優化**(需先升 db connection pool 從單 connection →
-   pool;perf gain ~ms 量級,non-urgent)
+5. **B-1/B-2 收尾** — `market_ohlcv_tw` dual-source merge(`TaiwanStockTotalReturnIndex` +
+   `TaiwanVariousIndicators5Seconds` → daily OHLCV);完成後 `taiex_index_derived`
+   才有真資料(目前 PR #19c-1 verifier 對 2330 read=0 wrote=0 是 source-empty,非 builder bug)
 
-6. **PR review + merge**:把 init-project-setup-yGset 累積 commit(v1.10~v1.16,
-   ~50+ commit)整合到 active dev branch claude/initial-setup-RhLKU(maintainer
-   review 平行進行)
+### 中期 backlog(non-blocking)
 
-### 推薦本 session 結束 → 下次直接動 PR #20
-
-當前 collector v3.2 重構**核心 milestone 已完成**(13 builders + orchestrator + CLI
-+ 7a/7b/7c verify 全綠),Silver 計算層完整跑通。剩 PR #20 trigger ENABLE 把
-Bronze→Silver dirty propagation 真正接上,是「v3.2 production-ready」的最後一
-塊拼圖。
-3. **PR #19c 動工**(剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI)
-   - holding_shares_per / monthly_revenue / financial_statement(依 PR #18.5)
-   - taiex_index / us_market_index / exchange_rate / market_margin / business_indicator
-   - margin / valuation / institutional / day_trading 補 PR #19b 暫不填的衍生欄
-     (gov_bank_net / market_value_weight / SBL 6 欄 / day_trading_ratio)
-   - `silver/orchestrator.py` 補 asyncio.gather 7a 平行 + 7b 序列 + 7c 走 rust_bridge
-   - `src/main.py` 加 `silver phase 7a/7b/7c` 子命令
-   - `bronze/phase_executor.py` 從 src/phase_executor.py 拆出
-4. **PR #20 動工**(Bronze→Silver trigger CREATE + ENABLE + price_adjustment_events 1:4 fanout 整合測試)
-   - blueprint §5.5 DDL trg_mark_silver_dirty + 14 個 CREATE TRIGGER
-   - 砍 §5.6 短期補丁 post_process.invalidate_fwd_cache(PR #19c 起 dirty queue 接管)
-   - 整合測試:INSERT INTO price_adjustment_events → 4 fwd 表 is_dirty=TRUE
-5. **v1.9~v1.12 PR review + merge**(initial-setup-RhLKU 分支累積 ~40+ commit)。等 maintainer review,平行進行。
-5. **agent-review-mcp 支線開始**(spec 在最早的訊息,從 v1.6 起就懸而未決)
-6. **Phase 4 真正的 incremental 優化**(現在 staleness 補丁是「全部 reset 0」,長期該做 dirty-detection 只跑變動股票)
-7. **CLAUDE.md 章節重組**(本檔已超過 700 行,v1.4-v1.7 詳解可繼續搬 docs/claude_history.md)
-8. **inspect_db.py 升 PG 版**(v2.0 後該腳本已不可用)
-9. **m2 PR #20 / #21**(orchestrator go-live + Silver views + legacy_v2 rename + M3 prep,blueprint §十 PR 切法)
+6. **`asyncio.gather` 7a 平行優化** — 需先升 PostgresWriter 為 connection pool;
+   perf gain ~ms 量級,排序低
+7. **Phase 4 真正的 incremental 優化** — 偵測「該股票無新除權息事件 → 跳過」
+   每天 incremental 可省 ~6 分鐘
+8. **`inspect_db.py` 升 PG 版** — v2.0 後該腳本是 SQLite hardcode 不可用
+9. **CLAUDE.md 章節重組** — v1.4 → v1.7 詳解搬 `docs/claude_history.md`(本檔已 ~1500 行)
+10. **agent-review-mcp 支線**(v1.4 spec,自 v1.6 懸而未決)
+11. **PR review + merge** — `claude/initial-setup-RhLKU` 累積 v1.10 → v1.18 ~60+ commit
+    待 maintainer 整合
+12. **m2 PR #20 / #21 完整 milestone** — orchestrator go-live + Silver views(spec §2.5)
+    + legacy_v2 rename(blueprint §八.2)+ M3 prep,blueprint §十 PR 切法

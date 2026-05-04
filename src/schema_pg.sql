@@ -807,6 +807,7 @@ CREATE TABLE IF NOT EXISTS day_trading_derived (
     date               DATE NOT NULL,
     day_trading_buy    BIGINT,
     day_trading_sell   BIGINT,
+    day_trading_ratio  NUMERIC(10, 4),                       -- §7.4 (buy+sell)×100/volume,PR #21-A 加
     detail             JSONB,
     is_dirty           BOOLEAN NOT NULL DEFAULT FALSE,
     dirty_at           TIMESTAMPTZ,
