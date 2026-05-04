@@ -109,7 +109,25 @@ PR #19c 主要工作完成,留給後續 PR 的:
 - silver/orchestrator.py 真實邏輯落地 ✓
 - silver phase 7a/7b/7c CLI 落地 ✓
 - 13 個 builder 全部可被 orchestrator dispatch ✓
-- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5(smoke ✓)→ #19c-1 ✅ → #19c-2 ✅ → **#19c-3 ⏳ 待 user verify** → #20
+- **本機 verify 結果(stock 2330)**:Phase 7a 12/12 OK,Phase 7b 1/1 OK,Phase 7c rust_bridge 1 stock 處理完無 error
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5(smoke ✓)→ #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → **#20 ⏳ next**
+
+### F. 已知 follow-up issue(non-blocking)
+
+**taiex_index_derived 對 stock 2330 read=0 wrote=0** — 不是 builder bug,**Bronze
+`market_ohlcv_tw` 從來沒被 populate**(collector.toml 沒對應 API entry,只有
+v2.0 `market_index_tw` entry 寫到 legacy 表)。Blueprint §四 注解寫:
+
+> market_ohlcv_tw 來源:TaiwanStockTotalReturnIndex(close)+
+> TaiwanVariousIndicators5Seconds(intraday 5-sec aggregate to daily OHLCV)
+> **multi-source merge 邏輯留待 PR #17 重構 phase_executor 時實作**
+
+屬於 B-1/B-2(PR #11 era)沒收尾的 known incomplete,不是 PR #19 引入。
+TAIEX OHLCV 暫時沒 downstream consumer,**不阻塞 PR #20**。真要做時走「加
+collector.toml dual-write entry + phase_executor 雙源 merge」一次到位。
+
+builder 行為已正確:`taiex_index._build_silver_rows(empty_bronze)` 回 [] →
+upsert 0 rows。Silver 表為空是 source-empty 的正確反映。
 
 ---
 
@@ -924,24 +942,48 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 PR #19c orchestrator + CLI 已落地(PR #19c-3,cherry-pick 自平行分支)— user verify 後接 PR #20**(trigger ENABLE)或衍生欄補齊。
+> **🎯 PR #19 三段全部完成(#19a + #19b + #19c-1/-2/-3),user 本機 12/12 OK 驗過。**
+> 下個階段建議:**PR #20 trigger ENABLE**(Bronze→Silver dirty queue 上線),
+> 是 v3.2 dirty queue 上線的硬阻塞,優先級最高。
 
-1. **🎯 PR #19c-3 本機驗證 + push**(本 session 完成 v1.16 整合):
-   - `python src/main.py silver phase 7a --stocks 2330 --full-rebuild`(12 個 7a builder)
-   - `python src/main.py silver phase 7b --stocks 2330 --full-rebuild`(financial_statement)
-   - `git push`(本 session 已 commit + push 到 init-project-setup-yGset)
-2. **PR #20 動工**(Bronze→Silver trigger CREATE + ENABLE + 1:4 fanout 整合測試)
-   - blueprint §5.5 DDL trg_mark_silver_dirty + 14 個 CREATE TRIGGER
-   - 砍 §5.6 短期補丁 post_process.invalidate_fwd_cache(dirty queue 接管)
-   - 整合測試:INSERT INTO price_adjustment_events → 4 fwd 表 is_dirty=TRUE
-3. **衍生欄補齊**(可與 PR #20 平行,部分需新 Bronze + alembic):
-   - institutional.gov_bank_net(新 GovernmentBankBuySell Bronze)
-   - margin SBL 6 cols(integrate securities_lending_tw,Bronze 已存在)
-   - valuation.market_value_weight(join price_daily + stock_info_ref)
-   - day_trading_ratio(join price_daily volume)
-   - market_margin total_*_balance(新 TotalMarginPurchaseShortSale Bronze)
-4. **bronze/phase_executor.py 從 src/phase_executor.py 拆出**(blueprint §三 結構)
-5. **asyncio.gather 7a 平行優化**(需先升 db connection pool)
+### 動工順序
+
+1. **🎯 PR #20 — trigger ENABLE**(下個 session 主任務,~半天)
+   - blueprint §5.5 DDL `trg_mark_silver_dirty` + 14 個 `CREATE TRIGGER`
+   - 包含 fwd 4 張表的「全段歷史 dirty」 trigger(price_adjustment_events 寫入
+     → 4 fwd 表整檔 is_dirty=TRUE)
+   - 砍 §5.6 短期補丁 `post_process.invalidate_fwd_cache`(dirty queue 接管)
+   - 整合測試:INSERT 一筆 price_adjustment_events → 驗 4 fwd 表 + 對應 stock_id
+     的 7a/7b derived 表全標 dirty(SQL assertion)
+   - 砍 bronze/dirty_marker.py 的 stub no-op 改為 deprecated log
+
+2. **衍生欄補齊**(可與 PR #20 平行 / 後跟,部分需新 Bronze + alembic)
+   - institutional.gov_bank_net(新 GovernmentBankBuySell Bronze + alembic)
+   - margin SBL 6 cols(integrate `securities_lending_tw`,Bronze 已存在,只需
+     builder 內部 aggregation logic)
+   - valuation.market_value_weight(join price_daily + stock_info_ref 發行股數)
+   - day_trading_ratio(join price_daily volume,7b 階段)
+   - market_margin total_*_balance(新 TotalMarginPurchaseShortSale Bronze + alembic)
+
+3. **bronze/phase_executor.py 從 src/phase_executor.py 拆出**(blueprint §三 結構工)
+
+4. **B-1/B-2 收尾** — market_ohlcv_tw dual-source merge(TaiwanStockTotalReturnIndex
+   + TaiwanVariousIndicators5Seconds → daily OHLCV);完成後 taiex_index_derived
+   有資料
+
+5. **asyncio.gather 7a 平行優化**(需先升 db connection pool 從單 connection →
+   pool;perf gain ~ms 量級,non-urgent)
+
+6. **PR review + merge**:把 init-project-setup-yGset 累積 commit(v1.10~v1.16,
+   ~50+ commit)整合到 active dev branch claude/initial-setup-RhLKU(maintainer
+   review 平行進行)
+
+### 推薦本 session 結束 → 下次直接動 PR #20
+
+當前 collector v3.2 重構**核心 milestone 已完成**(13 builders + orchestrator + CLI
++ 7a/7b/7c verify 全綠),Silver 計算層完整跑通。剩 PR #20 trigger ENABLE 把
+Bronze→Silver dirty propagation 真正接上,是「v3.2 production-ready」的最後一
+塊拼圖。
 3. **PR #19c 動工**(剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI)
    - holding_shares_per / monthly_revenue / financial_statement(依 PR #18.5)
    - taiex_index / us_market_index / exchange_rate / market_margin / business_indicator
