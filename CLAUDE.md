@@ -23,7 +23,93 @@
   - `claude/collector-schema-mapping-2YF5U` / `claude/continue-work-dvkRv` / `claude/setup-agent-review-mcp-berOR`(v1.5/v1.6 探勘)
   - `claude/review-collector-spec-Gktcf`(早期 review 分支)
   - `collector`(早期 PR #4)
-- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 + v1.13 + v1.14 + v1.15 PR 開於 initial-setup-RhLKU 分支
+- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 + v1.13 + v1.14 + v1.15 + v1.16 PR 開於 initial-setup-RhLKU 分支
+
+---
+
+## v1.16 — PR #19c-3 orchestrator + Phase 7 CLI(cherry-pick from build-data-builders-4BwpT,2026-05-04)
+
+意外發現 user 本機原本另有平行 Claude session 在 `claude/build-data-builders-4BwpT`
+分支做 PR #19c part 1,**已經寫好我留給 PR #19c-3 的 orchestrator 真實邏輯 + main.py
+silver phase 子命令**。差異盤點:
+
+- 他們做的:5 個 market-level builder(版本不同)+ orchestrator + CLI
+- 我做的:5 個 market-level builder(PR #19c-1)+ 3 個 PR #18.5 依賴 builder(PR #19c-2)+ PR #18.5 alembic + dual-write entries
+- 沒重疊的:他們做了 orchestrator + CLI(我留 PR #19c-3),我做了 PR #19c-2 + PR #18.5(他們沒做)
+
+**整合策略**:cherry-pick 他們的 orchestrator + main.py CLI(品質高,設計穩),
+保留我所有 builder + PR #19c-2 + PR #18.5。CLAUDE.md 我自己寫(他們的 v1.14 版
+跟我的 v1.13~v1.15 衝突)。
+
+### A. src/silver/orchestrator.py 真實邏輯(從 stub 升)
+
+`SilverOrchestrator.run(phases, stock_ids, full_rebuild)`:
+
+- **串列跑 builder**(不是 asyncio.gather)— PostgresWriter 持單一 connection,
+  concurrent thread access 踩 psycopg thread-safety 限制。要平行跑需先升 db
+  connection pool,perf gain 在這層實際很小(每 builder ~ms 量級),**先求正確**,
+  平行優化留後續 PR
+- **NotImplementedError → status='skipped'** 不中斷其他 builder(防衛性,雖然
+  13 個 builder 全實作)
+- **Exception → status='failed'** + reason 紀錄,**也不中斷其他**(對齊
+  cores_overview §7.5 dirty 契約:失敗 builder 不 reset is_dirty 留下次重試)
+- **7c 派 rust_bridge.run_phase4** 給 tw_market_core 系列(price_*_fwd +
+  price_limit_merge_events)
+- 結構化回傳 dict for status table
+
+### B. src/main.py silver 子命令
+
+`python src/main.py silver phase 7a/7b/7c [--stocks ...] [--full-rebuild]`
+
+- argparse 加 silver subparser + silver_phase_parser
+- `_run_silver()` 函式獨立於 _run_collector,7c 才需要 RustBridge instance
+- 印 status table(builder × status × read × wrote × ms),總計 ok/skipped/failed
+
+### C. 沙箱整合驗證
+
+- orchestrator + builders 套件 import 通(`from silver.orchestrator import SilverOrchestrator`)
+- PHASE_GROUPS 對齊 BUILDERS 註冊表(7a 12 個 + 7b 1 個 = 13 builders 全部 covered)
+- `builders_in_phase('7a' / '7b' / '7c')` classmethod 工作正常
+- async run() 對 mock db 跑 7b phase 成功 dispatch 到 financial_statement builder
+  → status='ok',rows_read=0(空 mock),不中斷
+
+### D. 用戶本機驗證
+
+```powershell
+git pull
+python src/main.py silver phase 7a --stocks 2330 --full-rebuild
+# 預期:12 個 7a builder 全 ok 跑完(對齊 PR #19c-1 / PR #19c-2 已驗的邏輯),
+# 印出 status table 含 builder name / status / rows_read / rows_written / ms
+
+python src/main.py silver phase 7b --stocks 2330 --full-rebuild
+# 預期:financial_statement builder 跑完 status=ok
+
+# 7c(需 Rust binary)
+python src/main.py silver phase 7c --stocks 2330
+# 預期:派 rust_bridge.run_phase4 給 Rust binary,跑後復權系列
+```
+
+### E. 平行分支留下的東西沒撈過來
+
+`origin/claude/build-data-builders-4BwpT` 還在 origin,但不再需要:
+- 他們版本的 5 個 market-level builder(我自己版本已驗 PR #19c-1)
+- 他們版本的 verify_pr19c_silver_5.py 空 Bronze 改 skip(orchestrator 已用同樣
+  pattern handle skipped/failed,verify 改善是純 UX 沒急迫性,留 follow-up)
+- 他們的 CLAUDE.md v1.14(跟我這邊 v1.13~v1.15 太多衝突,不撈)
+
+PR #19c 主要工作完成,留給後續 PR 的:
+- 5 個衍生欄補齊(SBL 6 / gov_bank_net / market_value_weight / day_trading_ratio
+  / market_margin total_*_balance)
+- bronze/phase_executor.py 從 src/phase_executor.py 拆出
+- verify scripts 統一空 Bronze 處理(skip vs abort 的 UX)
+- asyncio.gather 7a 平行優化(需 db connection pool 升級)
+
+### 已知狀態(下次 session 起點)
+
+- silver/orchestrator.py 真實邏輯落地 ✓
+- silver phase 7a/7b/7c CLI 落地 ✓
+- 13 個 builder 全部可被 orchestrator dispatch ✓
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5(smoke ✓)→ #19c-1 ✅ → #19c-2 ✅ → **#19c-3 ⏳ 待 user verify** → #20
 
 ---
 
@@ -838,21 +924,24 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 13 個 builder 全部實作完成(PR #19c-2)— user verify 後接 PR #19c-3**(orchestrator + CLI + 衍生欄)。
+> **🎯 PR #19c orchestrator + CLI 已落地(PR #19c-3,cherry-pick 自平行分支)— user verify 後接 PR #20**(trigger ENABLE)或衍生欄補齊。
 
-1. **🎯 PR #19c-2 本機驗證 + push**(本 session 完成 v1.15 code):
-   - `python scripts/verify_pr19c2_silver.py`(預期 3/3 OK 對 v2.0 legacy 等值,stocks=1101,2317,2330)
+1. **🎯 PR #19c-3 本機驗證 + push**(本 session 完成 v1.16 整合):
+   - `python src/main.py silver phase 7a --stocks 2330 --full-rebuild`(12 個 7a builder)
+   - `python src/main.py silver phase 7b --stocks 2330 --full-rebuild`(financial_statement)
    - `git push`(本 session 已 commit + push 到 init-project-setup-yGset)
-2. **PR #19c-3 動工**(orchestrator 真實邏輯 + CLI 整合 + 衍生欄補齊)
-   - `silver/orchestrator.py` 補 asyncio.gather 7a 平行 + 7b 序列 + 7c 走 rust_bridge
-   - `src/main.py` 加 `silver phase 7a/7b/7c` 子命令
-   - `bronze/phase_executor.py` 從 src/phase_executor.py 拆出
-   - 補 PR #19b / PR #19c-1 暫不填的衍生欄(部分需新 Bronze + alembic):
-     - institutional.gov_bank_net(需新增 GovernmentBankBuySell Bronze 來源)
-     - margin SBL 6 cols(integrate securities_lending_tw aggregation,Bronze 已存在)
-     - valuation.market_value_weight(join price_daily + stock_info_ref 發行股數)
-     - day_trading_ratio(7b 階段 join price_daily volume)
-     - market_margin total_*_balance 2 cols(新增 TotalMarginPurchaseShortSale Bronze)
+2. **PR #20 動工**(Bronze→Silver trigger CREATE + ENABLE + 1:4 fanout 整合測試)
+   - blueprint §5.5 DDL trg_mark_silver_dirty + 14 個 CREATE TRIGGER
+   - 砍 §5.6 短期補丁 post_process.invalidate_fwd_cache(dirty queue 接管)
+   - 整合測試:INSERT INTO price_adjustment_events → 4 fwd 表 is_dirty=TRUE
+3. **衍生欄補齊**(可與 PR #20 平行,部分需新 Bronze + alembic):
+   - institutional.gov_bank_net(新 GovernmentBankBuySell Bronze)
+   - margin SBL 6 cols(integrate securities_lending_tw,Bronze 已存在)
+   - valuation.market_value_weight(join price_daily + stock_info_ref)
+   - day_trading_ratio(join price_daily volume)
+   - market_margin total_*_balance(新 TotalMarginPurchaseShortSale Bronze)
+4. **bronze/phase_executor.py 從 src/phase_executor.py 拆出**(blueprint §三 結構)
+5. **asyncio.gather 7a 平行優化**(需先升 db connection pool)
 3. **PR #19c 動工**(剩 8 個 builder + orchestrator 真實邏輯 + Phase 7a/7b/7c CLI)
    - holding_shares_per / monthly_revenue / financial_statement(依 PR #18.5)
    - taiex_index / us_market_index / exchange_rate / market_margin / business_indicator

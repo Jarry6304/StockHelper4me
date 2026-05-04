@@ -7,6 +7,7 @@ tw-stock-collector CLI 進入點。
   python src/main.py backfill [--phases 1,2,3,4] [--stocks 2330,2317]
   python src/main.py incremental [--stocks 2330,2317]
   python src/main.py phase 3
+  python src/main.py silver phase 7a [--stocks 2330] [--full-rebuild]
   python src/main.py status
   python src/main.py validate
 
@@ -157,6 +158,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Phase 編號（0-6；Phase 0 為 trading_calendar 預載入）",
     )
 
+    # ── silver 子命令(Phase 7 dirty-driven Silver 計算層,blueprint v3.2)
+    silver_parser = subparsers.add_parser(
+        "silver",
+        help="Silver 層計算(Phase 7a/7b/7c)",
+    )
+    silver_subparsers = silver_parser.add_subparsers(dest="silver_command", required=True)
+
+    silver_phase_parser = silver_subparsers.add_parser(
+        "phase",
+        help="跑指定 Silver phase(7a / 7b / 7c)",
+    )
+    silver_phase_parser.add_argument(
+        "phase_name",
+        choices=["7a", "7b", "7c"],
+        metavar="PHASE",
+        help="Silver phase:7a(獨立 builder)/ 7b(跨表依賴)/ 7c(Rust 後復權)",
+    )
+    silver_phase_parser.add_argument(
+        "--stocks",
+        help="覆蓋股票清單,逗號分隔(market-level builder 一律忽略)",
+    )
+    silver_phase_parser.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help="忽略 dirty queue,全表重算(目前唯一支援的模式)",
+    )
+
     # ── status 子命令（不需要執行選項）
     subparsers.add_parser("status", help="顯示同步進度摘要")
 
@@ -199,6 +227,11 @@ def main() -> None:
     # status 指令
     if args.command == "status":
         cmd_status(config)
+        return
+
+    # silver 指令(Phase 7 dirty-driven 計算層)
+    if args.command == "silver":
+        asyncio.run(_run_silver(args, config))
         return
 
     # 其他指令（backfill / incremental / phase）需要執行引擎
@@ -299,6 +332,83 @@ async def _run_collector(args, config, stock_list_cfg) -> None:
 
     elapsed = int(time.monotonic() - start_time)
     logger.info(f"Collector finished. elapsed={elapsed}s")
+
+
+# =============================================================================
+# 子命令:silver phase(Phase 7 dirty-driven Silver 計算層)
+# =============================================================================
+
+async def _run_silver(args, config) -> None:
+    """跑 Silver Phase 7(7a / 7b / 7c)。
+
+    7a / 7b 走 silver/builders/<name>.run(db, ...);
+    7c 派 rust_bridge.run_phase4 給 tw_market_core 系列。
+
+    NotImplementedError → status="skipped"(不中斷其他 builder)
+    Exception → status="failed" + reason 紀錄(不中斷,對齊 cores_overview §7.5
+    dirty 契約,失敗 builder 不 reset is_dirty 留下次重試)。
+    """
+    from silver.orchestrator import SilverOrchestrator
+
+    start_time = time.monotonic()
+    phase_name = args.phase_name
+    stock_ids  = (
+        [s.strip() for s in args.stocks.split(",")] if args.stocks else None
+    )
+
+    db = create_writer()
+    db.init_schema()
+
+    # 7c 才需要 rust_bridge;7a / 7b 不用
+    rust_bridge = None
+    if phase_name == "7c":
+        rust_bridge = RustBridge(config.global_cfg.rust_binary_path)
+
+    try:
+        orch = SilverOrchestrator(db=db, rust_bridge=rust_bridge)
+        logger.info(
+            f"Silver started. phase={phase_name}, "
+            f"stocks={stock_ids or 'all'}, full_rebuild={args.full_rebuild}"
+        )
+        result = await orch.run(
+            phases       = [phase_name],
+            stock_ids    = stock_ids,
+            full_rebuild = args.full_rebuild,
+        )
+
+        # 印 status table
+        print()
+        print("=" * 70)
+        print(f"Silver phase {phase_name} 結果")
+        print("=" * 70)
+        phase_result = result["results"].get(phase_name, {})
+        if phase_name == "7c":
+            print(f"  rust_bridge result: {phase_result}")
+        else:
+            print(f"{'builder':<22} {'status':<10} {'read':>8} {'wrote':>8} {'ms':>8}")
+            print("-" * 60)
+            for name, r in phase_result.items():
+                status = r.get("status", "?")
+                rd = r.get("rows_read", "-")
+                wr = r.get("rows_written", "-")
+                ms = r.get("elapsed_ms", "-")
+                print(f"{name:<22} {status:<10} {str(rd):>8} {str(wr):>8} {str(ms):>8}")
+            ok = sum(1 for r in phase_result.values() if r.get("status") == "ok")
+            sk = sum(1 for r in phase_result.values() if r.get("status") == "skipped")
+            fl = sum(1 for r in phase_result.values() if r.get("status") == "failed")
+            total = len(phase_result)
+            print("-" * 60)
+            print(f"TOTAL: {ok}/{total} OK, {sk} skipped, {fl} failed")
+        print()
+
+    except Exception as e:
+        logger.error(f"Silver aborted. phase={phase_name}, reason={e}")
+        raise
+    finally:
+        db.close()
+
+    elapsed = int(time.monotonic() - start_time)
+    logger.info(f"Silver finished. phase={phase_name}, elapsed={elapsed}s")
 
 
 # =============================================================================
