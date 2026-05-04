@@ -23,7 +23,68 @@
   - `claude/collector-schema-mapping-2YF5U` / `claude/continue-work-dvkRv` / `claude/setup-agent-review-mcp-berOR`(v1.5/v1.6 探勘)
   - `claude/review-collector-spec-Gktcf`(早期 review 分支)
   - `collector`(早期 PR #4)
-- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 + v1.13 + v1.14 PR 開於 initial-setup-RhLKU 分支
+- **PR**:v1.9 + v1.9.1 + v1.10 + v1.11 + v1.12 + v1.13 + v1.14 + v1.15 PR 開於 initial-setup-RhLKU 分支
+
+---
+
+## v1.15 — PR #19c-2 Silver 3 個 PR #18.5 依賴 builder(2026-05-04)
+
+接 PR #19c-1 後動工 PR #19c-2。原計畫切片 scope 仍太大,本 session 進一步縮:
+**只完成 3 個 PR #18.5 依賴 builder + verifier**。orchestrator 真實邏輯 + CLI
+整合 + bronze/phase_executor 拆段 + 衍生欄補齊留 PR #19c-3。
+
+### A. 3 個 builder 從 stub 升實作
+
+| builder | Silver 寫入 | Bronze 來源 | 邏輯 |
+|---|---|---|---|
+| holding_shares_per | holding_shares_per_derived | holding_shares_per_tw | Bronze N rows/level → Silver 1 row/(stock,date)+ detail JSONB pack levels(對齊 v2.0 aggregate_holding_shares) |
+| monthly_revenue | monthly_revenue_derived | monthly_revenue_tw | Bronze raw FinMind 欄名 → Silver:revenue_year → revenue_yoy / revenue_month → revenue_mom rename;country / create_time(TEXT)pack 進 detail JSONB |
+| financial_statement | financial_statement_derived | financial_statement_tw | Bronze N rows/(stock,date,event_type,origin_name)→ Silver 1 row/(stock,date,type)+ detail JSONB pack origin_name → value(對齊 v2.0 aggregate_financial)。Bronze.event_type → Silver.type |
+
+### B. 完成 13 個 builder 全部從 stub 升實作
+
+PR sequencing milestone:
+- PR #19a:14 張 Silver schema + 13 builder stubs
+- PR #19b:5 個 simple stock-level builder(institutional / margin / foreign_holding / day_trading / valuation)
+- PR #19c-1:5 個 market-level builder(taiex / us / exchange_rate / market_margin / business_indicator)
+- **PR #19c-2(本 session)**:3 個 PR #18.5 依賴 builder ✓
+
+13 個 silver/builders/*.py 全部從 raise NotImplementedError 升實作。
+
+### C. 驗證器 scripts/verify_pr19c2_silver.py
+
+對齊 verify_pr19b_silver.py 模式:對 v2.0 legacy 表逐 PK 等值比對。
+
+預設 stocks=`["1101","2317","2330"]`(對齊 PR #18.5 user smoke test 已 backfill
+範圍)。Bronze 空表 sanity check 在跑 builder 前先過濾,點明該跑哪個 backfill。
+
+### D. 沙箱合成資料測試
+
+3 個 builder transform 邏輯通過:
+- holding_shares_per:2 levels × 2 dates → pack into detail JSONB 正確
+- monthly_revenue:revenue_year → revenue_yoy rename + 空字串 create_time pass-through
+- financial_statement:income + balance 分開 group + origin_name 集合進 detail
+
+### E. 用戶本機驗證(預期全綠)
+
+```powershell
+git pull
+python scripts/verify_pr19c2_silver.py    # 預設 1101,2317,2330 — 預期 3/3 OK
+```
+
+### 已知狀態(下次 session 起點)
+
+- 13 個 builder 全部實作完成 ✓
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️ (smoke test) → #19c-1 ✅ → **#19c-2 ⏳ 待 user verify** → #19c-3 → #20
+
+PR #19c-3 留:
+- silver/orchestrator.py 真實邏輯(asyncio.gather 7a 平行 + 7b 序列 + 7c rust_bridge)
+- src/main.py 加 `silver phase 7a/7b/7c` 子命令
+- bronze/phase_executor.py 從 src/phase_executor.py 拆出
+- PR #19b/#19c-1 暫不填的衍生欄(institutional.gov_bank_net /
+  margin SBL 6 / valuation.market_value_weight / day_trading_ratio /
+  market_margin total_*_balance)— 部分需新 Bronze table + alembic migration
+  (GovernmentBankBuySell / TotalMarginPurchaseShortSale)
 
 ---
 
@@ -777,20 +838,18 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 PR #19c-1 5 個 market-level builder 已落地,user verify 後接 PR #19c-2**。
-> 5 個 market-level builder 對齊 Bronze 1:1,pyproject 已落地不再卡 import friction。
+> **🎯 13 個 builder 全部實作完成(PR #19c-2)— user verify 後接 PR #19c-3**(orchestrator + CLI + 衍生欄)。
 
-1. **🎯 PR #19c-1 本機驗證 + push**(本 session 完成 v1.14 code,user 本機跑驗證):
-   - `python scripts/verify_pr19c_silver.py`(5/5 OK 對 Bronze 等值)
+1. **🎯 PR #19c-2 本機驗證 + push**(本 session 完成 v1.15 code):
+   - `python scripts/verify_pr19c2_silver.py`(預期 3/3 OK 對 v2.0 legacy 等值,stocks=1101,2317,2330)
    - `git push`(本 session 已 commit + push 到 init-project-setup-yGset)
-2. **PR #19c-2 動工**(剩 3 個 PR #18.5 依賴 builder + orchestrator + CLI 整合)
-   - 3 個 builder(holding_shares_per / monthly_revenue / financial_statement)— Bronze 已 PR #18.5 smoke test 3 stocks 通過,可開發 + 驗 round-trip
+2. **PR #19c-3 動工**(orchestrator 真實邏輯 + CLI 整合 + 衍生欄補齊)
    - `silver/orchestrator.py` 補 asyncio.gather 7a 平行 + 7b 序列 + 7c 走 rust_bridge
    - `src/main.py` 加 `silver phase 7a/7b/7c` 子命令
    - `bronze/phase_executor.py` 從 src/phase_executor.py 拆出
-   - 補 PR #19b / PR #19c-1 暫不填的衍生欄:
+   - 補 PR #19b / PR #19c-1 暫不填的衍生欄(部分需新 Bronze + alembic):
      - institutional.gov_bank_net(需新增 GovernmentBankBuySell Bronze 來源)
-     - margin SBL 6 cols(integrate securities_lending_tw aggregation)
+     - margin SBL 6 cols(integrate securities_lending_tw aggregation,Bronze 已存在)
      - valuation.market_value_weight(join price_daily + stock_info_ref 發行股數)
      - day_trading_ratio(7b 階段 join price_daily volume)
      - market_margin total_*_balance 2 cols(新增 TotalMarginPurchaseShortSale Bronze)
