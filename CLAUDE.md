@@ -167,7 +167,7 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ⏳ 待 user verify → #21-B`。下個 session 主任務見「下次 session 建議優先序」段。
+當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅(user verify + day_trading hotfix) → #21-B`。下個 session 主任務見「下次 session 建議優先序」段。
 
 ---
 
@@ -298,16 +298,60 @@ python scripts/verify_pr19b_silver.py                # 仍 5/5 OK(skip 新欄)
 
 User 本機需排 30~40h 跑首次 backfill,流程同 v1.13 PR #18.5。
 
+### H. user 本機驗收 + 兩個 spot-check trap(2026-05-05)
+
+User 跑完三段流程,verify 都通,但 spot-check 揭露兩問題:
+
+1. **`day_trading_ratio` 對 2330 = 436758%**(明顯爆表)
+   - Root cause:builder 公式 `(buy + sell) × 100 / volume` 把**金額(NTD)** 除以
+     **股數**。FinMind `TaiwanStockDayTrading` 欄位語意:
+     - `day_trading_buy / sell` = `BuyAmount / SellAmount`(NTD 金額)
+     - `day_trading_tw.volume` = `Volume`(當沖股數)
+   - Spec §7.4 真正的公式是 `day_trade_volume / total_volume × 100`,
+     分子是「當沖股數」(`day_trading_tw.volume`),分母是「全日股數」
+     (`price_daily.volume`)。
+   - **Hotfix**(本次 commit):builder 改加 LEFT JOIN `price_daily`,
+     `_compute_ratio(dt_volume, pd_volume)` = `dt_volume × 100 / pd_volume`。
+     BRONZE_TABLES 從 `["day_trading_tw"]` → `["day_trading_tw", "price_daily"]`。
+   - 修完 smoke test 通(`12M / 30M = 40%` 合理範圍)。
+
+2. **`market_value_weight` 對 2330 = 0.995**(預期 ~25-30%)
+   - Root cause:**不是 code bug**,是 dev env 的 `valuation_per_tw` 只反推填了
+     ~5 檔(8881 row / 1776 date ≈ 5 stocks)。SUM 分母只算這 5 檔,2330
+     在這 5 檔裡的市值佔比就是 99.5%。production 全市場 backfill 後 2330
+     在 1700+ 檔裡的佔比才會回到 ~25-30%。
+   - **Doc-only**:builder docstring 加 dev env caveat 段落,提醒「分母是
+     valuation_per_tw 內所有 stock 聚合,partial dev backfill 會使分母偏小」。
+   - 不改 code 邏輯(production 行為正確)。
+
+修完 user 重跑驗收流程:
+
+```powershell
+git pull
+python src/main.py silver phase 7a --stocks 2330 --full-rebuild
+psql "postgresql://twstock:twstock@localhost:5432/twstock" -c "
+SELECT stock_id, date, day_trading_buy, day_trading_sell, day_trading_ratio
+FROM day_trading_derived
+WHERE market='TW' AND stock_id='2330' ORDER BY date DESC LIMIT 5
+"
+# 預期 day_trading_ratio 在 0~100% 區間(2330 當沖率約 30~70%,看當日)
+```
+
 ### 已知狀態(下次 session 起點)
 
-- alembic head:`o4p5q6r7s8t9`(待 user 本機 `alembic upgrade head`)
-- 5 衍生欄缺口:2 補(market_value_weight / day_trading_ratio)+ 3 留 PR #21-B
-- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓)→ #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15)→ **#21-A ⏳ 待 user verify** → #21-B → #22
+- alembic head:`o4p5q6r7s8t9`(user 已落)
+- PR #21-A:**code 已 user verify pass**,`day_trading_ratio` hotfix 同 PR
+  (本 commit),`market_value_weight` dev env 偏窄是預期行為。
+- 5 衍生欄缺口:2 補(market_value_weight / day_trading_ratio + 1 hotfix)
+  + 3 留 PR #21-B
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓)
+  → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15)→ **#21-A ✅** → #21-B → #22
 
 下個 session 建議:
-1. PR #21-A user 本機驗證 — `silver phase 7a` + spot-check 兩欄數值合理性
-2. **PR #21-B** 動工:3 條新 Bronze + 30~40h backfill 計畫(需 user 排日曆時間)
-3. 平行可動:bronze/phase_executor.py 拆段 / B-1/B-2 收尾 market_ohlcv_tw dual-source
+1. **PR #21-B** 動工:3 條新 Bronze + 30~40h backfill 計畫(需 user 排日曆時間)
+2. 平行可動:bronze/phase_executor.py 拆段 / B-1/B-2 收尾 market_ohlcv_tw dual-source
+3. (可選)拿 production 全市場 backfill 後資料 spot-check `market_value_weight`
+   對 2330 確認 ~25-30%(不擋 PR sequencing)
 
 ---
 
@@ -1208,22 +1252,17 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.18 PR #21-A 已 land(2026-05-04)**:`market_value_weight` +
-> `day_trading_ratio` 兩個 builder-only 衍生欄補完;3 條需新 Bronze 的衍生欄
-> 留 PR #21-B。
+> **🎯 v1.18 PR #21-A user verify 通(2026-05-05)**:reverse-pivot 5/5 OK +
+> verify_pr19b 5/5 OK + spot-check 揭露 day_trading_ratio formula bug,同 PR
+> hotfix(改用 `dt_volume / pd_volume × 100`,JOIN price_daily)。
+> `market_value_weight` 對 2330 = 0.995 是 dev env 只有 ~5 檔的數學結果,
+> production 全市場應 ~25-30%,builder docstring 加 caveat 不改 code。
 > 下階段主軸:**PR #21-B 新 Bronze 補完剩 3 條衍生欄**,需 user 排 30~40h
 > backfill 計畫(走 PR #18.5 同 pattern)。
 
 ### 阻塞性排序
 
-1. **🎯 PR #21-A user 本機驗證**(~30 分鐘)
-   - `alembic upgrade head` → `o4p5q6r7s8t9`
-   - `python src/main.py silver phase 7a --stocks 2330 --full-rebuild`
-   - psql spot-check `valuation_daily_derived.market_value_weight` 範圍 [0,1]
-     合理 + `day_trading_derived.day_trading_ratio` 約 0~50% 區間
-   - `python scripts/verify_pr19b_silver.py` 仍 5/5 OK
-
-2. **🎯 PR #21-B — 3 條新 Bronze + 衍生欄補齊**(下個 session 主任務,~1 天 + backfill)
+1. **🎯 PR #21-B — 3 條新 Bronze + 衍生欄補齊**(下個 session 主任務,~1 天 + backfill)
    - `institutional.gov_bank_net` ← `TaiwanStockGovernmentBankBuySell`(候選名)
    - `market_margin.total_margin_purchase_balance` / `total_short_sale_balance`
      ← `TaiwanStockTotalMarginPurchaseShortSale`
@@ -1233,29 +1272,29 @@ python scripts\inspect_db.py 2330
    - 規模:3 entries × 1700+ stocks × 21 年 ≈ 30~40h calendar-time @ 1600 reqs/h
      (對齊 v1.13 PR #18.5 流程)
 
-3. **PR #21 收尾** — 砍 §5.6 deprecated 路徑
+2. **PR #21 收尾** — 砍 §5.6 deprecated 路徑
    - 觀察 1~2 sprint dirty queue 無歧義後,砍 `post_process.invalidate_fwd_cache`
      函式本體 + `bronze/dirty_marker.mark_silver_dirty` no-op
    - Rust binary 改讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`
      (orchestrator path 已接,Rust 自接是收尾用 — 兩端任一條 path work 就夠)
 
-4. **bronze/phase_executor.py 從 src/phase_executor.py 拆出**(blueprint §三
+3. **bronze/phase_executor.py 從 src/phase_executor.py 拆出**(blueprint §三
    結構工 — phase 1-6 屬 bronze,phase 7 屬 silver,目前都擠在 src/ 根)
 
-5. **B-1/B-2 收尾** — `market_ohlcv_tw` dual-source merge(`TaiwanStockTotalReturnIndex` +
+4. **B-1/B-2 收尾** — `market_ohlcv_tw` dual-source merge(`TaiwanStockTotalReturnIndex` +
    `TaiwanVariousIndicators5Seconds` → daily OHLCV);完成後 `taiex_index_derived`
    才有真資料(目前 PR #19c-1 verifier 對 2330 read=0 wrote=0 是 source-empty,非 builder bug)
 
 ### 中期 backlog(non-blocking)
 
-6. **`asyncio.gather` 7a 平行優化** — 需先升 PostgresWriter 為 connection pool;
+5. **`asyncio.gather` 7a 平行優化** — 需先升 PostgresWriter 為 connection pool;
    perf gain ~ms 量級,排序低
-7. **Phase 4 真正的 incremental 優化** — 偵測「該股票無新除權息事件 → 跳過」
+6. **Phase 4 真正的 incremental 優化** — 偵測「該股票無新除權息事件 → 跳過」
    每天 incremental 可省 ~6 分鐘
-8. **`inspect_db.py` 升 PG 版** — v2.0 後該腳本是 SQLite hardcode 不可用
-9. **CLAUDE.md 章節重組** — ~~v1.4 → v1.7 詳解搬 `docs/claude_history.md`~~ ✅ v1.18 reorg 已完成(v1.5-v1.9.1 全部搬到 history;主檔從 1500+ → ~1260 行)
-10. **agent-review-mcp 支線**(v1.4 spec,自 v1.6 懸而未決)
-11. **PR review + merge** — `claude/initial-setup-RhLKU` 累積 v1.10 → v1.18 ~60+ commit
+7. **`inspect_db.py` 升 PG 版** — v2.0 後該腳本是 SQLite hardcode 不可用
+8. **CLAUDE.md 章節重組** — ~~v1.4 → v1.7 詳解搬 `docs/claude_history.md`~~ ✅ v1.18 reorg 已完成(v1.5-v1.9.1 全部搬到 history;主檔從 1500+ → ~1260 行)
+9. **agent-review-mcp 支線**(v1.4 spec,自 v1.6 懸而未決)
+10. **PR review + merge** — `claude/initial-setup-RhLKU` 累積 v1.10 → v1.18 ~60+ commit
     待 maintainer 整合
-12. **m2 PR #20 / #21 完整 milestone** — orchestrator go-live + Silver views(spec §2.5)
+11. **m2 PR #20 / #21 完整 milestone** — orchestrator go-live + Silver views(spec §2.5)
     + legacy_v2 rename(blueprint §八.2)+ M3 prep,blueprint §十 PR 切法
