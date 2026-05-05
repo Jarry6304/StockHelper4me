@@ -79,7 +79,7 @@ VERIFY_SPECS: list[VerifySpec] = [
             "dealer_buy", "dealer_sell",
             "dealer_hedging_buy", "dealer_hedging_sell",
         ),
-        skip_silver_cols = ("gov_bank_net",),    # PR #19c
+        skip_silver_cols = ("gov_bank_net",),    # PR #21-B 從 Bronze fill,legacy 無對應欄
     ),
     VerifySpec(
         name         = "margin",
@@ -98,7 +98,7 @@ VERIFY_SPECS: list[VerifySpec] = [
             "margin_short_sales_short_sales",
             "margin_short_sales_short_covering",
             "margin_short_sales_current_day_balance",
-            # 3 SBL → PR #19c
+            # 3 SBL — PR #21-B 從 short_sale_securities_lending_tw fill,legacy 無對應欄
             "sbl_short_sales_short_sales",
             "sbl_short_sales_returns",
             "sbl_short_sales_current_day_balance",
@@ -130,7 +130,7 @@ VERIFY_SPECS: list[VerifySpec] = [
         legacy_table = "valuation_daily",
         pk_cols      = ("market", "stock_id", "date"),
         compare_cols = ("per", "pbr", "dividend_yield"),
-        skip_silver_cols = ("market_value_weight",),    # PR #19c
+        skip_silver_cols = ("market_value_weight",),    # PR #21-A 從跨表 fill,legacy 無對應欄
     ),
 ]
 

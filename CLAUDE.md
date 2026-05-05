@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.18，最新 2026-05-04）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.19，最新 2026-05-05）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-RhLKU`，alembic head `o4p5q6r7s8t9_pr21_a_day_trading_ratio`（2026-05-04）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-fXhK2`，alembic head `p5q6r7s8t9u0_pr21_b_bronze3_derived5`（2026-05-05）。
 
 ---
 
@@ -167,7 +167,208 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅(user verify + day_trading hotfix + 2 候補 backlog 收尾) → #21-B`。下個 session 主任務見「下次 session 建議優先序」段。
+當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅(user verify + day_trading hotfix + 2 候補 backlog 收尾) → #21-B ⏳(code 落地待 user 30~40h backfill + verify)`。下個 session 主任務見「下次 session 建議優先序」段。
+
+---
+
+## v1.19 — PR #21-B 3 條新 Bronze + 5 衍生欄補完(2026-05-05)
+
+接 PR #21-A 完整收尾後動工 PR #21-B。原 plan 寫「~1 天 + backfill」、3 條
+新 Bronze 表。本 session 完成全部 code 動作,留 30~40h backfill 給 user 排日曆
+(走 PR #18.5 同 dual-write pattern)。
+
+### A. 5 個衍生欄 vs 3 個新 Bronze 對映
+
+| 衍生欄 | 所屬 Silver | 來源 Bronze(PR #21-B 落地) | FinMind dataset |
+|---|---|---|---|
+| `institutional.gov_bank_net` | institutional_daily_derived | government_bank_buy_sell_tw | TaiwanStockGovernmentBankBuySell |
+| `market_margin.total_margin_purchase_balance` | market_margin_maintenance_derived | total_margin_purchase_short_sale_tw | TaiwanStockTotalMarginPurchaseShortSale |
+| `market_margin.total_short_sale_balance` | 同上 | 同上 | 同上 |
+| `margin.sbl_short_sales_short_sales` | margin_daily_derived | short_sale_securities_lending_tw | **TaiwanStockShortSaleSecuritiesLending(候選名)** |
+| `margin.sbl_short_sales_returns` | 同上 | 同上 | 同上 |
+| `margin.sbl_short_sales_current_day_balance` | 同上 | 同上 | 同上 |
+
+⚠️ SBL 那條 dataset 名是候選名(spec §2.6.1 line 577 寫「SecuritiesLending」
+泛稱,實際 FinMind 命名 user 首跑 backfill 才能驗;若 404,collector.toml 改名
+重跑,同 PR #18.5 流程)。SBL 與既有 `securities_lending_tw` 來源
+`TaiwanStockSecuritiesLending`(借券成交明細,trade-level)是不同 dataset:
+後者是「借入交易」per-trade,前者是「借券賣出」daily aggregate 含 short_sales /
+returns / current_day_balance,兩者並存,trigger 名稱也不同
+(`mark_margin_derived_from_sbl_dirty` vs `mark_margin_derived_from_short_sale_dirty`)。
+
+### B. alembic `p5q6r7s8t9u0_pr21_b_bronze3_derived5`
+
+3 張新 Bronze raw 表 + 索引 + 3 個 Bronze→Silver dirty trigger:
+
+```sql
+CREATE TABLE government_bank_buy_sell_tw (
+    market    TEXT NOT NULL,
+    stock_id  TEXT NOT NULL,
+    date      DATE NOT NULL,
+    buy       BIGINT,
+    sell      BIGINT,
+    PRIMARY KEY (market, stock_id, date)
+);
+
+CREATE TABLE total_margin_purchase_short_sale_tw (
+    market                          TEXT NOT NULL,
+    date                            DATE NOT NULL,
+    total_margin_purchase_balance   BIGINT,
+    total_short_sale_balance        BIGINT,
+    PRIMARY KEY (market, date)         -- market-level,無 stock_id
+);
+
+CREATE TABLE short_sale_securities_lending_tw (
+    market                TEXT NOT NULL,
+    stock_id              TEXT NOT NULL,
+    date                  DATE NOT NULL,
+    short_sales           BIGINT,
+    returns               BIGINT,
+    current_day_balance   BIGINT,
+    PRIMARY KEY (market, stock_id, date)
+);
+```
+
+3 個 trigger:
+
+| trigger 名 | 來源 Bronze | 模式 | 目標 Silver |
+|---|---|---|---|
+| mark_institutional_derived_from_gov_bank_dirty | government_bank_buy_sell_tw | generic `trg_mark_silver_dirty('institutional_daily_derived')` | institutional_daily_derived |
+| mark_market_margin_derived_from_total_dirty | total_margin_purchase_short_sale_tw | reuse 既有 `trg_mark_market_margin_dirty()`(2-col PK 函式 body 一致,可服務多 source Bronze) | market_margin_maintenance_derived |
+| mark_margin_derived_from_short_sale_dirty | short_sale_securities_lending_tw | generic `trg_mark_silver_dirty('margin_daily_derived')` | margin_daily_derived |
+
+設計重點:**0 新 trigger function**,2 generic + 1 reuse 既有。reuse 是因為
+`trg_mark_market_margin_dirty()` 函式 body 只讀 `NEW.market` / `NEW.date`,
+2 個 source Bronze 都有這 2 個欄,服務任一 source 都正確。
+
+### C. collector.toml 3 個 dual-write entry
+
+對映 alembic 落地的 3 張 Bronze。phase 分配:
+
+| entry | param_mode | phase | segment_days | enabled |
+|---|---|---|---|---|
+| government_bank_buy_sell_v3 | per_stock | 5 | 365 | true |
+| total_margin_purchase_short_sale_v3 | all_market | 6 | 365 | true |
+| short_sale_securities_lending_v3 | per_stock | 5 | 365 | true |
+
+`field_rename` best-guess 對齊 FinMind 常見命名(e.g.
+`TotalMarginPurchaseTodayBalance` → `total_margin_purchase_balance`,
+`ShortSales` → `short_sales`);user 首跑 smoke test 對齊真實欄名,必要時調整。
+
+⚠️ 首次 backfill ~30-40h calendar-time(2 個 per_stock × 1700+ stocks × 21 年
++ 1 個 all_market × 21 年 @ 1600 reqs/h)。user 想推遲:把 3 個 enabled 改 false,
+等準備好再切回 true。
+
+### D. 3 個 Silver builder LEFT JOIN 補欄
+
+3 個 builder 改成讀 2 張 Bronze,以 (market, stock_id, date) 或 (market, date)
+LEFT JOIN 將新 Bronze 補進衍生欄;新 Bronze 缺 row → 衍生欄 NULL,不影響其他
+stocks/dates 的 pivot/合成。
+
+| builder | 主 Bronze | 副 Bronze(LEFT JOIN) | LEFT JOIN key | 補進衍生欄 |
+|---|---|---|---|---|
+| institutional | institutional_investors_tw | government_bank_buy_sell_tw | (market, stock_id, date) | gov_bank_net = buy - sell(任一 NULL → NULL) |
+| market_margin | market_margin_maintenance | total_margin_purchase_short_sale_tw | (market, date) | total_margin_purchase_balance / total_short_sale_balance(1:1) |
+| margin | margin_purchase_short_sale_tw | short_sale_securities_lending_tw | (market, stock_id, date) | sbl_short_sales_short_sales / _returns / _current_day_balance(1:1) |
+
+`institutional._gov_bank_net(buy, sell)` 邊界處理(per spec §2.6.2「buy/sell 二
+擇一,留 net」):任一 NULL → None。資料完整時才算 net,避免 0 視為缺失。
+
+### E. verifier 更新(comments only,skip_silver_cols 結構不動)
+
+`verify_pr19b_silver.py` + `verify_pr19c_silver.py` 的 `skip_silver_cols` 結構
+**不動**,因為這 5 衍生欄是 Silver-only,legacy v2.0 表沒對應欄位 — round-trip
+驗證仍要 skip,改的只是 comment 標明欄位來源(從「PR #19c 待補」改「PR #21-B
+從 X Bronze fill,legacy 無對應欄」)。
+
+(本 PR 不加新 verifier;user 直接 `psql` spot check Silver 衍生欄是否 NOT NULL
++ 對 Bronze raw 值即可,對齊 PR #18.5 / PR #21-A user-facing 流程。)
+
+### F. 沙箱已驗
+
+- alembic migration AST 解析 ✓ + chain `o4p5q6r7s8t9 → p5q6r7s8t9u0` ✓
+- collector.toml `python -c "import tomllib; tomllib.load(...)"` ✓ + 3 entry 結構 OK
+- 3 個 builder import ✓ + BRONZE_TABLES 各含 2 張(主 + 副)
+- 3 個 builder transform 邏輯合成資料 smoke test 全綠:
+  - institutional._gov_bank_net 6 個 case(normal / negative / 任一 NULL / 兩 NULL / 0)
+  - institutional._pivot LEFT JOIN(2330 補 net=300,8888 缺 lookup → NULL)
+  - market_margin._build_silver_rows LEFT JOIN(2026-05-01 補,2026-05-02 缺 → NULL)
+  - margin._build_silver_rows LEFT JOIN(2330 補 SBL,8888 缺 → 3 SBL NULL)
+
+### G. user 本機驗證流程
+
+```powershell
+# 1. 拉 + 落 schema
+git pull
+alembic upgrade head                        # p5q6r7s8t9u0(3 Bronze + 3 trigger)
+
+# 2. validate config
+python src/main.py validate
+psql $env:DATABASE_URL -c "\dt *_tw"        # 應看到 11 張 Bronze(8 + 3 新)
+
+# 3. smoke test 單股(5~10 分鐘,驗 dataset 名 + 欄位語意)
+python src/main.py backfill --phases 5,6 --stocks 2330
+# 注意觀察:
+#   - government_bank_buy_sell_v3 / short_sale_securities_lending_v3 dataset 是否 200 OK
+#   - 若 short_sale_securities_lending dataset 404:改 collector.toml dataset 名再跑
+#   - 若 row count 為 0:檢查 field_rename 是否需調
+
+# 4. 全市場 backfill(預期 30~40h calendar-time)
+python src/main.py backfill --phases 5,6
+
+# 5. 跑 Silver builder + spot check 5 衍生欄
+python src/main.py silver phase 7a --stocks 2330 --full-rebuild
+python src/main.py silver phase 7c                  # market-level builder
+
+psql $env:DATABASE_URL -c "
+SELECT stock_id, date, gov_bank_net
+FROM institutional_daily_derived
+WHERE stock_id='2330' ORDER BY date DESC LIMIT 5
+"
+psql $env:DATABASE_URL -c "
+SELECT date, ratio, total_margin_purchase_balance, total_short_sale_balance
+FROM market_margin_maintenance_derived ORDER BY date DESC LIMIT 5
+"
+psql $env:DATABASE_URL -c "
+SELECT stock_id, date,
+       sbl_short_sales_short_sales, sbl_short_sales_returns, sbl_short_sales_current_day_balance
+FROM margin_daily_derived
+WHERE stock_id='2330' ORDER BY date DESC LIMIT 5
+"
+
+# 6. 既有 round-trip 驗證仍應 5/5 OK + 5/5 OK(skip 5 衍生欄)
+python scripts/verify_pr19b_silver.py
+python scripts/verify_pr19c_silver.py
+```
+
+### H. 已知設計風險(首跑 smoke test 該驗的)
+
+1. **gov_bank Bronze 假設 1 row/(stock,date)**:若 FinMind 回 8 家行庫各自一筆
+   (`bank_name` 維度),會踩 PK 衝突。修法:加 `bank_name` 進 PK + builder 加
+   aggregate(SUM(buy) / SUM(sell))。
+2. **short_sale_securities_lending dataset 名候選**:`TaiwanStockShortSaleSecuritiesLending`
+   是依 FinMind 命名慣例 best-guess。若 404,常見替代名:
+   - `TaiwanStockShortSaleBalance`(spec hint 提過)
+   - `TaiwanStockShortSale`
+   - `TaiwanDailyShortSaleBalances`
+3. **3 個 entry field_rename 都是 best-guess**:user 跑 smoke test 看
+   `api_sync_progress.status`(預期 `completed`)+ Bronze 表 row count 是否 > 0,
+   不對就調 field_rename。
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`p5q6r7s8t9u0`(待 user 本機 `alembic upgrade head` 落地)
+- 3 張新 Bronze schema + 3 個 dirty trigger 上線(資料待 30~40h backfill)
+- 5 衍生欄缺口全填:0/5 NULL → 全部接 Bronze(本 PR 完成 code,實際資料看 user backfill)
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓)
+  → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15)→ #21-A ✅ →
+  **#21-B ⏳ code 落地待 user backfill + verify** → #22
+
+下個 session 建議:
+1. **user backfill 完 + spot check 結果**(有 hotfix 需求才進 #21-B-2)
+2. **PR #22 / B-1/B-2 收尾** market_ohlcv_tw dual-source merge
+3. **PR #21 完整收尾** — 1~2 sprint 後砍 §5.6 deprecated 路徑
+   (`post_process.invalidate_fwd_cache` + `bronze/dirty_marker.mark_silver_dirty`)
 
 ---
 
@@ -1281,33 +1482,35 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.18 PR #21-A 完整收尾(2026-05-05)**:`market_value_weight` +
-> `day_trading_ratio` 兩衍生欄補完(後者 hotfix 後 user verify 16~28% 合理),
-> + 2 候補 backlog(bronze/phase_executor 拆段 + inspect_db.py 升 PG 版)同 PR 收。
-> 下階段主軸:**PR #21-B 新 Bronze 補完剩 3 條衍生欄**,需 user 排 30~40h
-> backfill 計畫(走 PR #18.5 同 pattern)。
+> **🎯 v1.19 PR #21-B code 落地(2026-05-05)**:3 條新 Bronze 表
+> (government_bank_buy_sell_tw / total_margin_purchase_short_sale_tw /
+> short_sale_securities_lending_tw)+ 3 個 Bronze→Silver dirty trigger
+> + 3 個 builder LEFT JOIN 補 5 衍生欄 + 3 個 collector.toml dual-write entry。
+> 沙箱 4 層驗(alembic / toml / import / synthetic smoke)全綠;首次 backfill
+> 預期 30~40h,留 user 排日曆 + verify 後續 hotfix。
 
 ### 阻塞性排序
 
-1. **🎯 PR #21-B — 3 條新 Bronze + 衍生欄補齊**(下個 session 主任務,~1 天 + backfill)
-   - `institutional.gov_bank_net` ← `TaiwanStockGovernmentBankBuySell`(候選名)
-   - `market_margin.total_margin_purchase_balance` / `total_short_sale_balance`
-     ← `TaiwanStockTotalMarginPurchaseShortSale`
-   - `margin.sbl_short_sales_*`(3 欄)— 需研究 FinMind 哪個 dataset 提供
-     daily 借券累計(現 `securities_lending_tw` 是 trade-level)
-   - 三條都需新 Bronze 表 + alembic + collector.toml dual-write + builder 修
-   - 規模:3 entries × 1700+ stocks × 21 年 ≈ 30~40h calendar-time @ 1600 reqs/h
-     (對齊 v1.13 PR #18.5 流程)
+1. **🎯 user 本機 PR #21-B verify**(下個 session 開頭可能要做的事)
+   - alembic upgrade head + smoke test 單股(2330)
+   - 觀察 3 個新 entry api_sync_progress.status:
+     - `TaiwanStockGovernmentBankBuySell`:預期 `completed`(若 1 row/(stock,date)
+       假設錯,踩 PK 衝突 → 加 `bank_name` 進 PK 改 schema)
+     - `TaiwanStockTotalMarginPurchaseShortSale`:預期 `completed`
+     - `TaiwanStockShortSaleSecuritiesLending`(候選名):若 404,試
+       `TaiwanStockShortSaleBalance` / `TaiwanStockShortSale` 等 fallback 名
+   - 若 dataset 名 / 欄名 / PK shape 任一錯 → 動 hotfix(走 PR #21-B-2 同 commit)
 
-2. **PR #21 收尾** — 砍 §5.6 deprecated 路徑
+2. **PR #22 / B-1/B-2 收尾** — `market_ohlcv_tw` dual-source merge
+   (`TaiwanStockTotalReturnIndex` + `TaiwanVariousIndicators5Seconds` → daily OHLCV);
+   完成後 `taiex_index_derived` 才有真資料(目前 PR #19c-1 verifier 對 2330
+   read=0 wrote=0 是 source-empty,非 builder bug)
+
+3. **PR #21 完整收尾** — 砍 §5.6 deprecated 路徑
    - 觀察 1~2 sprint dirty queue 無歧義後,砍 `post_process.invalidate_fwd_cache`
      函式本體 + `bronze/dirty_marker.mark_silver_dirty` no-op
    - Rust binary 改讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`
      (orchestrator path 已接,Rust 自接是收尾用 — 兩端任一條 path work 就夠)
-
-3. **B-1/B-2 收尾** — `market_ohlcv_tw` dual-source merge(`TaiwanStockTotalReturnIndex` +
-   `TaiwanVariousIndicators5Seconds` → daily OHLCV);完成後 `taiex_index_derived`
-   才有真資料(目前 PR #19c-1 verifier 對 2330 read=0 wrote=0 是 source-empty,非 builder bug)
 
 ### 中期 backlog(non-blocking)
 

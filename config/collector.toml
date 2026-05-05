@@ -586,3 +586,67 @@ is_backer    = false
 segment_days = 365
 field_rename = {"leading" = "leading_indicator", "coincident" = "coincident_indicator", "lagging" = "lagging_indicator"}
 notes        = "景氣指標(月頻);v3.2 B-6 新表;每月 1 筆;reference 級不算 Core;leading/coincident/lagging 加 _indicator 後綴避開 PG 保留字 LEADING"
+
+
+# =============================================================================
+# v3.2 PR #21-B 5 衍生欄補完 dual-write entries(blueprint v3.2 §六 + spec §2.6)
+# =============================================================================
+# 3 個 entry 對映 PR #21-B alembic p5q6r7s8t9u0 落地的 3 張 Bronze raw 表,
+# feed 5 個 Silver 衍生欄(institutional.gov_bank_net /
+# market_margin.total_*_balance × 2 / margin.sbl_short_sales_* × 3)。
+#
+# ⚠️ 首次跑 backfill 預期 ~30-40h calendar-time:
+#   - government_bank_buy_sell_v3       per_stock × 1700+ × 21 年
+#   - short_sale_securities_lending_v3  per_stock × 1700+ × 21 年
+#   - total_margin_purchase_short_sale_v3  all_market × 21 年(快)
+#
+# user 想推遲首次 backfill:把 3 個 enabled 改 false,等準備好再切回 true。
+# field_rename 是依 FinMind 常見命名 best-guess;首跑 smoke test 對齊真實欄名,
+# 必要時在 collector.toml 調整(同 PR #18.5 流程)。
+
+# Bronze 1:government_bank_buy_sell_tw — 八大行庫買賣超(per stock)
+# 預期 FinMind 回 1 row/(stock,date),aggregate 8 家行庫 buy/sell
+[[api]]
+name         = "government_bank_buy_sell_v3"
+dataset      = "TaiwanStockGovernmentBankBuySell"
+param_mode   = "per_stock"
+target_table = "government_bank_buy_sell_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {}
+notes        = "PR #21-B v3.2 Bronze raw 八大行庫買賣超;Silver 在 institutional builder LEFT JOIN 後算 gov_bank_net = buy - sell"
+
+# Bronze 2:total_margin_purchase_short_sale_tw — 整體市場融資融券(market-level)
+# FinMind TaiwanStockTotalMarginPurchaseShortSale 一般回 (date,
+# TotalMarginPurchaseTodayBalance, TotalShortSaleTodayBalance, 其他衍生欄);
+# field_rename 把 *TodayBalance 對齊 Silver 欄名
+[[api]]
+name         = "total_margin_purchase_short_sale_v3"
+dataset      = "TaiwanStockTotalMarginPurchaseShortSale"
+param_mode   = "all_market"
+target_table = "total_margin_purchase_short_sale_tw"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"TotalMarginPurchaseTodayBalance" = "total_margin_purchase_balance", "TotalShortSaleTodayBalance" = "total_short_sale_balance"}
+notes        = "PR #21-B v3.2 Bronze raw 整體市場融資融券餘額(market-level);feed market_margin_maintenance_derived 2 衍生欄"
+
+# Bronze 3:short_sale_securities_lending_tw — 借券賣出明細(daily aggregate per stock)
+# ⚠️ candidate dataset 名 `TaiwanStockShortSaleSecuritiesLending`(與既有
+# securities_lending_tw 來源 `TaiwanStockSecuritiesLending` 是不同 dataset)。
+# 若首跑 backfill 該 dataset 名 404,改名後重跑(同 PR #18.5 流程)。
+# 若實際欄名不是 ShortSales / Returns / CurrentDayBalance,改 field_rename 對齊。
+[[api]]
+name         = "short_sale_securities_lending_v3"
+dataset      = "TaiwanStockShortSaleSecuritiesLending"
+param_mode   = "per_stock"
+target_table = "short_sale_securities_lending_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"ShortSales" = "short_sales", "Returns" = "returns", "CurrentDayBalance" = "current_day_balance"}
+notes        = "PR #21-B v3.2 Bronze raw 借券賣出 daily aggregate;feed margin_daily_derived sbl_short_sales_* 3 欄;dataset 名為候選名,首跑 smoke test 確認"

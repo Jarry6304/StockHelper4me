@@ -1142,6 +1142,63 @@ CREATE TRIGGER mark_fwd_dirty_on_event
 
 
 -- =============================================================================
+-- v3.2 PR #21-B Bronze 3 張新表 + 3 個 trigger(blueprint v3.2 §六 + spec §2.6.1/2/3)
+-- =============================================================================
+-- 對映 alembic p5q6r7s8t9u0;補 5 個衍生欄(institutional.gov_bank_net /
+-- market_margin.total_*_balance × 2 / margin.sbl_short_sales_* × 3)的 Bronze 來源。
+
+-- 八大行庫買賣超(per stock per day,假設 FinMind 回 aggregate 1 row;
+-- 若實際 per-bank 多 row,需補 bank_name 進 PK)
+CREATE TABLE IF NOT EXISTS government_bank_buy_sell_tw (
+    market    TEXT NOT NULL,
+    stock_id  TEXT NOT NULL,
+    date      DATE NOT NULL,
+    buy       BIGINT,
+    sell      BIGINT,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_gov_bank_buy_sell_tw_stock_date_desc
+    ON government_bank_buy_sell_tw (stock_id, date DESC);
+
+-- 整體市場融資融券餘額(market-level;PK 無 stock_id)
+CREATE TABLE IF NOT EXISTS total_margin_purchase_short_sale_tw (
+    market                          TEXT NOT NULL,
+    date                            DATE NOT NULL,
+    total_margin_purchase_balance   BIGINT,
+    total_short_sale_balance        BIGINT,
+    PRIMARY KEY (market, date)
+);
+
+-- 借券賣出明細(daily aggregate per stock;與 securities_lending_tw 借券成交
+-- per-trade 是不同 dataset)
+-- candidate FinMind dataset:TaiwanStockShortSaleSecuritiesLending(user 首跑 backfill 驗名)
+CREATE TABLE IF NOT EXISTS short_sale_securities_lending_tw (
+    market                TEXT NOT NULL,
+    stock_id              TEXT NOT NULL,
+    date                  DATE NOT NULL,
+    short_sales           BIGINT,
+    returns               BIGINT,
+    current_day_balance   BIGINT,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_short_sale_sbl_tw_stock_date_desc
+    ON short_sale_securities_lending_tw (stock_id, date DESC);
+
+-- 3 個新 trigger(2 generic + 1 reuse 既有 trg_mark_market_margin_dirty)
+CREATE TRIGGER mark_institutional_derived_from_gov_bank_dirty
+    AFTER INSERT OR UPDATE ON government_bank_buy_sell_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('institutional_daily_derived');
+
+CREATE TRIGGER mark_market_margin_derived_from_total_dirty
+    AFTER INSERT OR UPDATE ON total_margin_purchase_short_sale_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_market_margin_dirty();
+
+CREATE TRIGGER mark_margin_derived_from_short_sale_dirty
+    AFTER INSERT OR UPDATE ON short_sale_securities_lending_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('margin_daily_derived');
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 
