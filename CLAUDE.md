@@ -355,17 +355,73 @@ python scripts/verify_pr19c_silver.py
    `api_sync_progress.status`(預期 `completed`)+ Bronze 表 row count 是否 > 0,
    不對就調 field_rename。
 
+### I. user 本機 smoke test 揭露 2 個 hotfix(2026-05-06)
+
+User 跑 `alembic upgrade head` + `backfill --phases 5,6 --stocks 2330` 揭露:
+
+| Bronze | 結果 | 原因 |
+|---|---|---|
+| `total_margin_purchase_short_sale_tw` | ✅ 1778 rows | dataset 名 + field_rename 都對 |
+| `government_bank_buy_sell_tw` | ❌ HTTP 400 × 8 | FinMind tier 限制 |
+| `short_sale_securities_lending_tw` | ❌ HTTP 422 × 8 | candidate dataset 名不存在 |
+
+寫 `scripts/probe_finmind_datasets.py` 探 FinMind `/datalist` + 候選名,揭露:
+
+**1. gov_bank 需 sponsor tier**:
+```
+"Your level is backer. Please update your user level"
+```
+`TaiwanStockGovernmentBankBuySell` dataset 名 valid(從別個 422 enum error 也能看到列在
+allowed datasets 裡),但 user 是 `backer` tier,該 dataset 需 `sponsor` 訂閱。
+
+**Hotfix**:collector.toml `government_bank_buy_sell_v3` 設 `enabled = false` + 註明
+原因。Bronze schema + trigger 已落,等 user 升 FinMind tier 後切回 true 即可。
+Silver `institutional_daily_derived.gov_bank_net` 維持 NULL(builder LEFT JOIN
+缺 row → NULL,行為對齊 PR #21-B 之前)。
+
+**2. SBL 真實 dataset 是 `TaiwanDailyShortSaleBalances`**:
+回 15 個欄位(Margin + SBL 兩組),我們要的 3 個 SBL 欄是:
+- `SBLShortSalesShortSales` → `short_sales`
+- `SBLShortSalesReturns` → `returns`
+- `SBLShortSalesCurrentDayBalance` → `current_day_balance`
+
+額外 4 個 SBL 欄(PreviousDayBalance / Quota / ShortCovering / Adjustments)spec
+§2.6.1 明文要砍,db.upsert PRAGMA filter 自動 drop 不入 Bronze。
+
+**Hotfix**:collector.toml `short_sale_securities_lending_v3` 改:
+- `dataset` = `TaiwanStockShortSaleSecuritiesLending`(404)→ `TaiwanDailyShortSaleBalances`
+- `field_rename` = 3 個 SBL\* → 3 個 Silver 欄名
+
+api_sync_progress 既有 8 segment failed 紀錄,user 下次跑 backfill 自動 retry
+(phase_executor 對 `failed` status 會重試)。Bronze schema / trigger / Silver builder
+不動。
+
+**3. backfill 規模調整**:30~40h → ~22h
+原估 3 dataset × 1700+ stocks × 21 年。實際:
+- gov_bank disabled — 0
+- total_margin all_market — 已完成
+- SBL per_stock — 1700 × 21 ≈ 35700 reqs @ 2.25s/req ≈ 22h
+
 ### 已知狀態(下次 session 起點)
 
-- alembic head:`p5q6r7s8t9u0`(待 user 本機 `alembic upgrade head` 落地)
-- 3 張新 Bronze schema + 3 個 dirty trigger 上線(資料待 30~40h backfill)
-- 5 衍生欄缺口全填:0/5 NULL → 全部接 Bronze(本 PR 完成 code,實際資料看 user backfill)
+- alembic head:`p5q6r7s8t9u0`(user 已落)
+- 3 張新 Bronze schema + 3 個 dirty trigger 上線(2026-05-06 hotfix 後)
+- **資料狀態**:
+  - `total_margin_purchase_short_sale_tw`:✅ 1778 rows(market_margin builder 可用)
+  - `short_sale_securities_lending_tw`:⏳ 待 user ~22h backfill(margin builder 等資料)
+  - `government_bank_buy_sell_tw`:🔒 blocked on FinMind sponsor tier(institutional builder
+    gov_bank_net 維持 NULL)
+- 5 衍生欄填補狀態:**4/5 可填**(2 total_*_balance + 3 sbl_short_sales_*),1/5 blocked
+  (gov_bank_net 等 tier 升級)
 - v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓)
   → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15)→ #21-A ✅ →
-  **#21-B ⏳ code 落地待 user backfill + verify** → #22
+  **#21-B ⚠️ code 落地 + 2 hotfix(SBL dataset 名 + gov_bank disable)+ 待 user ~22h SBL backfill** → #22
 
 下個 session 建議:
-1. **user backfill 完 + spot check 結果**(有 hotfix 需求才進 #21-B-2)
+1. **user 跑 SBL ~22h backfill**(gov_bank 跳過)+ verify 4/5 衍生欄 spot check
+   - `python src/main.py backfill --phases 5 --stocks 2330` 5~10 分鐘 smoke test SBL dataset
+   - row count > 0 + api_sync_progress.status=completed → 全市場 backfill ~22h
+2. **user backfill 完 + spot check 結果**(有 hotfix 需求才進 #21-B-3)
 2. **PR #22 / B-1/B-2 收尾** market_ohlcv_tw dual-source merge
 3. **PR #21 完整收尾** — 1~2 sprint 後砍 §5.6 deprecated 路徑
    (`post_process.invalidate_fwd_cache` + `bronze/dirty_marker.mark_silver_dirty`)
