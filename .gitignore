@@ -1,3 +1,10 @@
+# av3 / discover / fix log dumps(root level only;scripts/*.txt 不在此規則內)
+/av3_*.txt
+/discover*.txt
+/fix_p1_17_log.txt
+/p1_17_result.txt
+/test.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -205,3 +212,28 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# tw-stock-collector
+data/*.db
+data/*.db-wal
+data/*.db-shm
+logs/
+rust_compute/target/
+scripts/test_28_apis_result.json
+*.db
+*.sqlite
+.venv/
+
+# tw-stock-collector：個人探測 / 測試殘留（repo root only，避免誤殺 src/scripts 下同名檔）
+/.vs/
+/api_specs_snapshot*.json
+/schema_report.json
+/schema_report.md
+/bat.py
+/probe_spec.py
+/finmind_schema_inspector*.py
+/test_400.py
+/test_data_id.py
+/test_ratelimit.py
+# 以後想丟個人探索檔，建議放 scratch/ 統一忽略：
+/scratch/
