@@ -130,7 +130,7 @@ class RustBridge:
         Returns:
             Rust binary 輸出的 JSON 摘要，格式：
             {
-                "schema_version": "2.0",
+                "schema_version": "3.2",
                 "processed": 1800,
                 "skipped": 12,
                 "errors": [{"stock_id": "XXXX", "reason": "..."}],

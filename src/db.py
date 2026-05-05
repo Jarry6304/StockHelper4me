@@ -49,9 +49,10 @@ from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger("collector.db")
 
-# Schema 版本,與 schema_metadata 表中的值對齊
-# Rust binary 啟動時 assert 此值
-SCHEMA_VERSION = "2.0"
+# Schema 版本,與 schema_metadata 表中的值對齊(由 alembic c2d3e4f5g6h7 bump 到 3.2)
+# init_schema() 比對此常數判斷是否要跑 schema_pg.sql;rust_bridge EXPECTED_SCHEMA_VERSION
+# 也鎖在同一值,schema 升版時三處(此處 / rust_bridge.py:31 / alembic migration)一起改
+SCHEMA_VERSION = "3.2"
 
 
 # =============================================================================
@@ -732,6 +733,18 @@ def create_writer(connection_url: str | None = None) -> DBWriter:
     Raises:
         RuntimeError: 環境變數缺失且未提供 connection_url
     """
+    # 鏡像 alembic/env.py:載 .env 檔(若存在),讓 verify_*.py / main.py 等
+    # 入口不必各自手動 load_dotenv。load_dotenv 預設不覆蓋已存在的環境變數,
+    # 所以 PowerShell `$env:DATABASE_URL=...` 仍優先。
+    try:
+        from dotenv import load_dotenv
+
+        env_path = Path(__file__).resolve().parent.parent / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
+    except ImportError:
+        pass  # python-dotenv 是 hard dep,但 import 失敗時退回純 os.environ
+
     if os.getenv("TWSTOCK_USE_SQLITE") == "1":
         sqlite_path = os.getenv("SQLITE_PATH", "data/tw_stock.db")
         return SqliteWriter(sqlite_path)

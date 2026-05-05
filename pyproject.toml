@@ -1,0 +1,48 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# =============================================================================
+# Project metadata(PEP 621)
+# =============================================================================
+[project]
+name            = "tw-stock-collector"
+version         = "3.2.0"
+description     = "Taiwan stock data collector — FinMind API → Postgres (Bronze/Silver/M3 medallion architecture)"
+readme          = "README.md"
+requires-python = ">=3.11"
+license         = {file = "LICENSE"}
+authors         = [{name = "Jarry"}]
+keywords        = ["taiwan-stock", "finmind", "postgres", "medallion", "collector"]
+
+# 對齊 requirements.txt 核心依賴(dev / test 走 optional-dependencies)
+dependencies = [
+    "aiohttp>=3.9",
+    "psycopg[binary]>=3.2,<4",
+    "psycopg-pool>=3.2",
+    "alembic>=1.13",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+# =============================================================================
+# Setuptools src layout
+# =============================================================================
+# pip install -e . 後:
+#   - silver / silver.builders / bronze 套件 importable
+#   - src/ 內 loose modules(api_client / db / main / phase_executor 等)
+#     也 importable(setuptools editable install 走 .pth 把 src/ 加進 sys.path)
+# 不再需要每次手動 $env:PYTHONPATH = "src";
+# alembic.ini 的 prepend_sys_path = . 保留(讓 alembic env.py 仍可從 root 跑)。
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where   = ["src"]
+include = ["silver*", "bronze*"]

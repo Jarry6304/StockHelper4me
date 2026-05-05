@@ -1,17 +1,23 @@
 """
-phase_executor.py
-------------------
-Phase 排程引擎模組。
+bronze/phase_executor.py
+------------------------
+Phase 1-6(Bronze 收集)排程引擎。PR #21-A 收尾從 src/phase_executor.py 搬到
+src/bronze/(blueprint §三 結構工 — phase 1-6 屬 bronze,phase 7 屬 silver,
+本檔對齊 src/silver/orchestrator.py 的 Phase 7 排程)。
 
-負責依 Phase 1→6 順序執行各 API 蒐集任務：
-- Phase 1：META（全市場）
-- Phase 2：EVENTS（每支股票）
-- Phase 3：RAW PRICE（每支股票 × 日期分段）
-- Phase 4：RUST 計算（呼叫 rust_bridge）
-- Phase 5：CHIP / FUNDAMENTAL
-- Phase 6：MACRO
+負責依 Phase 1→6 順序執行各 API 蒐集任務:
+- Phase 1:META(全市場)
+- Phase 2:EVENTS(每支股票)
+- Phase 3:RAW PRICE(每支股票 × 日期分段)
+- Phase 4:RUST 計算(呼叫 rust_bridge)
+- Phase 5:CHIP / FUNDAMENTAL
+- Phase 6:MACRO
 
-Phase 1 完成後需重新解析股票清單（先雞後蛋問題）。
+Phase 1 完成後需重新解析股票清單(先雞後蛋問題)。
+
+Imports 不變:本檔仍 import `aggregators` / `api_client` / `config_loader` 等
+src/ root modules — pyproject.toml 的 editable install 把 src/ 加進 sys.path,
+從 src/bronze/ 也能 import src/ root modules 沒問題。
 """
 
 import logging
@@ -236,11 +242,9 @@ class PhaseExecutor:
                     # PK 從 schema 動態查（DBWriter._table_pks），schema 是 single source of truth
                     pks = self.db._table_pks(api_config.target_table)
                     self.db.upsert(api_config.target_table, rows, primary_keys=pks)
-                    # P0-7 短期補丁(r3.1):price_adjustment_events 寫入後 reset
-                    # stock_sync_status.fwd_adj_valid 觸發 Phase 4 重算
-                    if api_config.target_table == "price_adjustment_events":
-                        from post_process import invalidate_fwd_cache
-                        invalidate_fwd_cache(self.db, stock_id)
+                    # PR #20:trg_mark_fwd_silver_dirty 接管 fwd 全段歷史 dirty 標記
+                    # (price_adjustment_events 寫入 → fwd 4 表 is_dirty=TRUE)。
+                    # 原本的 invalidate_fwd_cache 短期補丁路徑見 post_process.py(deprecated)。
 
                 # 更新進度
                 status = "empty" if not rows else "completed"

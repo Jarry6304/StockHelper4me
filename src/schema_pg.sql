@@ -657,6 +657,491 @@ CREATE INDEX IF NOT EXISTS idx_valuation_per_tw_stock_date_desc
 
 
 -- =============================================================================
+-- v3.2 PR #19a Silver `*_derived` 14 張 + dirty 欄位 + fwd ALTER
+-- =============================================================================
+-- per spec §2.3 canonical 清單。每張共通結構:source 表欄 + dirty 欄位 + 部分索引
+-- (ON dirty_at WHERE is_dirty = TRUE,給 orchestrator pull queue 用)。
+-- 與 alembic k0l1m2n3o4p5 對齊;Bronze→Silver trigger DDL 留 PR #20 enable。
+
+-- 1. price_limit_merge_events(Rust 計算,schema TBD per PR #20)
+CREATE TABLE IF NOT EXISTS price_limit_merge_events (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    merge_type     TEXT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_plme_dirty
+    ON price_limit_merge_events (dirty_at) WHERE is_dirty = TRUE;
+
+-- 2. monthly_revenue_derived
+CREATE TABLE IF NOT EXISTS monthly_revenue_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    revenue        NUMERIC(20, 2),
+    revenue_mom    NUMERIC(10, 4),
+    revenue_yoy    NUMERIC(10, 4),
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_mr_dirty
+    ON monthly_revenue_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 3. valuation_daily_derived(+market_value_weight per §2.6.4)
+CREATE TABLE IF NOT EXISTS valuation_daily_derived (
+    market               TEXT NOT NULL,
+    stock_id             TEXT NOT NULL,
+    date                 DATE NOT NULL,
+    per                  NUMERIC(10, 4),
+    pbr                  NUMERIC(10, 4),
+    dividend_yield       NUMERIC(8, 4),
+    market_value_weight  NUMERIC(10, 6),
+    is_dirty             BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at             TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_vd_dirty
+    ON valuation_daily_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 4. financial_statement_derived
+CREATE TABLE IF NOT EXISTS financial_statement_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    type           TEXT NOT NULL,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date, type),
+    CONSTRAINT chk_fin_derived_type CHECK (type IN ('income', 'balance', 'cashflow'))
+);
+CREATE INDEX IF NOT EXISTS idx_fs_dirty
+    ON financial_statement_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 5. institutional_daily_derived(+gov_bank_net per §2.6.2)
+CREATE TABLE IF NOT EXISTS institutional_daily_derived (
+    market                      TEXT NOT NULL,
+    stock_id                    TEXT NOT NULL,
+    date                        DATE NOT NULL,
+    foreign_buy                 BIGINT,
+    foreign_sell                BIGINT,
+    foreign_dealer_self_buy     BIGINT,
+    foreign_dealer_self_sell    BIGINT,
+    investment_trust_buy        BIGINT,
+    investment_trust_sell       BIGINT,
+    dealer_buy                  BIGINT,
+    dealer_sell                 BIGINT,
+    dealer_hedging_buy          BIGINT,
+    dealer_hedging_sell         BIGINT,
+    gov_bank_net                BIGINT,
+    is_dirty                    BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                    TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_id_dirty
+    ON institutional_daily_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 6. margin_daily_derived(+SBL 6 欄 per §2.6.1)
+CREATE TABLE IF NOT EXISTS margin_daily_derived (
+    market                                  TEXT NOT NULL,
+    stock_id                                TEXT NOT NULL,
+    date                                    DATE NOT NULL,
+    margin_purchase                         BIGINT,
+    margin_sell                             BIGINT,
+    margin_balance                          BIGINT,
+    short_sale                              BIGINT,
+    short_cover                             BIGINT,
+    short_balance                           BIGINT,
+    detail                                  JSONB,
+    margin_short_sales_short_sales          BIGINT,
+    margin_short_sales_short_covering       BIGINT,
+    margin_short_sales_current_day_balance  BIGINT,
+    sbl_short_sales_short_sales             BIGINT,
+    sbl_short_sales_returns                 BIGINT,
+    sbl_short_sales_current_day_balance     BIGINT,
+    is_dirty                                BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                                TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_md_dirty
+    ON margin_daily_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 7. foreign_holding_derived
+CREATE TABLE IF NOT EXISTS foreign_holding_derived (
+    market                  TEXT NOT NULL,
+    stock_id                TEXT NOT NULL,
+    date                    DATE NOT NULL,
+    foreign_holding_shares  BIGINT,
+    foreign_holding_ratio   NUMERIC(8, 4),
+    detail                  JSONB,
+    is_dirty                BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_fh_dirty
+    ON foreign_holding_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 8. holding_shares_per_derived
+CREATE TABLE IF NOT EXISTS holding_shares_per_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_hsp_dirty
+    ON holding_shares_per_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 9. day_trading_derived
+CREATE TABLE IF NOT EXISTS day_trading_derived (
+    market             TEXT NOT NULL,
+    stock_id           TEXT NOT NULL,
+    date               DATE NOT NULL,
+    day_trading_buy    BIGINT,
+    day_trading_sell   BIGINT,
+    day_trading_ratio  NUMERIC(10, 4),                       -- §7.4 (buy+sell)×100/volume,PR #21-A 加
+    detail             JSONB,
+    is_dirty           BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at           TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_dt_dirty
+    ON day_trading_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 10. taiex_index_derived(對應 market_ohlcv_tw)
+CREATE TABLE IF NOT EXISTS taiex_index_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    open           NUMERIC(15, 4),
+    high           NUMERIC(15, 4),
+    low            NUMERIC(15, 4),
+    close          NUMERIC(15, 4),
+    volume         BIGINT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_tid_dirty
+    ON taiex_index_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 11. us_market_index_derived(對應 market_index_us)
+CREATE TABLE IF NOT EXISTS us_market_index_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    open           NUMERIC(15, 4),
+    high           NUMERIC(15, 4),
+    low            NUMERIC(15, 4),
+    close          NUMERIC(15, 4),
+    volume         BIGINT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_usmid_dirty
+    ON us_market_index_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 12. exchange_rate_derived(PK 含 currency,不是 stock_id)
+CREATE TABLE IF NOT EXISTS exchange_rate_derived (
+    market         TEXT NOT NULL,
+    date           DATE NOT NULL,
+    currency       TEXT NOT NULL,
+    rate           NUMERIC(15, 6),
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, date, currency)
+);
+CREATE INDEX IF NOT EXISTS idx_erd_dirty
+    ON exchange_rate_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 13. market_margin_maintenance_derived(+2 欄 per §2.6.3)
+CREATE TABLE IF NOT EXISTS market_margin_maintenance_derived (
+    market                          TEXT NOT NULL,
+    date                            DATE NOT NULL,
+    ratio                           NUMERIC(8, 2),
+    total_margin_purchase_balance   BIGINT,
+    total_short_sale_balance        BIGINT,
+    is_dirty                        BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                        TIMESTAMPTZ,
+    PRIMARY KEY (market, date)
+);
+CREATE INDEX IF NOT EXISTS idx_mmmd_dirty
+    ON market_margin_maintenance_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- 14. business_indicator_derived(NEW per §6.3)
+-- 注意:spec §6.3 DDL 寫 bare leading / coincident / lagging,但 PG 保留字
+-- (TRIM(LEADING ...))不能裸用。Bronze business_indicator_tw 早已加 `_indicator`
+-- 後綴(line 204-205 hotfix),Silver 對齊 Bronze 1:1 不用 rename。
+CREATE TABLE IF NOT EXISTS business_indicator_derived (
+    market                  TEXT NOT NULL DEFAULT 'tw',
+    stock_id                TEXT NOT NULL DEFAULT '_market_',
+    date                    DATE NOT NULL,
+    leading_indicator       NUMERIC(10, 4),
+    coincident_indicator    NUMERIC(10, 4),
+    lagging_indicator       NUMERIC(10, 4),
+    monitoring              INT,
+    monitoring_color        TEXT,
+    is_dirty                BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_bid_dirty
+    ON business_indicator_derived (dirty_at) WHERE is_dirty = TRUE;
+
+-- ─── 3 張 fwd 表加 dirty 欄位 + index(PR #17 已建表,本次只 ALTER)─────────
+ALTER TABLE price_daily_fwd
+    ADD COLUMN IF NOT EXISTS is_dirty BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS dirty_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_price_daily_fwd_dirty
+    ON price_daily_fwd (dirty_at) WHERE is_dirty = TRUE;
+
+ALTER TABLE price_weekly_fwd
+    ADD COLUMN IF NOT EXISTS is_dirty BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS dirty_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_price_weekly_fwd_dirty
+    ON price_weekly_fwd (dirty_at) WHERE is_dirty = TRUE;
+
+ALTER TABLE price_monthly_fwd
+    ADD COLUMN IF NOT EXISTS is_dirty BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS dirty_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_price_monthly_fwd_dirty
+    ON price_monthly_fwd (dirty_at) WHERE is_dirty = TRUE;
+
+
+-- =============================================================================
+-- v3.2 PR #18.5 Bronze refetch 3 張(blueprint §八.1 Option A)
+-- =============================================================================
+-- 因 detail JSONB unpack 不可逆(level taxonomy 未知 / 中→英 origin_name 對應丟失 /
+-- FinMind 月營收 1 row/股/月),3 張表走 Option A 從 FinMind 全量重抓 raw bytes
+-- (~30-40h calendar-time)。Coexist with v2.0 表(holding_shares_per /
+-- financial_statement / monthly_revenue);_legacy_v2 rename + DROP 留 T0+21 / T0+60。
+-- 對應 alembic l1m2n3o4p5q6 + collector.toml dual-write entries。
+
+-- 股權分散表(每 level 1 row;FinMind raw)
+CREATE TABLE IF NOT EXISTS holding_shares_per_tw (
+    market               TEXT NOT NULL,
+    stock_id             TEXT NOT NULL,
+    date                 DATE NOT NULL,
+    holding_shares_level TEXT NOT NULL,
+    people               BIGINT,
+    percent              NUMERIC(8, 4),
+    unit                 BIGINT,
+    PRIMARY KEY (market, stock_id, date, holding_shares_level)
+);
+CREATE INDEX IF NOT EXISTS idx_holding_shares_per_tw_stock_date_desc
+    ON holding_shares_per_tw (stock_id, date DESC);
+
+
+-- 財報三表合一(event_type ∈ income/balance/cashflow,reuse pae convention)
+CREATE TABLE IF NOT EXISTS financial_statement_tw (
+    market      TEXT NOT NULL,
+    stock_id    TEXT NOT NULL,
+    date        DATE NOT NULL,
+    event_type  TEXT NOT NULL,
+    type        TEXT,
+    origin_name TEXT NOT NULL,
+    value       NUMERIC(20, 4),
+    PRIMARY KEY (market, stock_id, date, event_type, origin_name),
+    CONSTRAINT chk_fs_tw_event_type CHECK (event_type IN ('income', 'balance', 'cashflow'))
+);
+CREATE INDEX IF NOT EXISTS idx_financial_statement_tw_stock_date_desc
+    ON financial_statement_tw (stock_id, date DESC);
+
+
+-- 月營收(raw FinMind 欄名;Silver builder 才 rename revenue_year → revenue_yoy 等)
+-- create_time 用 TEXT(per PR #18.5 hotfix m2n3o4p5q6r7):FinMind 對某些 row 回 ""
+-- 不是 NULL,Bronze raw 保留原始字串,Silver builder cast 用 NULLIF(...)::TIMESTAMPTZ
+CREATE TABLE IF NOT EXISTS monthly_revenue_tw (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    revenue        NUMERIC(20, 2),
+    revenue_year   NUMERIC(10, 4),
+    revenue_month  NUMERIC(10, 4),
+    country        TEXT,
+    create_time    TEXT,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_monthly_revenue_tw_stock_date_desc
+    ON monthly_revenue_tw (stock_id, date DESC);
+
+
+-- =============================================================================
+-- Bronze→Silver dirty trigger(PR #20 / alembic n3o4p5q6r7s8;blueprint v3.2 §5.5)
+-- =============================================================================
+-- 6 個 trigger function + 15 個 trigger;Bronze upsert 自動 mark Silver row dirty。
+-- 詳細說明 + Bronze ↔ Silver 對映 + PK shape 變體見 alembic migration header。
+
+-- 通用 3-col PK (market, stock_id, date) Silver 表;TG_ARGV[0] = silver 表名
+CREATE OR REPLACE FUNCTION trg_mark_silver_dirty()
+RETURNS TRIGGER AS $$
+DECLARE
+    silver_table TEXT := TG_ARGV[0];
+BEGIN
+    EXECUTE format(
+        'INSERT INTO %I (market, stock_id, date, is_dirty, dirty_at)
+         VALUES ($1, $2, $3, TRUE, NOW())
+         ON CONFLICT (market, stock_id, date) DO UPDATE
+            SET is_dirty = TRUE, dirty_at = NOW()',
+        silver_table
+    ) USING NEW.market, NEW.stock_id, NEW.date;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- financial_statement:Bronze.event_type ↔ Silver.type(4-col PK)
+CREATE OR REPLACE FUNCTION trg_mark_financial_stmt_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO financial_statement_derived
+        (market, stock_id, date, type, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, NEW.stock_id, NEW.date, NEW.event_type, TRUE, NOW())
+    ON CONFLICT (market, stock_id, date, type) DO UPDATE
+        SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- exchange_rate:PK 含 currency 不含 stock_id
+CREATE OR REPLACE FUNCTION trg_mark_exchange_rate_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO exchange_rate_derived
+        (market, date, currency, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, NEW.date, NEW.currency, TRUE, NOW())
+    ON CONFLICT (market, date, currency) DO UPDATE
+        SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- market_margin:2-col PK,無 stock_id
+CREATE OR REPLACE FUNCTION trg_mark_market_margin_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO market_margin_maintenance_derived
+        (market, date, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, NEW.date, TRUE, NOW())
+    ON CONFLICT (market, date) DO UPDATE
+        SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- business_indicator:Bronze 2-col PK → Silver 3-col PK 用 sentinel '_market_'
+CREATE OR REPLACE FUNCTION trg_mark_business_indicator_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO business_indicator_derived
+        (market, stock_id, date, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, '_market_', NEW.date, TRUE, NOW())
+    ON CONFLICT (market, stock_id, date) DO UPDATE
+        SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- price_adjustment_events:該 stock_id 全段歷史 fwd 4 張表整檔 dirty
+-- 理由:multiplier 倒推設計,新除權息會回頭改全段歷史值,不只標單日
+CREATE OR REPLACE FUNCTION trg_mark_fwd_silver_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE price_daily_fwd
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    UPDATE price_weekly_fwd
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    UPDATE price_monthly_fwd
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    UPDATE price_limit_merge_events
+       SET is_dirty = TRUE, dirty_at = NOW()
+     WHERE market = NEW.market AND stock_id = NEW.stock_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 10 個 generic trigger
+CREATE TRIGGER mark_institutional_derived_dirty
+    AFTER INSERT OR UPDATE ON institutional_investors_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('institutional_daily_derived');
+
+CREATE TRIGGER mark_margin_derived_from_margin_dirty
+    AFTER INSERT OR UPDATE ON margin_purchase_short_sale_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('margin_daily_derived');
+
+CREATE TRIGGER mark_margin_derived_from_sbl_dirty
+    AFTER INSERT OR UPDATE ON securities_lending_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('margin_daily_derived');
+
+CREATE TRIGGER mark_foreign_holding_derived_dirty
+    AFTER INSERT OR UPDATE ON foreign_investor_share_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('foreign_holding_derived');
+
+CREATE TRIGGER mark_holding_shares_per_derived_dirty
+    AFTER INSERT OR UPDATE ON holding_shares_per_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('holding_shares_per_derived');
+
+CREATE TRIGGER mark_day_trading_derived_dirty
+    AFTER INSERT OR UPDATE ON day_trading_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('day_trading_derived');
+
+CREATE TRIGGER mark_valuation_derived_dirty
+    AFTER INSERT OR UPDATE ON valuation_per_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('valuation_daily_derived');
+
+CREATE TRIGGER mark_monthly_revenue_derived_dirty
+    AFTER INSERT OR UPDATE ON monthly_revenue_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('monthly_revenue_derived');
+
+CREATE TRIGGER mark_taiex_index_derived_dirty
+    AFTER INSERT OR UPDATE ON market_ohlcv_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('taiex_index_derived');
+
+CREATE TRIGGER mark_us_market_index_derived_dirty
+    AFTER INSERT OR UPDATE ON market_index_us
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('us_market_index_derived');
+
+-- 5 個 special trigger
+CREATE TRIGGER mark_financial_stmt_derived_dirty
+    AFTER INSERT OR UPDATE ON financial_statement_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_financial_stmt_dirty();
+
+CREATE TRIGGER mark_exchange_rate_derived_dirty
+    AFTER INSERT OR UPDATE ON exchange_rate
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_exchange_rate_dirty();
+
+CREATE TRIGGER mark_market_margin_derived_dirty
+    AFTER INSERT OR UPDATE ON market_margin_maintenance
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_market_margin_dirty();
+
+CREATE TRIGGER mark_business_indicator_derived_dirty
+    AFTER INSERT OR UPDATE ON business_indicator_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_business_indicator_dirty();
+
+CREATE TRIGGER mark_fwd_dirty_on_event
+    AFTER INSERT OR UPDATE ON price_adjustment_events
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_fwd_silver_dirty();
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 
