@@ -37,7 +37,7 @@ from api_client import FinMindClient
 from config_loader import load_collector_config, load_stock_list_config
 from db import create_writer
 from logger_setup import setup_logger
-from phase_executor import PhaseExecutor
+from bronze.phase_executor import PhaseExecutor
 from rate_limiter import RateLimiter
 from rust_bridge import RustBridge
 from sync_tracker import SyncTracker
