@@ -1,10 +1,21 @@
 # Indicator Cores:量能類
 
-> **版本**:v2.0 抽出版 r1
-> **日期**:2026-04-30
-> **配套文件**:`cores_overview.md`(共通規範)
+> **版本**:v2.0 抽出版 r2
+> **日期**:2026-05-06
+> **配套文件**:`cores_overview.md`(共通規範)、`layered_schema_post_refactor.md`(Silver 層)、`adr/0001_tw_market_handling.md`
 > **包含 Core**:3 個
 > **優先級分布**:P1(1 個)/ P3(2 個)
+
+---
+
+## r2 修訂摘要(2026-05-06)
+
+- **跟進 overview r2**:廢除 `TW-Market Core`,所有資料前處理職責歸 Silver S1_adjustment Rust binary
+- §2.2 改述為「Silver `price_*_fwd.volume` 已隨 split 復權」,移除 TW-Market Core 提及
+- §4.3 `vwap_core.VwapParams.anchor_date` 改為 `Option<NaiveDate>` 以滿足 `Params: Default` 約束(overview §3.2)
+- §6.1 / §6.2 「raw 表」措辭修正為「Silver 表」
+- §2 共通規範補「對應資料表」與「統一規範引用」段落(對齊 `neely_core.md` §17 / §15.5)
+- 補 §2.2 後的 `---` 分隔線
 
 ---
 
@@ -33,24 +44,39 @@
 
 ## 二、共通規範(本子類)
 
-### 2.1 trait
+本子類全走 `IndicatorCore` trait(見總綱 §3)、滑動窗口型 / 累積式計算策略(總綱 §7.2)、輸出寫入 `indicator_values` 與 `facts`(總綱 §7.1)。
 
-全部走 `IndicatorCore` trait(見 `cores_overview.md` §3)。
-
-### 2.2 計算策略
-
-全部屬**滑動窗口型 / 累積型指標**,採增量計算策略。
-
-### 2.3 量能類的特殊輸入
+### 2.1 量能類的特殊輸入
 
 本子類 Core 同時消費:
 
-- **價格**(close, high, low)— 來自 `price_*_fwd`
-- **成交量**(volume)— 來自 `price_*_fwd.volume`
+- **價格**(close, high, low)— 來自 Silver `price_*_fwd`
+- **成交量**(volume)— 來自 Silver `price_*_fwd.volume`
 
-### 2.4 還原與成交量
+### 2.2 還原與成交量
 
-**重要**:除權息事件會影響成交量(股票分割後成交股數會變)。本子類 Core **吃 TW-Market Core 處理過的 volume**(已隨除權息調整),不吃 raw volume。
+**重要**:除權息事件會影響成交量(股票分割後成交股數會變)。本子類 Core 吃 **Silver `price_*_fwd.volume`(已由 S1_adjustment Rust binary 隨除權息調整)**,不吃 Bronze 層 raw volume。
+
+> **歷史備註**:v2.0 r1 曾規劃 Cores 層的 `TW-Market Core` 處理 volume 復權,r2 後此 Core 廢除,職責歸 Silver S1。詳見 `adr/0001_tw_market_handling.md`。
+
+### 2.3 統一規範引用
+
+- Fact statement 詞彙限制遵循 `cores_overview.md` §6.1.1(禁用主觀詞彙)
+- `stock_id` 編碼遵循 `cores_overview.md` §6.2.1(保留字規範);本子類 Core 處理個股,實務上使用真實股票代號
+- Facts 表 unique constraint 與 `params_hash` 演算法遵循 `cores_overview.md` §6.3 / §7.4
+- Output 結構不自帶 `source_version` / `params_hash`,由 Pipeline 在寫入 `indicator_values` / `facts` 時補入
+
+### 2.4 對應資料表
+
+本子類所有 Core 的資料來源與寫入目標相同(對齊 `neely_core.md` §17 範本):
+
+| 用途 | 資料表 |
+|---|---|
+| 輸入 OHLC + Volume | Silver `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd`(由 S1_adjustment Rust binary 產出) |
+| 寫入時間序列值 | `indicator_values`(JSONB),`source_core` 為各 Core 名稱 |
+| 寫入 Fact | `facts`(append-only),`source_core` 為各 Core 名稱 |
+
+> Silver `price_*_fwd` 表結構與處理邏輯由 `layered_schema_post_refactor.md` §4.1 定義。各 Core 不關心 Silver 內部如何產出,只消費結果。各 Core 章節不再重述本表,**統一引用本節**。
 
 ---
 
@@ -136,8 +162,8 @@ V2 主推 **Anchored VWAP**(日線 / 週線適用)。
 
 ```rust
 pub struct VwapParams {
-    pub mode: VwapMode,
-    pub anchor_date: NaiveDate,          // 必填(Anchored 模式)
+    pub mode: VwapMode,                  // 預設 Anchored
+    pub anchor_date: Option<NaiveDate>,  // Anchored 模式必填,Session 模式忽略
     pub source: PriceSource,             // 預設 Hlc3((H+L+C)/3)
     pub timeframe: Timeframe,
 }
@@ -147,6 +173,11 @@ pub enum VwapMode {
     Session,        // 每日重置(P3 後考慮)
 }
 ```
+
+`VwapParams` derive `Default`(對齊 overview §3.2 約束):
+- `mode = Anchored`,`anchor_date = None`,`source = Hlc3`,`timeframe = Daily`
+- `compute()` 階段檢查:若 `mode = Anchored && anchor_date = None`,回傳 `Err(VwapError::MissingAnchorDate)`
+- Workflow toml 必須顯式宣告 `anchor_date`,否則 Pipeline 在 dispatch 階段拒絕該 entry
 
 ### 4.4 warmup_periods
 
@@ -221,6 +252,7 @@ pub struct MfiParams {
 
 ```rust
 fn warmup_periods(&self, params: &MfiParams) -> usize {
+    // MFI 為 RSI 變體但不需多層平滑,×2 即足夠(略少於總綱 §7.3.1 EMA 慣例)
     params.period * 2 + 5
 }
 ```
@@ -261,11 +293,11 @@ pub struct MfiPoint {
 
 ### 6.1 為何不獨立
 
-成交量(`volume`)已存在於 raw 表(`price_daily_fwd.volume` 等),**無計算邏輯**。將其包成 `volume_core` 純屬冗餘。
+成交量(`volume`)已存在於 Silver 表(`price_daily_fwd.volume` 等),**無計算邏輯**(Silver S1 已處理 split 復權)。將其包成 `volume_core` 純屬冗餘。
 
 ### 6.2 P1 9 個指標的澄清
 
-部分 Workflow toml 模板列出 P1 需要 9 個指標,其中包含 `volume`,但這並非新建 `volume_core`,而是「workflow 模板宣告需要 volume 資料」。實際 Aggregation Layer 直接從 raw 表撈即可。
+部分 Workflow toml 模板列出 P1 需要 9 個指標,其中包含 `volume`,但這並非新建 `volume_core`,而是「workflow 模板宣告需要 volume 資料」。實際 Aggregation Layer 直接從 Silver `price_*_fwd` 表撈即可。
 
 實質 P1 需新建 Core 為 **8 個**:`macd / rsi / kd / adx / ma / bollinger / atr / obv`。
 

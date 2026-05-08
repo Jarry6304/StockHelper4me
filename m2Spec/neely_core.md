@@ -1,10 +1,21 @@
 # Neely Core 規格
 
-> **版本**:v2.0 抽出版 r1
-> **日期**:2026-04-30
+> **版本**:v2.0 抽出版 r2
+> **日期**:2026-05-06
 > **基準**:`neo_pipeline_v2_architecture_decisions_r3.md`
-> **配套文件**:`cores_overview.md`(共通規範)
+> **配套文件**:`cores_overview.md`(共通規範)、`layered_schema_post_refactor.md`(Silver 層)、`adr/0001_tw_market_handling.md`
+> **架構原則**:本文件遵循 README「架構原則:計算 / 規則分層」—— Neely Core 只做 Neely 規則套用,所有資料前處理(後復權、漲跌停合併)由 Silver 層完成。
 > **優先級**:**P0**(核心 Core,所有後續 Core 的結構性參考)
+
+---
+
+## r2 修訂摘要(2026-05-06)
+
+- 上游從「TW-Market Core 處理過的 OHLC」改為「Silver `price_*_fwd`」(§5 / §17 / §21.1)
+- §10.4 容差規範新增「TAIEX neutral 閾值」段落(原屬 TW-Market Core §5.2,移至此處作為 Neely 規則參數)
+- §6.3 NeelyEngineConfig 新增 `neutral_threshold_taiex` 工程參數
+- §20 已棄用清單新增「TW-Market Core 嵌在 Cores 層」一條
+- §21.1 上游章節改寫
 
 ---
 
@@ -47,9 +58,10 @@
 ### 1.2 必要規範
 
 - 屬 Wave Core,**不**走 `IndicatorCore` trait
-- 走 `WaveCore` trait(草案,P0 確定)
+- 走 `WaveCore` trait(設計約束見 `cores_overview.md` §3.3,trait 簽章於 P0 開發前定稿)
 - 是 P0 階段最複雜、開發優先級最高的 Core
 - 與 Traditional Core(P3)獨立並列,**不整合**
+- 嚴格遵循 README「架構原則:計算 / 規則分層」—— 本 Core 只做 Neely 規則套用,所有資料前處理由 Silver 層完成
 
 ### 1.3 Neely Core 的特殊地位
 
@@ -198,7 +210,7 @@ neely_core/
 | 模組 | v1.1 Item | 去哪 | 理由 |
 |---|---|---|---|
 | Scorer 7 因子加總 | Item 7 | 進 Neely Core,但**不加總** | 拆解後保留事實層 |
-| 連續漲跌停合併 | Item 1.5 | TW-Market Core | 台股市場特性,不是 Neely |
+| 連續漲跌停合併 | Item 1.5 | Silver 層 S1_adjustment | 屬複雜計算(跨日狀態追溯),不是 Neely 規則 |
 | `[TW-MARKET]` Scorer 微調 | Item 7.4 | **棄用** | 主觀加權 |
 | 容差 toml 外部化 | (討論) | **棄用** | 誘導偏離原作 |
 | Engine_T (傳統派) | Item 13, 17 | Traditional Core(獨立並列) | 不是 Neely 體系 |
@@ -218,11 +230,13 @@ neely_core/
 
 | 輸入 | 來源 |
 |---|---|
-| `OHLCVSeries` | `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd`(經 TW-Market Core 處理) |
+| `OHLCVSeries` | Silver 層 `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd`(經 S1_adjustment Rust binary 處理) |
 | `Timeframe` | 日線 / 週線 / 月線 |
 | `NeelyCoreParams` | 見第六章 |
 
-**重要**:Neely Core 吃的是 TW-Market Core 處理過的 OHLC(漲跌停合併、後復權),**不**直接吃 raw OHLC。Neely Core 完全不知道台股的存在。
+**重要**:Neely Core 直接讀 Silver 層 `price_*_fwd` 表,所有資料前處理(後復權、漲跌停合併)已由 Silver S1 完成。Neely Core 完全不知道台股的存在,純淨執行 Neely 規則。
+
+> Silver 層的處理職責清單見 `layered_schema_post_refactor.md` §4.1。漲跌停合併規則與後復權倒推算法的設計溯源見 `adr/0001_tw_market_handling.md` 附錄 B。
 
 ---
 
@@ -266,6 +280,10 @@ pub struct NeelyEngineConfig {
 
     /// Forest 超過 max_size 時的處理策略
     pub overflow_strategy: OverflowStrategy,
+
+    /// 加權指數套用 Rule of Neutrality 的中性區判定閾值(個股不適用)
+    /// 預設 0.5(%),詳見 §10.4
+    pub neutral_threshold_taiex: f64,           // 預設 0.5
 }
 
 pub enum OverflowStrategy {
@@ -288,6 +306,7 @@ impl Default for NeelyEngineConfig {
             forest_max_size: 1000,
             compaction_timeout_secs: 60,
             overflow_strategy: OverflowStrategy::BeamSearchFallback { k: 100 },
+            neutral_threshold_taiex: 0.5,  // %
         }
     }
 }
@@ -306,7 +325,7 @@ ATR 在 Neely 體系中是 **Rule of Proportion / Neutrality / 45° 判定的計
 
 ### 6.6 Fibonacci tolerance 等 Neely 規則沒有對應 setter
 
-NeelyEngineConfig **僅** `atr_period` / `beam_width` / `forest_max_size` / `compaction_timeout_secs` / `overflow_strategy` 五個工程參數可調。
+NeelyEngineConfig **僅** `atr_period` / `beam_width` / `forest_max_size` / `compaction_timeout_secs` / `overflow_strategy` / `neutral_threshold_taiex` 六個工程參數可調。
 
 ❌ 不可外部化的 Neely 規則:
 
@@ -317,6 +336,8 @@ NeelyEngineConfig **僅** `atr_period` / `beam_width` / `forest_max_size` / `com
 - Power Rating 查表值(寫死)
 
 要改任一項就是「刻意偏離 Neely 原作」,需在 commit 訊息明確標註,**不可透過設定檔規避**。
+
+> **`neutral_threshold_taiex` 例外說明**:此參數**不屬於 Neely 規則本身**,而是「Rule of Neutrality 套用於加權指數」的工程選擇。Neely 原書未列加權指數特例,此值由本專案以工程慣例設定。詳見 §10.4。
 
 ---
 
@@ -605,6 +626,21 @@ candidate
 ❌ 容差:W3 - W1 ≥ -X(絕對)
 ```
 
+#### 10.4.1 加權指數的 Neutral 閾值放寬
+
+加權指數套用 Rule of Neutrality 時,中性區判定閾值較個股寬鬆:
+
+| 對象 | 中性區判定 |
+|---|---|
+| 個股 | `\|單日漲跌幅\| < 預設 ATR 比例` → Neutral |
+| 加權指數(TAIEX / TPEx) | `\|單日漲跌幅\| < neutral_threshold_taiex`(預設 0.5%)→ Neutral |
+
+**設計意圖**:加權指數波動天然較個股小,若沿用個股閾值會將大盤多數交易日誤判為趨勢日,使 monowave 切割過密、Validator 拒絕率異常。
+
+**參數歸屬**:`neutral_threshold_taiex` 屬 NeelyEngineConfig 的工程參數(§6.3),非 Neely 規則本身。Neely 原書未列加權指數特例,本專案依工程慣例設定。
+
+**歷史備註**:此規則 v1.x / v2.0 r1 曾規劃在 TW-Market Core,r2 後 TW-Market Core 廢除,此規則歸 Neely Core(屬規則層,符合 README「規則歸 Cores」原則)。
+
 ---
 
 ## 十一、Compaction 重新定位
@@ -833,6 +869,12 @@ Neely Core 與 Traditional Core 都會產出「波浪相關 Fact」,**統一在 
 
 只有「事件型」的事實寫 facts(scenario 出現 / 消失 / 失效、forest 摘要等)。
 
+### 15.5 統一規範引用
+
+- Fact statement 詞彙限制遵循 `cores_overview.md` §6.1.1(禁用主觀詞彙)
+- `stock_id` 編碼遵循 `cores_overview.md` §6.2.1(保留字規範);Neely Core 處理個股,實務上使用真實股票代號
+- Facts 表 unique constraint 與 `params_hash` 演算法遵循 `cores_overview.md` §6.3 / §7.4
+
 ---
 
 ## 十六、warmup_periods
@@ -863,10 +905,12 @@ P0 Gate 五檔股票實測時應記錄「資料不足」的拒絕比例,作為 w
 
 | 用途 | 資料表 |
 |---|---|
-| 輸入 OHLC | `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd`(經 TW-Market Core 處理) |
+| 輸入 OHLC | Silver `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd`(由 S1_adjustment Rust binary 產出) |
 | 寫入結構快照 | `structural_snapshots`,`core_name = 'neely_core'` |
 | 寫入 Fibonacci 投影視圖(可選) | `structural_snapshots`,`core_name = 'fib_zones'` + `derived_from_core = 'neely_core'` |
 | 寫入 Fact | `facts`,`source_core = 'neely_core'` |
+
+> Silver `price_*_fwd` 表結構與處理邏輯由 `layered_schema_post_refactor.md` §4.1 定義。Neely Core 不關心 Silver 內部如何產出,只消費結果。
 
 ### 17.1 structural_snapshots JSONB 範例
 
@@ -988,13 +1032,15 @@ P0 完成後,執行五檔股票實測,校準 NeelyEngineConfig 預設值。
 | 容差 toml 外部化 | 早期討論 | 誘導偏離原作 |
 | Compaction 完全不剪枝 | r2 §7.2 | 工程現實下 OOM,改為「窮舉但有 forest_max_size 護欄」 |
 | `[TW-MARKET]` Scorer 微調 | v1.1 Item 7.4 | 主觀加權,違反「忠於原作」 |
-| 漲跌停處理嵌在 Neely Engine | v1.1 Item 1.5 | 違反單一職責,移至 TW-Market Core |
+| 漲跌停處理嵌在 Neely Engine | v1.1 Item 1.5 | 違反單一職責,r2 後歸 Silver S1_adjustment(原規劃移至 TW-Market Core,但 r2 已廢除該 Core) |
 | `Trigger.on_trigger.ReduceProbability` | r2 §5.4 | 與 §2.2 不使用 probability 矛盾,改 `WeakenScenario` |
 | `neely_power_rating: i8` | r2 §5.4 | 改 `enum PowerRating`,避免 99 等無效值 |
 | Scorer 7 因子加權加總 | v1.1 Item 7 | 進 Neely Core 但**不加總**,拆解為 `structural_facts` |
 | Engine_T + Engine_N 整合公式 | v1.1 Item 17.5 | 主觀調參,Traditional Core 改為獨立並列 |
 | 自動校準 atr_period | (討論) | 校準準則(monowave 數量合理性等)皆主觀,違反 §1.3 |
 | Fibonacci 獨立 Core | r2 §14.2.3 / §15.1 隱含 | 確認為 Neely Core 子模組 |
+| **TW-Market Core 嵌在 Cores 層**(作為 Neely Core 上游) | v2.0 r1 / `cores_overview.md` §4.4 | r2 廢除:屬複雜計算,歸 Silver S1。Neely Core 改為直讀 Silver `price_*_fwd`。詳見 `adr/0001_tw_market_handling.md` |
+| **加權指數 neutral 閾值放在 TW-Market Core** | v1.1 隱含 | 屬規則套用,r2 後歸 Neely Core §10.4(`neutral_threshold_taiex`) |
 
 ---
 
@@ -1002,7 +1048,10 @@ P0 完成後,執行五檔股票實測,校準 NeelyEngineConfig 預設值。
 
 ### 21.1 上游
 
-- **TW-Market Core**(P0,前置)— Neely Core 吃 TW-Market Core 處理過的 OHLC
+- **Silver 層 S1_adjustment**(資料層,非 Core)— Neely Core 直讀 Silver `price_*_fwd` 表,所有資料前處理(後復權、漲跌停合併)由 S1 Rust binary 完成
+- Neely Core 不知道 Silver 層內部如何處理,只消費結果
+
+> 歷史備註:v1.x / v2.0 r1 曾規劃 `TW-Market Core` 作為 Neely Core 上游,r2 後此 Core 廢除。詳見 `adr/0001_tw_market_handling.md`。
 
 ### 21.2 下游(Aggregation Layer)
 
@@ -1039,7 +1088,7 @@ Aggregation Layer 並排呈現
 ### 21.4 與 Traditional Core 的關係
 
 - Neely Core 與 Traditional Core **獨立並列**,**不整合**
-- 兩者吃同一份 TW-Market Core 處理過的 OHLC
+- 兩者讀同一份 Silver `price_*_fwd`(已由 S1_adjustment 後復權與漲跌停合併)
 - 兩者各自輸出 Forest,Aggregation Layer 並排呈現
 - v1.1 的 Combined confidence 整合公式已棄用
 

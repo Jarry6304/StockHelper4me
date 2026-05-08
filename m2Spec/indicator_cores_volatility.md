@@ -1,10 +1,18 @@
 # Indicator Cores:波動 / 通道類
 
-> **版本**:v2.0 抽出版 r1
-> **日期**:2026-04-30
-> **配套文件**:`cores_overview.md`(共通規範)
+> **版本**:v2.0 抽出版 r2
+> **日期**:2026-05-06
+> **配套文件**:`cores_overview.md`(共通規範)、`layered_schema_post_refactor.md`(Silver 層)、`adr/0001_tw_market_handling.md`
 > **包含 Core**:4 個
-> **優先級分布**:P1(2 個)/ P2(1 個)/ P3(2 個)
+> **優先級分布**:P1(2 個)/ P3(2 個)
+
+---
+
+## r2 修訂摘要(2026-05-06)
+
+- **跟進 overview r2**:廢除 `TW-Market Core`,所有資料前處理職責歸 Silver S1_adjustment Rust binary
+- §4.5 `atr_core` Fact 範例第一條(每日 ATR 數值,不入 facts 表)從 Fact 表移除,改置於 §4.6
+- §2 共通規範補「對應資料表」與「統一規範引用」段落(對齊 `neely_core.md` §17 / §15.5)
 
 ---
 
@@ -33,19 +41,13 @@
 
 ## 二、共通規範(本子類)
 
-### 2.1 trait
+本子類全走 `IndicatorCore` trait(見總綱 §3)、滑動窗口型計算策略(總綱 §7.2)、輸出寫入 `indicator_values` 與 `facts`(總綱 §7.1)。
 
-全部走 `IndicatorCore` trait(見 `cores_overview.md` §3)。
-
-### 2.2 計算策略
-
-全部屬**滑動窗口型指標**,採「最近 N 天 + 暖機區增量計算」,每日 batch 寫入 `indicator_values`。
-
-### 2.3 「通道」概念統一
+### 2.1 「通道」概念統一
 
 本子類中三個 Core(Bollinger / Keltner / Donchian)都是「以中線 ± 通道寬」形式,統一輸出 `upper_band` / `middle_band` / `lower_band` 三線結構,便於前端與 Aggregation Layer 一致處理。
 
-### 2.4 ATR 的雙重身份提醒
+### 2.2 ATR 的雙重身份提醒
 
 **ATR 同時是**:
 
@@ -53,6 +55,25 @@
 2. **Neely Core 的工程參數依賴** — Neely Core 內部自帶 ATR 計算邏輯(`NeelyEngineConfig.atr_period = 14`)
 
 兩者**互不引用**:Neely Core 不依賴 `atr_core`,因為其計算邏輯內嵌且為固定常數;`atr_core` 為對外服務,兩者數值相同但實作獨立。
+
+### 2.3 統一規範引用
+
+- Fact statement 詞彙限制遵循 `cores_overview.md` §6.1.1(禁用主觀詞彙)
+- `stock_id` 編碼遵循 `cores_overview.md` §6.2.1(保留字規範);本子類 Core 處理個股,實務上使用真實股票代號
+- Facts 表 unique constraint 與 `params_hash` 演算法遵循 `cores_overview.md` §6.3 / §7.4
+- Output 結構不自帶 `source_version` / `params_hash`,由 Pipeline 在寫入 `indicator_values` / `facts` 時補入
+
+### 2.4 對應資料表
+
+本子類所有 Core 的資料來源與寫入目標相同(對齊 `neely_core.md` §17 範本):
+
+| 用途 | 資料表 |
+|---|---|
+| 輸入 OHLC | Silver `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd`(由 S1_adjustment Rust binary 產出) |
+| 寫入時間序列值 | `indicator_values`(JSONB),`source_core` 為各 Core 名稱 |
+| 寫入 Fact | `facts`(append-only),`source_core` 為各 Core 名稱 |
+
+> Silver `price_*_fwd` 表結構與處理邏輯由 `layered_schema_post_refactor.md` §4.1 定義。各 Core 不關心 Silver 內部如何產出,只消費結果。各 Core 章節不再重述本表,**統一引用本節**。
 
 ---
 
@@ -146,7 +167,7 @@ pub struct AtrParams {
 
 ```rust
 fn warmup_periods(&self, params: &AtrParams) -> usize {
-    params.period * 4  // 平滑收斂
+    params.period * 4  // 單層 EMA 平滑,依總綱 §7.3.1 慣例
 }
 ```
 
@@ -168,15 +189,14 @@ pub struct AtrPoint {
 
 | Fact statement | metadata |
 |---|---|
-| `ATR(14) = 18.5 at 2026-04-25, ATR% = 3.2%` | `{ atr: 18.5, atr_pct: 3.2 } (僅供查詢,不入 facts 表)` |
 | `ATR(14) % at 1-year high(5.8%) on 2026-04-22` | `{ event: "volatility_extreme_high", lookback: "1y", value_pct: 5.8 }` |
 | `ATR(14) % at 1-year low(1.2%) on 2026-04-15` | `{ event: "volatility_extreme_low", lookback: "1y", value_pct: 1.2 }` |
 | `ATR(14) expanded 50% over 10 days(2.0%→3.0%)` | `{ event: "volatility_expansion", from: 2.0, to: 3.0, days: 10 }` |
 
 ### 4.6 入 facts 與不入 facts 的區分
 
-- **每日 ATR 數值** → 寫 `indicator_values` JSONB,**不**寫 facts(避免 facts 表爆量)
-- **極值事件 / 擴張收縮事件** → 寫 `facts`
+- **每日 ATR 數值**(例:`ATR(14) = 18.5, ATR% = 3.2%`)→ 寫 `indicator_values` JSONB,**不**寫 facts(避免 facts 表爆量)
+- **極值事件 / 擴張收縮事件** → 寫 `facts`(即 §4.5 表中所列)
 
 ### 4.7 atr_pct 的意義
 
@@ -205,6 +225,7 @@ pub struct KeltnerParams {
 
 ```rust
 fn warmup_periods(&self, params: &KeltnerParams) -> usize {
+    // EMA 與 ATR 各取 ×4 慣例(總綱 §7.3.1),取大者再加緩衝
     (params.ema_period * 4).max(params.atr_period * 4) + 5
 }
 ```

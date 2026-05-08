@@ -1,10 +1,19 @@
 # Indicator Cores:型態 / 價位類
 
-> **版本**:v2.0 抽出版 r1
-> **日期**:2026-04-30
-> **配套文件**:`cores_overview.md`(共通規範)
+> **版本**:v2.0 抽出版 r2
+> **日期**:2026-05-06
+> **配套文件**:`cores_overview.md`(共通規範)、`layered_schema_post_refactor.md`(Silver 層)、`adr/0001_tw_market_handling.md`
 > **包含 Core**:3 個
 > **優先級分布**:P2(全部 3 個)
+
+---
+
+## r2 修訂摘要(2026-05-06)
+
+- **跟進 overview r2**:廢除 `TW-Market Core`,所有資料前處理職責歸 Silver S1_adjustment Rust binary
+- §4.4 `SrLevel` / `SrStrength` 移除 `touch_count` 欄位重複(SrStrength 不再持有 touch_count,改由外層 SrLevel 提供)
+- §2 共通規範補「對應資料表」與「統一規範引用」段落(對齊 `neely_core.md` §17 / §15.5)
+- 註:本子類為**結構性指標**,寫入目標為 `structural_snapshots` 而非 `indicator_values`(見 §2.4)
 
 ---
 
@@ -31,35 +40,45 @@
 
 ## 二、共通規範(本子類)
 
-### 2.1 trait
+本子類全走 `IndicatorCore` trait(見總綱 §3),但屬**結構性指標**,寫入策略與動量 / 波動 / 量能類不同。
 
-全部走 `IndicatorCore` trait(見 `cores_overview.md` §3),但屬「結構性指標」,**每日全量重算**而非增量計算。
-
-### 2.2 結構性指標的特色
+### 2.1 結構性指標的特色
 
 與動量 / 波動 / 量能類不同,本子類:
 
-- 輸出**結構性快照**(SR 位、趨勢線、K 線型態),寫入 `structural_snapshots` 而非 `indicator_values`
-- 計算成本較高,通常每日全量重算
+- 輸出**結構性快照**(SR 位、趨勢線、K 線型態),寫入 `structural_snapshots` 而非 `indicator_values`(見總綱 §7.1)
+- 計算成本較高,通常**每日全量重算**而非滑動窗口增量
 - 對歷史資料敏感(回看窗口較大)
+- 輸入仍為 Silver `price_*_fwd`(經 S1_adjustment 處理過的 OHLC)
 
-### 2.3 Stage 4 拆分對應
+### 2.2 Stage 4 拆分對應
 
 Batch Pipeline Stage 4 拆 4a / 4b:
 
 - **Stage 4a**:獨立結構性 Core(Neely / Traditional / `support_resistance_core` / `candlestick_pattern_core`)平行執行
 - **Stage 4b**:依賴 4a 的 Core(`trendline_core` / Fib 投影)在 4a 完成後執行
 
-### 2.4 Fact 邊界提醒(再次強調)
+> **注**:overview r2 §12.4 列舉 Stage 4a 時僅以「SR」縮寫代表,本節為精確展開版本(含 candlestick_pattern_core)。後續 overview 修訂應同步補上。
 
-本子類**最容易出現「經驗判斷式 Fact」的誘惑**,必須嚴格守住規則式邊界:
+### 2.3 統一規範引用
 
-| ✅ 進 Core | ❌ 不進 Core |
+- Fact statement 詞彙限制遵循 `cores_overview.md` §6.1.1(禁用主觀詞彙)
+- `stock_id` 編碼遵循 `cores_overview.md` §6.2.1(保留字規範);本子類 Core 處理個股,實務上使用真實股票代號
+- Facts 表 unique constraint 與 `params_hash` 演算法遵循 `cores_overview.md` §6.3 / §7.4
+- Output 結構不自帶 `source_version` / `params_hash`,由 Pipeline 在寫入 `structural_snapshots` / `facts` 時補入
+
+### 2.4 對應資料表
+
+本子類所有 Core 的資料來源與寫入目標(對齊 `neely_core.md` §17 範本):
+
+| 用途 | 資料表 |
 |---|---|
-| `Doji at 2026-04-25 (close-open / range = 0.05)` | `紅三兵看起來像反轉訊號` |
-| `Hammer at 2026-04-22 (lower_shadow / body = 3.5)` | `K 線形狀有點像鎚子` |
-| `Resistance at 580.0(touched 5 times in 120 days)` | `這附近壓力很重` |
-| `Trendline from 2026-01-15 low to 2026-03-10 low, broken at 2026-04-22` | `趨勢線斷掉,看起來空頭確立` |
+| 輸入 OHLC | Silver `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd`(由 S1_adjustment Rust binary 產出) |
+| 寫入結構快照 | `structural_snapshots`(JSONB),`source_core` 為各 Core 名稱 |
+| 寫入 Fact | `facts`(append-only),`source_core` 為各 Core 名稱 |
+| 特例:`trendline_core` 額外消費 | Neely Core 的 `monowave_series` 輸出(`structural_snapshots.snapshot.monowave_series`,`core_name = 'neely_core'`),見 §5 |
+
+> Silver `price_*_fwd` 表結構與處理邏輯由 `layered_schema_post_refactor.md` §4.1 定義。各 Core 章節不再重述本表,**統一引用本節**。
 
 ---
 
@@ -126,6 +145,7 @@ pub struct CandlestickPatternParams {
 
 ```rust
 fn warmup_periods(&self, params: &CandlestickPatternParams) -> usize {
+    // 結構性 Core,依總綱 §7.3.1 慣例:lookback + 緩衝
     params.trend_lookback + 5
 }
 ```
@@ -231,7 +251,7 @@ pub struct SupportResistanceOutput {
 pub struct SrLevel {
     pub price: f64,
     pub level_kind: SrKind,            // Support / Resistance
-    pub touch_count: usize,
+    pub touch_count: usize,            // 觸碰次數(主屬性)
     pub touch_dates: Vec<NaiveDate>,
     pub first_seen: NaiveDate,
     pub last_seen: NaiveDate,
@@ -239,12 +259,13 @@ pub struct SrLevel {
 }
 
 pub struct SrStrength {
-    pub touch_count: usize,
     pub recency_bars: usize,           // 最近一次觸碰距今 K 棒數
     pub time_span_bars: usize,         // 第一次到最後一次觸碰跨度
-    pub avg_volume_at_touches: f64,
+    pub avg_volume_at_touches: f64,    // 觸碰時的平均成交量
 }
 ```
+
+> **設計說明**:`touch_count` 屬 SrLevel 主屬性(任何撐壓位都需要它),`SrStrength` 僅持有「次級度量」。前端排序與篩選時,`touch_count` 為第一指標,`SrStrength.recency_bars` / `time_span_bars` 為第二指標。
 
 ### 4.5 Fact 範例
 

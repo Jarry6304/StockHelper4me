@@ -1,10 +1,22 @@
 # Indicator Cores:動量 / 趨勢 / 強度類
 
-> **版本**:v2.0 抽出版 r1
-> **日期**:2026-04-30
-> **配套文件**:`cores_overview.md`(共通規範)
+> **版本**:v2.0 抽出版 r2
+> **日期**:2026-05-06
+> **配套文件**:`cores_overview.md`(共通規範)、`layered_schema_post_refactor.md`(Silver 層)、`adr/0001_tw_market_handling.md`
 > **包含 Core**:9 個
-> **優先級分布**:P1(4 個)/ P3(5 個)
+> **優先級分布**:P1(5 個)/ P3(4 個)
+
+---
+
+## r2 修訂摘要(2026-05-06)
+
+- **跟進 overview r2**:廢除 `TW-Market Core`,所有資料前處理職責歸 Silver S1_adjustment Rust binary
+- §2.1 輸入描述改為「經 Silver S1_adjustment 處理」,移除 `LimitMergeStrategy` enum 提及
+- §7 `ma_core` Params 重構為 `Vec<MaSpec>`,單一實例計算多條均線,§7.5 Output / §7.6 Fact / §7.7 多均線組合 / §7.8 跨均線交叉同步重寫
+- §九 `williams_r_core` / §十 `cci_core` 補 `warmup_periods` 子節
+- 新增 §十一 `coppock_core`(P3)完整章節,原「動量類不收編說明」順移為 §十二
+- 新增「對應資料表」段落於各 Core(對齊 `neely_core.md` §17 範本)
+- §2 共通規範補「統一規範引用」收束(對齊 `neely_core.md` §15.5)
 
 ---
 
@@ -21,6 +33,7 @@
 9. [`williams_r_core`](#九williams_r_corep3)
 10. [`cci_core`](#十cci_corep3)
 11. [`coppock_core`](#十一coppock_corep3)
+12. [動量類不收編說明](#十二動量類不收編說明)
 
 ---
 
@@ -32,44 +45,46 @@
 | `rsi_core` | RSI | P1 |
 | `kd_core` | KD / Stochastic | P1 |
 | `adx_core` | ADX / DMI | P1 |
-| `ma_core` | SMA / EMA / WMA | P1 |
+| `ma_core` | SMA / EMA / WMA(同族統一) | P1 |
 | `ichimoku_core` | 一目均衡表 | P3 |
 | `williams_r_core` | Williams %R | P3 |
 | `cci_core` | CCI | P3 |
 | `coppock_core` | Coppock Curve | P3 |
 
+> **注**:overview §9 P1 列出技術指標 8 個,本子類佔 5 個(`macd / rsi / kd / adx / ma`),其餘 P1 為 `bollinger / atr / obv`(波動 / 量能類)。
+
 ---
 
 ## 二、共通規範(本子類)
 
-### 2.1 trait
+本子類全走 `IndicatorCore` trait(見總綱 §3)、滑動窗口型計算策略(總綱 §7.2)、輸出寫入 `indicator_values` 與 `facts`(總綱 §7.1)。
 
-全部走 `IndicatorCore` trait(見 `cores_overview.md` §3)。
+### 2.1 輸入
 
-### 2.2 計算策略
+統一從 Silver 層 `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd` 讀取**經 Silver S1_adjustment Rust binary 處理過的 OHLC**(透過 `shared/ohlcv_loader/`,見總綱 §3.4)。
 
-全部屬**滑動窗口型指標**,採「最近 N 天 + 暖機區增量計算」,每日 batch 寫入當日值至 `indicator_values` JSONB 欄位。
+所有資料前處理(後復權、漲跌停合併)已由 Silver 層完成。Cores 層不再擁有 `LimitMergeStrategy` 等漲跌停處理 enum;若需查詢漲跌停事件,直接讀 Silver `price_limit_merge_events`(見 `layered_schema_post_refactor.md` §4.1)。
 
-### 2.3 輸入
+> **歷史備註**:v2.0 r1 曾規劃 Cores 層的 `TW-Market Core` 作為 OHLC 前置處理,r2 後此 Core 廢除,職責歸 Silver S1。詳見 `adr/0001_tw_market_handling.md`。
 
-統一從 `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd` 讀取**經 TW-Market Core 處理過的 OHLC**。
+### 2.2 統一規範引用
 
-各 Core 預設使用 `LimitMergeStrategy::None`(每日 K 棒保留),除非 Workflow toml 明確指定。
+- Fact statement 詞彙限制遵循 `cores_overview.md` §6.1.1(禁用主觀詞彙)
+- `stock_id` 編碼遵循 `cores_overview.md` §6.2.1(保留字規範);本子類 Core 處理個股,實務上使用真實股票代號
+- Facts 表 unique constraint 與 `params_hash` 演算法遵循 `cores_overview.md` §6.3 / §7.4
+- Output 結構不自帶 `source_version` / `params_hash`,由 Pipeline 在寫入 `indicator_values` / `facts` 時補入
 
-### 2.4 Fact 邊界提醒
+### 2.3 對應資料表
 
-僅產出**機械式可重現的事實**:
+本子類所有 Core 的資料來源與寫入目標相同(對齊 `neely_core.md` §17 範本):
 
-- ✅ `golden cross`(MACD 線穿越訊號線)
-- ✅ `divergence`(明確規則式背離,需有頂底定義)
-- ❌ `動能轉強` / `趨勢確立` 等經驗判斷詞彙
-
-### 2.5 寫入分流
-
-| 資料 | 目的地 |
+| 用途 | 資料表 |
 |---|---|
-| 每日數值(MACD line / RSI value / ...) | `indicator_values`(JSONB) |
-| 事件式事實(golden_cross / overbought_streak) | `facts`(append-only) |
+| 輸入 OHLC | Silver `price_daily_fwd` / `price_weekly_fwd` / `price_monthly_fwd`(由 S1_adjustment Rust binary 產出) |
+| 寫入時間序列值 | `indicator_values`(JSONB),`source_core` 為各 Core 名稱 |
+| 寫入 Fact | `facts`(append-only),`source_core` 為各 Core 名稱 |
+
+> Silver `price_*_fwd` 表結構與處理邏輯由 `layered_schema_post_refactor.md` §4.1 定義。各 Core 不關心 Silver 內部如何產出,只消費結果。各 Core 章節不再重述本表,**統一引用本節**。
 
 ---
 
@@ -94,7 +109,7 @@ pub struct MacdParams {
 
 ```rust
 fn warmup_periods(&self, params: &MacdParams) -> usize {
-    // EMA 收斂約需 3-4 倍週期
+    // EMA 慣例 ×4(總綱 §7.3.1)
     params.slow * 4  // 預設 26 * 4 = 104
 }
 ```
@@ -272,7 +287,8 @@ pub struct AdxParams {
 
 ```rust
 fn warmup_periods(&self, params: &AdxParams) -> usize {
-    params.period * 6  // ADX 收斂較慢,需更多暖機
+    // ADX 為雙層平滑(DI 平均後再平滑),×6 慣例(總綱 §7.3.1)
+    params.period * 6
 }
 ```
 
@@ -310,22 +326,37 @@ pub struct AdxPoint {
 
 ### 7.1 定位
 
-統一處理 SMA / EMA / WMA / DEMA / TEMA 等同族均線指標,以 enum 參數區分子型號。
+統一處理 SMA / EMA / WMA / DEMA / TEMA / HMA 等同族均線指標,以 `Vec<MaSpec>` 一次宣告多條均線,單一實例同時計算並偵測「Price cross MA」與「跨均線交叉」事件。
 
-### 7.2 為何同族統一
+### 7.2 為何同族統一 + 多條同算
 
-- 演算法相近,差異僅在權重計算
-- 一個 Core 約 200 行可完成,不需開五個 Core
-- Workflow toml 可一次宣告多條均線(MA20 + MA60 + MA120)
+依 overview §2.3 同族合併三條件:
+
+1. **Params 結構同構**:同樣的 `kind / period / source` 欄位集合,僅取值不同 ✅
+2. **Output schema 同構**:同樣是 `(date, value)` 序列 ✅
+3. **Fact 種類同構**:統一為 `ma_bullish_cross / ma_bearish_cross / ma_golden_cross / above_ma_streak` ✅
+
+三條全成立 → 合併為單一 Core。
+
+**為何單一實例算多條而非多次 entry**:
+- 跨均線交叉(SMA20 vs SMA60)需同時看到兩條均線才能偵測
+- 若拆成多個 entry,每個實例 `compute(input, params) -> output` 只見自己的 params,無法產出跨均線交叉 Fact
+- 因此 ma_core 的 Params 持有 `Vec<MaSpec>`,單一實例輸出多條 series 並在內部偵測交叉
+- 此設計**不**違反零耦合原則(同 Core 同族子型號內部協同,非跨 Core 引用)
 
 ### 7.3 Params
 
 ```rust
 pub struct MaParams {
+    pub specs: Vec<MaSpec>,       // 至少 1 條,常見 5 / 10 / 20 / 60 / 120 / 240
+    pub timeframe: Timeframe,
+    pub detect_cross_pairs: CrossPairPolicy,  // 跨均線交叉偵測策略
+}
+
+pub struct MaSpec {
     pub kind: MaKind,
     pub period: usize,
     pub source: PriceSource,       // 預設 Close
-    pub timeframe: Timeframe,
 }
 
 pub enum MaKind {
@@ -346,20 +377,32 @@ pub enum PriceSource {
     Hlc3,   // (High + Low + Close) / 3
     Ohlc4,
 }
+
+pub enum CrossPairPolicy {
+    None,                  // 不偵測跨均線交叉
+    AllPairs,              // 偵測所有兩兩組合
+    Pairs(Vec<(usize, usize)>),  // 指定 (short_period, long_period) 對
+}
 ```
+
+`MaParams` derive `Default` 時,`specs = vec![MaSpec { kind: Sma, period: 20, source: Close }]`,`detect_cross_pairs = CrossPairPolicy::None`。
 
 ### 7.4 warmup_periods
 
+各 MaKind 倍數依總綱 §7.3.1 慣例(SMA ×1 / EMA ×4 / DEMA ×6 / TEMA ×8 / HMA ×2),取所有 spec 中的最大值:
+
 ```rust
 fn warmup_periods(&self, params: &MaParams) -> usize {
-    match params.kind {
-        MaKind::Sma => params.period,
-        MaKind::Ema => params.period * 4,
-        MaKind::Wma => params.period,
-        MaKind::Dema => params.period * 6,
-        MaKind::Tema => params.period * 8,
-        MaKind::Hma => params.period * 2,
-    }
+    params.specs.iter().map(|spec| {
+        match spec.kind {
+            MaKind::Sma => spec.period,
+            MaKind::Ema => spec.period * 4,
+            MaKind::Wma => spec.period,
+            MaKind::Dema => spec.period * 6,
+            MaKind::Tema => spec.period * 8,
+            MaKind::Hma => spec.period * 2,
+        }
+    }).max().unwrap_or(0) + 5  // 緩衝
 }
 ```
 
@@ -367,6 +410,11 @@ fn warmup_periods(&self, params: &MaParams) -> usize {
 
 ```rust
 pub struct MaOutput {
+    pub series_by_spec: Vec<MaSeriesEntry>,
+}
+
+pub struct MaSeriesEntry {
+    pub spec: MaSpec,             // 對應的 spec
     pub series: Vec<MaPoint>,
 }
 
@@ -376,38 +424,59 @@ pub struct MaPoint {
 }
 ```
 
+每條 spec 對應一個 `MaSeriesEntry`,前端與 Aggregation Layer 依 `spec.kind / spec.period` 索引取用。
+
 ### 7.6 Fact 範例
 
 | Fact statement | metadata |
 |---|---|
 | `Price crossed above SMA(20) at 2026-04-15` | `{ event: "ma_bullish_cross", ma_kind: "sma", period: 20 }` |
 | `Price crossed below EMA(60) at 2026-04-22` | `{ event: "ma_bearish_cross", ma_kind: "ema", period: 60 }` |
-| `SMA(20) crossed above SMA(60) at 2026-04-10(golden cross)` | `{ event: "ma_golden_cross", short_period: 20, long_period: 60 }` |
+| `SMA(20) crossed above SMA(60) at 2026-04-10(golden cross)` | `{ event: "ma_golden_cross", short: { kind: "sma", period: 20 }, long: { kind: "sma", period: 60 } }` |
+| `EMA(50) crossed below EMA(200) at 2026-04-25(death cross)` | `{ event: "ma_death_cross", short: { kind: "ema", period: 50 }, long: { kind: "ema", period: 200 } }` |
 | `Price held above EMA(200) for 60 consecutive days` | `{ event: "above_ma_streak", ma_kind: "ema", period: 200, days: 60 }` |
 
-### 7.7 多均線組合查詢
+### 7.7 多均線組合宣告範例
 
-**注意**:單一 `ma_core` 實例只算一條均線。Workflow 若需 5 / 10 / 20 / 60 / 120 / 240 等多條,需在 toml 列多次 entry,各帶不同 params:
+Workflow toml 一次宣告多條均線 + 指定要偵測的交叉對:
 
 ```toml
 [[indicator_cores]]
 name = "ma"
-params = { kind = "sma", period = 5, timeframe = "daily" }
+params.timeframe = "daily"
+params.detect_cross_pairs = { type = "pairs", pairs = [[20, 60], [50, 200]] }
 
-[[indicator_cores]]
-name = "ma"
-params = { kind = "sma", period = 20, timeframe = "daily" }
+[[params.specs]]
+kind = "sma"
+period = 5
 
-[[indicator_cores]]
-name = "ma"
-params = { kind = "ema", period = 60, timeframe = "daily" }
+[[params.specs]]
+kind = "sma"
+period = 20
+
+[[params.specs]]
+kind = "sma"
+period = 60
+
+[[params.specs]]
+kind = "ema"
+period = 50
+
+[[params.specs]]
+kind = "ema"
+period = 200
 ```
 
-各 entry 的 `params_hash` 不同,寫入 `indicator_values` 不會衝突。
+整組宣告在單一 ma_core 實例內,`params_hash` 涵蓋整個 specs 清單。
 
-### 7.8 跨均線交叉 Fact
+### 7.8 跨均線交叉 Fact 為何不違反零耦合
 
-跨均線交叉(SMA20 cross SMA60)由 `ma_core` 內部偵測產出,**不**屬「跨指標訊號」(因為都是同一 Core 同族子型號)。
+跨均線交叉(SMA20 cross SMA60)由 `ma_core` **單一實例內部**同時產出兩條 series 並偵測,**不**屬「跨指標訊號」:
+
+- 跨指標訊號(overview §11):需要消費**不同 Core** 的輸出(例:Bollinger + Keltner = TTM Squeeze)
+- 跨均線交叉:**同一 Core 同一實例**的內部 series 比對,屬同族子型號協同
+
+此設計與 overview §11.2「同時看兩個 Core 才能成立的訊號不進架構」並無衝突。
 
 ---
 
@@ -484,7 +553,16 @@ pub struct WilliamsRParams {
 }
 ```
 
-### 9.3 Output
+### 9.3 warmup_periods
+
+```rust
+fn warmup_periods(&self, params: &WilliamsRParams) -> usize {
+    // 與 Stochastic 同源,單層平滑取 ×4 慣例(總綱 §7.3.1)
+    params.period * 4
+}
+```
+
+### 9.4 Output
 
 ```rust
 pub struct WilliamsROutput {
@@ -497,7 +575,7 @@ pub struct WilliamsRPoint {
 }
 ```
 
-### 9.4 Fact 範例
+### 9.5 Fact 範例
 
 | Fact statement | metadata |
 |---|---|
@@ -525,7 +603,16 @@ pub struct CciParams {
 }
 ```
 
-### 10.3 Output
+### 10.3 warmup_periods
+
+```rust
+fn warmup_periods(&self, params: &CciParams) -> usize {
+    // CCI 為視窗統計(均值與平均絕對偏差),依總綱 §7.3.1 慣例:period + 緩衝
+    params.period + 5
+}
+```
+
+### 10.4 Output
 
 ```rust
 pub struct CciOutput {
@@ -538,7 +625,7 @@ pub struct CciPoint {
 }
 ```
 
-### 10.4 Fact 範例
+### 10.5 Fact 範例
 
 | Fact statement | metadata |
 |---|---|
@@ -552,16 +639,22 @@ pub struct CciPoint {
 
 ### 11.1 定位
 
-Coppock Curve,長期動能指標,主要用於月線判斷大型底部訊號。
+Coppock Curve(Coppock 曲線),長期動能指標,由 Edwin Coppock 於 1962 年提出,主要用於月線判斷主升段起點(由負轉正)。標準計算式:
+
+```
+Coppock = WMA(n_wma, ROC(n_long) + ROC(n_short))
+```
+
+預設參數 `WMA(10, ROC(14) + ROC(11))`,常用於月線。
 
 ### 11.2 Params
 
 ```rust
 pub struct CoppockParams {
-    pub roc1_period: usize,        // 預設 14(月)
-    pub roc2_period: usize,        // 預設 11(月)
-    pub wma_period: usize,         // 預設 10(月)
-    pub timeframe: Timeframe,      // 預設 Monthly(此指標主要用於月線)
+    pub roc_long: usize,           // 預設 14(長期 ROC 週期)
+    pub roc_short: usize,          // 預設 11(短期 ROC 週期)
+    pub wma_period: usize,         // 預設 10(WMA 平滑週期)
+    pub timeframe: Timeframe,      // 主推 Monthly,日線 / 週線意義較弱
 }
 ```
 
@@ -569,7 +662,9 @@ pub struct CoppockParams {
 
 ```rust
 fn warmup_periods(&self, params: &CoppockParams) -> usize {
-    params.roc1_period + params.wma_period + 12  // 月線單位
+    // ROC 為差分(視窗統計型),WMA 為加權平均(視窗統計型),兩層視窗串接
+    // 依總綱 §7.3.1 慣例:max(roc_long, roc_short) + wma_period + 緩衝
+    params.roc_long.max(params.roc_short) + params.wma_period + 5
 }
 ```
 
@@ -590,9 +685,53 @@ pub struct CoppockPoint {
 
 | Fact statement | metadata |
 |---|---|
-| `Coppock(14,11,10) crossed above zero at 2026-04(monthly)` | `{ event: "zero_cross_positive", timeframe: "monthly" }` |
-| `Coppock(14,11,10) bottomed at -45 in 2026-02, rising since` | `{ event: "trough", value: -45, date: "2026-02" }` |
+| `Coppock(14,11,10) zero line cross(positive) at 2026-04-30` | `{ event: "zero_cross_positive", date: "2026-04-30" }` |
+| `Coppock(14,11,10) zero line cross(negative) at 2026-03-31` | `{ event: "zero_cross_negative", date: "2026-03-31" }` |
+| `Coppock(14,11,10) trough at -45.2 on 2026-02-28, rising since` | `{ event: "trough", value: -45.2, since_date: "2026-02-28" }` |
+| `Coppock(14,11,10) bullish divergence: price LL 2026-01-31, Coppock HL 2026-04-30` | `{ event: "bullish_divergence", price_date: "2026-01-31", indicator_date: "2026-04-30" }` |
 
-### 11.6 注意事項
+### 11.6 月線時間框架建議
 
-Coppock Curve 主要用於月線,日線數值意義不大。Workflow toml 中應限制 timeframe 為 monthly,Pipeline 在 daily / weekly 不執行此 Core(或標記為 not_applicable)。
+Coppock Curve 的設計初衷是月線指標,日線 / 週線使用須注意:
+
+| 時間框架 | 適用性 | 說明 |
+|---|---|---|
+| Monthly | ✅ 主要 | Coppock 原意設計,長期主升段判斷 |
+| Weekly | ⚠️ 意義較弱 | 訊號頻率提高但失去長期動能本質 |
+| Daily | ❌ 不建議 | 訊號雜訊過多,失去 Coppock 的篩選價值 |
+
+Workflow toml 預設 `timeframe = "monthly"`。
+
+### 11.7 背離規則
+
+對齊 `macd_core §3.6` 規則:
+
+- 兩個價格極值點(HH 或 LL)之間時間距離 ≥ N 月(預設 N=6,因月線粒度)
+- 兩極值點之間 Coppock 對應方向相反
+- 該規則需明確寫死於 `compute.rs`
+
+---
+
+## 十二、動量類不收編說明
+
+為避免日後重複討論,明確列出**不獨立成 Core**的動量類概念。
+
+### 12.1 不收編清單
+
+| 項目 | 為何不獨立 | 實際處理方式 |
+|---|---|---|
+| **MACD-Histogram** | 已是 `macd_core` Output 子欄位 | 由 `macd_core` 一併輸出與產出 Fact |
+| **Stochastic RSI(StochRSI)** | RSI 套 KD 平滑的衍生品,屬「跨指標衍生」,違反零耦合 | 不獨立;若使用者需要,屬使用者教學層 |
+| **DMI(+DI / -DI)** | 已內建於 `adx_core`(ADX 由 +DI / -DI 計算而來) | 由 `adx_core` 一併輸出 |
+| **TRIX / TSI / DPO** 等冷門動量 | 使用率低,不入 P1~P3 範圍 | 未列入,未來視需求加入 |
+| **動量類綜合訊號**(如 RSI+ADX 雙指標確認) | 跨指標訊號,違反零耦合 | 援引總綱 §11,屬使用者教學層 |
+
+### 12.2 動量類同族合併判準
+
+依總綱 §2.3 三條件判定。動量類已執行的合併:
+
+- **MA 族(SMA/EMA/WMA/DEMA/TEMA/HMA)合併為 `ma_core`**:三條件全滿足,且採 `Vec<MaSpec>` 設計支援多條同算與跨均線交叉偵測
+- **MACD 系(主線 / signal / histogram)合併為 `macd_core`**:屬同一指標的多個輸出欄位,本就是單一 Core
+- **RSI 與 StochRSI 不合併**:Output schema 異構(StochRSI 需多一層 KD 平滑),Fact 種類雖近但不同源
+
+未來新增動量指標時,依總綱 §2.3 判準決定獨立或併入既有 Core。

@@ -1,10 +1,23 @@
 # Environment Cores 規格(環境)
 
-> **版本**:v2.0 抽出版 r1
-> **日期**:2026-04-30
+> **版本**:v2.0 抽出版 r2
+> **日期**:2026-05-07
 > **配套文件**:`cores_overview.md`(共通規範)
 > **包含 Core**:5 個
 > **優先級**:全部 P2
+
+---
+
+## r2 修訂摘要(2026-05-07)
+
+- **資料表對應改指 Silver derived**:依總綱 §4.4「Cores 一律從 Silver 層讀取,不直接讀 Bronze」,所有 Core 章首對照表更新為 `*_derived` 表名(對應 `layered_schema_post_refactor.md` §4.4)
+- **`fear_greed_core` 例外註記**:Silver 目前無 `fear_greed_index_derived`,Core 直讀 Bronze `fear_greed_index` 為**已知架構例外**,須補 derived 後切換,詳見 §6.2 與 §6.7
+- **Input Series 與載入器補齊**:§2.1 明列 5 種 `*Series` 與 `shared/environment_loader/`,對齊 chip / fundamental 子類格式
+- **events 結構統一**:採 `{ date, kind, value, metadata }` 同構結構
+- **計算策略表補齊**:§2.4 新增 batch 處理表,對齊 chip / fundamental 子類
+- **warmup_periods 偏離理由補齊**:`market_margin_core` 的硬編 20 補理由
+- **Silver PK 標註**:`exchange_rate_derived` 與 `market_margin_maintenance_derived` 為非標準 PK(不含 stock_id),於對應章節標明
+- **跨 Core 整合禁止**:引用總綱 §11
 
 ---
 
@@ -23,13 +36,22 @@
 
 ## 一、本文件範圍
 
-| Core | 名稱 | 對應資料表 |
-|---|---|---|
-| `taiex_core` | 加權指數 | `market_index_tw` |
-| `us_market_core` | SPY / VIX / 美股 | `market_index_us` |
-| `exchange_rate_core` | 匯率 | `exchange_rate` |
-| `fear_greed_core` | 恐慌貪婪指數 | `fear_greed_index` |
-| `market_margin_core` | 市場整體融資維持率 | `market_margin_maintenance` |
+| Core | 名稱 | 上游 Silver 表 | Silver PK | 保留 stock_id |
+|---|---|---|---|---|
+| `taiex_core` | 加權指數 | `taiex_index_derived` | `(market, stock_id, date)` | `_index_taiex_` |
+| `us_market_core` | SPY / VIX / 美股 | `us_market_index_derived` | `(market, stock_id, date)` | `_global_` |
+| `exchange_rate_core` | 匯率 | `exchange_rate_derived` | `(market, date, currency)` | `_global_` |
+| `fear_greed_core` | 恐慌貪婪指數 | ⚠️ Bronze `fear_greed_index`(暫定) | `(market, date)` | `_global_` |
+| `market_margin_core` | 市場整體融資維持率 | `market_margin_maintenance_derived` | `(market, date)` | `_market_` |
+
+> **PK 注意**:
+> - `exchange_rate_derived` PK **不含 stock_id**,以 `currency` 區分(USD/TWD、JPY/TWD 等)
+> - `market_margin_maintenance_derived` PK **不含 stock_id**,屬全市場單一序列
+> - `fear_greed_index`(Bronze)PK 同樣不含 stock_id
+>
+> 三者的 stock_id 保留字依 §6.2.1(總綱)使用,載入器在組裝 `Series` 時填入保留字。
+
+> **fear_greed_core 例外**:Silver 目前無 `fear_greed_index_derived`,本 Core 暫時直讀 Bronze。此為已知架構例外(違反總綱 §4.4 但已登記),待 Silver 端補 derived 後切換。詳見 §6.2 與 §6.7。
 
 ---
 
@@ -37,17 +59,15 @@
 
 ### 2.1 trait
 
-全部走 `IndicatorCore` trait。
+全部走 `IndicatorCore` trait(見總綱 §3),`Input` 為各自對應的環境資料序列(`MarketIndexTwSeries` / `MarketIndexUsSeries` / `ExchangeRateSeries` / `FearGreedIndexSeries` / `MarketMarginMaintenanceSeries`),由 `shared/environment_loader/` 提供載入器(見總綱 §3.4)。各 Core 的 `warmup_periods()` 單位依輸入頻率決定,見總綱 §3.4 與 §7.3.1。
 
 ### 2.2 個股無關性
 
-Environment Cores 的輸出**與個股無關**,反映整體市場 / 環境變數。寫入 `indicator_values` 時 `stock_id` 為 `_market_` 或 `_global_` 等保留值(具體規範見儲存層 spec)。
+Environment Cores 的輸出**與個股無關**,反映整體市場 / 環境變數。`stock_id` 使用保留字(`_market_` / `_global_` / `_index_taiex_`),完整規範見總綱 §6.2.1,本節不重述。
 
 ### 2.3 Environment Cores 的設計意義
 
 Environment Cores 的事實**不會直接影響個股 Core 的計算**,而是在 Aggregation Layer 與個股事實**並排呈現**,讓使用者自己連結個股技術面與大環境的關聯。
-
-### 2.4 與個股 Core 的關係
 
 ```
 個股技術面 Fact(來自 Indicator Cores)
@@ -63,12 +83,37 @@ Environment Cores 的事實**不會直接影響個股 Core 的計算**,而是在
    使用者自己連線
 ```
 
-### 2.5 Fact 邊界提醒
+### 2.4 計算策略
 
-- ✅ `加權指數 MACD 黃金交叉`、`VIX 上升至 28`、`USD/TWD 突破 30.5`
-- ❌ `市場情緒轉樂觀`、`美股拖累台股`、`匯率壓力減輕`
+| Core | 頻率 | batch 處理方式 |
+|---|---|---|
+| `taiex_core` | 日頻 | 增量,每日收盤後 |
+| `us_market_core` | 日頻(美國日) | 增量,需處理時差(見 §4.7) |
+| `exchange_rate_core` | 日頻 | 增量,多幣別並行 |
+| `fear_greed_core` | 日頻 | 增量 |
+| `market_margin_core` | 日頻 | 增量 |
 
-「拖累」、「壓力」、「轉樂觀」屬主觀因果判斷,**禁止**進入 Fact statement。
+### 2.5 Output 統一結構
+
+依總綱 §2「Output schema 同構」原則,所有 Environment Core 的 Output 採以下兩層結構:
+
+```rust
+pub struct XxxOutput {
+    pub series: Vec<XxxPoint>,      // 時間序列數值
+    pub events: Vec<XxxEvent>,      // 事件型 Fact 來源
+}
+
+pub struct XxxEvent {
+    pub date: NaiveDate,
+    pub kind: XxxEventKind,
+    pub value: f64,
+    pub metadata: serde_json::Value,
+}
+```
+
+### 2.6 Fact 邊界提醒
+
+Fact 邊界與禁用詞彙清單見總綱 §6.1.1,本子類涉及的「市場情緒轉樂觀」、「美股拖累台股」、「匯率壓力減輕」等主觀詞彙已收錄於該節,此處不重述。
 
 ---
 
@@ -78,15 +123,21 @@ Environment Cores 的事實**不會直接影響個股 Core 的計算**,而是在
 
 加權指數的趨勢、技術指標、量能事實。
 
-### 3.2 注意:此 Core 自身可呼叫其他 Indicator Core 嗎?
+### 3.2 上游 Silver
 
-**不可以**。`taiex_core` **內嵌**自己所需的指標計算(MACD、RSI 等),**不**從外部 Indicator Core 取資料。
+- 表:`taiex_index_derived`
+- PK:`(market, stock_id, date)`,`stock_id` 取值為 `TAIEX` / `TPEx`
+- 關鍵欄位:`open / high / low / close / volume`
+- 載入器:`shared/environment_loader/`,提供 `MarketIndexTwSeries`
+- **保留 stock_id**:`_index_taiex_`(Fact 寫入時使用)
 
-### 3.3 為何要重複實作
+### 3.3 此 Core 自身可呼叫其他 Indicator Core 嗎?
+
+**不可以**。`taiex_core` **內嵌**自己所需的指標計算(MACD、RSI 等),**不**從外部 Indicator Core 取資料,理由:
 
 - 維持零耦合原則(Core 之間不互相 import)
 - `taiex_core` 用的是大盤指數,個股 Indicator Core 用的是個股 OHLC,輸入不同
-- 邏輯雷同部分可走 `shared/` 共用工具(若未來抽出)
+- 邏輯雷同部分可走 `shared/` 共用工具(若未來抽出,屬 P3 後議題)
 
 ### 3.4 Params
 
@@ -109,6 +160,8 @@ fn warmup_periods(&self, params: &TaiexParams) -> usize {
     (params.macd_slow * 4).max(params.trend_lookback_bars + 10)
 }
 ```
+
+依 §7.3.1 慣例:MACD 系 ×4(EMA 收斂)與 lookback + 緩衝取大者,符合慣例不附偏離理由。
 
 ### 3.6 Output
 
@@ -134,7 +187,8 @@ pub struct TaiexPoint {
 pub struct TaiexEvent {
     pub date: NaiveDate,
     pub kind: TaiexEventKind,
-    pub value: f64,
+    pub value: f64,                        // 指標值或變動百分比
+    pub metadata: serde_json::Value,
 }
 
 pub enum TaiexEventKind {
@@ -154,10 +208,10 @@ pub enum TaiexEventKind {
 
 | Fact statement | metadata |
 |---|---|
-| `TAIEX MACD golden cross at 2026-04-15` | `{ index: "taiex", event: "macd_golden_cross" }` |
-| `TAIEX broke above MA60 at 2026-04-22(close=18,500, MA60=18,250)` | `{ index: "taiex", event: "ma60_breakout" }` |
-| `TAIEX volume z-score 3.2 on 2026-04-25(volume surge)` | `{ index: "taiex", event: "volume_surge", z: 3.2 }` |
-| `TAIEX RSI = 78 on 2026-04-25(overbought for 5 days)` | `{ index: "taiex", event: "rsi_overbought_streak", days: 5 }` |
+| `TAIEX MACD golden cross at 2026-04-15` | `{ index: "taiex" }` |
+| `TAIEX broke above MA60 at 2026-04-22(close=18,500, MA60=18,250)` | `{ index: "taiex", close: 18500, ma60: 18250 }` |
+| `TAIEX volume z-score 3.2 on 2026-04-25(volume surge)` | `{ index: "taiex", z: 3.2 }` |
+| `TAIEX RSI = 78 on 2026-04-25(overbought for 5 days)` | `{ index: "taiex", rsi: 78, days: 5 }` |
 
 ---
 
@@ -167,11 +221,19 @@ pub enum TaiexEventKind {
 
 美股大盤(SPY)趨勢、VIX 區間、夜盤異動事實。
 
-### 4.2 為何要看美股
+### 4.2 上游 Silver
+
+- 表:`us_market_index_derived`
+- PK:`(market, stock_id, date)`,`stock_id` 取值為 `SPY` / `^VIX` 等代號
+- 關鍵欄位:`open / high / low / close / volume`
+- 載入器:`shared/environment_loader/`,提供 `MarketIndexUsSeries`
+- **保留 stock_id**:`_global_`(Fact 寫入時使用)
+
+### 4.3 為何要看美股
 
 台股與美股相關性高,美股事實作為台股 Core 的**外部環境**並排呈現。但 Core 本身**不**做「美股漲台股會漲」的因果推論。
 
-### 4.3 Params
+### 4.4 Params
 
 ```rust
 pub struct UsMarketParams {
@@ -184,7 +246,7 @@ pub struct UsMarketParams {
 }
 ```
 
-### 4.4 warmup_periods
+### 4.5 warmup_periods
 
 ```rust
 fn warmup_periods(&self, params: &UsMarketParams) -> usize {
@@ -192,7 +254,9 @@ fn warmup_periods(&self, params: &UsMarketParams) -> usize {
 }
 ```
 
-### 4.5 Output
+依 §7.3.1 慣例:單層 EMA × 4 為收斂期,符合慣例不附偏離理由。
+
+### 4.6 Output
 
 ```rust
 pub struct UsMarketOutput {
@@ -214,6 +278,7 @@ pub struct UsMarketEvent {
     pub date: NaiveDate,
     pub kind: UsMarketEventKind,
     pub value: f64,
+    pub metadata: serde_json::Value,
 }
 
 pub enum UsMarketEventKind {
@@ -226,18 +291,18 @@ pub enum UsMarketEventKind {
 }
 ```
 
-### 4.6 Fact 範例
+### 4.7 Fact 範例
 
 | Fact statement | metadata |
 |---|---|
-| `SPY MACD death cross at 2026-04-22` | `{ index: "spy", event: "macd_death_cross" }` |
-| `VIX spike to 32.5 on 2026-04-25(+45% single day)` | `{ event: "vix_spike", vix: 32.5 }` |
-| `VIX entered high zone(>25) on 2026-04-22` | `{ event: "vix_high_zone_entry" }` |
-| `SPY -2.8% on 2026-04-22 evening(US time)` | `{ event: "spy_overnight_large_move", change: -2.8 }` |
+| `SPY MACD death cross at 2026-04-22` | `{ index: "spy" }` |
+| `VIX spike to 32.5 on 2026-04-25(+45% single day)` | `{ vix: 32.5, change: 45.0 }` |
+| `VIX entered high zone(>25) on 2026-04-22` | `{ vix: 26.3, threshold: 25.0 }` |
+| `SPY -2.8% on 2026-04-22 evening(US time)` | `{ change: -2.8, us_date: "2026-04-22" }` |
 
-### 4.7 時區注意
+### 4.8 時區注意
 
-美股交易時間與台股不同步。Output 的 `date` 為美國日,Aggregation Layer 在對齊台股時間軸時需處理時差(美股當日收盤事實對應台股**次日**開盤的環境)。
+美股交易時間與台股不同步。Output 的 `date` 為美國日,Aggregation Layer 在對齊台股時間軸時需處理時差(美股當日收盤事實對應台股**次日**開盤的環境)。`metadata.us_date` 欄位供下游明確區分。
 
 ---
 
@@ -247,11 +312,19 @@ pub enum UsMarketEventKind {
 
 匯率(USD/TWD 等)趨勢、突破事實。
 
-### 5.2 為何要看匯率
+### 5.2 上游 Silver
+
+- 表:`exchange_rate_derived`
+- **PK:`(market, date, currency)` — 不含 stock_id**
+- 關鍵欄位:`rate`
+- 載入器:`shared/environment_loader/`,提供 `ExchangeRateSeries`(載入器將多幣別 row 組裝為單一 Series,以 `currency_pair` 區分)
+- **保留 stock_id**:`_global_`(Fact 寫入時使用)
+
+### 5.3 為何要看匯率
 
 匯率影響外資進出與出口股獲利。但 Core 本身**不**做「匯率升值對某個股利空」這類因果推論,僅輸出匯率事實。
 
-### 5.3 Params
+### 5.4 Params
 
 ```rust
 pub struct ExchangeRateParams {
@@ -263,7 +336,7 @@ pub struct ExchangeRateParams {
 }
 ```
 
-### 5.4 warmup_periods
+### 5.5 warmup_periods
 
 ```rust
 fn warmup_periods(&self, params: &ExchangeRateParams) -> usize {
@@ -271,7 +344,9 @@ fn warmup_periods(&self, params: &ExchangeRateParams) -> usize {
 }
 ```
 
-### 5.5 Output
+依 §7.3.1 慣例:SMA 視窗 + 緩衝,符合慣例不附偏離理由。
+
+### 5.6 Output
 
 ```rust
 pub struct ExchangeRateOutput {
@@ -290,9 +365,9 @@ pub struct ExchangeRatePoint {
 
 pub struct ExchangeRateEvent {
     pub date: NaiveDate,
-    pub currency_pair: String,
     pub kind: ExchangeRateEventKind,
-    pub value: f64,
+    pub value: f64,                        // 匯率值或變化%
+    pub metadata: serde_json::Value,
 }
 
 pub enum ExchangeRateEventKind {
@@ -303,13 +378,13 @@ pub enum ExchangeRateEventKind {
 }
 ```
 
-### 5.6 Fact 範例
+### 5.7 Fact 範例
 
 | Fact statement | metadata |
 |---|---|
-| `USD/TWD broke above 30.5 on 2026-04-22(rate=30.55)` | `{ pair: "USD/TWD", event: "key_level_breakout", level: 30.5 }` |
-| `USD/TWD -0.85% on 2026-04-25(largest move in 60 days)` | `{ pair: "USD/TWD", event: "significant_single_day_move", change: -0.85 }` |
-| `USD/TWD crossed above MA(20) at 2026-04-15` | `{ pair: "USD/TWD", event: "ma_cross", direction: "above" }` |
+| `USD/TWD broke above 30.5 on 2026-04-22(rate=30.55)` | `{ pair: "USD/TWD", level: 30.5, rate: 30.55 }` |
+| `USD/TWD -0.85% on 2026-04-25(largest move in 60 days)` | `{ pair: "USD/TWD", change: -0.85, lookback: "60d" }` |
+| `USD/TWD crossed above MA(20) at 2026-04-15` | `{ pair: "USD/TWD", direction: "above", ma_period: 20 }` |
 
 ---
 
@@ -317,9 +392,23 @@ pub enum ExchangeRateEventKind {
 
 ### 6.1 定位
 
-恐慌貪婪指數(可能為 CNN 美股指數 / 台股自製指標),區間判定與極端事件。
+恐慌貪婪指數(CNN 美股指數,經 FinMind API 取得),區間判定與極端事件。
 
-### 6.2 Params
+### 6.2 上游資料(架構例外)
+
+- ⚠️ **目前直讀 Bronze**:`fear_greed_index`,PK `(market, date)`
+- 關鍵欄位:`score`(0–100)、`label`(Fear / Greed / Neutral / Extreme Fear / Extreme Greed)
+- 載入器:`shared/environment_loader/`,提供 `FearGreedIndexSeries`
+- **保留 stock_id**:`_global_`(Fact 寫入時使用)
+
+**為何例外**:依總綱 §4.4「Cores 一律從 Silver 層讀取」,但 `fear_greed_index` 在 layered_schema r2 後**尚無 derived 表**(資料來源單純,目前無清洗需求)。本 Core 為**已登記的架構例外**。
+
+**TODO(P3 前處理)**:
+- 補建 `fear_greed_index_derived` 至 Silver 層 S6_derived_environment
+- 本 Core 載入器切換為讀 derived
+- 例外條目從本節移除
+
+### 6.3 Params
 
 ```rust
 pub struct FearGreedParams {
@@ -332,7 +421,7 @@ pub struct FearGreedParams {
 }
 ```
 
-### 6.3 warmup_periods
+### 6.4 warmup_periods
 
 ```rust
 fn warmup_periods(&self, params: &FearGreedParams) -> usize {
@@ -340,7 +429,9 @@ fn warmup_periods(&self, params: &FearGreedParams) -> usize {
 }
 ```
 
-### 6.4 Output
+依 §7.3.1 慣例:連續事件偵測 = lookback + 緩衝,符合慣例不附偏離理由。
+
+### 6.5 Output
 
 ```rust
 pub struct FearGreedOutput {
@@ -365,7 +456,8 @@ pub enum FearGreedZone {
 pub struct FearGreedEvent {
     pub date: NaiveDate,
     pub kind: FearGreedEventKind,
-    pub value: f64,
+    pub value: f64,                        // 指數值
+    pub metadata: serde_json::Value,
 }
 
 pub enum FearGreedEventKind {
@@ -377,32 +469,52 @@ pub enum FearGreedEventKind {
 }
 ```
 
-### 6.5 Fact 範例
+### 6.6 Fact 範例
 
 | Fact statement | metadata |
 |---|---|
-| `Fear & Greed Index entered extreme fear zone(22) on 2026-04-25` | `{ event: "entered_extreme_fear", value: 22 }` |
-| `Fear & Greed Index in greed zone for 8 consecutive days` | `{ event: "streak_in_zone", zone: "greed", days: 8 }` |
-| `Fear & Greed Index exited extreme greed at 73 on 2026-04-22` | `{ event: "exited_extreme_greed", value: 73 }` |
+| `Fear & Greed Index entered extreme fear zone(22) on 2026-04-25` | `{ value: 22, threshold: 25.0 }` |
+| `Fear & Greed Index in greed zone for 8 consecutive days` | `{ zone: "greed", days: 8 }` |
+| `Fear & Greed Index exited extreme greed at 73 on 2026-04-22` | `{ value: 73, threshold: 75.0 }` |
+
+### 6.7 Bronze 直讀的影響範圍
+
+本 Core 直讀 Bronze 期間,以下行為與其他 Environment Core 略有不同:
+
+- 載入器讀 `fear_greed_index`(Bronze)而非 `*_derived`
+- `is_dirty / dirty_at` 機制不可用,batch 排程改以「日期最大值」判斷新資料
+- 切換至 derived 後,本 Core 僅需更新載入器,Core 邏輯不變
 
 ---
 
 ## 七、`market_margin_core`
 
+> **命名注意**:本 Core 為**市場整體**融資維持率,與個股級 `margin_core`(Chip Cores)分立。`market_` 前綴依總綱 §13.2.1 命名規範強制使用。
+
 ### 7.1 定位
 
 市場整體融資維持率,反映槓桿風險。
 
-### 7.2 與 `margin_core` 的差異
+### 7.2 上游 Silver
+
+- 表:`market_margin_maintenance_derived`
+- **PK:`(market, date)` — 不含 stock_id**
+- 關鍵欄位:`ratio` / `total_margin_purchase_balance` / `total_short_sale_balance`
+- 載入器:`shared/environment_loader/`,提供 `MarketMarginMaintenanceSeries`
+- **保留 stock_id**:`_market_`(Fact 寫入時使用)
+
+### 7.3 與 `margin_core` 的差異
 
 | 項目 | `margin_core`(個股) | `market_margin_core`(整體) |
 |---|---|---|
 | 範圍 | 單一個股的融資融券 | 全市場融資維持率 |
 | 分類 | Chip Cores | Environment Cores |
 | `stock_id` | 個股代號 | `_market_` |
+| 上游 Silver | `margin_daily_derived` | `market_margin_maintenance_derived` |
+| Silver PK | `(market, stock_id, date)` | `(market, date)` 不含 stock_id |
 | 用途 | 個股籌碼分析 | 大環境風險評估 |
 
-### 7.3 Params
+### 7.4 Params
 
 ```rust
 pub struct MarketMarginParams {
@@ -413,7 +525,7 @@ pub struct MarketMarginParams {
 }
 ```
 
-### 7.4 warmup_periods
+### 7.5 warmup_periods
 
 ```rust
 fn warmup_periods(&self, params: &MarketMarginParams) -> usize {
@@ -421,7 +533,9 @@ fn warmup_periods(&self, params: &MarketMarginParams) -> usize {
 }
 ```
 
-### 7.5 Output
+**偏離 §7.3.1 慣例理由**:本 Core 為閾值分區與短期波動偵測,無平滑收斂與結構性 lookback。固定 20 個交易日為單日異動「歷史最大」事件偵測所需的最小窗口。
+
+### 7.6 Output
 
 ```rust
 pub struct MarketMarginOutput {
@@ -445,7 +559,8 @@ pub enum MarginZone {
 pub struct MarketMarginEvent {
     pub date: NaiveDate,
     pub kind: MarketMarginEventKind,
-    pub value: f64,
+    pub value: f64,                        // 維持率值或變化%
+    pub metadata: serde_json::Value,
 }
 
 pub enum MarketMarginEventKind {
@@ -456,15 +571,15 @@ pub enum MarketMarginEventKind {
 }
 ```
 
-### 7.6 Fact 範例
+### 7.7 Fact 範例
 
 | Fact statement | metadata |
 |---|---|
-| `Market margin maintenance dropped to 142% on 2026-04-25(warning zone)` | `{ event: "entered_warning_zone", value: 142.0 }` |
-| `Market margin maintenance reached 128% on 2026-04-28(danger zone)` | `{ event: "entered_danger_zone", value: 128.0 }` |
-| `Market margin maintenance dropped 6.5% in single day on 2026-04-22` | `{ event: "significant_single_day_drop", change: -6.5 }` |
+| `Market margin maintenance dropped to 142% on 2026-04-25(warning zone)` | `{ value: 142.0, threshold: 145.0 }` |
+| `Market margin maintenance reached 128% on 2026-04-28(danger zone)` | `{ value: 128.0, threshold: 130.0 }` |
+| `Market margin maintenance dropped 6.5% in single day on 2026-04-22` | `{ change: -6.5, lookback: "20d" }` |
 
-### 7.7 強制平倉風險警訊
+### 7.8 強制平倉風險警訊
 
 當 `maintenance_rate < danger_threshold`(預設 130%),代表大量融資戶接近強制平倉,可能引發市場連鎖賣壓。但 Core 本身**不**做「強平風險即將引發崩盤」這類預測,僅輸出客觀數值與分區事件。
 
@@ -474,7 +589,7 @@ pub enum MarketMarginEventKind {
 
 ### 8.1 不在 Core 層整合
 
-「VIX 飆升 + 個股 RSI 超買 = 賣訊」這類綜合判斷涉及 Environment Core 與個股 Core,**不**在 Core 層整合。
+「VIX 飆升 + 個股 RSI 超買 = 賣訊」這類綜合判斷涉及 Environment Core 與個股 Core,**不**在 Core 層整合。本原則見總綱 §11(跨指標訊號處理原則),適用於跨子類組合。
 
 ### 8.2 並排呈現
 
