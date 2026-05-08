@@ -29,16 +29,12 @@ CANDIDATES = [
     ("TaiwanStockTotalReturnIndex",         "TAIEX",   "2025-01-01", "2025-01-15"),
     # ⚠️ 5Seconds 不接 data_id(all_market dataset);只跑 1 天看 row 數 + 欄位
     ("TaiwanVariousIndicators5Seconds",     None,      "2025-01-02", "2025-01-02"),
-    # 🆕 USStockPrice + Yahoo TAIEX/TPEx ticker(已用於 market_index_us SPY/^VIX,
-    # 若接 ^TWII / ^TWOII 直接拿到 daily OHLCV)
-    ("USStockPrice",                        "^TWII",   "2025-01-01", "2025-01-15"),
-    ("USStockPrice",                        "^TWOII",  "2025-01-01", "2025-01-15"),
-    ("USStockPrice",                        "^TWO",    "2025-01-01", "2025-01-15"),  # 另一個可能 TPEx ticker
-    # 順便試別的可能 daily OHLCV TAIEX source(萬一 FinMind 有更直接的)
-    ("TaiwanStockMarketIndex",              "TAIEX",   "2025-01-01", "2025-01-15"),
-    ("TaiwanStockMarketDailyTrade",         None,      "2025-01-01", "2025-01-15"),  # all_market
-    ("TaiwanStockTradingDailyReport",       None,      "2025-01-01", "2025-01-15"),  # all_market
-    ("TaiwanStockOHLC",                     "TAIEX",   "2025-01-01", "2025-01-15"),
+    # 🆕 從 422 enum 找到的新 candidate(2026-05-08):
+    ("TaiwanStockEvery5SecondsIndex",       "TAIEX",   "2025-01-02", "2025-01-02"),
+    ("TaiwanStockEvery5SecondsIndex",       None,      "2025-01-02", "2025-01-02"),  # all_market 試試
+    ("TaiwanStockMarketValue",              "TAIEX",   "2025-01-01", "2025-01-15"),
+    ("TaiwanStockMarketValue",              None,      "2025-01-01", "2025-01-15"),  # all_market 試
+    ("TaiwanStockStatisticsOfOrderBookAndTrade", "TAIEX", "2025-01-02", "2025-01-02"),
 ]
 
 
