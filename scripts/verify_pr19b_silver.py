@@ -186,7 +186,10 @@ def _compare(silver_by_pk: dict, legacy_by_pk: dict, spec: VerifySpec) -> dict:
                 })
 
     return {
-        "match":            not (missing or extra or diffs),
+        # extra_in_silver 不算 FAIL — Silver 可能比 v2.0 legacy 新(legacy 已 deprecated
+        # 不每日更新),或 PR #20 trigger 從別的 Bronze(e.g. SBL)建 stub row。
+        # builder 對齊正確性看 missing(legacy 有 silver 沒)+ value_diffs(都有但值不同)。
+        "match":            not (missing or diffs),
         "silver_count":     len(silver_by_pk),
         "legacy_count":     len(legacy_by_pk),
         "missing_in_silver": missing,
@@ -260,20 +263,29 @@ def main() -> int:
 
         # 3. 印 status
         print()
-        print(f"{'builder':<18} {'silver':>8} {'legacy':>8}  {'status':>6}")
-        print("-" * 50)
+        print(f"{'builder':<18} {'silver':>8} {'legacy':>8}  {'extra':>6}  {'status':>6}")
+        print("-" * 60)
         all_ok = True
         for spec, report in results:
             ok = report["match"]
             all_ok = all_ok and ok
             status = "OK" if ok else "FAIL"
+            extras = len(report["extra_in_silver"])
+            extra_str = f"+{extras}" if extras else "0"
             print(f"{spec.name:<18} "
                   f"{report['silver_count']:>8} "
                   f"{report['legacy_count']:>8}  "
+                  f"{extra_str:>6}  "
                   f"{status:>6}")
-        print("-" * 50)
+        print("-" * 60)
         print(f"{'TOTAL':<18} {sum(1 for _, r in results if r['match'])}/{len(results)} OK")
         print()
+        # 印 extras 提示(非 FAIL,但 user 該知道)
+        any_extras = any(report["extra_in_silver"] for _, report in results)
+        if any_extras:
+            print("ℹ️  extra_in_silver = Silver 多 row(legacy v2.0 deprecated 不更新 / PR #20")
+            print("   trigger 從別的 Bronze 建 stub row);不算 FAIL,但留意 magnitude。")
+            print()
 
         # 4. 失敗時印 diff
         if not all_ok:
