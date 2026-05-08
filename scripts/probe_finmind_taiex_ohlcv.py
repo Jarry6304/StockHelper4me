@@ -77,9 +77,36 @@ async def probe(
                 else:
                     print(f"  ⚠️  {label} → 200 OK but 0 rows")
             else:
-                print(f"  ❌ {label} → {resp.status}: {text[:200]}")
+                print(f"  ❌ {label} → {resp.status}: {text[:300]}")
     except Exception as e:
         print(f"  💥 {label} → exception: {e}")
+
+
+async def dump_full_enum(session: aiohttp.ClientSession, token: str) -> None:
+    """打 1 個故意亂的 dataset 名,從 422 error message 撈完整 dataset enum。"""
+    params = {"dataset": "__FORCE_ENUM_ERROR__", "token": token}
+    try:
+        async with session.get(FINMIND_BASE_URL, params=params, timeout=30) as resp:
+            text = await resp.text()
+            if resp.status == 422:
+                import json, re
+                body = json.loads(text)
+                # body['detail'][0]['msg'] 含 "Input should be 'X', 'Y', ..."
+                msg = body.get("detail", [{}])[0].get("msg", "")
+                # extract single-quoted dataset names
+                names = re.findall(r"'([A-Za-z]\w+)'", msg)
+                # filter market / index / OHLCV / TAIEX / Total / Various 相關
+                keywords = ["index", "taiex", "tpex", "market", "ohlc", "indicator",
+                             "totalreturn", "5sec", "trade", "report", "OHLC"]
+                matches = [n for n in names if any(kw in n.lower() for kw in keywords)]
+                print(f"  /data 422 enum: {len(names)} valid dataset names total")
+                print(f"  matching keywords ({len(matches)}):")
+                for m in sorted(matches):
+                    print(f"    - {m}")
+            else:
+                print(f"  /data 422 probe got status={resp.status},body={text[:300]}")
+    except Exception as e:
+        print(f"  /data 422 probe error: {e}")
 
 
 async def main() -> int:
@@ -118,9 +145,16 @@ async def main() -> int:
             print(f"  /datalist error: {e}")
         print()
 
-        # 2. probe candidate datasets
+        # 2. /data 422 enum 撈完整 dataset 清單
         print("=" * 80)
-        print("Phase 2: probe 候選 dataset(看 fields + sample row)")
+        print("Phase 2: /data 422 error enum(列 FinMind 全部認的 dataset 名)")
+        print("=" * 80)
+        await dump_full_enum(session, token)
+        print()
+
+        # 3. probe candidate datasets
+        print("=" * 80)
+        print("Phase 3: probe 候選 dataset(看 fields + sample row)")
         print("=" * 80)
         for ds, did, sd, ed in CANDIDATES:
             await probe(session, token, ds, did, sd, ed)
