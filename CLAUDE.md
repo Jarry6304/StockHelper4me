@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-fXhK2`，alembic head `q6r7s8t9u0v1_pr21_b_total_margin_pivot_fix`（2026-05-08）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-fXhK2`，alembic head `r7s8t9u0v1w2_pr_r1_add_source_to_3_tw`（2026-05-09，PR #R1 補 source 欄至 3 張 _tw Bronze）。
 
 ---
 
@@ -168,7 +168,81 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09)`。下個 session 主任務見「下次 session 建議優先序」段。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ⏳(m2 大重構 R1:source 欄補回 3 張 _tw,2026-05-09)`。m2 大重構 plan 在 PR #24,R1~R6 切片動工中。
+
+---
+
+## v1.22 — PR #R1 m2 大重構:source 欄補回 3 張 _tw Bronze(2026-05-09)
+
+接 PR #21 deprecated path cleanup + PR #23 m2Spec/oldm2Spec/ 歸檔後,m2 大重構
+正式動工。R1 是 plan §三 第 1 個 PR,範圍純 schema additive。
+
+### 範圍
+
+3 張 Bronze 表 ALTER ADD COLUMN `source TEXT NOT NULL DEFAULT 'finmind'`:
+
+| Bronze 表 | spec ref | 補上原因 |
+|---|---|---|
+| `holding_shares_per_tw` | spec §3.5 line 430 | 明文「**PR #R1 補回**」標記 |
+| `financial_statement_tw` | spec §3.6 漏寫 | Bronze 全表 source 一致原則(見 plan §1.2 註 2) |
+| `monthly_revenue_tw` | spec §3.6 漏寫 | 同上 |
+
+### alembic `r7s8t9u0v1w2_pr_r1_add_source_to_3_tw`
+
+```sql
+ALTER TABLE holding_shares_per_tw   ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'finmind';
+ALTER TABLE financial_statement_tw  ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'finmind';
+ALTER TABLE monthly_revenue_tw      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'finmind';
+```
+
+PG 11+ 對 ALTER ADD COLUMN with DEFAULT 是 instant operation(不掃 row,
+不阻塞)。既有資料(holding_shares_per_tw 7M+ rows / financial_statement_tw
+~14M+ rows / monthly_revenue_tw 数十萬 rows)default 自動填 'finmind'。
+
+### 配套改動
+
+- `src/schema_pg.sql`:3 個 CREATE TABLE 同步加 source 欄 + comment 標 PR #R1
+- 既有 collector.toml 5 個 v3 entries 沒指定 source,db.upsert 不過濾此欄,
+  schema default 接管 — **0 collector.toml 改動**
+- 既有 Silver builders(holding_shares_per / financial_statement / monthly_revenue)
+  不讀 source 欄 — **0 builder 改動**
+
+### user 本機驗證流程
+
+```powershell
+git pull
+alembic upgrade head                                    # r7s8t9u0v1w2
+
+# 3 表 source 欄存在 + 既有資料 default = 'finmind'
+psql $env:DATABASE_URL -c "
+  SELECT 'holding_shares_per_tw' AS t, source, COUNT(*) FROM holding_shares_per_tw GROUP BY source
+  UNION ALL SELECT 'financial_statement_tw', source, COUNT(*) FROM financial_statement_tw GROUP BY source
+  UNION ALL SELECT 'monthly_revenue_tw', source, COUNT(*) FROM monthly_revenue_tw GROUP BY source
+"
+
+# rollback smoke
+alembic downgrade -1 && alembic upgrade head
+
+# 既有 Silver pipeline 不受影響(round-trip 仍 5/5)
+python scripts/verify_pr19b_silver.py
+```
+
+### 風險
+
+🟢 低:
+- ALTER ADD COLUMN with DEFAULT instant operation
+- 0 collector.toml / 0 builder 改動
+- Rollback:downgrade DROP COLUMN
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`r7s8t9u0v1w2`(待 user 本機 `alembic upgrade head` 落地)
+- PR #24:m2 大重構 plan(`m2Spec/data_refactor_plan.md`)— **§1.2 wording fix
+  pushed**(2026-05-09)
+- PR #R1:本 PR(待 user verify)
+- 下個 PR:**#R2** v2.0 舊 3 表(`holding_shares_per` / `financial_statement` /
+  `monthly_revenue`)rename `_legacy_v2` + collector.toml v2.0 entry target_table
+  同步
 
 ---
 
