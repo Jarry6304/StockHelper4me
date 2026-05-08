@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.19，最新 2026-05-08）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.20，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -167,7 +167,126 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill;gov_bank_net 永久 N/A on backer tier)`。下個 session 主任務見「下次 session 建議優先序」段。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill;gov_bank_net 永久 N/A on backer tier) → #22 ✅(TAIEX/TPEx daily OHLCV 含 volume,2026-05-09)`。下個 session 主任務見「下次 session 建議優先序」段。
+
+---
+
+## v1.20 — PR #22 / B-1/B-2 TAIEX/TPEx daily OHLCV(2026-05-09)
+
+接 PR #21-B 完整收尾後動工 PR #22 — `taiex_index_derived` 一直 read=0 wrote=0
+是因為 Bronze `market_ohlcv_tw`(PR #11/B-1/B-2 已建 schema)從未被 populate
+(collector.toml 沒對應 entry,blueprint 註明「multi-source merge 邏輯留 PR #17
+重構 phase_executor 時實作」是當時 spec 的假設)。
+
+### A. 找對 dataset 的曲折歷程
+
+spec §2.3 寫 `market_ohlcv_tw` 來源 = `TaiwanStockTotalReturnIndex` +
+`TaiwanVariousIndicators5Seconds`,本 session probe(`scripts/probe_finmind_taiex_ohlcv.py`)
+揭露這 2 個 dataset 互不可 merge:
+
+| dataset | 內容 | 數值 |
+|---|---|---|
+| `TaiwanStockTotalReturnIndex` | 報酬指數(含股利再投資)daily price only | 50486 |
+| `TaiwanVariousIndicators5Seconds` | 加權指數 5-sec ticks(只 TAIEX 一檔) | 22832 |
+| `TaiwanStockEvery5SecondsIndex` | 加權指數 5-sec ticks(支援 data_id=TAIEX/TPEx) | 22832 |
+
+兩種指數**物理意義不同**(報酬 vs 加權),不能合成 OHLCV。原 spec 假設錯。
+
+走過 4 條死路:
+1. `USStockPrice + ^TWII / ^TWOII / ^TWO`:200 OK 但 0 rows(Yahoo ticker 認得
+   但 FinMind 沒 cover TAIEX)
+2. `TaiwanStockMarketIndex` / `TaiwanStockOHLC` / 其他 4 個 candidate:422 不存在
+3. 5-sec aggregate 路(commit b5ad596):寫 `aggregate_5sec_to_daily_ohlc`,
+   collector.toml `market_ohlcv_v3` 用 5Seconds + segment_days=3,~2h backfill,
+   volume 永遠 NULL — **可行但不漂亮**
+4. /datalist endpoint 只回 6 個國家名(`Canda`/`China`/`Euro`/`Japan`/`Taiwan`/`UK`),
+   廢話 endpoint;改從 422 error message 撈 91 個 backer-tier dataset enum 才
+   找到 `TaiwanStockEvery5SecondsIndex` 等候選名
+
+User 提示「應該有別的表能拿到 OHL」→ probe `TaiwanStockPrice + data_id=TAIEX/TPEx`:
+
+```
+fields: ['Trading_Volume', 'Trading_money', 'Trading_turnover',
+         'close', 'date', 'max', 'min', 'open', 'spread', 'stock_id']
+TAIEX 2025-01-02:open=22975.71 max=23038.08 min=22713.63 close=22832.06
+                  Trading_Volume=6,901,476,303(真有 volume!)
+```
+
+🎯 **直接命中** — FinMind 把 TAIEX/TPEx 當股票 expose 給 `TaiwanStockPrice`(同
+既有 `price_daily` entry 用的 dataset),完整 OHLCV + volume,加權指數收盤跟
+5Seconds tick 一致,0 工程量解決。
+
+### B. 落地實作(commit aa1b094)
+
+(1) collector.toml `market_ohlcv_v3` entry — 對齊既有 `price_daily` pattern:
+
+```toml
+[[api]]
+name         = "market_ohlcv_v3"
+dataset      = "TaiwanStockPrice"
+param_mode   = "per_stock_fixed"
+target_table = "market_ohlcv_tw"
+phase        = 1
+enabled      = true
+is_backer    = true
+segment_days = 365
+fixed_ids    = ["TAIEX", "TPEx"]
+field_rename = {
+    "max"               = "high",
+    "min"               = "low",
+    "Trading_Volume"    = "volume",
+    "Trading_money"     = "_trading_money",
+    "Trading_turnover"  = "_trading_turnover",
+    "spread"            = "_spread",
+}
+detail_fields = ["_trading_money", "_trading_turnover", "_spread"]
+```
+
+注意 `market_ohlcv_tw` schema 沒 `turnover` stored col(price_daily 有),
+`Trading_turnover` 改進 detail JSONB(跟 price_daily 略不同)。
+
+(2) Revert 前一 commit(b5ad596)的 5-sec aggregator 路:
+- 砍 `aggregate_5sec_to_daily_ohlc` from aggregators.py
+- 砍 apply_aggregation dispatcher key='aggregate_5sec_ohlc'
+- YAGNI — 未來若需要 intraday 微結構分析可從 git 撈回
+
+(3) Bronze schema(`market_ohlcv_tw` alembic h7i8j9k0l1m2)不動,既有 PR #20
+trigger `mark_taiex_index_derived_dirty` 也不動。
+
+### C. User 本機驗證(2026-05-09)
+
+```
+[Phase 1][market_ohlcv_v3] TAIEX 8 segments × ~245 rows = 1781 rows
+[Phase 1][market_ohlcv_v3] TPEx  8 segments × ~245 rows = 1781 rows
+elapsed = 33 秒(預估 ~2 分鐘,per_stock_fixed × 2 indices × 8 segments × ~3s)
+
+[taiex_index] read=3562 → wrote=3562  ← 從 0 變 3562 ✅
+```
+
+Spot check Bronze TAIEX 2026-05-08:
+
+```
+date=2026-05-08 open=41886.03 high=42038.60 low=41132.25 close=41603.94
+volume=15,497,124,214  detail={spread:-329.84, trading_money:1.3T, trading_turnover:7.4M}
+```
+
+`spread = today.close - yesterday.close` 內部一致(5/8 close - 5/7 close
+= 41603.94 - 41933.78 = -329.84,對得上 detail spread)。
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`q6r7s8t9u0v1`(不變,PR #22 純 collector.toml 改不需 migration)
+- `market_ohlcv_tw` Bronze:1781 rows × 2 indices(TAIEX + TPEx)
+- `taiex_index_derived` Silver:3562 rows(從 0 → full)
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️
+  → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅ → #21-A ✅ → #21-B ✅
+  → **#22 ✅(TAIEX/TPEx daily OHLCV 含 volume)** → #23(待定)
+
+下個 session 建議:
+1. **PR #21 完整收尾** — 觀察 1~2 sprint 後砍 §5.6 deprecated 路徑
+   (`post_process.invalidate_fwd_cache` + `bronze/dirty_marker.mark_silver_dirty`)
+2. **margin / market_margin builder UNION 升級**(可選)
+3. **m2 PR #20 / #21 完整 milestone** — Silver views + legacy_v2 rename + M3 prep
 
 ---
 
@@ -1611,30 +1730,27 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.19 PR #21-B + PR #18 follow-up 完整收尾(2026-05-08)**:3 條新 Bronze
-> + 4 個 hotfix(SBL dataset 名 / gov_bank tier disable / total_margin pivot /
-> declare_date sanitize / verify semantics)+ 4 張 PR #18 Bronze 全市場反推
-> 補完(margin / foreign_holding / day_trading / valuation 從 sparse → 1.7~1.9M)。
-> 最終驗證:PR #18 5/5 OK + Silver 12/12 OK + PR #19b 5/5 OK + 4/5 衍生欄 ~99% fill。
-> alembic head:`q6r7s8t9u0v1`。
+> **🎯 v1.20 PR #22 完整收尾(2026-05-09)**:`TaiwanStockPrice + data_id=TAIEX/TPEx`
+> 直接拿 daily OHLCV 含 Volume(原 spec 假設的 dual-source merge 不可行,probe 找到
+> 0 工程量的 dataset)。Bronze 1781 rows × 2 indices,Silver `taiex_index_derived`
+> 從 0 → 3562 rows。alembic head 不變(`q6r7s8t9u0v1`)。
 
 ### 阻塞性排序
 
-1. **PR #22 / B-1/B-2 收尾** — `market_ohlcv_tw` dual-source merge
-   (`TaiwanStockTotalReturnIndex` + `TaiwanVariousIndicators5Seconds` → daily OHLCV);
-   完成後 `taiex_index_derived` 才有真資料(目前 builder read=0 wrote=0 是
-   source-empty,非 builder bug)。是 PR #21-B 之後唯一 critical-path follow-up。
-
-2. **PR #21 完整收尾** — 砍 §5.6 deprecated 路徑
+1. **PR #21 完整收尾** — 砍 §5.6 deprecated 路徑
    - 觀察 1~2 sprint dirty queue 無歧義後,砍 `post_process.invalidate_fwd_cache`
      函式本體 + `bronze/dirty_marker.mark_silver_dirty` no-op
    - Rust binary 改讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`
      (orchestrator path 已接,Rust 自接是收尾用 — 兩端任一條 path work 就夠)
 
-3. **margin / market_margin builder UNION 升級**(可選 nice-to-have)
+2. **margin / market_margin builder UNION 升級**(可選 nice-to-have)
    讓 builder iterate(主 Bronze ∪ 副 Bronze)keys,避免 Silver 永遠有 stub row
    (目前 9706 stub from SBL trigger / 10 stub from total_margin trigger)。
    不影響衍生欄 fill rate,只影響 Silver row count 漂亮度。
+
+3. **m2 PR milestone 完整收尾** — Silver views(spec §2.5)+ legacy_v2 rename
+   (blueprint §八.2)+ M3 prep,blueprint §十 PR 切法。是離開 v3.2 r1 進入 M3
+   indicator core 之前的最後一段。
 
 ### 中期 backlog(non-blocking)
 
