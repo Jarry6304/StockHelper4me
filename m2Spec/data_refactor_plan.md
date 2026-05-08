@@ -37,14 +37,16 @@
 | # | 點 | 細節 | 對映 PR |
 |---|---|---|---|
 | 1 | `holding_shares_per_tw` 缺 `source` 欄位 | spec §3.5 明文「PR #R1 補回」 | #R1 |
-| 2 | `financial_statement_tw` 缺 `source` 欄位 | spec §3.6 同 | #R1 |
-| 3 | `monthly_revenue_tw` 缺 `source` 欄位 | spec §3.6 同 | #R1 |
+| 2 | `financial_statement_tw` 缺 `source` 欄位 | spec §3.6 表格未列(漏寫);依 Bronze 全表 source 一致原則補上(其他 Bronze 多含 source default 'finmind';trading_date_ref 例外排除) | #R1 |
+| 3 | `monthly_revenue_tw` 缺 `source` 欄位 | 同 2 — spec §3.6 表格未列,依 Bronze 一致原則補上 | #R1 |
 | 4 | v2.0 舊 `holding_shares_per` 仍存（dual-write target） | rename 成 `_legacy_v2` 進入觀察期 | #R2 |
 | 5 | v2.0 舊 `financial_statement` / `monthly_revenue` 同 4 | 同 | #R2 |
 | 6 | 3 張 `_tw` Bronze 要去 suffix 升格成主名 | spec §3.5 / §3.6 註明「PR #R4 後升格」 | #R3 |
 | 7 | collector.toml 對應 `_v3` entry 要改 `target_table` 對齊 + 將 entry name 收回主名 | spec §五 註明「PR #R4 後 `api_name` 將從 `_v3` 收回主名」 | #R3 + #R4 |
 
-> 註：spec 把「升格 rename」標記在「PR #R4 後」，我這份 plan 把實際 schema rename 動作放 PR #R3 執行（rename 必須先做，後續 PR 才能引用新名）。spec 的 PR #R4 標記是「升格『生效後』」的時序描述，不是 PR 編號上的順序。
+> 註 1:spec 把「升格 rename」標記在「PR #R4 後」,我這份 plan 把實際 schema rename 動作放 PR #R3 執行(rename 必須先做,後續 PR 才能引用新名)。spec 的 PR #R4 標記是「升格『生效後』」的時序描述,不是 PR 編號上的順序。
+>
+> 註 2(2026-05-09 修正):spec §3.6 表格在 `financial_statement` / `monthly_revenue` 兩處沒列 source 欄,但 spec §3.5 明確要求 `holding_shares_per` 要有 source。本 plan 採「Bronze 全表 source 一致」原則 — 把「§3.6 漏寫」視為 spec bug 而非刻意排除。原 plan 寫「spec §3.6 同」是引用錯誤,本次修正。R1 動工後若 user 改判刻意排除,改動成本只有「砍 R1 兩個 ALTER」,不卡 R2~R6 進度。
 
 ### 1.3 退場時序
 
