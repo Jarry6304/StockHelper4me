@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.19，最新 2026-05-05）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.19，最新 2026-05-08）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-fXhK2`，alembic head `p5q6r7s8t9u0_pr21_b_bronze3_derived5`（2026-05-05）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-fXhK2`，alembic head `q6r7s8t9u0v1_pr21_b_total_margin_pivot_fix`（2026-05-08）。
 
 ---
 
@@ -167,7 +167,7 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅(user verify + day_trading hotfix + 2 候補 backlog 收尾) → #21-B ⏳(code 落地待 user 30~40h backfill + verify)`。下個 session 主任務見「下次 session 建議優先序」段。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill;gov_bank_net 永久 N/A on backer tier)`。下個 session 主任務見「下次 session 建議優先序」段。
 
 ---
 
@@ -402,29 +402,102 @@ api_sync_progress 既有 8 segment failed 紀錄,user 下次跑 backfill 自動 
 - total_margin all_market — 已完成
 - SBL per_stock — 1700 × 21 ≈ 35700 reqs @ 2.25s/req ≈ 22h
 
+### J. user 跑 ~17.5h SBL 全市場 backfill + 4 個後續 hotfix(2026-05-08)
+
+User SBL 全市場 backfill 跑完(actual 17.5h vs 預估 22h),`short_sale_securities_lending_tw`
+1,848,375 rows。spot check 揭露 3 個衍生欄(sbl_short_sales_*)在 Bronze 有資料的
+範圍 fill rate 99.21%,但 total_*_balance(market_margin)0%、且 PR #18 5 張
+Bronze 中 4 張(margin / foreign_holding / day_trading / valuation)沒被全市場
+反推過(只跑過 prototype),Silver vs legacy round-trip 4 張 FAIL。
+
+4 個 hotfix 同 session 收(commit 順序):
+
+**1. (`f36838c`)total_margin Bronze schema 重建 — pivot-by-row**
+   FinMind probe(`scripts/probe_finmind_datasets.py`)揭露 `TaiwanStockTotalMarginPurchaseShortSale`
+   真實格式不是預期的 wide row,而是 pivoted-by-row:
+   ```
+   {date, name='MarginPurchase', TodayBalance, YesBalance, buy, sell, Return}
+   {date, name='ShortSale',      TodayBalance, ...}
+   ```
+   alembic `q6r7s8t9u0v1` DROP+重建 Bronze:
+   - PK 從 (market, date) → (market, date, name)
+   - 砍 total_margin_purchase_balance / total_short_sale_balance(這 2 個是 Silver 衍生欄)
+   - 加 today_balance / yes_balance / buy / sell / return_amount(`Return` SQL 保留字 → return_amount)
+   - 重建 mark_market_margin_derived_from_total_dirty trigger(reuse 既有 function)
+   builder market_margin 加 `_build_total_margin_lookup` pivot:
+   `MarginPurchase.today_balance → total_margin_purchase_balance`,
+   `ShortSale.today_balance → total_short_sale_balance`。
+
+**2. (`d183201`)MarginPurchaseMoney silent skip + builder docstring 補述 PR #20 stub 行為**
+   FinMind 自 2026-04-29 起新增第 3 個 name='MarginPurchaseMoney'(融資金額 NTD),
+   spec §2.6.3 不需。`KNOWN_SKIP_NAMES = {'MarginPurchaseMoney'}` silently skip,
+   未知 name 仍走 warning(防衛 FinMind 之後再加新 metric 不被 silently 吃掉)。
+
+**3. (`3e3eb61`)reverse_pivot foreign_holding declare_date sanitize**
+   user 跑 `reverse_pivot_foreign_holding.py` 全市場炸 InvalidDatetimeFormat —
+   legacy detail JSONB 對未申報 stock 把 `RecentlyDeclareDate` 存 `'0'`(FinMind
+   missing 占位),反推進 Bronze DATE 欄收不下。`_reverse_detail_unpack()` 對
+   `DATE_DETAIL_KEYS = {'declare_date'}` 走 `_sanitize_date()`:None / '0' / '' /
+   non-ISO 字串 → None。
+
+**4. (`295ab70`)+(`973fd8b`)round-trip / verify_pr19b semantics 修正**
+   - 295ab70:`_normalize_detail` 對 DATE_DETAIL_KEYS 內的 key 把 '0' / '' 視為
+     等價 None(配合 sanitize lossy 設計);verify_pr18_bronze foreign_holding
+     不再 6916 value_diffs FAIL。
+   - 973fd8b:verify_pr19b `match` 條件砍 `extra_in_silver`(只看 missing + value_diffs)。
+     原因:legacy v2.0 deprecated 不每日 dual-write,Silver 可能比 legacy 新;且
+     PR #20 trigger 從 SBL Bronze 建 stub Silver row(margin_* NULL,sbl_* 填),
+     legacy 自然沒這些 PK。9706 extra in silver 全是 5/4-5/7 dates 的 SBL-only stub。
+
+User 順手把 4 張 Bronze 反推全跑(PR #18 follow-up 收尾):
+```powershell
+python scripts/reverse_pivot_margin.py           # 1840528 rows
+python scripts/reverse_pivot_foreign_holding.py  # 1933954 rows
+python scripts/reverse_pivot_day_trading.py      # 1728615 rows
+python scripts/reverse_pivot_valuation.py        # 1728675 rows
+```
+
+### 最終驗證結果(2026-05-08 收尾)
+
+| 驗證項 | 結果 |
+|---|---|
+| **PR #18 reverse-pivot round-trip**(`verify_pr18_bronze.py`)| **5/5 OK** ✅ |
+| **Silver builders Phase 7a/7b/7c**(全市場 full-rebuild)| **12 + 1 + 1 OK** ✅ |
+| **PR #19b Silver vs legacy round-trip**(`verify_pr19b_silver.py`)| **5/5 OK** ✅(margin +9706 extra 屬 stub,不算 FAIL)|
+| **PR #21-B 5 衍生欄 fill rate** | **4/5 ~99%** ✅ + 1 blocked |
+|   `market_margin.total_margin_purchase_balance` | **99.44%**(1771/1781)|
+|   `market_margin.total_short_sale_balance` | **99.44%**(同上)|
+|   `margin.sbl_short_sales_short_sales` | **99.21%**(對 Bronze 有資料範圍)|
+|   `margin.sbl_short_sales_returns` | **99.21%** |
+|   `margin.sbl_short_sales_current_day_balance` | **99.21%** |
+|   `institutional.gov_bank_net` | 🔒 0%(blocked on FinMind sponsor tier — user 不升)|
+
+**Silver 表最終 row count**:
+- foreign_holding_derived: 1,933,954(從 8,957 → 全市場)
+- margin_daily_derived: 1,850,234(從 1,850,169 微增 — SBL trigger 加 stub)
+- day_trading_derived: 1,728,615(從 8,690 → 全市場)
+- valuation_daily_derived: 1,728,675(從 8,881 → 全市場)
+- institutional_daily_derived: 1,825,884
+- market_margin_maintenance_derived: 1,781
+
 ### 已知狀態(下次 session 起點)
 
-- alembic head:`p5q6r7s8t9u0`(user 已落)
-- 3 張新 Bronze schema + 3 個 dirty trigger 上線(2026-05-06 hotfix 後)
-- **資料狀態**:
-  - `total_margin_purchase_short_sale_tw`:✅ 1778 rows(market_margin builder 可用)
-  - `short_sale_securities_lending_tw`:⏳ 待 user ~22h backfill(margin builder 等資料)
-  - `government_bank_buy_sell_tw`:🔒 blocked on FinMind sponsor tier(institutional builder
-    gov_bank_net 維持 NULL)
-- 5 衍生欄填補狀態:**4/5 可填**(2 total_*_balance + 3 sbl_short_sales_*),1/5 blocked
-  (gov_bank_net 等 tier 升級)
-- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅ → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓)
-  → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15)→ #21-A ✅ →
-  **#21-B ⚠️ code 落地 + 2 hotfix(SBL dataset 名 + gov_bank disable)+ 待 user ~22h SBL backfill** → #22
+- alembic head:`q6r7s8t9u0v1`(user 已落)
+- PR #21-B + PR #18 follow-up:**完整收尾** ✅
+- 5 衍生欄缺口:1/5 永久 N/A(gov_bank_net on backer tier);其他 4/5 ~99% fill
+- v3.2 r1 PR sequencing:#17 ✅ → #18 ✅(回頭補完 4 張)→ #19a ✅ → #19b ✅
+  → #18.5 ⚠️(smoke ✓)→ #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15)
+  → #21-A ✅ → **#21-B ✅(4/5 衍生欄收尾,gov_bank 永久 N/A)** → #22
 
 下個 session 建議:
-1. **user 跑 SBL ~22h backfill**(gov_bank 跳過)+ verify 4/5 衍生欄 spot check
-   - `python src/main.py backfill --phases 5 --stocks 2330` 5~10 分鐘 smoke test SBL dataset
-   - row count > 0 + api_sync_progress.status=completed → 全市場 backfill ~22h
-2. **user backfill 完 + spot check 結果**(有 hotfix 需求才進 #21-B-3)
-2. **PR #22 / B-1/B-2 收尾** market_ohlcv_tw dual-source merge
-3. **PR #21 完整收尾** — 1~2 sprint 後砍 §5.6 deprecated 路徑
+1. **PR #22 / B-1/B-2** market_ohlcv_tw dual-source merge
+   (`TaiwanStockTotalReturnIndex` + `TaiwanVariousIndicators5Seconds` → daily OHLCV);
+   完成後 `taiex_index_derived` 才有真資料(目前 read=0 wrote=0 是 source-empty)
+2. **PR #21 完整收尾** — 1~2 sprint 後砍 §5.6 deprecated 路徑
    (`post_process.invalidate_fwd_cache` + `bronze/dirty_marker.mark_silver_dirty`)
+3. **margin / market_margin builder UNION 升級**(可選 nice-to-have)
+   讓 builder iterate(主 Bronze ∪ 副 Bronze)keys,避免 Silver 永遠有 stub row。
+   現狀的 9706 stub row 不影響 4/5 衍生欄 fill rate,只是 Silver row count 偏多。
 
 ---
 
@@ -1538,35 +1611,30 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.19 PR #21-B code 落地(2026-05-05)**:3 條新 Bronze 表
-> (government_bank_buy_sell_tw / total_margin_purchase_short_sale_tw /
-> short_sale_securities_lending_tw)+ 3 個 Bronze→Silver dirty trigger
-> + 3 個 builder LEFT JOIN 補 5 衍生欄 + 3 個 collector.toml dual-write entry。
-> 沙箱 4 層驗(alembic / toml / import / synthetic smoke)全綠;首次 backfill
-> 預期 30~40h,留 user 排日曆 + verify 後續 hotfix。
+> **🎯 v1.19 PR #21-B + PR #18 follow-up 完整收尾(2026-05-08)**:3 條新 Bronze
+> + 4 個 hotfix(SBL dataset 名 / gov_bank tier disable / total_margin pivot /
+> declare_date sanitize / verify semantics)+ 4 張 PR #18 Bronze 全市場反推
+> 補完(margin / foreign_holding / day_trading / valuation 從 sparse → 1.7~1.9M)。
+> 最終驗證:PR #18 5/5 OK + Silver 12/12 OK + PR #19b 5/5 OK + 4/5 衍生欄 ~99% fill。
+> alembic head:`q6r7s8t9u0v1`。
 
 ### 阻塞性排序
 
-1. **🎯 user 本機 PR #21-B verify**(下個 session 開頭可能要做的事)
-   - alembic upgrade head + smoke test 單股(2330)
-   - 觀察 3 個新 entry api_sync_progress.status:
-     - `TaiwanStockGovernmentBankBuySell`:預期 `completed`(若 1 row/(stock,date)
-       假設錯,踩 PK 衝突 → 加 `bank_name` 進 PK 改 schema)
-     - `TaiwanStockTotalMarginPurchaseShortSale`:預期 `completed`
-     - `TaiwanStockShortSaleSecuritiesLending`(候選名):若 404,試
-       `TaiwanStockShortSaleBalance` / `TaiwanStockShortSale` 等 fallback 名
-   - 若 dataset 名 / 欄名 / PK shape 任一錯 → 動 hotfix(走 PR #21-B-2 同 commit)
-
-2. **PR #22 / B-1/B-2 收尾** — `market_ohlcv_tw` dual-source merge
+1. **PR #22 / B-1/B-2 收尾** — `market_ohlcv_tw` dual-source merge
    (`TaiwanStockTotalReturnIndex` + `TaiwanVariousIndicators5Seconds` → daily OHLCV);
-   完成後 `taiex_index_derived` 才有真資料(目前 PR #19c-1 verifier 對 2330
-   read=0 wrote=0 是 source-empty,非 builder bug)
+   完成後 `taiex_index_derived` 才有真資料(目前 builder read=0 wrote=0 是
+   source-empty,非 builder bug)。是 PR #21-B 之後唯一 critical-path follow-up。
 
-3. **PR #21 完整收尾** — 砍 §5.6 deprecated 路徑
+2. **PR #21 完整收尾** — 砍 §5.6 deprecated 路徑
    - 觀察 1~2 sprint dirty queue 無歧義後,砍 `post_process.invalidate_fwd_cache`
      函式本體 + `bronze/dirty_marker.mark_silver_dirty` no-op
    - Rust binary 改讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`
      (orchestrator path 已接,Rust 自接是收尾用 — 兩端任一條 path work 就夠)
+
+3. **margin / market_margin builder UNION 升級**(可選 nice-to-have)
+   讓 builder iterate(主 Bronze ∪ 副 Bronze)keys,避免 Silver 永遠有 stub row
+   (目前 9706 stub from SBL trigger / 10 stub from total_margin trigger)。
+   不影響衍生欄 fill rate,只影響 Silver row count 漂亮度。
 
 ### 中期 backlog(non-blocking)
 
