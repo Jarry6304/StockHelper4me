@@ -125,6 +125,28 @@ fixed_ids    = ["TAIEX", "TPEx"]
 notes        = "加權報酬指數（TAIEX）+ 櫃買報酬指數（TPEx）"
 # API 回傳 (date, stock_id, price)；DB schema PK 已更新為 (market, stock_id, date)
 
+# PR #22 / B-1/B-2(2026-05-08):TAIEX/TPEx daily OHL+C 來源
+# 2026-05-08 probe 揭露:backer tier 沒有現成 daily OHLCV TAIEX dataset。
+# TaiwanStockTotalReturnIndex 是報酬指數(50486)只有 close;
+# TaiwanStockEvery5SecondsIndex 是加權指數(22832)5-sec ticks。
+# 走 5-sec aggregate 路:每天 ~3241 ticks → daily OHL+C(volume 永遠 NULL,
+# 因為指數無 volume 概念)。aggregator 在 src/aggregators.py:aggregate_5sec_to_daily_ohlc。
+# segment_days=3 控制每 request ~10K rows(FinMind 安全範圍)。
+# 估 backfill:21 年 × ~84 segments × 2 indices @ 1600 reqs/h ≈ 2h。
+[[api]]
+name         = "market_ohlcv_v3"
+dataset      = "TaiwanStockEvery5SecondsIndex"
+param_mode   = "per_stock_fixed"
+target_table = "market_ohlcv_tw"
+phase        = 1
+enabled      = true
+is_backer    = false
+segment_days = 3
+fixed_ids    = ["TAIEX", "TPEx"]
+field_rename = {}
+aggregation  = "aggregate_5sec_ohlc"
+notes        = "PR #22 TAIEX/TPEx daily OHL+C(從 5-sec ticks aggregate;volume 永遠 NULL,指數無 volume)"
+
 # =============================================================================
 # Phase 2：EVENTS（除權息 / 減資 / 分割 / 面額變更）
 # =============================================================================
