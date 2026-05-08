@@ -125,6 +125,26 @@ fixed_ids    = ["TAIEX", "TPEx"]
 notes        = "加權報酬指數（TAIEX）+ 櫃買報酬指數（TPEx）"
 # API 回傳 (date, stock_id, price)；DB schema PK 已更新為 (market, stock_id, date)
 
+# PR #22 / B-1/B-2(2026-05-08):TAIEX/TPEx daily OHLCV
+# 2026-05-08 probe 揭露 TaiwanStockPrice 把 TAIEX / TPEx 當股票一樣回 daily
+# OHLCV(含 Volume!),0 工程量。schema/field 跟 price_daily 完全對齊:
+#   open / max / min / close / Trading_Volume / Trading_turnover /
+#   Trading_money / spread / stock_id / date
+# 走 per_stock_fixed pattern(對齊 market_index_tw),fixed_ids 指定 TAIEX/TPEx。
+[[api]]
+name         = "market_ohlcv_v3"
+dataset      = "TaiwanStockPrice"
+param_mode   = "per_stock_fixed"
+target_table = "market_ohlcv_tw"
+phase        = 1
+enabled      = true
+is_backer    = true
+segment_days = 365
+fixed_ids    = ["TAIEX", "TPEx"]
+field_rename = {"max" = "high", "min" = "low", "Trading_Volume" = "volume", "Trading_money" = "_trading_money", "Trading_turnover" = "_trading_turnover", "spread" = "_spread"}
+detail_fields = ["_trading_money", "_trading_turnover", "_spread"]
+notes        = "PR #22 TAIEX/TPEx daily OHLCV(同 price_daily dataset TaiwanStockPrice);Trading_money/turnover/spread 進 detail"
+
 # =============================================================================
 # Phase 2：EVENTS（除權息 / 減資 / 分割 / 面額變更）
 # =============================================================================
@@ -586,3 +606,73 @@ is_backer    = false
 segment_days = 365
 field_rename = {"leading" = "leading_indicator", "coincident" = "coincident_indicator", "lagging" = "lagging_indicator"}
 notes        = "景氣指標(月頻);v3.2 B-6 新表;每月 1 筆;reference 級不算 Core;leading/coincident/lagging 加 _indicator 後綴避開 PG 保留字 LEADING"
+
+
+# =============================================================================
+# v3.2 PR #21-B 5 衍生欄補完 dual-write entries(blueprint v3.2 §六 + spec §2.6)
+# =============================================================================
+# 3 個 entry 對映 PR #21-B alembic p5q6r7s8t9u0 落地的 3 張 Bronze raw 表,
+# feed 5 個 Silver 衍生欄(institutional.gov_bank_net /
+# market_margin.total_*_balance × 2 / margin.sbl_short_sales_* × 3)。
+#
+# ⚠️ 首次 backfill 預期 ~22h calendar-time(SBL 1700+ stocks × 21 年 @ 1600 reqs/h);
+# total_margin all_market 已完成(1778 rows),gov_bank 需 sponsor tier 暫關。
+#
+# user 想推遲首次 backfill:把 enabled 改 false,等準備好再切回 true。
+# field_rename 是依 FinMind 真實欄名(2026-05-06 probe 確認):
+# - total_margin: TotalMarginPurchase/ShortSaleTodayBalance(✅ smoke test 通過)
+# - SBL: SBLShortSales{ShortSales,Returns,CurrentDayBalance}(scripts/probe_finmind_datasets.py 確認)
+
+# Bronze 1:government_bank_buy_sell_tw — 八大行庫買賣超(per stock)
+# ⚠️ 2026-05-06 smoke test 揭露:`TaiwanStockGovernmentBankBuySell` 需 FinMind
+# **sponsor tier**(回 HTTP 400「Your level is backer. Please update your user level」),
+# user 目前是 backer tier,該 dataset 不可用。
+# 處理:enabled = false,等 user 升訂閱 OR 找替代 dataset 再開。Bronze schema +
+# trigger 已落地(alembic p5q6r7s8t9u0),不影響其他 Bronze;Silver
+# institutional_daily_derived.gov_bank_net 維持 NULL(builder LEFT JOIN 缺 row → NULL)。
+[[api]]
+name         = "government_bank_buy_sell_v3"
+dataset      = "TaiwanStockGovernmentBankBuySell"
+param_mode   = "per_stock"
+target_table = "government_bank_buy_sell_tw"
+phase        = 5
+enabled      = false
+is_backer    = false
+segment_days = 365
+field_rename = {}
+notes        = "PR #21-B 八大行庫買賣超 — 需 FinMind sponsor tier(2026-05-06 probe 結果),enabled=false 暫關;Bronze schema 已落,等升 tier 後切回 true"
+
+# Bronze 2:total_margin_purchase_short_sale_tw — 整體市場融資融券(market-level)
+# 2026-05-08 hotfix(alembic q6r7s8t9u0v1):FinMind 真實格式是 pivoted-by-row,
+# 1 個 (date) 對應 2 row(name='MarginPurchase' + name='ShortSale'),各帶
+# TodayBalance / YesBalance / buy / sell / Return。
+# Bronze schema 加 `name` 進 PK,builder 走 pivot;`Return` 是 SQL 保留字 → return_amount。
+[[api]]
+name         = "total_margin_purchase_short_sale_v3"
+dataset      = "TaiwanStockTotalMarginPurchaseShortSale"
+param_mode   = "all_market"
+target_table = "total_margin_purchase_short_sale_tw"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"TodayBalance" = "today_balance", "YesBalance" = "yes_balance", "Return" = "return_amount"}
+notes        = "PR #21-B v3.2 Bronze raw 整體市場融資融券(pivoted by name);feed market_margin_maintenance_derived 2 衍生欄(builder pivot MarginPurchase/ShortSale)"
+
+# Bronze 3:short_sale_securities_lending_tw — 借券賣出明細(daily aggregate per stock)
+# 2026-05-06 probe 揭露真實 dataset 名是 `TaiwanDailyShortSaleBalances`(回 15 個欄,
+# 含 Margin + SBL 兩組)。我們只取 SBL 3 欄(spec §2.6.1「砍掉 previous/quota/
+# adjustments」),其他 12 欄由 db.upsert PRAGMA 自動 drop 不入 Bronze。
+# 注意此 dataset 與既有 `securities_lending_tw` 來源 `TaiwanStockSecuritiesLending`
+# 是不同 dataset:後者是借券成交明細(trade-level),前者是 daily aggregate。
+[[api]]
+name         = "short_sale_securities_lending_v3"
+dataset      = "TaiwanDailyShortSaleBalances"
+param_mode   = "per_stock"
+target_table = "short_sale_securities_lending_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"SBLShortSalesShortSales" = "short_sales", "SBLShortSalesReturns" = "returns", "SBLShortSalesCurrentDayBalance" = "current_day_balance"}
+notes        = "PR #21-B v3.2 Bronze raw 借券賣出 daily aggregate(來源 TaiwanDailyShortSaleBalances);feed margin_daily_derived sbl_short_sales_* 3 欄"

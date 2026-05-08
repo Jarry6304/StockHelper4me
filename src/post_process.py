@@ -13,16 +13,14 @@ Phase 2 後處理模組：TaiwanStockDividend 合併邏輯。
      v3.2 PR #17 後不再 UPDATE 寫回 events 表）
   3. 修正 stock_dividend 事件的 volume_factor(P1-17 補丁)
 
-PR #20 起 §5.6 短期補丁 `invalidate_fwd_cache` 由 DB trigger
-`trg_mark_fwd_silver_dirty`(alembic n3o4p5q6r7s8)接管:
-  price_adjustment_events 寫入 → 4 張 fwd 表整檔 is_dirty=TRUE
-  Phase 7c orchestrator 從 price_daily_fwd.is_dirty 拉清單派 Rust
-本檔 invalidate_fwd_cache 留 deprecated 1~2 sprint 給 emergency manual ops。
+§5.6 短期補丁 `invalidate_fwd_cache` 由 DB trigger `trg_mark_fwd_silver_dirty`
+(PR #20 / alembic n3o4p5q6r7s8)接管;Phase 7c orchestrator 從
+`price_daily_fwd.is_dirty=TRUE` pull 清單派 Rust。Python 端不再有對應函式
+(PR #21 移除 deprecated shim)。
 """
 
 import json
 import logging
-import warnings
 
 from db import DBWriter
 
@@ -40,8 +38,6 @@ def dividend_policy_merge(db: DBWriter, stock_id: str) -> None:
     _patch_mixed_dividend(db, stock_id)
     _detect_capital_increase(db, stock_id)
     _recompute_stock_dividend_vf(db, stock_id)
-    # PR #20:trg_mark_fwd_silver_dirty 接管 fwd dirty 標記,
-    # invalidate_fwd_cache call 移除(原本走 stock_sync_status.fwd_adj_valid=0 reset)
 
 
 def _recompute_stock_dividend_vf(db: DBWriter, stock_id: str) -> None:
@@ -74,33 +70,6 @@ def _recompute_stock_dividend_vf(db: DBWriter, stock_id: str) -> None:
             f"[stock_dividend_vf] stock={stock_id} 修正 {affected} 筆 stock_dividend "
             f"事件的 volume_factor(P1-17)"
         )
-
-
-def invalidate_fwd_cache(db: DBWriter, stock_id: str) -> None:
-    """**DEPRECATED (PR #20)** — DB trigger 接管,本函式留 1~2 sprint 相容期。
-
-    PR #20 alembic n3o4p5q6r7s8 上 `trg_mark_fwd_silver_dirty`:
-    price_adjustment_events 寫入 → price_*_fwd 4 張表整檔 is_dirty=TRUE。
-    Phase 7c orchestrator 改從 `price_daily_fwd.is_dirty=TRUE` pull 清單派 Rust,
-    不再依賴 `stock_sync_status.fwd_adj_valid=0`。
-
-    本函式 PR #21 後完全移除;PR #20 期間呼叫只 emit DeprecationWarning,
-    寫入仍照舊以避免 emergency manual ops 直接斷掉。
-    """
-    warnings.warn(
-        "post_process.invalidate_fwd_cache 已 deprecated(PR #20):"
-        "DB trigger trg_mark_fwd_silver_dirty 接管,Phase 7c orchestrator 從 "
-        "price_daily_fwd.is_dirty pull dirty stocks。PR #21 移除。",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    db.update(
-        "INSERT INTO stock_sync_status (market, stock_id, fwd_adj_valid) "
-        "VALUES (%s, %s, 0) "
-        "ON CONFLICT (market, stock_id) DO UPDATE SET fwd_adj_valid = 0",
-        ['TW', stock_id],
-    )
-    logger.info(f"[fwd_cache_invalidate deprecated] stock={stock_id} → fwd_adj_valid=0")
 
 
 # =============================================================================

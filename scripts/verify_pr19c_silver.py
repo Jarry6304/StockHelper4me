@@ -95,6 +95,8 @@ VERIFY_SPECS: list[VerifySpec] = [
         pk_cols        = ("market", "date"),
         bronze_pk_cols = ("market", "date"),
         compare_cols   = ("ratio",),
+        # PR #21-B 從 total_margin_purchase_short_sale_tw fill,Bronze 無對應欄(verifier 比對 source 是
+        # market_margin_maintenance Bronze,不含這 2 欄;新 Bronze 走 verify_pr21b_silver.py)
         skip_silver_cols = ("total_margin_purchase_balance", "total_short_sale_balance"),
     ),
     VerifySpec(
