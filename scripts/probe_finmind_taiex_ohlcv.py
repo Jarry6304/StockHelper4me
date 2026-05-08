@@ -27,7 +27,8 @@ FINMIND_DATALIST_URL = "https://api.finmindtrade.com/api/v4/datalist"
 CANDIDATES = [
     # 已知會用的(spec §六 提)
     ("TaiwanStockTotalReturnIndex",         "TAIEX",   "2025-01-01", "2025-01-15"),
-    ("TaiwanVariousIndicators5Seconds",     "TAIEX",   "2025-01-02", "2025-01-02"),
+    # ⚠️ 5Seconds 不接 data_id(all_market dataset);只跑 1 天看 row 數 + 欄位
+    ("TaiwanVariousIndicators5Seconds",     None,      "2025-01-02", "2025-01-02"),
     # 順便試別的可能 daily OHLCV TAIEX source(萬一 FinMind 有更直接的)
     ("TaiwanStockMarketIndex",              "TAIEX",   "2025-01-01", "2025-01-15"),
     ("TaiwanStockMarketDailyTrade",         None,      "2025-01-01", "2025-01-15"),  # all_market
@@ -98,9 +99,14 @@ async def main() -> int:
                     ]
                     keywords = ["index", "taiex", "tpex", "market", "ohlc", "indicator", "totalreturn", "5sec"]
                     matches = [n for n in names if any(kw in n.lower() for kw in keywords)]
-                    print(f"  total: {len(names)},matching: {len(matches)}")
-                    for m in sorted(matches):
-                        print(f"    - {m}")
+                    print(f"  total: {len(names)},matching keywords: {len(matches)}")
+                    print(f"  ALL {len(names)} datasets returned by /datalist:")
+                    for n in sorted(names):
+                        print(f"    - {n}")
+                    if matches:
+                        print(f"  matching:")
+                        for m in sorted(matches):
+                            print(f"    - {m}")
                 else:
                     print(f"  /datalist HTTP {resp.status}: {await resp.text()[:300]}")
         except Exception as e:
