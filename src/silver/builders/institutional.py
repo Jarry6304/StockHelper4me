@@ -1,7 +1,8 @@
 """
 silver/builders/institutional.py
 ================================
-institutional_investors_tw (Bronze) → institutional_daily_derived (Silver)。
+institutional_investors_tw + government_bank_buy_sell_tw (Bronze) →
+                              institutional_daily_derived (Silver)。
 
 Pivot 邏輯:對 (market, stock_id, date) 把 Bronze 多 row(每 investor_type 一筆)
 合成 1 寬 row,10 個 buy/sell 欄位 + gov_bank_net 1 欄。
@@ -11,14 +12,17 @@ Pivot 邏輯:對 (market, stock_id, date) 把 Bronze 多 row(每 investor_type �
 Investment_Trust, Dealer, Dealer_Hedging})。
 
 gov_bank_net(per spec §2.6.2)八大行庫淨買賣:
-- 來源 GovernmentBankBuySell API(目前 collector.toml 沒接,Bronze 不存)
-- PR #19b stub 階段:寫 NULL(欄位存在但無資料)
-- 留 PR #19c 接 government_bank_tw Bronze 後 join 補
+- 來源 government_bank_buy_sell_tw Bronze(PR #21-B 落地;FinMind dataset
+  TaiwanStockGovernmentBankBuySell)
+- gov_bank_net = buy - sell;buy / sell 任一 NULL → gov_bank_net = NULL
+- LEFT JOIN 模式:institutional Bronze 主表;gov_bank Bronze 缺對應 (stock,date)
+  時 gov_bank_net = NULL,不影響其他 stocks/dates 的 pivot
 
 驗證(用戶本機):
     python scripts/verify_pr19b_silver.py
     對 institutional 跑 round-trip 比對 institutional_daily(v2.0 legacy)
-    10 個 buy/sell 欄應 100% 等值;gov_bank_net 兩邊都 NULL(暫不比)。
+    10 個 buy/sell 欄應 100% 等值;gov_bank_net 兩邊 v2.0 legacy 沒有,
+    skip 在 verify spec 內(以 Bronze 是否填寫驗 gov_bank_net 是否 NOT NULL)。
 """
 
 from __future__ import annotations
@@ -35,7 +39,7 @@ logger = logging.getLogger("collector.silver.builders.institutional")
 
 NAME          = "institutional"
 SILVER_TABLE  = "institutional_daily_derived"
-BRONZE_TABLES = ["institutional_investors_tw"]
+BRONZE_TABLES = ["institutional_investors_tw", "government_bank_buy_sell_tw"]
 
 
 # investor_type → (buy 欄, sell 欄)— Bronze investor_type 已是英文 key
@@ -48,11 +52,31 @@ INVESTOR_TYPE_MAP: dict[str, tuple[str, str]] = {
 }
 
 
+def _gov_bank_net(buy: Any, sell: Any) -> int | None:
+    """buy - sell;任一 NULL → None(per spec §2.6.2「buy/sell 二擇一,留 net」
+    邊界處理:資料完整時才算 net,任一缺失就視為無法判斷)。"""
+    if buy is None or sell is None:
+        return None
+    return int(buy) - int(sell)
+
+
+def _build_gov_bank_lookup(
+    bronze_rows: list[dict[str, Any]],
+) -> dict[tuple, int | None]:
+    """{(market, stock_id, date): gov_bank_net}。"""
+    out: dict[tuple, int | None] = {}
+    for row in bronze_rows:
+        key = (row.get("market"), row.get("stock_id"), row.get("date"))
+        out[key] = _gov_bank_net(row.get("buy"), row.get("sell"))
+    return out
+
+
 def _pivot(
     bronze_rows: list[dict[str, Any]],
     trading_dates: set[str],
+    gov_bank_lookup: dict[tuple, int | None],
 ) -> list[dict[str, Any]]:
-    """Bronze 多 row → Silver 1 寬 row。"""
+    """Bronze 多 row → Silver 1 寬 row,LEFT JOIN gov_bank by (market, stock_id, date)。"""
     if trading_dates:
         bronze_rows = filter_to_trading_days(bronze_rows, trading_dates, label=NAME)
 
@@ -68,7 +92,7 @@ def _pivot(
             for buy_col, sell_col in INVESTOR_TYPE_MAP.values():
                 agg[buy_col]  = None
                 agg[sell_col] = None
-            agg["gov_bank_net"] = None  # PR #19c 才接
+            agg["gov_bank_net"] = gov_bank_lookup.get(key)   # LEFT JOIN
             grouped[key] = agg
 
         inv_type = row.get("investor_type", "")
@@ -106,7 +130,10 @@ def run(
 
     trading_dates = get_trading_dates(db)
     bronze = fetch_bronze(db, "institutional_investors_tw", stock_ids=stock_ids)
-    silver = _pivot(bronze, trading_dates)
+    gov_bank_bronze = fetch_bronze(db, "government_bank_buy_sell_tw", stock_ids=stock_ids)
+    gov_bank_lookup = _build_gov_bank_lookup(gov_bank_bronze)
+
+    silver = _pivot(bronze, trading_dates, gov_bank_lookup)
 
     written = upsert_silver(
         db, SILVER_TABLE, silver,
@@ -115,7 +142,7 @@ def run(
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
     logger.info(
-        f"[{NAME}] read={len(bronze)} bronze rows → "
+        f"[{NAME}] read={len(bronze)} bronze rows + {len(gov_bank_bronze)} gov_bank rows → "
         f"wrote={written} silver rows(elapsed={elapsed_ms}ms)"
     )
     return {
