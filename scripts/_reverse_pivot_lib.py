@@ -371,9 +371,47 @@ def _reverse_detail_unpack(
         # 可能拿到 str,兩種情況都要處理。
         detail_obj = _coerce_jsonb(row.get("detail"))
         for k in spec.legacy_detail_keys:
-            bronze_row[k] = detail_obj.get(k) if detail_obj else None
+            v = detail_obj.get(k) if detail_obj else None
+            # FinMind 對 missing date 用 "0" 或 "" 占位;反推進 Bronze DATE 欄
+            # (e.g. foreign_investor_share_tw.declare_date)會炸 InvalidDatetimeFormat。
+            # sanitize 已知 DATE-typed detail key:非合法 ISO date 字串 → None
+            if k in DATE_DETAIL_KEYS:
+                v = _sanitize_date(v)
+            bronze_row[k] = v
         out.append(bronze_row)
     return out
+
+
+# 已知 DATE-typed detail key(unpack 時 sanitize):
+# - declare_date(foreign_investor_share_tw):來源 RecentlyDeclareDate,FinMind
+#   對未申報的 stock 回 "0" 或 ""
+DATE_DETAIL_KEYS: set[str] = {"declare_date"}
+
+# 簡單 ISO date 正則(YYYY-MM-DD);psycopg DATE 只能吃這格式 + datetime.date 物件
+import re as _re
+_ISO_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _sanitize_date(v: Any) -> Any:
+    """返 None 對非合法 ISO date 字串(e.g. '0' / '' / None);合法值 pass-through。
+
+    psycopg DATE 欄接受:
+      - None
+      - datetime.date / datetime.datetime
+      - 'YYYY-MM-DD' 格式字串
+    """
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):       # datetime.date / datetime
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if not s or s == "0":
+            return None
+        if _ISO_DATE_RE.match(s):
+            return s
+        return None                     # 其他怪格式視為 missing
+    return None
 
 
 def _repivot_detail_pack(
