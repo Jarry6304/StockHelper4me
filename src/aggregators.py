@@ -315,62 +315,7 @@ def apply_aggregation(
     if strategy == "pack_holding_shares":
         return aggregate_holding_shares(rows)
 
-    if strategy == "aggregate_5sec_ohlc":
-        return aggregate_5sec_to_daily_ohlc(rows)
-
     raise ValueError(f"未知的聚合策略：'{strategy}'")
-
-
-def aggregate_5sec_to_daily_ohlc(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    將 TaiwanStockEvery5SecondsIndex 5-sec ticks aggregate 為 daily OHL+C。
-
-    PR #22 / B-1/B-2:backer tier 沒有現成 daily OHLCV TAIEX dataset,只能從
-    5-sec ticks 自己 aggregate。此 dataset 一天 ~3241 row(09:00:00~13:30:00
-    每 5 秒 1 row),aggregate 成 1 row/day:
-      open  = 第一個 tick 的 price(09:00:00)
-      high  = max(price)
-      low   = min(price)
-      close = 最後一個 tick 的 price(13:30:00)
-      volume = NULL(5Seconds 不含 volume,backer tier 拿不到指數 volume)
-
-    FinMind TaiwanStockEvery5SecondsIndex 格式:
-      {date='2025-01-02', time='09:00:00', stock_id='TAIEX', price=23035.1, kind='twse'}
-
-    Aggregate by (stock_id, date),依 time 排序後取 first/max/min/last。
-
-    Args:
-        rows: field_mapper 輸出的 5-sec tick rows(已過 field_rename)
-
-    Returns:
-        每 (stock_id, date) 1 row,含 open/high/low/close,volume=None
-    """
-    grouped: dict[tuple, list[dict[str, Any]]] = {}
-    for row in rows:
-        key = (row.get("stock_id"), row.get("date"))
-        grouped.setdefault(key, []).append(row)
-
-    out: list[dict[str, Any]] = []
-    for (stock_id, date), tick_rows in grouped.items():
-        # 依 time 排序(string sort 對 'HH:MM:SS' 格式正確)
-        tick_rows.sort(key=lambda r: r.get("time") or "")
-        prices = [r.get("price") for r in tick_rows if r.get("price") is not None]
-        if not prices:
-            logger.warning(
-                f"[aggregate_5sec_ohlc] (stock_id={stock_id}, date={date}) "
-                f"無有效 price tick,略過"
-            )
-            continue
-        out.append({
-            "stock_id": stock_id,
-            "date":     date,
-            "open":     prices[0],
-            "high":     max(prices),
-            "low":      min(prices),
-            "close":    prices[-1],
-            "volume":   None,                 # 5Seconds 無 volume
-        })
-    return out
 
 
 # ──────────────────────────────────────────────────────────────────────────────
