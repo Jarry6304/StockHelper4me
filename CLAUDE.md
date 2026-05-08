@@ -157,12 +157,13 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | 路徑 | 內容 |
 |---|---|
 | `collectorSpec/tw_stock_collector_program_spec_v1.2_p{1,2,3}.md` | v1.2 collector 程式規格（架構 / Rate Limiter / Phase Executor / Sync Tracker / CLI） |
-| `m2Spec/collector_schema_consolidated_spec_v3_2.md` | v3.2 r1 schema 整合規格（4 層 Medallion + 14 Silver） |
-| `m2Spec/collector_rust_restructure_blueprint_v3_2.md` | Rust + collector 重構藍圖（PR #17 → #21 切法） |
-| `m2Spec/cores_overview.md` | M3 計算層總覽（§7.5 dirty queue 契約 / §10.0 Core 邊界三原則） |
-| `m2Spec/{tw_market,traditional,neely,fundamental,chip,environment}_core.md` | 各 core 計算規格 |
-| `m2Spec/indicator_cores_{momentum,pattern,volatility,volume}.md` | indicator 計算規格 |
-| `m2Spec/unified_alignment_review_r2.md` | 11 篇 core spec 審查整合（r1 → r3.1，含 av3 結論） |
+| `m2Spec/oldm2Spec/collector_schema_consolidated_spec_v3_2.md` | v3.2 r1 schema 整合規格（4 層 Medallion + 14 Silver） |
+| `m2Spec/oldm2Spec/collector_rust_restructure_blueprint_v3_2.md` | Rust + collector 重構藍圖（PR #17 → #21 切法） |
+| `m2Spec/oldm2Spec/cores_overview.md` | M3 計算層總覽（§7.5 dirty queue 契約 / §10.0 Core 邊界三原則） |
+| `m2Spec/oldm2Spec/{tw_market,traditional,neely,fundamental,chip,environment}_core.md` | 各 core 計算規格 |
+| `m2Spec/oldm2Spec/indicator_cores_{momentum,pattern,volatility,volume}.md` | indicator 計算規格 |
+| `m2Spec/oldm2Spec/unified_alignment_review_r2.md` | 11 篇 core spec 審查整合（r1 → r3.1，含 av3 結論） |
+| `m2Spec/0001_tw_market_handling.md` / `m2Spec/layered_schema_post_refactor.md` | 2026-05-09 user 重翻新規格(commit `34b86a2`)；舊版進 `oldm2Spec/` |
 | `docs/schema_reference.md` / `docs/collectors.md` | DB schema 與 collector 細節 |
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
@@ -1616,7 +1617,7 @@ for price in raw_prices.iter().rev() {
 }
 ```
 
-**v1.8 進化**:`compute_forward_adjusted` 拆兩個獨立 multiplier(`price_multiplier` 從 AF / `volume_multiplier` 從 vf);詳見 commit `c71d422` + `m2Spec/unified_alignment_review_r2.md` r3.1 P0-11 段。
+**v1.8 進化**:`compute_forward_adjusted` 拆兩個獨立 multiplier(`price_multiplier` 從 AF / `volume_multiplier` 從 vf);詳見 commit `c71d422` + `m2Spec/oldm2Spec/unified_alignment_review_r2.md` r3.1 P0-11 段。
 
 
 ## 關鍵架構決策（不要改）

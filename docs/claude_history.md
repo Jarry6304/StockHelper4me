@@ -246,11 +246,11 @@ api_date   | 2026-04-30                        ← FinMind 標日 ✅
 
 ### 1. m2 collector 重構藍圖（藍圖 v3.2 r1）
 
-依 `m2Spec/collector_schema_consolidated_spec_v3_2.md` 對齊 4 層 Medallion(Bronze/Reference/Silver/M3),產出 `m2Spec/collector_rust_restructure_blueprint_v3_2.md`：盤點現行 v2.0 collector + rust_compute,提供模組拆分、Schema 異動、Phase 0 動工順序、Migration 雙寫策略、PR 切法。
+依 `m2Spec/oldm2Spec/collector_schema_consolidated_spec_v3_2.md` 對齊 4 層 Medallion(Bronze/Reference/Silver/M3),產出 `m2Spec/oldm2Spec/collector_rust_restructure_blueprint_v3_2.md`：盤點現行 v2.0 collector + rust_compute,提供模組拆分、Schema 異動、Phase 0 動工順序、Migration 雙寫策略、PR 切法。
 
 ### 2. Cores spec 系列審查（r1 → r2 → r2.1 → r3 → r3.1）
 
-針對 11 篇 Core spec 三輪迭代審查整合報告 `m2Spec/unified_alignment_review_r2.md`：
+針對 11 篇 Core spec 三輪迭代審查整合報告 `m2Spec/oldm2Spec/unified_alignment_review_r2.md`：
 - **r1→r2**：13 處 r1 邏輯/引用/數量修正
 - **r2→r2.1**：12 處事實/流程錯誤(7 A 系列 + 5 B 系列),基於 11 篇 spec 原文 spot-check
 - **r2.1→r3**：C 系列 10 條漏抓 gap promote 進 P0(3)/P1(3)/P2(4)
