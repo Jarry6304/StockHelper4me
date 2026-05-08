@@ -495,8 +495,21 @@ def _values_equal(a: Any, b: Any) -> bool:
 
 
 def _normalize_detail(d: dict[str, Any]) -> dict[str, Any]:
-    """把 dict 內值為 None 的 entry 拔掉。供 detail JSONB round-trip 比對用。"""
-    return {k: v for k, v in d.items() if v is not None}
+    """把 dict 內值為 None 的 entry 拔掉。供 detail JSONB round-trip 比對用。
+
+    對 DATE_DETAIL_KEYS 內的 key,額外把 '0' / '' 視為等價 None(FinMind missing
+    占位 — _reverse_detail_unpack 會 sanitize 進 Bronze 變 None,repivot 回 dict
+    也是 None,但原 legacy detail 仍是 '0',兩邊不一致是 sanitize lossy 設計
+    使然,不算 round-trip diff)。
+    """
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        if v is None:
+            continue
+        if k in DATE_DETAIL_KEYS and isinstance(v, str) and v.strip() in ("", "0"):
+            continue
+        out[k] = v
+    return out
 
 
 # =============================================================================
