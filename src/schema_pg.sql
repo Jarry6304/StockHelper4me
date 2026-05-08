@@ -1160,13 +1160,22 @@ CREATE TABLE IF NOT EXISTS government_bank_buy_sell_tw (
 CREATE INDEX IF NOT EXISTS idx_gov_bank_buy_sell_tw_stock_date_desc
     ON government_bank_buy_sell_tw (stock_id, date DESC);
 
--- 整體市場融資融券餘額(market-level;PK 無 stock_id)
+-- 整體市場融資融券(market-level;pivoted by name 來源 FinMind 真實格式)
+-- 2026-05-08 hotfix(alembic q6r7s8t9u0v1):FinMind 1 (date) 對應 2 row,
+-- name='MarginPurchase' / 'ShortSale' 各帶 today_balance / yes_balance / buy /
+-- sell / return_amount(`Return` 是 SQL 保留字 → return_amount)。
+-- Silver builder market_margin pivot:MarginPurchase.today_balance →
+-- total_margin_purchase_balance,ShortSale.today_balance → total_short_sale_balance。
 CREATE TABLE IF NOT EXISTS total_margin_purchase_short_sale_tw (
-    market                          TEXT NOT NULL,
-    date                            DATE NOT NULL,
-    total_margin_purchase_balance   BIGINT,
-    total_short_sale_balance        BIGINT,
-    PRIMARY KEY (market, date)
+    market         TEXT NOT NULL,
+    date           DATE NOT NULL,
+    name           TEXT NOT NULL,                    -- 'MarginPurchase' | 'ShortSale'
+    today_balance  BIGINT,
+    yes_balance    BIGINT,
+    buy            BIGINT,
+    sell           BIGINT,
+    return_amount  BIGINT,                            -- 'Return' SQL 保留字 → rename
+    PRIMARY KEY (market, date, name)
 );
 
 -- 借券賣出明細(daily aggregate per stock;與 securities_lending_tw 借券成交

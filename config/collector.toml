@@ -623,9 +623,10 @@ field_rename = {}
 notes        = "PR #21-B 八大行庫買賣超 — 需 FinMind sponsor tier(2026-05-06 probe 結果),enabled=false 暫關;Bronze schema 已落,等升 tier 後切回 true"
 
 # Bronze 2:total_margin_purchase_short_sale_tw — 整體市場融資融券(market-level)
-# FinMind TaiwanStockTotalMarginPurchaseShortSale 回 (date,
-# TotalMarginPurchaseTodayBalance, TotalShortSaleTodayBalance, 其他衍生欄);
-# field_rename 把 *TodayBalance 對齊 Silver 欄名(✅ 2026-05-06 smoke test 1778 rows OK)
+# 2026-05-08 hotfix(alembic q6r7s8t9u0v1):FinMind 真實格式是 pivoted-by-row,
+# 1 個 (date) 對應 2 row(name='MarginPurchase' + name='ShortSale'),各帶
+# TodayBalance / YesBalance / buy / sell / Return。
+# Bronze schema 加 `name` 進 PK,builder 走 pivot;`Return` 是 SQL 保留字 → return_amount。
 [[api]]
 name         = "total_margin_purchase_short_sale_v3"
 dataset      = "TaiwanStockTotalMarginPurchaseShortSale"
@@ -635,8 +636,8 @@ phase        = 6
 enabled      = true
 is_backer    = false
 segment_days = 365
-field_rename = {"TotalMarginPurchaseTodayBalance" = "total_margin_purchase_balance", "TotalShortSaleTodayBalance" = "total_short_sale_balance"}
-notes        = "PR #21-B v3.2 Bronze raw 整體市場融資融券餘額(market-level);feed market_margin_maintenance_derived 2 衍生欄"
+field_rename = {"TodayBalance" = "today_balance", "YesBalance" = "yes_balance", "Return" = "return_amount"}
+notes        = "PR #21-B v3.2 Bronze raw 整體市場融資融券(pivoted by name);feed market_margin_maintenance_derived 2 衍生欄(builder pivot MarginPurchase/ShortSale)"
 
 # Bronze 3:short_sale_securities_lending_tw — 借券賣出明細(daily aggregate per stock)
 # 2026-05-06 probe 揭露真實 dataset 名是 `TaiwanDailyShortSaleBalances`(回 15 個欄,

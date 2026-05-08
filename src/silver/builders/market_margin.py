@@ -11,10 +11,19 @@ Silver 衍生欄(per spec §2.6.3):
   - total_short_sale_balance(整體市場融券餘額)
 PR #21-B 落地:從 total_margin_purchase_short_sale_tw Bronze
 (FinMind dataset TaiwanStockTotalMarginPurchaseShortSale)讀取後 LEFT JOIN
-by (market, date) 補進 Silver。Bronze 缺對應 (market, date) → 兩欄 NULL。
+by (market, date) 補進 Silver。
+
+⚠️ 2026-05-08 hotfix(alembic q6r7s8t9u0v1):FinMind 是 pivoted-by-row 格式,
+1 個 (date) 對應 2 row(name='MarginPurchase' + name='ShortSale'),各帶
+today_balance / yes_balance / buy / sell / return_amount。Bronze PK 加 `name`,
+builder 走 pivot:
+    name='MarginPurchase' 那 row 的 today_balance → total_margin_purchase_balance
+    name='ShortSale'      那 row 的 today_balance → total_short_sale_balance
+
+Bronze 缺對應 (market, date) → 兩欄 NULL(LEFT JOIN 行為)。
 
 Bronze 欄位:market / date / ratio
-Silver 1:1 直拷 ratio + 2 衍生欄(LEFT JOIN total_margin Bronze)+ dirty 欄。
+Silver 1:1 直拷 ratio + 2 衍生欄(LEFT JOIN total_margin Bronze pivot)+ dirty 欄。
 """
 
 from __future__ import annotations
@@ -34,17 +43,38 @@ SILVER_TABLE  = "market_margin_maintenance_derived"
 BRONZE_TABLES = ["market_margin_maintenance", "total_margin_purchase_short_sale_tw"]
 
 
+# Bronze name 欄 → Silver 衍生欄
+NAME_TO_SILVER_COL: dict[str, str] = {
+    "MarginPurchase": "total_margin_purchase_balance",
+    "ShortSale":      "total_short_sale_balance",
+}
+
+
 def _build_total_margin_lookup(
     bronze_rows: list[dict[str, Any]],
 ) -> dict[tuple, dict[str, Any]]:
-    """{(market, date): {total_margin_purchase_balance, total_short_sale_balance}}。"""
+    """Pivot by name:{(market, date): {total_margin_purchase_balance, total_short_sale_balance}}。
+
+    Bronze 1 (market, date) 對應 2 row(name=MarginPurchase / ShortSale),
+    各帶 today_balance,pivot 進 Silver 的 2 欄。
+    任一 name 缺 row → 對應 Silver 欄 None;兩個 name 都缺 → key 不在 lookup。
+    """
     out: dict[tuple, dict[str, Any]] = {}
     for row in bronze_rows:
         key = (row.get("market"), row.get("date"))
-        out[key] = {
-            "total_margin_purchase_balance": row.get("total_margin_purchase_balance"),
-            "total_short_sale_balance":      row.get("total_short_sale_balance"),
-        }
+        if key not in out:
+            out[key] = {
+                "total_margin_purchase_balance": None,
+                "total_short_sale_balance":      None,
+            }
+        silver_col = NAME_TO_SILVER_COL.get(row.get("name", ""))
+        if silver_col:
+            out[key][silver_col] = row.get("today_balance")
+        else:
+            logger.warning(
+                f"未知 name='{row.get('name')}' "
+                f"(market={key[0]}, date={key[1]}),已略過"
+            )
     return out
 
 
@@ -76,7 +106,8 @@ def run(
 
     bronze = fetch_bronze(db, "market_margin_maintenance", order_by="market, date")
     total_margin = fetch_bronze(
-        db, "total_margin_purchase_short_sale_tw", order_by="market, date",
+        db, "total_margin_purchase_short_sale_tw",
+        order_by="market, date, name",
     )
     total_margin_lookup = _build_total_margin_lookup(total_margin)
 
@@ -88,7 +119,8 @@ def run(
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
     logger.info(
-        f"[{NAME}] read={len(bronze)} margin + {len(total_margin)} total_margin → "
+        f"[{NAME}] read={len(bronze)} margin + {len(total_margin)} total_margin "
+        f"(pivot to {len(total_margin_lookup)} dates) → "
         f"wrote={written}({elapsed_ms}ms)"
     )
     return {
