@@ -49,15 +49,21 @@ NAME_TO_SILVER_COL: dict[str, str] = {
     "ShortSale":      "total_short_sale_balance",
 }
 
+# 已知但不採用的 name(silently skip,不噴 warning)
+# - MarginPurchaseMoney:2026-04-29 起 FinMind 新增的「融資金額(NTD)」,spec
+#   §2.6.3 只要「融資餘額(shares)」即 MarginPurchase,本 metric 用不到
+KNOWN_SKIP_NAMES: set[str] = {"MarginPurchaseMoney"}
+
 
 def _build_total_margin_lookup(
     bronze_rows: list[dict[str, Any]],
 ) -> dict[tuple, dict[str, Any]]:
     """Pivot by name:{(market, date): {total_margin_purchase_balance, total_short_sale_balance}}。
 
-    Bronze 1 (market, date) 對應 2 row(name=MarginPurchase / ShortSale),
-    各帶 today_balance,pivot 進 Silver 的 2 欄。
+    Bronze 1 (market, date) 對應 2~3 row(name=MarginPurchase / ShortSale 必有,
+    2026-04-29 起 FinMind 新增 MarginPurchaseMoney 第 3 row),pivot 進 Silver 的 2 欄。
     任一 name 缺 row → 對應 Silver 欄 None;兩個 name 都缺 → key 不在 lookup。
+    KNOWN_SKIP_NAMES 內的 name silently skip(不污染 log);其餘未知 name → warning。
     """
     out: dict[tuple, dict[str, Any]] = {}
     for row in bronze_rows:
@@ -67,12 +73,15 @@ def _build_total_margin_lookup(
                 "total_margin_purchase_balance": None,
                 "total_short_sale_balance":      None,
             }
-        silver_col = NAME_TO_SILVER_COL.get(row.get("name", ""))
+        name = row.get("name", "")
+        silver_col = NAME_TO_SILVER_COL.get(name)
         if silver_col:
             out[key][silver_col] = row.get("today_balance")
+        elif name in KNOWN_SKIP_NAMES:
+            continue
         else:
             logger.warning(
-                f"未知 name='{row.get('name')}' "
+                f"未知 name='{name}' "
                 f"(market={key[0]}, date={key[1]}),已略過"
             )
     return out
