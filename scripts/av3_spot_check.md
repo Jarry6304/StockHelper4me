@@ -101,7 +101,7 @@ Output 是 group by event_type 的計數:
 ## 我會根據結果決定的事(等你貼結果)
 
 1. **A-V3 verdict 定案**(學術派 / 實務派 / 純粹派 / WEIRD)
-2. **blueprint `m2Spec/collector_rust_restructure_blueprint_v3_2.md` §四 4.4 條件 ALTER**:
+2. **blueprint `m2Spec/oldm2Spec/collector_rust_restructure_blueprint_v3_2.md` §四 4.4 條件 ALTER**:
    - 若 Rust 派:刪掉「ALTER price_daily_fwd 加 volume_adjusted」這條,改加 `cumulative_adjustment_factor`
    - 若實務派:保留 ALTER 但改成「加 volume_adjusted_strict」(Rust 派的 volume),原 volume 欄位保留(實務派的 volume)
    - 若 WEIRD:暫停,先解 Rust bug
