@@ -35,6 +35,14 @@ CANDIDATES = [
     ("TaiwanStockMarketValue",              "TAIEX",   "2025-01-01", "2025-01-15"),
     ("TaiwanStockMarketValue",              None,      "2025-01-01", "2025-01-15"),  # all_market 試
     ("TaiwanStockStatisticsOfOrderBookAndTrade", "TAIEX", "2025-01-02", "2025-01-02"),
+    # 🆕 user 提示(2026-05-08):TaiwanStockPrice 是既有 price_daily entry 用的
+    # dataset,回個股 OHLCV;若接 TAIEX / TWSE 標準指數 ticker 就 0 工程量解決
+    ("TaiwanStockPrice",                    "TAIEX",   "2025-01-01", "2025-01-15"),
+    ("TaiwanStockPrice",                    "TPEx",    "2025-01-01", "2025-01-15"),
+    ("TaiwanStockPrice",                    "IX0001",  "2025-01-01", "2025-01-15"),  # TWSE 加權指數
+    ("TaiwanStockPrice",                    "IX0043",  "2025-01-01", "2025-01-15"),  # TPEx 加權指數
+    ("TaiwanStockPrice",                    "TAIEX_INDEX", "2025-01-01", "2025-01-15"),
+    ("TaiwanStockPrice",                    "^TWII",   "2025-01-01", "2025-01-15"),
 ]
 
 
