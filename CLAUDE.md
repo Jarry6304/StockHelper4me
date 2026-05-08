@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.20，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.21，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -167,7 +167,56 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill;gov_bank_net 永久 N/A on backer tier) → #22 ✅(TAIEX/TPEx daily OHLCV 含 volume,2026-05-09)`。下個 session 主任務見「下次 session 建議優先序」段。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09)`。下個 session 主任務見「下次 session 建議優先序」段。
+
+---
+
+## v1.21 — PR #21 deprecated path 全砍(2026-05-09)
+
+接 PR #22 收尾後動工 PR #21 — 砍 §5.6 短期補丁路徑,讓 PR #20 trigger
+成為唯一真相來源。
+
+### 移除範圍
+
+| 路徑 | 處理 |
+|---|---|
+| `src/bronze/dirty_marker.py` 整檔 | **DELETE**(無 caller,deprecated stub 自 PR #20)|
+| `post_process.invalidate_fwd_cache` 函式本體 | **DELETE**(無 caller,deprecated 自 PR #20)|
+| `post_process.dividend_policy_merge` 內已砍 call 留下的歷史 comment | clean |
+| `bronze/phase_executor._run_api` 內 deprecated comment | clean |
+| `bronze/__init__.py` docstring 提 `dirty_marker.py` | rewrite |
+| `post_process.py` 頂端 docstring 改用過去式描述 | rewrite |
+
+剩 1 個歷史 reference(`silver/orchestrator.py:209-210` docstring 提
+`stock_sync_status.fwd_adj_valid=0`)留著 — 是說明 orchestrator 不再依賴
+這 flag 的歷史脈絡,沒呼叫對應 deprecated 函式。
+
+### Rust binary 自接 dirty queue 留 follow-up
+
+per spec 「兩端任一條 path work 就夠」— orchestrator path 已接
+(`silver/orchestrator._run_7c` 從 `price_daily_fwd.is_dirty=TRUE` pull),
+Rust binary 還在讀 `stock_sync_status.fwd_adj_valid=0`(`rust_compute/src/main.rs`)。
+這個改造非 critical,留下個 session 動。當前生產環境用 orchestrator path 完整 work。
+
+### 沙箱已驗
+
+- AST parse:`post_process.py` / `bronze/phase_executor.py` ✓
+- import:`post_process` ✓ / `bronze.dirty_marker` 預期 ModuleNotFoundError ✓
+- `dividend_policy_merge` 仍可呼叫 ✓
+- `invalidate_fwd_cache` import 失敗(已移除)✓
+- repo grep 0 active python references to deprecated 函式名
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`q6r7s8t9u0v1`(不變,純 Python 程式碼移除)
+- v3.2 r1 PR sequencing:#17~#22 + #21 deprecated cleanup **全綠** ✅
+- 進入 M3 indicator core 之前的 v3.2 r1 collector + Silver pipeline 完整收尾
+
+下個 session 建議:
+1. **margin / market_margin builder UNION 升級**(可選 nice-to-have,~9716 stub row)
+2. **Rust binary 自接 dirty queue**(讀 `price_daily_fwd.is_dirty` 取代
+   `stock_sync_status.fwd_adj_valid`)— 收尾用,非 critical
+3. **m2 milestone 完整收尾** — Silver views + legacy_v2 rename + M3 prep
 
 ---
 
@@ -1730,25 +1779,26 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.20 PR #22 完整收尾(2026-05-09)**:`TaiwanStockPrice + data_id=TAIEX/TPEx`
-> 直接拿 daily OHLCV 含 Volume(原 spec 假設的 dual-source merge 不可行,probe 找到
-> 0 工程量的 dataset)。Bronze 1781 rows × 2 indices,Silver `taiex_index_derived`
-> 從 0 → 3562 rows。alembic head 不變(`q6r7s8t9u0v1`)。
+> **🎯 v1.21 PR #21 deprecated path 全砍(2026-05-09)**:刪除
+> `bronze/dirty_marker.py` 整檔 + `post_process.invalidate_fwd_cache` 函式體,
+> 清理 `bronze/__init__.py` / `phase_executor` 殘留 comment。PR #20 trigger
+> 成為唯一真相來源。沙箱 6 case import / AST 全綠。
+> v3.2 r1 PR sequencing 全收尾(#17~#22 + #21 cleanup 全綠)。
 
 ### 阻塞性排序
 
-1. **PR #21 完整收尾** — 砍 §5.6 deprecated 路徑
-   - 觀察 1~2 sprint dirty queue 無歧義後,砍 `post_process.invalidate_fwd_cache`
-     函式本體 + `bronze/dirty_marker.mark_silver_dirty` no-op
-   - Rust binary 改讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`
-     (orchestrator path 已接,Rust 自接是收尾用 — 兩端任一條 path work 就夠)
+無 critical-path 任務。剩 nice-to-have:
+
+1. **Rust binary 自接 dirty queue**(收尾用,非 critical)
+   讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`。
+   orchestrator path 已接,Rust 自接是 belt-and-suspenders;當前生產環境完整 work。
 
 2. **margin / market_margin builder UNION 升級**(可選 nice-to-have)
    讓 builder iterate(主 Bronze ∪ 副 Bronze)keys,避免 Silver 永遠有 stub row
    (目前 9706 stub from SBL trigger / 10 stub from total_margin trigger)。
    不影響衍生欄 fill rate,只影響 Silver row count 漂亮度。
 
-3. **m2 PR milestone 完整收尾** — Silver views(spec §2.5)+ legacy_v2 rename
+3. **m2 milestone 完整收尾** — Silver views(spec §2.5)+ legacy_v2 rename
    (blueprint §八.2)+ M3 prep,blueprint §十 PR 切法。是離開 v3.2 r1 進入 M3
    indicator core 之前的最後一段。
 
