@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.24，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.25，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/bronze-tables-rename-8rawA`，alembic head `t9u0v1w2x3y4_pr_r3_promote_tw_bronze_3_tables`（2026-05-09，PR #R3 `_tw` Bronze 3 表升格主名）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/bronze-tables-rename-8rawA`，alembic head `u0v1w2x3y4z5_pr_r4_rename_v2_entry_names_legacy`（2026-05-09，PR #R4 v2.0 entry name 加 `_legacy` 後綴）。
 
 ---
 
@@ -168,7 +168,140 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅(m2 大重構 R1:source 欄補回 3 張 _tw) → #R2 ✅(R2:v2.0 舊 3 表 rename _legacy_v2) → #R3 ⏳(R3:_tw Bronze 升格主名)`。m2 大重構 plan 在 PR #24,R1~R6 切片動工中。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅(m2 大重構 R1:source 欄補回 3 張 _tw) → #R2 ✅(R2:v2.0 舊 3 表 rename _legacy_v2) → #R3 ⏳(R3:_tw Bronze 升格主名;PR #28) → #R4 ⏳(R4:v2.0 entry name 加 _legacy 後綴;同 PR #28)`。m2 大重構 plan 在 PR #24,R1~R6 切片動工中。
+
+---
+
+## v1.25 — PR #R4 m2 大重構:v2.0 entry name 加 `_legacy` 後綴(2026-05-09)
+
+接 R3 落地後動 R4(plan §6.3 簡化選項)。同 PR #28 收尾(沒切新分支)。
+
+### 為什麼走 §6.3 簡化選項
+
+plan §6.2 原方案要把 v3 entry name 從 `_v3` 收回主名(`holding_shares_per_v3`
+→ `holding_shares_per`),但這會踩 `api_sync_progress.api_name` collision —
+v2.0 entry 跨時間點同名不同 target 會混淆。
+
+§6.3 推薦:**v3 entry 永遠保留 `_v3` 後綴作為「重抓 spec 來源」標籤**,
+只把 v2.0 entry 加 `_legacy` 後綴 — 沒有跨時間點同名,api_sync_progress
+clean UPDATE 即可。
+
+範圍縮成「v2.0 entry 顯式 `_legacy` 後綴」,1~2h 完工。
+
+### 範圍
+
+5 個 v2.0 entry name rename(target_table 已在 R2 改 `_legacy_v2`,本 PR 不動):
+
+| 舊 entry name | 新 entry name | target_table(R2 已落) |
+|---|---|---|
+| `holding_shares_per` | `holding_shares_per_legacy` | `holding_shares_per_legacy_v2` |
+| `monthly_revenue` | `monthly_revenue_legacy` | `monthly_revenue_legacy_v2` |
+| `financial_income` | `financial_income_legacy` | `financial_statement_legacy_v2` |
+| `financial_balance` | `financial_balance_legacy` | `financial_statement_legacy_v2` |
+| `financial_cashflow` | `financial_cashflow_legacy` | `financial_statement_legacy_v2` |
+
+5 個 v3 entries(`*_v3`)**永遠不動**,主路徑 100% 不受影響。
+
+### alembic `u0v1w2x3y4z5_pr_r4_rename_v2_entry_names_legacy`
+
+5 條 idempotent UPDATE:
+
+```sql
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM api_sync_progress WHERE api_name = 'holding_shares_per') THEN
+        UPDATE api_sync_progress
+           SET api_name = 'holding_shares_per_legacy'
+         WHERE api_name = 'holding_shares_per';
+    END IF;
+END $$;
+-- (其他 4 條同 pattern)
+```
+
+**無 collision 風險**:R4 前 5 個 `*_legacy` row count = 0(沒任何地方用過),
+新名 row 由本 migration UPDATE 寫入。
+
+### 為什麼必須遷移 api_sync_progress.api_name
+
+`api_sync_progress` PK = (api_name, stock_id, segment_start)。entry name rename
+而 api_name 不同步遷移 → incremental 找不到既有 segment status → 以為從未跑過,
+踩 1700+ stocks × 21 年全市場重抓(~30-40h calendar-time)。
+
+migration 強制 UPDATE 同步,既有 backfill 進度紀錄無痕跟到新 entry name。
+
+### 配套改動
+
+- `config/collector.toml`:5 個 v2.0 entry name 加 `_legacy` 後綴 + notes 更新
+- `alembic/versions/2026_05_09_u0v1w2x3y4z5_pr_r4_rename_v2_entry_names_legacy.py`:
+  本 migration(5 idempotent UPDATE)
+- `scripts/verify_pr19c2_silver.py`:**R2 follow-up fix** — 3 個 `legacy_table` ref
+  從 `holding_shares_per` / `monthly_revenue` / `financial_statement` 改成
+  `*_legacy_v2`(R2 漏改,verifier 之前對 v2.0 legacy 比對抓不到表 → 全 FAIL,
+  本 PR 順手收掉,讓 R5 觀察期 SLO 驗證能用)
+
+### user 本機驗證流程
+
+```powershell
+git pull
+alembic upgrade head                                    # → u0v1w2x3y4z5
+
+# 5 個新 entry name 在 api_sync_progress 找得到(舊名 row count = 0)
+psql $env:DATABASE_URL -c "
+  SELECT api_name, COUNT(*) FROM api_sync_progress
+  WHERE api_name IN (
+    'holding_shares_per_legacy', 'monthly_revenue_legacy',
+    'financial_income_legacy', 'financial_balance_legacy', 'financial_cashflow_legacy'
+  )
+  GROUP BY api_name ORDER BY api_name
+"
+
+# 舊 entry name 應該 row count = 0(全部遷移完)
+psql $env:DATABASE_URL -c "
+  SELECT api_name, COUNT(*) FROM api_sync_progress
+  WHERE api_name IN (
+    'holding_shares_per', 'monthly_revenue',
+    'financial_income', 'financial_balance', 'financial_cashflow'
+  )
+  GROUP BY api_name
+"
+# 預期 0 rows(沒任何 row 用舊名)
+
+# validate config(會看到 5 個 *_legacy entry)
+python src/main.py validate
+
+# incremental smoke — 跑 phase 5,既有進度紀錄應跟新 entry name 對齊不重抓
+python src/main.py incremental --phases 5 --stocks 2330
+# 預期:5 個 *_legacy entry 各跑 1 segment(2330 已 fully backfilled,
+# incremental 只查最近一段;若新名找不到舊紀錄 → 會踩全市場重抓 36 個 segment)
+
+# verify_pr19c2 R2 follow-up fix 後應 3/3 OK(對 v2.0 legacy_v2 比對等值)
+python scripts/verify_pr19c2_silver.py
+
+# rollback smoke
+alembic downgrade -1 && alembic upgrade head
+```
+
+### 風險
+
+🟡 中:
+- migration 落地時若有 active backfill in-flight 跑到 phase 5,舊名 row UPDATE
+  後該 backfill 會繼續完成寫入但用新 entry name — 推薦落地時不要有 active backfill
+- v3 entry 完全不動,主路徑寫入 100% 不受影響
+- collector.toml 5 個 entry name 改名:`python src/main.py validate` 會看到
+  10 個 phase 5 entry(5 v2.0 _legacy + 5 v3),pre-R4 是 5+5 = 10 同數,只有名字差
+- Rollback:downgrade UPDATE 反向(新名 → 舊名)
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`u0v1w2x3y4z5`(待 user 本機 `alembic upgrade head` 落地)
+- PR #R3 + #R4:同 PR #28(R3 R4 合一,user verify 一輪)
+- 下個 PR:**#R5** 觀察期 21~60 天(無 code change,純驗證 SLO)+
+  **#R6** DROP 3 張 `_legacy_v2`(永久 DROP,需 backup 後執行)
+- 觀察期 SLO(plan §7.2):
+  - Silver builder 持續每日 12/12 OK
+  - api_sync_progress.status='failed' = 0
+  - 3 張 `_legacy_v2` row count 與主名表 ±1%
+- 完整 m2 大重構結束後可進 M3 indicator core(spec/m2Spec/)
 
 ---
 
@@ -2093,21 +2226,23 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.24 PR #R3 m2 大重構:`_tw` Bronze 升格主名(2026-05-09)**:
-> 3 張 `_tw` Bronze rename 去 suffix 升格主名 + 索引同步 + 5 v3 entry target 改主名 +
-> 3 Silver builder 同步 + schema_pg.sql / inspect_db / verify_pr20_triggers
-> 表名對齊。trigger 由 PG OID 自動跟著表 rename(已 sandbox 驗證),migration
-> 不需 DROP+重建。alembic head:`t9u0v1w2x3y4`(待 user verify)。
+> **🎯 v1.25 PR #R4 m2 大重構:v2.0 entry name 加 `_legacy` 後綴(2026-05-09)**:
+> 走 plan §6.3 簡化選項 — 5 個 v2.0 entry name 加 `_legacy` 後綴 +
+> alembic UPDATE api_sync_progress.api_name 5 條(idempotent);v3 entry 永遠
+> 保留 `_v3` 標籤不動。順手收 verify_pr19c2 R2 follow-up legacy_table refs
+> (3 處 `*_legacy_v2`)。alembic head:`u0v1w2x3y4z5`(待 user verify);
+> R3 R4 同 PR #28。
 
 ### 阻塞性排序
 
-m2 大重構接續(R5 觀察期 + R6 DROP 之間,先把 R4 收掉):
+m2 大重構僅剩 R5 觀察期 + R6 永久 DROP:
 
-1. **PR #R4** — collector.toml v3 entry name 從 `_v3` 後綴收主名,或走
-   plan §6.3 簡化選項(永久保留 `_v3` 標籤)。**改 entry name 會改
-   `api_sync_progress.api_name`**,需要 SQL UPDATE 同步遷移 backfill 進度紀錄。
-   若選簡化選項,只把 v2.0 entry 改 `_legacy` 後綴(target 已在 R2 落地),
-   範圍縮成純 collector.toml 改名,1~2h 可完成。
+1. **PR #R5** 觀察期 21~60 天(無 code change,純驗證 SLO)
+   - Silver builder 持續每日 12/12 OK
+   - api_sync_progress.status='failed' = 0
+   - 3 張 `_legacy_v2` row count 與主名表 ±1%
+2. **PR #R6** DROP 3 張 `_legacy_v2`(永久 DROP,需 backup 後執行 — 不可 rollback)
+   + 對應 5 個 v2.0 `_legacy` entry 從 collector.toml 移除
 
 剩 nice-to-have:
 
