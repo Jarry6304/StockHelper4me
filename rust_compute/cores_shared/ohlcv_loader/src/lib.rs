@@ -49,7 +49,12 @@ pub async fn load_daily(
 ) -> Result<OhlcvSeries> {
     let rows: Vec<FwdBarRow> = sqlx::query_as(
         r#"
-        SELECT date, open, high, low, close, volume
+        SELECT date,
+               open::float8  AS open,
+               high::float8  AS high,
+               low::float8   AS low,
+               close::float8 AS close,
+               volume
         FROM price_daily_fwd
         WHERE stock_id = $1
           AND is_dirty = FALSE
@@ -81,7 +86,12 @@ pub async fn load_weekly(
     // 假設 date 欄存在(對齊 Silver builder),否則本 query 需改 (year, week) 推算
     let rows: Vec<FwdBarRow> = sqlx::query_as(
         r#"
-        SELECT date, open, high, low, close, volume
+        SELECT date,
+               open::float8  AS open,
+               high::float8  AS high,
+               low::float8   AS low,
+               close::float8 AS close,
+               volume
         FROM price_weekly_fwd
         WHERE stock_id = $1
           AND is_dirty = FALSE
@@ -108,7 +118,12 @@ pub async fn load_monthly(
 ) -> Result<OhlcvSeries> {
     let rows: Vec<FwdBarRow> = sqlx::query_as(
         r#"
-        SELECT date, open, high, low, close, volume
+        SELECT date,
+               open::float8  AS open,
+               high::float8  AS high,
+               low::float8   AS low,
+               close::float8 AS close,
+               volume
         FROM price_monthly_fwd
         WHERE stock_id = $1
           AND is_dirty = FALSE
