@@ -36,7 +36,12 @@ pub struct MarketIndexTwRaw {
 pub async fn load_taiex(pool: &PgPool, lookback_days: i32) -> Result<MarketIndexTwSeries> {
     let points: Vec<MarketIndexTwRaw> = sqlx::query_as(
         r#"
-        SELECT date, open, high, low, close, volume
+        SELECT date,
+               open::float8  AS open,
+               high::float8  AS high,
+               low::float8   AS low,
+               close::float8 AS close,
+               volume
         FROM taiex_index_derived
         WHERE stock_id = 'TAIEX'
           AND date >= (CURRENT_DATE - $1::int)
@@ -67,7 +72,9 @@ pub struct MarketIndexUsRaw {
 pub async fn load_us_market(pool: &PgPool, stock_id: &str, lookback_days: i32) -> Result<MarketIndexUsSeries> {
     let points: Vec<MarketIndexUsRaw> = sqlx::query_as(
         r#"
-        SELECT date, close, volume
+        SELECT date,
+               close::float8 AS close,
+               volume
         FROM us_market_index_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - $2::int)
@@ -110,7 +117,8 @@ pub struct ExchangeRateRaw {
 pub async fn load_exchange_rate(pool: &PgPool, currency: &str, lookback_days: i32) -> Result<ExchangeRateSeries> {
     let points: Vec<ExchangeRateRaw> = sqlx::query_as(
         r#"
-        SELECT date, rate
+        SELECT date,
+               rate::float8 AS rate
         FROM exchange_rate_derived
         WHERE currency = $1
           AND date >= (CURRENT_DATE - $2::int)
@@ -138,9 +146,11 @@ pub struct FearGreedRaw {
 
 pub async fn load_fear_greed(pool: &PgPool, lookback_days: i32) -> Result<FearGreedIndexSeries> {
     // §6.2 spec 已記:暫直讀 Bronze(無 *_derived);P0 後補 Silver derived 切換
+    // PG 表欄名是 `score`(NUMERIC),Rust struct field 是 `value`(對齊 spec §6.5)— alias rename
     let points: Vec<FearGreedRaw> = sqlx::query_as(
         r#"
-        SELECT date, value
+        SELECT date,
+               score::float8 AS value
         FROM fear_greed_index
         WHERE date >= (CURRENT_DATE - $1::int)
         ORDER BY date ASC
@@ -170,7 +180,10 @@ pub struct MarketMarginRaw {
 pub async fn load_market_margin(pool: &PgPool, lookback_days: i32) -> Result<MarketMarginMaintenanceSeries> {
     let points: Vec<MarketMarginRaw> = sqlx::query_as(
         r#"
-        SELECT date, ratio, total_margin_purchase_balance, total_short_sale_balance
+        SELECT date,
+               ratio::float8 AS ratio,
+               total_margin_purchase_balance,
+               total_short_sale_balance
         FROM market_margin_maintenance_derived
         WHERE date >= (CURRENT_DATE - $1::int)
         ORDER BY date ASC

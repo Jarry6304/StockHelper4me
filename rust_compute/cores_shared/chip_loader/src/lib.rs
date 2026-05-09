@@ -37,9 +37,13 @@ pub async fn load_day_trading(
     stock_id: &str,
     lookback_days: i32,
 ) -> Result<DayTradingSeries> {
+    // day_trading_ratio NUMERIC(10,4):explicit cast → float8 對齊 Rust Option<f64>
     let points: Vec<DayTradingRaw> = sqlx::query_as(
         r#"
-        SELECT date, day_trading_buy, day_trading_sell, day_trading_ratio
+        SELECT date,
+               day_trading_buy,
+               day_trading_sell,
+               day_trading_ratio::float8 AS day_trading_ratio
         FROM day_trading_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - $2::int)
@@ -211,13 +215,14 @@ pub async fn load_foreign_holding(
     stock_id: &str,
     lookback_days: i32,
 ) -> Result<ForeignHoldingSeries> {
+    // foreign_holding_ratio NUMERIC(8,4):explicit cast → float8 對齊 Rust Option<f64>
     // foreign_limit_pct 目前 Silver 沒 expose 為 stored col,先 NULL placeholder
     let points: Vec<ForeignHoldingRaw> = sqlx::query_as(
         r#"
         SELECT date,
                foreign_holding_shares,
-               foreign_holding_ratio,
-               NULL::float8 AS foreign_limit_pct
+               foreign_holding_ratio::float8 AS foreign_holding_ratio,
+               NULL::float8                  AS foreign_limit_pct
         FROM foreign_holding_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - $2::int)

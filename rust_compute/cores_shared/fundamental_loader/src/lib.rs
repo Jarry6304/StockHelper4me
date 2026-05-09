@@ -34,9 +34,16 @@ pub async fn load_monthly_revenue(
     stock_id: &str,
     lookback_months: i32,
 ) -> Result<MonthlyRevenueSeries> {
+    // schema:revenue NUMERIC(20,2) / revenue_yoy NUMERIC(10,4) / revenue_mom NUMERIC(10,4)
+    // Rust struct:revenue Option<i64>(對齊 RevenueCore expects i64 元為單位)
+    //              yoy/mom Option<f64>;使用 explicit cast 避免 sqlx NUMERIC vs FLOAT8 mismatch
     let points: Vec<MonthlyRevenueRaw> = sqlx::query_as(
         r#"
-        SELECT date, revenue, revenue_yoy, revenue_mom, detail
+        SELECT date,
+               revenue::int8        AS revenue,
+               revenue_yoy::float8  AS revenue_yoy,
+               revenue_mom::float8  AS revenue_mom,
+               detail
         FROM monthly_revenue_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - ($2::int * 31))
@@ -76,9 +83,14 @@ pub async fn load_valuation_daily(
     stock_id: &str,
     lookback_days: i32,
 ) -> Result<ValuationDailySeries> {
+    // schema 4 個欄全 NUMERIC,explicit cast 避免 sqlx NUMERIC vs FLOAT8 mismatch
     let points: Vec<ValuationDailyRaw> = sqlx::query_as(
         r#"
-        SELECT date, per, pbr, dividend_yield, market_value_weight
+        SELECT date,
+               per::float8                 AS per,
+               pbr::float8                 AS pbr,
+               dividend_yield::float8      AS dividend_yield,
+               market_value_weight::float8 AS market_value_weight
         FROM valuation_daily_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - $2::int)
