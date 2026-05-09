@@ -2,17 +2,20 @@
 //
 // 對齊 m2Spec/oldm2Spec/neely_core.md r2(2026-05-06)。
 //
-// 已實作(M3 PR-3a 為止):
+// 已實作(M3 PR-3b 為止):
 //   - struct / enum 合約定義(§五 §六 §八 §九 — Input / Params / Output / Scenario Forest)
 //   - WaveCore trait 實作 + warmup_periods(§16:Daily 500 / Weekly 250 / Monthly 120)
 //   - **Stage 1**:Monowave Detection(Pure Close + Wilder ATR-filtered reversal)
 //   - **Stage 2**:Rule of Neutrality + Rule of Proportion 標註
 //   - **Stage 3**:Bottom-up Candidate Generator(滑窗 wave_count ∈ {3,5} + alternation filter + beam_width cap)
+//   - **Stage 4**:Validator framework + R1/R2/R3 完整實作(R4-R7 + F/Z/T/W 22 條 Deferred)
 //   - compute() 回 partial NeelyCoreOutput:scenario_forest 暫空,
-//     monowave_series + candidate_count 已填,diagnostics 含 Stage 1-3 耗時
+//     monowave_series + candidate_count + validator pass/reject count + rejections 已填,
+//     diagnostics 含 Stage 1-4 耗時
 //
 // 留後續 PR:
-//   - Stage 4:Validator R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2(留 PR-3b,需 user 在 m3Spec/ 寫 neely 最新版後對齊)
+//   - Stage 4 完整:R4-R7 + F1-F2 + Z1-Z4 + T1-T10 + W1-W2 規則細節(留 PR-3c,
+//     需 user 在 m3Spec/ 寫最新 neely_core spec 後 batch 補)
 //   - Stage 5-7:Classifier / Post-Constructive Validator / Complexity Rule(留 PR-4)
 //   - Stage 8:Compaction(exhaustive + beam_search fallback)+ Forest 上限保護(留 PR-5)
 //   - Stage 9-10:Missing Wave / Emulation / Power Rating / Fibonacci / Triggers + facts(留 PR-6)
@@ -75,9 +78,9 @@ impl WaveCore for NeelyCore {
     }
 
     fn version(&self) -> &'static str {
-        // 隨 spec / 演算法版本變動。M3 PR-3a partial(Stage 1-3 落地)階段 0.3.0,
+        // 隨 spec / 演算法版本變動。M3 PR-3b partial(Stage 1-4 落地,R1-R3 完整 + 22 條 deferred)階段 0.4.0,
         // 等 P0 Gate 五檔實測通過再 bump 到 1.0.0(spec §17.1 範例為 "1.0.0")。
-        "0.3.0"
+        "0.4.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -117,7 +120,24 @@ impl WaveCore for NeelyCore {
             stage_3_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 4-10 留後續 PR(scenario_forest 暫空,Validator 不跑)
+        // ── Stage 4:Validator R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2(M3 PR-3b)
+        let stage_4_start = Instant::now();
+        let validation_reports = validator::validate_all(&wave_candidates, &classified);
+        stage_elapsed.insert(
+            "stage_4_validator".to_string(),
+            stage_4_start.elapsed().as_millis() as u64,
+        );
+
+        let validator_pass_count = validation_reports.iter().filter(|r| r.overall_pass).count();
+        let validator_reject_count = validation_reports.len().saturating_sub(validator_pass_count);
+        let mut all_rejections: Vec<_> = Vec::new();
+        for report in &validation_reports {
+            for rej in &report.failed {
+                all_rejections.push(rej.clone());
+            }
+        }
+
+        // ── Stage 5-10 留後續 PR(scenario_forest 暫空,Classifier/Compaction 不跑)
 
         let monowave_series: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
         let elapsed_ms = total_start.elapsed().as_millis() as u64;
@@ -138,12 +158,15 @@ impl WaveCore for NeelyCore {
             stock_id: input.stock_id.clone(),
             timeframe: input.timeframe,
             data_range,
-            // Stage 8 才會產出。M3 PR-3a 階段仍空 vec
+            // Stage 8 才會產出。M3 PR-3b 階段仍空 vec
             scenario_forest: Vec::new(),
             monowave_series,
             diagnostics: NeelyDiagnostics {
                 monowave_count: classified.len(),
                 candidate_count: wave_candidates.len(),
+                validator_pass_count,
+                validator_reject_count,
+                rejections: all_rejections,
                 stage_elapsed_ms: stage_elapsed,
                 elapsed_ms,
                 ..Default::default()
@@ -202,11 +225,11 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.3.0");
+        assert_eq!(core.version(), "0.4.0");
     }
 
     // -------------------------------------------------------------
-    // Partial compute()(M3 PR-3a:跑到 Stage 3)
+    // Partial compute()(M3 PR-3b:跑到 Stage 4)
     // -------------------------------------------------------------
 
     use crate::output::{MonowaveDirection, OhlcvBar};
@@ -236,10 +259,22 @@ mod tests {
         assert_eq!(out.scenario_forest.len(), 0);
         assert_eq!(out.diagnostics.monowave_count, 0);
         assert_eq!(out.diagnostics.candidate_count, 0);
+        assert_eq!(out.diagnostics.validator_pass_count, 0);
+        assert_eq!(out.diagnostics.validator_reject_count, 0);
+        assert!(out.diagnostics.rejections.is_empty());
         assert!(out.insufficient_data, "0 bars < warmup 500 → insufficient");
-        assert!(out.diagnostics.stage_elapsed_ms.contains_key("stage_1_monowave"));
-        assert!(out.diagnostics.stage_elapsed_ms.contains_key("stage_2_classify"));
-        assert!(out.diagnostics.stage_elapsed_ms.contains_key("stage_3_candidates"));
+        for stage_key in &[
+            "stage_1_monowave",
+            "stage_2_classify",
+            "stage_3_candidates",
+            "stage_4_validator",
+        ] {
+            assert!(
+                out.diagnostics.stage_elapsed_ms.contains_key(*stage_key),
+                "stage timing key '{}' 應存在",
+                stage_key
+            );
+        }
     }
 
     #[test]
@@ -263,12 +298,21 @@ mod tests {
         assert!(matches!(out.monowave_series[0].direction, MonowaveDirection::Up));
         assert!(matches!(out.monowave_series[1].direction, MonowaveDirection::Down));
         assert!(matches!(out.monowave_series[2].direction, MonowaveDirection::Up));
-        // PR-3a 階段 forest 仍空(Stage 8 才產出)
+        // PR-3b 階段 forest 仍空(Stage 8 才產出)
         assert_eq!(out.scenario_forest.len(), 0);
         // Stage 3 candidate generator:3 個 alternating monowave → 1 個 wave_count=3 candidate
         assert_eq!(
             out.diagnostics.candidate_count, 1,
             "U-D-U 3 monowaves 應生 1 個 wave_count=3 candidate"
+        );
+        // Stage 4 validator:該 candidate 對 R1(W2 不超過 W1 起點)應通過
+        // — W2 從 13 跌到 9,跨過 W1 起點 10,應 R1 fail
+        // 但這裡 monowaves 從 detect 出來的 start_price 是 close,W1 起點 close=10.0,
+        // W2 endpoint close=9.0,9.0 < 10.0 → 跨過 W1 起點 → R1 fail → reject_count 1
+        assert_eq!(
+            out.diagnostics.validator_pass_count + out.diagnostics.validator_reject_count,
+            1,
+            "1 candidate 應跑完 1 個 validator report"
         );
         // 7 bars < warmup 500 → 仍標 insufficient(預期行為)
         assert!(out.insufficient_data);
