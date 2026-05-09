@@ -40,8 +40,10 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// 列出已連結的 22 cores(對齊 inventory CoreRegistry::discover)
+    #[command(name = "list-cores")]
     ListCores,
     /// 對指定 stock 跑 neely_core 完整 Stage 1-10 Pipeline
+    #[command(name = "run")]
     Run {
         /// 股票代號(例 2330,或保留字 _index_taiex_)
         #[arg(long)]
@@ -54,6 +56,7 @@ enum Command {
         write: bool,
     },
     /// 全市場 × 全 22 cores production run
+    #[command(name = "run-all")]
     RunAll {
         /// 指定股票清單(逗號分隔,例 2330,2317);不指定則拉 price_daily_fwd 全市場
         #[arg(long)]
