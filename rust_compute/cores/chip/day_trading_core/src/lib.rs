@@ -45,9 +45,10 @@ pub struct DayTradingParams {
     pub ratio_low_threshold: f64,
     /// 當沖力道回看,預設 5
     pub momentum_lookback: usize,
-    /// 連續高/低當沖比的最小天數,預設 3(spec §7.6 範例 5,但 streak 從 3 起算更合理)
-    pub streak_min_days: usize,
 }
+
+/// 連續高/低當沖比的最小天數(對齊 spec §7.5 streak EventKind;§7.3 Params 未列,寫死 const)
+const STREAK_MIN_DAYS: usize = 3;
 
 impl Default for DayTradingParams {
     fn default() -> Self {
@@ -56,7 +57,6 @@ impl Default for DayTradingParams {
             ratio_high_threshold: 30.0,
             ratio_low_threshold: 5.0,
             momentum_lookback: 5,
-            streak_min_days: 3,
         }
     }
 }
@@ -76,10 +76,16 @@ pub struct DayTradingOutput {
 #[derive(Debug, Clone, Serialize)]
 pub struct DayTradingPoint {
     pub date: NaiveDate,
-    pub day_trade_buy: i64,
-    pub day_trade_sell: i64,
+    /// 當沖股數(對齊 spec §7.5)。
+    /// Silver day_trading_derived 沒直接欄位,best-guess:= day_trading_buy(實務上 buy ≈ sell)
+    pub day_trade_volume: i64,
+    /// 全日總成交股數(對齊 spec §7.5)。
+    /// Silver day_trading_derived 沒直接欄位,從 ratio 反推:= day_trade_volume × 100 / ratio(if ratio > 0)
+    pub total_volume: i64,
     pub day_trade_ratio: f64, // %
-    pub momentum: f64,        // ratio diff vs SMA(N) 前 N 期
+    pub day_trade_buy: i64,   // 當沖買進(原 Silver day_trading_buy)
+    pub day_trade_sell: i64,  // 當沖賣出
+    pub momentum: f64,        // 當沖力道:ratio diff vs SMA(N) 前 N 期
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,11 +142,23 @@ impl IndicatorCore for DayTradingCore {
         for (i, p) in input.points.iter().enumerate() {
             let ratio = p.day_trading_ratio.unwrap_or(0.0);
             let momentum = compute_momentum(&input.points, i, params.momentum_lookback);
+            let buy = p.day_trading_buy.unwrap_or(0);
+            let sell = p.day_trading_sell.unwrap_or(0);
+            // day_trade_volume:當沖股數;Silver 沒直接欄位,best-guess 取 buy(buy ≈ sell)
+            let day_trade_volume = buy;
+            // total_volume:從 ratio 反推 — ratio = volume × 100 / total → total = volume × 100 / ratio
+            let total_volume = if ratio > 0.0 {
+                ((day_trade_volume as f64) * 100.0 / ratio).round() as i64
+            } else {
+                0
+            };
             series.push(DayTradingPoint {
                 date: p.date,
-                day_trade_buy: p.day_trading_buy.unwrap_or(0),
-                day_trade_sell: p.day_trading_sell.unwrap_or(0),
+                day_trade_volume,
+                total_volume,
                 day_trade_ratio: ratio,
+                day_trade_buy: buy,
+                day_trade_sell: sell,
                 momentum,
             });
         }
@@ -219,7 +237,7 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
     // RatioStreakHigh / Low(連續 N 天高 / 低)
     detect_streak(
         series,
-        params.streak_min_days,
+        STREAK_MIN_DAYS,
         |p| p.day_trade_ratio >= params.ratio_high_threshold,
         DayTradingEventKind::RatioStreakHigh,
         params.ratio_high_threshold,
@@ -227,7 +245,7 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
     );
     detect_streak(
         series,
-        params.streak_min_days,
+        STREAK_MIN_DAYS,
         |p| p.day_trade_ratio > 0.0 && p.day_trade_ratio <= params.ratio_low_threshold,
         DayTradingEventKind::RatioStreakLow,
         params.ratio_low_threshold,

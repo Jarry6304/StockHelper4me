@@ -1,0 +1,18 @@
+[package]
+name        = "financial_statement_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Financial Statement Core(P2,財報三表事實萃取,對齊 oldm2Spec/fundamental_cores.md)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fact_schema       = { path = "../../../cores_shared/fact_schema" }
+fundamental_loader = { path = "../../../cores_shared/fundamental_loader" }
+core_registry     = { path = "../../../cores_shared/core_registry" }
+anyhow            = { workspace = true }
+chrono            = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+inventory         = "0.3"

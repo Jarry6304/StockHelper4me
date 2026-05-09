@@ -1,0 +1,18 @@
+[package]
+name        = "us_market_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "US Market Core(P2,SPY/VIX,stock_id 保留字 _global_)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fact_schema       = { path = "../../../cores_shared/fact_schema" }
+environment_loader = { path = "../../../cores_shared/environment_loader" }
+core_registry     = { path = "../../../cores_shared/core_registry" }
+anyhow            = { workspace = true }
+chrono            = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+inventory         = "0.3"

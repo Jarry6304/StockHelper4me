@@ -17,10 +17,12 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use fact_schema::Timeframe;
-use neely_core::output::{OhlcvBar, OhlcvSeries};
 use neely_core::NeelyCore;
 use neely_core::NeelyCoreParams;
 use sqlx::postgres::PgPool;
+
+// Re-export 給 indicator cores 共用(避免它們再 dep neely_core)
+pub use neely_core::output::{OhlcvBar, OhlcvSeries};
 
 /// price_daily_fwd / price_weekly_fwd / price_monthly_fwd 三表 row 共用結構
 #[derive(Debug, Clone, sqlx::FromRow)]

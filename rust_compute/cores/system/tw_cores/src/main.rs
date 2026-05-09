@@ -88,8 +88,33 @@ fn list_cores() -> Result<()> {
     }
 
     // 確保 dep crate 的 inventory::submit! 不被 dead-code 剃掉
+    // Wave
     let _ = NeelyCore::new();
+    // Indicator(8)
+    let _ = macd_core::MacdCore::new();
+    let _ = rsi_core::RsiCore::new();
+    let _ = kd_core::KdCore::new();
+    let _ = adx_core::AdxCore::new();
+    let _ = ma_core::MaCore::new();
+    let _ = bollinger_core::BollingerCore::new();
+    let _ = atr_core::AtrCore::new();
+    let _ = obv_core::ObvCore::new();
+    // Chip(5)
     let _ = day_trading_core::DayTradingCore::new();
+    let _ = institutional_core::InstitutionalCore::new();
+    let _ = margin_core::MarginCore::new();
+    let _ = foreign_holding_core::ForeignHoldingCore::new();
+    let _ = shareholder_core::ShareholderCore::new();
+    // Fundamental(3)
+    let _ = revenue_core::RevenueCore::new();
+    let _ = valuation_core::ValuationCore::new();
+    let _ = financial_statement_core::FinancialStatementCore::new();
+    // Environment(5)
+    let _ = taiex_core::TaiexCore::new();
+    let _ = us_market_core::UsMarketCore::new();
+    let _ = exchange_rate_core::ExchangeRateCore::new();
+    let _ = fear_greed_core::FearGreedCore::new();
+    let _ = market_margin_core::MarketMarginCore::new();
 
     println!();
     println!("Stage 1: Pure Close + Wilder ATR-filtered monowave detection ✅");
