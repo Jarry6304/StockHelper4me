@@ -41,14 +41,14 @@ async fn main() -> Result<()> {
 
     let _cli = Cli::parse();
 
-    println!("== M3 cores binary(skeleton + Stage 1-8 partial)==");
+    println!("== M3 cores binary(Stage 1-10 partial,Pipeline 走通)==");
     println!("workspace = rust_compute/(virtual root)");
     println!();
     println!("Linked cores:");
 
     let neely = NeelyCore::new();
     println!(
-        "  - {} v{} (Wave Core, P0, Stage 1-8 partial impl)",
+        "  - {} v{} (Wave Core, P0, Stage 1-10 partial impl + facts)",
         neely.name(),
         neely.version()
     );
@@ -79,7 +79,16 @@ async fn main() -> Result<()> {
         "Stage 8: Compaction(簡化 pass-through + Forest 上限保護)     🟡"
     );
     println!(
-        "Stage 9-10: Missing Wave / Power Rating / Fibonacci / facts   ⏳ 後續 PR"
+        "Stage 9: Missing Wave / Emulation skeleton                   🟡"
+    );
+    println!(
+        "Stage 10: Power Rating + Fibonacci ratios + Triggers(基本)  🟡"
+    );
+    println!(
+        "Facts:    produce_facts() 每 scenario 1 條 + forest summary  ✅"
+    );
+    println!(
+        "PG / Workflow: ohlcv_loader / inventory / alembic 三表        ⏳ PR-7+"
     );
     println!();
     println!(

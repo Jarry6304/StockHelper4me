@@ -2,24 +2,35 @@
 //
 // 對齊 m2Spec/oldm2Spec/neely_core.md r2(2026-05-06)。
 //
-// 已實作(M3 PR-5 為止):
+// 已實作(M3 PR-6 為止 — Stage 1-10 Pipeline 走通):
 //   - struct / enum 合約定義(§五 §六 §八 §九 — Input / Params / Output / Scenario Forest)
 //   - WaveCore trait 實作 + warmup_periods(§16:Daily 500 / Weekly 250 / Monthly 120)
 //   - **Stage 1**:Monowave Detection(Pure Close + Wilder ATR-filtered reversal)
 //   - **Stage 2**:Rule of Neutrality + Rule of Proportion 標註
 //   - **Stage 3**:Bottom-up Candidate Generator(滑窗 wave_count ∈ {3,5} + alternation filter + beam_width cap)
 //   - **Stage 4**:Validator framework + R1/R2/R3 完整實作(R4-R7 + F/Z/T/W 22 條 Deferred)
-//   - **Stage 5**:Classifier 基本邏輯(5wave + R3 pass → Impulse / R3 fail → Diagonal Leading;3wave → Zigzag Single)
+//   - **Stage 5**:Classifier 基本邏輯(5wave + R3 → Impulse/Diagonal;3wave → Zigzag Single)
 //   - **Stage 6**:Post-Constructive Validator skeleton(預設 pattern_complete = true)
 //   - **Stage 7**:Complexity Rule 篩選(差距 ≤ 1 級為 anchor)
 //   - **Stage 8**:Compaction 簡化版 pass-through + Forest 上限保護(BeamSearchFallback by power_rating)
-//   - compute() 回 NeelyCoreOutput,scenario_forest 內含實際 scenario,diagnostics 含
-//     Stage 1-8 耗時 + overflow_triggered / compaction_timeout / compaction_paths 旗標
+//   - **Stage 9a**:Missing Wave 偵測 skeleton(預設 false)
+//   - **Stage 9b**:Emulation 辨識 skeleton(預設 false)
+//   - **Stage 10a**:Power Rating 查表(Impulse Up→Bullish / Down→Bearish 等 best-guess)
+//   - **Stage 10b**:Fibonacci 投影 framework + ratios.rs 寫死 NEELY_FIB_RATIOS(10 個比率)+
+//     project_from_w1() helper(完整接 monowave price 留 PR-6b)
+//   - **Stage 10c**:Invalidation Triggers 生成(Impulse R1/R3 derived;Diagonal R1 derived;
+//     對齊 §9.4 OnTriggerAction:WeakenScenario 取代 ReduceProbability)
+//   - **produce_facts()**:每 Scenario 1 條結構性 Fact + 1 條 forest summary Fact
+//     (對齊 §6.1.1 機械式陳述,禁主觀詞彙)
+//   - compute() 回 完整 NeelyCoreOutput:scenario_forest 含 power_rating / triggers /
+//     fib_zones,diagnostics 含 13 個 stage 耗時 + 各種 flags
 //
 // 留後續 PR:
 //   - Stage 4-7 完整規則細節(留 PR-3c / PR-4b,需 user 在 m3Spec/ 寫最新 neely_core spec 後 batch 補)
-//   - Stage 8 進階:exhaustive 窮舉合法 compression paths(需 sub-wave 嵌套結構,留 PR-5b)
-//   - Stage 9-10:Missing Wave / Emulation / Power Rating / Fibonacci / Triggers + facts(留 PR-6)
+//   - Stage 8 進階:exhaustive 窮舉合法 compression paths(留 PR-5b)
+//   - Stage 9-10 完整:Missing Wave / Emulation / Fibonacci 接 monowave price /
+//     Power Rating 完整查表(留 PR-6b)
+//   - PG 連接:`shared/ohlcv_loader/` + `tw_cores` binary 接 PG + alembic 落地三表(留 PR-7)
 //   - inventory 註冊機制(`CoreRegistration`)+ Workflow toml(留 PR-8)
 //   - P0 Gate 五檔股票實測 + 校準(留 PR-Gate)
 //
@@ -79,9 +90,10 @@ impl WaveCore for NeelyCore {
     }
 
     fn version(&self) -> &'static str {
-        // 隨 spec / 演算法版本變動。M3 PR-5 partial(Stage 1-8 落地)階段 0.6.0,
+        // 隨 spec / 演算法版本變動。M3 PR-6 partial(Stage 1-10 落地,Power Rating /
+        // Fibonacci / Triggers 基本實作 + facts.rs produce_facts)階段 0.7.0,
         // 等 P0 Gate 五檔實測通過再 bump 到 1.0.0(spec §17.1 範例為 "1.0.0")。
-        "0.6.0"
+        "0.7.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -173,11 +185,49 @@ impl WaveCore for NeelyCore {
             "stage_8_compaction".to_string(),
             stage_8_start.elapsed().as_millis() as u64,
         );
+        let mut forest = compaction_result.forest;
 
-        // ── Stage 9-10 留後續 PR(facts / Power Rating / Fibonacci / Triggers)
+        // ── Stage 9a:Missing Wave 偵測(M3 PR-6 skeleton)
+        let stage_9a_start = Instant::now();
+        let _ = missing_wave::apply_to_forest(&forest);
+        stage_elapsed.insert(
+            "stage_9a_missing_wave".to_string(),
+            stage_9a_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 9b:Emulation 辨識(M3 PR-6 skeleton)
+        let stage_9b_start = Instant::now();
+        let _ = forest.iter().map(emulation::detect_emulation).count();
+        stage_elapsed.insert(
+            "stage_9b_emulation".to_string(),
+            stage_9b_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 10a:Power Rating 查表(M3 PR-6)
+        let stage_10a_start = Instant::now();
+        power_rating::apply_to_forest(&mut forest);
+        stage_elapsed.insert(
+            "stage_10a_power_rating".to_string(),
+            stage_10a_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 10b:Fibonacci 投影(M3 PR-6 skeleton — projection 留 PR-6b 接 monowave price)
+        let stage_10b_start = Instant::now();
+        fibonacci::apply_to_forest(&mut forest);
+        stage_elapsed.insert(
+            "stage_10b_fibonacci".to_string(),
+            stage_10b_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 10c:Invalidation Triggers 生成(M3 PR-6 best-guess)
+        let stage_10c_start = Instant::now();
+        triggers::apply_to_forest(&mut forest);
+        stage_elapsed.insert(
+            "stage_10c_triggers".to_string(),
+            stage_10c_start.elapsed().as_millis() as u64,
+        );
 
         let monowave_series: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
-        let forest = compaction_result.forest;
         let forest_size = forest.len();
         let elapsed_ms = total_start.elapsed().as_millis() as u64;
         let warmup = self.warmup_periods(&params);
@@ -218,9 +268,9 @@ impl WaveCore for NeelyCore {
         })
     }
 
-    fn produce_facts(&self, _output: &Self::Output) -> Vec<Fact> {
-        // §15 Fact 產出規則於 facts.rs 實作,留 PR-6 補完
-        Vec::new()
+    fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
+        // §15 Fact 產出規則 — M3 PR-6 basic 實作:每 Scenario 1 條 + 1 條 forest summary
+        facts::produce(output)
     }
 
     fn warmup_periods(&self, params: &Self::Params) -> usize {
@@ -267,7 +317,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.6.0");
+        assert_eq!(core.version(), "0.7.0");
     }
 
     // -------------------------------------------------------------
@@ -315,6 +365,11 @@ mod tests {
             "stage_6_post_validator",
             "stage_7_complexity",
             "stage_8_compaction",
+            "stage_9a_missing_wave",
+            "stage_9b_emulation",
+            "stage_10a_power_rating",
+            "stage_10b_fibonacci",
+            "stage_10c_triggers",
         ] {
             assert!(
                 out.diagnostics.stage_elapsed_ms.contains_key(*stage_key),
@@ -325,6 +380,32 @@ mod tests {
         // Compaction 旗標
         assert!(!out.diagnostics.overflow_triggered, "空輸入不應 overflow");
         assert!(!out.diagnostics.compaction_timeout);
+    }
+
+    #[test]
+    fn produce_facts_returns_facts_for_non_empty_forest() {
+        let core = NeelyCore::new();
+        let input = OhlcvSeries {
+            stock_id: "2330".to_string(),
+            timeframe: Timeframe::Daily,
+            bars: vec![
+                bar("2026-01-01", 10.0, 10.5, 9.5, 10.0),
+                bar("2026-01-02", 10.0, 11.5, 10.0, 11.0),
+                bar("2026-01-03", 11.0, 13.0, 11.0, 13.0),
+                bar("2026-01-04", 13.0, 13.0, 11.5, 11.5),
+                bar("2026-01-05", 11.5, 11.5, 9.0, 9.0),
+                bar("2026-01-06", 9.0, 11.0, 9.0, 11.0),
+                bar("2026-01-07", 11.0, 13.5, 11.0, 13.5),
+            ],
+        };
+        let out = core.compute(&input, NeelyCoreParams::default()).unwrap();
+        let facts = core.produce_facts(&out);
+        // forest 至少 1 個 → produce_facts 至少 2 條(1 scenario + 1 summary)
+        if !out.scenario_forest.is_empty() {
+            assert!(facts.len() >= 2);
+            assert!(facts.iter().all(|f| f.source_core == "neely_core"));
+            assert!(facts.iter().all(|f| f.stock_id == "2330"));
+        }
     }
 
     #[test]
