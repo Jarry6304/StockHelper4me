@@ -149,7 +149,7 @@ def test_basic_flow():
     print(f"  [OK] 重複 upsert {n} 筆 (應為 0,因為 DO NOTHING)")
 
     print("\n" + "=" * 60)
-    print("Test 9: financial_statement 的 JSONB 欄位")
+    print("Test 9: financial_statement_legacy_v2 的 JSONB 欄位")
     print("=" * 60)
     fs_row = {
         "market": "TW",
@@ -163,7 +163,7 @@ def test_basic_flow():
         },
     }
     n = db.upsert(
-        "financial_statement",
+        "financial_statement_legacy_v2",
         [fs_row],
         primary_keys=["market", "stock_id", "date", "type"],
     )
