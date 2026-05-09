@@ -2732,90 +2732,115 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.28 M3 Cores 動工(PR-1 → PR-batch,2026-05-09 同 session 推到極限)**:
+> **🎯 v1.28 收尾(2026-05-09)**:M3 Cores 從 0 推到 22 cores 全 spec-comply
+> 落地。workspace 23 crate / **148 unit test 全綠 0 failed** / 22 cores 全部
+> inventory 註冊 + Params/Output/EventKind/warmup 全對齊 spec(audit 5/5 PASS)。
 >
-> 10 段 PR(neely 9 段 + chip CC1 + 19 cores batch)把 cores 全部 22 個落地:
-> 1 Wave(neely Stage 1-10 partial)+ 8 Indicator(P1)+ 5 Chip(P2)+
-> 3 Fundamental(P2)+ 5 Environment(P2)。每 core IndicatorCore/WaveCore
-> trait impl + inventory::submit! 註冊 + 1-2 unit test。
-> 加 alembic 三表(indicator_values / structural_snapshots / facts)+ 4 個
-> loaders(ohlcv / chip / fundamental / environment 接 Silver)+ Workflow toml
-> 範例 + tw_cores binary 接 PG dry-run / write。
-> **workspace 23 crate / 143 unit tests 全綠 0 failed / 22 cores 全部
-> inventory 註冊 / target/debug/tw_cores list-cores 列出 22 cores 完整 metadata**。
->
-> alembic head:`v1w2x3y4z5a6 → w2x3y4z5a6b7`(PR-7 落 indicator_values /
-> structural_snapshots / facts 三表;user 本機需 `alembic upgrade head`)。
+> alembic head:`v1w2x3y4z5a6 → w2x3y4z5a6b7`(三表已落,**user 本機需先跑
+> `alembic upgrade head`**)。`tw_cores list-cores` 印 22 cores 完整 metadata。
 >
 > ⚠️ m3Spec/ 仍只有 user 既有的 `chip_cores.md`,其他 cores spec(neely /
-> fundamental / environment / indicator)code 暫 ref `m2Spec/oldm2Spec/` r2,
-> 等 user 在 m3Spec/ 寫最新 spec 後 batch sync code ref + 校準 R4-R7/F/Z/T/W
-> 22 條 Deferred 規則細節。
+> fundamental / environment / indicator)code 暫 ref `m2Spec/oldm2Spec/` r2。
 
-### 阻塞性排序
+### 1. 立即可動工(無 blocker)
 
-**22 個 cores 框架已落地**,後續工作分兩條:
-- (A)規則 / spec 校準(等 user m3Spec/ 寫定最新 spec)
-- (B)Pipeline 進階(orchestrator / P0 Gate / 測試策略)
-
-> ⚠️ **V2 階段禁止做的事**(spec 已明文,避免後續 session 自作主張):
-> - **Indicator kernel 共用化**(`taiex_core` 與個股 Indicator Core 邏輯重複的抽出)
->   → cores_overview.md §十四 「P3 後考慮,V2 不規劃」。
->   2026-05-09 嘗試過抽出 `cores_shared/indicator_kernel`(commit 5abca8d),
->   user 退板「禁止耦合,重複程式碼可以接受」,revert(commit 6f05fb9)。
->   8 個 indicator cores **保持各自獨立** ema/sma/wma/wilder_atr/wilder_rsi
->   實作,符合 §四 零耦合原則。
-> - **跨指標訊號獨立 Core**(TTM Squeeze / `chip_concentration_core` 等)
->   → cores_overview.md §十一 / chip_cores.md §八「不在 Core 層整合」。
-
-集中 TODO 清單(後續一併討論 / 一併檢討測試):
-
-**A. 規則細節(等 m3Spec/ 寫最新 spec 後 batch 校準)**:
-- chip_cores §3-6 各 EventKind 具體閾值
-- fundamental / environment / indicator 全部規則細節
-- neely_core PR-3c R4-R7 + F/Z/T/W 22 條 Deferred 規則
-- neely_core PR-4b Diagonal Leading/Ending sub_kind 區分
-- neely_core PR-5b exhaustive compaction 真正窮舉合法 paths
-- neely_core PR-6b Power Rating 完整查表 + Fibonacci 接 monowave price
-
-**B. Silver schema 假設**(可能需 alembic 補欄):
-- `margin_daily_derived.margin_maintenance` 是否存在
-- `foreign_holding_derived.foreign_limit_pct` 是否要 stored
-- `holding_shares_per_derived.detail` JSONB schema 細節
-- `market_margin_maintenance_derived` 完整欄位
-- `fear_greed_index` 是否需要 `_derived` 表(目前直讀 Bronze,§6.2 已知例外)
-- `financial_statement_derived.detail` JSONB key 命名(英文 vs 中文)
-
-**C. Pipeline 進階**:
-- **PR-9 Workflow toml orchestrator dispatch**:解析 workflows/*.toml,
-  依 inventory CoreRegistry 動態 dispatch 多 cores(目前 tw_cores 只支援
-  單核 `run --stock-id ...`)
-- **ErasedWaveCore / ErasedIndicatorCore trait wrapper**:CoreRegistry 目前
-  只存 metadata,實際 dispatch 需 dyn-compatible trait 包一層(associated types
-  erase)
-- **indicator_values 表寫入**:目前 PR-7 只寫 `structural_snapshots` +
-  `facts`;P1 indicator cores 上線時需補 `indicator_values` 寫入路徑
-- **inventory 動態 dispatch with type erasure**:需設計 `Box<dyn ErasedCore>`
-  保存 `compute()` 簽章一致的 trait object
-
-**D. 測試策略(後續一併檢討)**:
-- Indicator golden test 對外部標準(TA-Lib / pandas-ta)的指標值比對
-- Integration test 走 PG real data(沙箱無 PG,留 user 本機)
-- Neely Core P0 Gate 五檔股票(0050 / 2330 / 3363 / 6547 / 1312)實測 +
-  校準 forest_max_size / compaction_timeout_secs / BeamSearchFallback.k /
-  REVERSAL_ATR_MULTIPLIER / STOCK_NEUTRAL_ATR_MULTIPLIER / BEAM_CAP_MULTIPLIER
-- 各 core 對 spec §6.1 「機械式 Fact」原則的符合性 review
-- 各 core「best-guess 閾值」對 user 預期行為的對齊(visual review by user)
-
-**user 本機驗證**:
+**1a. user 本機 smoke**(blocking,user 端):
 ```powershell
 alembic upgrade head                                     # → w2x3y4z5a6b7
 cd rust_compute && cargo build --release --workspace
-target/release/tw_cores list-cores                       # 22 cores
+cargo test --workspace                                   # 預期 148/0
+target/release/tw_cores list-cores                       # 預期 22 cores
 $env:DATABASE_URL = "postgresql://..."
 target/release/tw_cores run --stock-id 2330              # dry-run neely
-target/release/tw_cores run --stock-id 2330 --write      # 落 PG
+target/release/tw_cores run --stock-id 2330 --write      # 落 PG snapshots+facts
 ```
+
+**1b. PR-9 Workflow toml dispatch + ErasedCore trait wrapper**(估 ~1.5 天):
+- 解析 workflows/*.toml 動態 dispatch 多 cores
+- 設計 `ErasedCore` trait 包 IndicatorCore/WaveCore associated types
+  (CoreRegistry 目前只存 metadata,實際 dispatch 需 dyn-compatible)
+- 用 `Box<dyn ErasedCore>` 保存 compute() 簽章一致的 trait object
+- tw_cores 加 `run-workflow --workflow tw_stock_standard --stock-id 2330` 子命令
+
+**1c. indicator_values 表寫入路徑**(估 ~半天):
+- 目前 PR-7 `tw_cores.write_outputs` 只寫 `structural_snapshots` + `facts`
+- P1 indicator cores 上線時要補 `indicator_values` JSONB 寫入(每日數值)
+- 對齊 cores_overview §7.1 三類資料寫入分流
+
+**1d. RSI Failure Swing**(估 ~半天):
+- spec §4.6 四步全成立才產出(RSI 進超買 → 退出 → 折返但未再進 → 跌破前低)
+- 框架 `RsiEventKind::FailureSwing` 已存在,只需補 detect 邏輯
+
+### 2. 等 user m3Spec/ 寫最新 spec 後做(spec-blocked)
+
+**2a. neely_core 規則完整化**:
+- PR-3c:Stage 4 R4-R7 + F1-F2 + Z1-Z4 + T1-T10 + W1-W2 共 22 條 Deferred 規則
+- PR-4b:Diagonal Leading vs Ending sub_kind 區分
+- PR-5b:exhaustive compaction 真正窮舉合法 paths(目前 pass-through)
+- PR-6b:Power Rating 完整 Neely 書頁查表 + Fibonacci 接 monowave price
+
+**2b. Indicator/Chip/Fundamental/Environment 各規則閾值校準**:
+- 各 core 內 `// TODO` / `best-guess` 註解標的常數
+- `financial_statement_core.detail` JSONB key 命名(目前英文 best-guess)
+- ATR/Bollinger/OBV lookback 常數(1y / 6m / 20-day)
+- ma_core Dema/Tema/Hma 公式精確性
+- Divergence min bars(目前寫死 20,對齊 spec §3.6)
+
+### 3. P0 Gate(Neely 校準,需 user 本機 PG 跑)
+
+**3a. 五檔股票實測**(估 ~1 天 + 校準):
+- 0050 / 2330 / 3363 / 6547 / 1312
+- 校準常數寫入 `docs/benchmarks/`:
+  - `forest_max_size`(目前 1000)
+  - `compaction_timeout_secs`(目前 60)
+  - `BeamSearchFallback.k`(目前 100)
+  - `REVERSAL_ATR_MULTIPLIER`(目前 0.5)
+  - `STOCK_NEUTRAL_ATR_MULTIPLIER`(目前 1.0)
+  - `BEAM_CAP_MULTIPLIER`(目前 10)
+- 對齊 cores_overview §9.1「P0 完成後的 Gate」
+
+**3b. 測試策略**:
+- Indicator golden test 對 TA-Lib / pandas-ta 比對
+- Integration test 走 PG real data(沙箱無 PG,留 user 本機)
+- 各 core「best-guess 閾值」對 user 預期行為 visual review
+
+### 4. Silver schema 假設待 user 驗(可能需 alembic 補欄)
+
+| 假設 | 影響 core | 處理方式 |
+|---|---|---|
+| `margin_daily_derived.margin_maintenance` 是否存在 | margin_core | 不存在 → MaintenanceLow event 永遠不觸發 |
+| `foreign_holding_derived.foreign_limit_pct` stored col | foreign_holding_core | 目前 NULL placeholder,LimitNearAlert 不觸發 |
+| `holding_shares_per_derived.detail` JSONB schema | shareholder_core | 目前 best-guess key(small_holders_count 等) |
+| `market_margin_maintenance_derived` 完整欄位 | market_margin_core | 目前 ratio + total_*_balance 三欄 |
+| `fear_greed_index` 是否需 `_derived` 表 | fear_greed_core | 目前直讀 Bronze,§6.2 已登記架構例外 |
+| `financial_statement_derived.detail` JSONB key | financial_statement_core | 英文 key 假設(EPS/Revenue/GrossProfitMargin 等) |
+
+### 5. m2 收尾(R5/R6 觀察期)— 不阻塞 M3
+
+- **R5 觀察期 21~60 天**(2026-05-09 啟動,最早 2026-05-30 進 R6)
+  - Silver builder 持續每日 12/12 OK
+  - api_sync_progress.status='failed' = 0
+  - 3 張 `_legacy_v2` row count 與主名表 ±1%
+- **R6 DROP 3 張 `_legacy_v2`**(永久 DROP,需 backup 後執行)+ 5 個 v2.0
+  `_legacy` entry 從 collector.toml 移除
+
+### 6. nice-to-have(可平行)
+
+- shared/timeframe_resampler / data_ref / degree_taxonomy 等 utility crate
+  (cores_overview §四 列出但未做)
+- asyncio.gather 7a 平行優化(需 PostgresWriter connection pool;perf gain ~ms)
+- tw_cores `run-all --stock-id 2330`(對單股跑全部 22 cores 並寫 PG)
+
+### ⚠️ V2 階段禁止做(spec 已明文)
+
+- **Indicator kernel 共用化** → cores_overview §十四「P3 後考慮,V2 不規劃」。
+  2026-05-09 嘗試過抽出(commit 5abca8d),user 退板,revert(commit 6f05fb9)。
+  8 個 indicator cores 保持各自獨立 ema/sma/wma/wilder_atr/wilder_rsi 實作,
+  符合 §四 零耦合原則。
+- **跨指標訊號獨立 Core**(TTM Squeeze / `chip_concentration_core` 等)
+  → cores_overview §十一 / chip_cores §八「不在 Core 層整合」。
+- **`financial_statement_core` 拆分**(損益/資產負債/現金流獨立 Core)
+  → cores_overview §十四「V3 議題,V2 不規劃」。
 
 m2 收尾(可平行,**不阻塞 M3**):
 
