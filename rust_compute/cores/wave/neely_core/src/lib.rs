@@ -2,7 +2,7 @@
 //
 // 對齊 m2Spec/oldm2Spec/neely_core.md r2(2026-05-06)。
 //
-// 已實作(M3 PR-4 為止):
+// 已實作(M3 PR-5 為止):
 //   - struct / enum 合約定義(§五 §六 §八 §九 — Input / Params / Output / Scenario Forest)
 //   - WaveCore trait 實作 + warmup_periods(§16:Daily 500 / Weekly 250 / Monthly 120)
 //   - **Stage 1**:Monowave Detection(Pure Close + Wilder ATR-filtered reversal)
@@ -11,13 +11,14 @@
 //   - **Stage 4**:Validator framework + R1/R2/R3 完整實作(R4-R7 + F/Z/T/W 22 條 Deferred)
 //   - **Stage 5**:Classifier 基本邏輯(5wave + R3 pass → Impulse / R3 fail → Diagonal Leading;3wave → Zigzag Single)
 //   - **Stage 6**:Post-Constructive Validator skeleton(預設 pattern_complete = true)
-//   - **Stage 7**:Complexity Rule 篩選(差距 ≤ 1 級為 anchor,Simple/Intermediate/Complex 三層)
-//   - compute() 回 partial NeelyCoreOutput:scenario_forest 含 classify 後 + complexity 篩選後的 Scenario list,
-//     diagnostics 含 Stage 1-7 耗時
+//   - **Stage 7**:Complexity Rule 篩選(差距 ≤ 1 級為 anchor)
+//   - **Stage 8**:Compaction 簡化版 pass-through + Forest 上限保護(BeamSearchFallback by power_rating)
+//   - compute() 回 NeelyCoreOutput,scenario_forest 內含實際 scenario,diagnostics 含
+//     Stage 1-8 耗時 + overflow_triggered / compaction_timeout / compaction_paths 旗標
 //
 // 留後續 PR:
 //   - Stage 4-7 完整規則細節(留 PR-3c / PR-4b,需 user 在 m3Spec/ 寫最新 neely_core spec 後 batch 補)
-//   - Stage 8:Compaction(exhaustive + beam_search fallback)+ Forest 上限保護(留 PR-5)
+//   - Stage 8 進階:exhaustive 窮舉合法 compression paths(需 sub-wave 嵌套結構,留 PR-5b)
 //   - Stage 9-10:Missing Wave / Emulation / Power Rating / Fibonacci / Triggers + facts(留 PR-6)
 //   - inventory 註冊機制(`CoreRegistration`)+ Workflow toml(留 PR-8)
 //   - P0 Gate 五檔股票實測 + 校準(留 PR-Gate)
@@ -78,9 +79,9 @@ impl WaveCore for NeelyCore {
     }
 
     fn version(&self) -> &'static str {
-        // 隨 spec / 演算法版本變動。M3 PR-4 partial(Stage 1-7 落地)階段 0.5.0,
+        // 隨 spec / 演算法版本變動。M3 PR-5 partial(Stage 1-8 落地)階段 0.6.0,
         // 等 P0 Gate 五檔實測通過再 bump 到 1.0.0(spec §17.1 範例為 "1.0.0")。
-        "0.5.0"
+        "0.6.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -165,10 +166,19 @@ impl WaveCore for NeelyCore {
             stage_7_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 8-10 留後續 PR(本階段 scenarios 直接成 forest,Compaction 簡化)
+        // ── Stage 8:Compaction(M3 PR-5,簡化 pass-through + Forest 上限保護)
+        let stage_8_start = Instant::now();
+        let compaction_result = compaction::compact(scenarios, cfg);
+        stage_elapsed.insert(
+            "stage_8_compaction".to_string(),
+            stage_8_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 9-10 留後續 PR(facts / Power Rating / Fibonacci / Triggers)
 
         let monowave_series: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
-        let forest_size = scenarios.len();
+        let forest = compaction_result.forest;
+        let forest_size = forest.len();
         let elapsed_ms = total_start.elapsed().as_millis() as u64;
         let warmup = self.warmup_periods(&params);
 
@@ -187,8 +197,7 @@ impl WaveCore for NeelyCore {
             stock_id: input.stock_id.clone(),
             timeframe: input.timeframe,
             data_range,
-            // Stage 8 簡化版(留 PR-5):每個通過 Stage 5-7 的 scenario 直接進 forest
-            scenario_forest: scenarios,
+            scenario_forest: forest,
             monowave_series,
             diagnostics: NeelyDiagnostics {
                 monowave_count: classified.len(),
@@ -197,6 +206,9 @@ impl WaveCore for NeelyCore {
                 validator_reject_count,
                 rejections: all_rejections,
                 forest_size,
+                compaction_paths: compaction_result.compaction_paths,
+                overflow_triggered: compaction_result.overflow_triggered,
+                compaction_timeout: compaction_result.timeout_triggered,
                 stage_elapsed_ms: stage_elapsed,
                 elapsed_ms,
                 ..Default::default()
@@ -255,7 +267,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.5.0");
+        assert_eq!(core.version(), "0.6.0");
     }
 
     // -------------------------------------------------------------
@@ -302,6 +314,7 @@ mod tests {
             "stage_5_classifier",
             "stage_6_post_validator",
             "stage_7_complexity",
+            "stage_8_compaction",
         ] {
             assert!(
                 out.diagnostics.stage_elapsed_ms.contains_key(*stage_key),
@@ -309,6 +322,9 @@ mod tests {
                 stage_key
             );
         }
+        // Compaction 旗標
+        assert!(!out.diagnostics.overflow_triggered, "空輸入不應 overflow");
+        assert!(!out.diagnostics.compaction_timeout);
     }
 
     #[test]

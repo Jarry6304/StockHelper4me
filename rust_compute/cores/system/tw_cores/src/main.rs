@@ -41,14 +41,14 @@ async fn main() -> Result<()> {
 
     let _cli = Cli::parse();
 
-    println!("== M3 cores binary(skeleton + Stage 1-7 partial)==");
+    println!("== M3 cores binary(skeleton + Stage 1-8 partial)==");
     println!("workspace = rust_compute/(virtual root)");
     println!();
     println!("Linked cores:");
 
     let neely = NeelyCore::new();
     println!(
-        "  - {} v{} (Wave Core, P0, Stage 1-7 partial impl)",
+        "  - {} v{} (Wave Core, P0, Stage 1-8 partial impl)",
         neely.name(),
         neely.version()
     );
@@ -76,7 +76,10 @@ async fn main() -> Result<()> {
         "Stage 7: Complexity Rule(差距 ≤ 1 級篩選)                    ✅"
     );
     println!(
-        "Stage 8-10: Compaction / Power Rating / Fibonacci / Forest    ⏳ 後續 PR"
+        "Stage 8: Compaction(簡化 pass-through + Forest 上限保護)     🟡"
+    );
+    println!(
+        "Stage 9-10: Missing Wave / Power Rating / Fibonacci / facts   ⏳ 後續 PR"
     );
     println!();
     println!(
