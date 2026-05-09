@@ -4,8 +4,10 @@ members = [
     "silver_s1_adjustment",
     "cores_shared/fact_schema",
     "cores_shared/ohlcv_loader",
+    "cores_shared/chip_loader",
     "cores_shared/core_registry",
     "cores/wave/neely_core",
+    "cores/chip/day_trading_core",
     "cores/system/tw_cores",
 ]
 

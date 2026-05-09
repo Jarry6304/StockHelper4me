@@ -9,10 +9,12 @@ name = "tw_cores"
 path = "src/main.rs"
 
 [dependencies]
-fact_schema    = { path = "../../../cores_shared/fact_schema" }
-ohlcv_loader   = { path = "../../../cores_shared/ohlcv_loader" }
-core_registry  = { path = "../../../cores_shared/core_registry" }
-neely_core     = { path = "../../wave/neely_core" }
+fact_schema      = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader     = { path = "../../../cores_shared/ohlcv_loader" }
+chip_loader      = { path = "../../../cores_shared/chip_loader" }
+core_registry    = { path = "../../../cores_shared/core_registry" }
+neely_core       = { path = "../../wave/neely_core" }
+day_trading_core = { path = "../../chip/day_trading_core" }
 clap          = { workspace = true }
 anyhow        = { workspace = true }
 tokio         = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+name        = "day_trading_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Day Trading Core(P2,當沖統計 / 比率 / 力道,對齊 m3Spec/chip_cores.md §七)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fact_schema    = { path = "../../../cores_shared/fact_schema" }
+chip_loader    = { path = "../../../cores_shared/chip_loader" }
+core_registry  = { path = "../../../cores_shared/core_registry" }
+anyhow         = { workspace = true }
+chrono         = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+inventory      = "0.3"

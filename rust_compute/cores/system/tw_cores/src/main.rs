@@ -87,8 +87,9 @@ fn list_cores() -> Result<()> {
         );
     }
 
-    let neely = NeelyCore::new();
-    let _ = neely.name(); // 確保 link 進來(否則 inventory::submit! 被 dead-code 剃掉)
+    // 確保 dep crate 的 inventory::submit! 不被 dead-code 剃掉
+    let _ = NeelyCore::new();
+    let _ = day_trading_core::DayTradingCore::new();
 
     println!();
     println!("Stage 1: Pure Close + Wilder ATR-filtered monowave detection ✅");
