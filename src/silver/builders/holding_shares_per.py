@@ -1,13 +1,13 @@
 """
 silver/builders/holding_shares_per.py
 =====================================
-holding_shares_per_tw (Bronze) → holding_shares_per_derived (Silver)。
+holding_shares_per (Bronze) → holding_shares_per_derived (Silver)。
 
 Bronze 是 raw 1 row per (stock × date × HoldingSharesLevel),Silver pack 成
 1 row per (stock × date) + detail JSONB packing 各 level 的 {people, percent, unit}。
 
 對應 src/aggregators.py:aggregate_holding_shares 的正向 pack 邏輯;Bronze 已 PR #18.5
-落地(smoke test 3 stocks 通過)。
+落地(smoke test 3 stocks 通過),PR #R3(alembic t9u0v1w2x3y4)後升格去 `_tw` 後綴。
 
 Bronze schema:
   PK (market, stock_id, date, holding_shares_level)
@@ -33,7 +33,7 @@ logger = logging.getLogger("collector.silver.builders.holding_shares_per")
 
 NAME          = "holding_shares_per"
 SILVER_TABLE  = "holding_shares_per_derived"
-BRONZE_TABLES = ["holding_shares_per_tw"]
+BRONZE_TABLES = ["holding_shares_per"]
 
 
 def _pack(bronze_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -68,7 +68,7 @@ def run(
     start = time.monotonic()
 
     bronze = fetch_bronze(
-        db, "holding_shares_per_tw",
+        db, "holding_shares_per",
         stock_ids=stock_ids,
         order_by="market, stock_id, date, holding_shares_level",
     )

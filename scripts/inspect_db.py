@@ -41,8 +41,8 @@ TABLE_GROUPS: dict[str, list[str]] = {
         # PR #18 reverse-pivot 5 張
         "institutional_investors_tw", "margin_purchase_short_sale_tw",
         "foreign_investor_share_tw", "day_trading_tw", "valuation_per_tw",
-        # PR #18.5 dual-write 3 張
-        "monthly_revenue_tw", "financial_statement_tw", "holding_shares_per_tw",
+        # PR #18.5 dual-write 3 張(PR #R3 後升格去 _tw 後綴)
+        "monthly_revenue", "financial_statement", "holding_shares_per",
         # 其他 v3.2 Bronze
         "securities_lending_tw", "business_indicator_tw",
         # Phase 6

@@ -363,7 +363,7 @@ CREATE TABLE IF NOT EXISTS foreign_holding (
 
 
 -- 股權分散表(v2.0 legacy;PR #R2 rename `_legacy_v2` 進入觀察期,PR #R6 後 DROP)
--- 主路徑改走 holding_shares_per_tw(PR #18.5);本表保留 21~60 天作 verifier 對照
+-- 主路徑改走 holding_shares_per(PR #R3 後升格,PR #18.5 原 _tw);本表保留 21~60 天作 verifier 對照
 CREATE TABLE IF NOT EXISTS holding_shares_per_legacy_v2 (
     market          TEXT NOT NULL,
     stock_id        TEXT NOT NULL,
@@ -413,7 +413,7 @@ CREATE TABLE IF NOT EXISTS index_weight_daily (
 
 
 -- 月營收(v2.0 legacy;PR #R2 rename `_legacy_v2`,PR #R6 後 DROP)
--- 主路徑改走 monthly_revenue_tw(PR #18.5)
+-- 主路徑改走 monthly_revenue(PR #R3 後升格,PR #18.5 原 _tw)
 CREATE TABLE IF NOT EXISTS monthly_revenue_legacy_v2 (
     market          TEXT NOT NULL,
     stock_id        TEXT NOT NULL,
@@ -428,7 +428,7 @@ CREATE TABLE IF NOT EXISTS monthly_revenue_legacy_v2 (
 
 
 -- 財務報表(損益 / 資產負債 / 現金流共用;v2.0 legacy)
--- PR #R2 rename `_legacy_v2`,PR #R6 後 DROP;主路徑改走 financial_statement_tw(PR #18.5)
+-- PR #R2 rename `_legacy_v2`,PR #R6 後 DROP;主路徑改走 financial_statement(PR #R3 後升格,PR #18.5 原 _tw)
 CREATE TABLE IF NOT EXISTS financial_statement_legacy_v2 (
     market          TEXT NOT NULL,
     stock_id        TEXT NOT NULL,
@@ -931,11 +931,13 @@ CREATE INDEX IF NOT EXISTS idx_price_monthly_fwd_dirty
 -- (~30-40h calendar-time)。Coexist with v2.0 表(已於 PR #R2 rename
 -- holding_shares_per_legacy_v2 / financial_statement_legacy_v2 /
 -- monthly_revenue_legacy_v2);PR #R6 後 DROP _legacy_v2。
--- 對應 alembic l1m2n3o4p5q6(本表)+ s8t9u0v1w2x3(legacy_v2 rename)+ collector.toml dual-write entries。
+-- 對應 alembic l1m2n3o4p5q6(原 _tw)+ s8t9u0v1w2x3(legacy_v2 rename)+
+--      t9u0v1w2x3y4(PR #R3 升格去 _tw 後綴 → 主名)+ collector.toml dual-write entries。
 
 -- 股權分散表(每 level 1 row;FinMind raw)
 -- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補回(spec §3.5 明文要求)
-CREATE TABLE IF NOT EXISTS holding_shares_per_tw (
+-- PR #R3(alembic t9u0v1w2x3y4)去 `_tw` 後綴升格成主名
+CREATE TABLE IF NOT EXISTS holding_shares_per (
     market               TEXT NOT NULL,
     stock_id             TEXT NOT NULL,
     date                 DATE NOT NULL,
@@ -946,13 +948,14 @@ CREATE TABLE IF NOT EXISTS holding_shares_per_tw (
     source               TEXT NOT NULL DEFAULT 'finmind',
     PRIMARY KEY (market, stock_id, date, holding_shares_level)
 );
-CREATE INDEX IF NOT EXISTS idx_holding_shares_per_tw_stock_date_desc
-    ON holding_shares_per_tw (stock_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_holding_shares_per_stock_date_desc
+    ON holding_shares_per (stock_id, date DESC);
 
 
 -- 財報三表合一(event_type ∈ income/balance/cashflow,reuse pae convention)
 -- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補上(spec §3.6 表格漏寫,依 Bronze 一致原則補回)
-CREATE TABLE IF NOT EXISTS financial_statement_tw (
+-- PR #R3(alembic t9u0v1w2x3y4)去 `_tw` 後綴升格成主名
+CREATE TABLE IF NOT EXISTS financial_statement (
     market      TEXT NOT NULL,
     stock_id    TEXT NOT NULL,
     date        DATE NOT NULL,
@@ -964,15 +967,16 @@ CREATE TABLE IF NOT EXISTS financial_statement_tw (
     PRIMARY KEY (market, stock_id, date, event_type, origin_name),
     CONSTRAINT chk_fs_tw_event_type CHECK (event_type IN ('income', 'balance', 'cashflow'))
 );
-CREATE INDEX IF NOT EXISTS idx_financial_statement_tw_stock_date_desc
-    ON financial_statement_tw (stock_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_financial_statement_stock_date_desc
+    ON financial_statement (stock_id, date DESC);
 
 
 -- 月營收(raw FinMind 欄名;Silver builder 才 rename revenue_year → revenue_yoy 等)
 -- create_time 用 TEXT(per PR #18.5 hotfix m2n3o4p5q6r7):FinMind 對某些 row 回 ""
 -- 不是 NULL,Bronze raw 保留原始字串,Silver builder cast 用 NULLIF(...)::TIMESTAMPTZ
 -- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補上(spec §3.6 表格漏寫,依 Bronze 一致原則補回)
-CREATE TABLE IF NOT EXISTS monthly_revenue_tw (
+-- PR #R3(alembic t9u0v1w2x3y4)去 `_tw` 後綴升格成主名
+CREATE TABLE IF NOT EXISTS monthly_revenue (
     market         TEXT NOT NULL,
     stock_id       TEXT NOT NULL,
     date           DATE NOT NULL,
@@ -984,8 +988,8 @@ CREATE TABLE IF NOT EXISTS monthly_revenue_tw (
     source         TEXT NOT NULL DEFAULT 'finmind',
     PRIMARY KEY (market, stock_id, date)
 );
-CREATE INDEX IF NOT EXISTS idx_monthly_revenue_tw_stock_date_desc
-    ON monthly_revenue_tw (stock_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_monthly_revenue_stock_date_desc
+    ON monthly_revenue (stock_id, date DESC);
 
 
 -- =============================================================================
@@ -1106,7 +1110,7 @@ CREATE TRIGGER mark_foreign_holding_derived_dirty
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('foreign_holding_derived');
 
 CREATE TRIGGER mark_holding_shares_per_derived_dirty
-    AFTER INSERT OR UPDATE ON holding_shares_per_tw
+    AFTER INSERT OR UPDATE ON holding_shares_per
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('holding_shares_per_derived');
 
 CREATE TRIGGER mark_day_trading_derived_dirty
@@ -1118,7 +1122,7 @@ CREATE TRIGGER mark_valuation_derived_dirty
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('valuation_daily_derived');
 
 CREATE TRIGGER mark_monthly_revenue_derived_dirty
-    AFTER INSERT OR UPDATE ON monthly_revenue_tw
+    AFTER INSERT OR UPDATE ON monthly_revenue
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('monthly_revenue_derived');
 
 CREATE TRIGGER mark_taiex_index_derived_dirty
@@ -1131,7 +1135,7 @@ CREATE TRIGGER mark_us_market_index_derived_dirty
 
 -- 5 個 special trigger
 CREATE TRIGGER mark_financial_stmt_derived_dirty
-    AFTER INSERT OR UPDATE ON financial_statement_tw
+    AFTER INSERT OR UPDATE ON financial_statement
     FOR EACH ROW EXECUTE FUNCTION trg_mark_financial_stmt_dirty();
 
 CREATE TRIGGER mark_exchange_rate_derived_dirty

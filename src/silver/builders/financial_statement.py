@@ -1,7 +1,7 @@
 """
 silver/builders/financial_statement.py
 ======================================
-financial_statement_tw (Bronze) → financial_statement_derived (Silver)。
+financial_statement (Bronze) → financial_statement_derived (Silver)。
 
 對應 src/aggregators.py:aggregate_financial 的正向 pack:Bronze 1 row per
 (stock × date × event_type × origin_name)→ Silver 1 row per (stock × date × type)
@@ -12,7 +12,7 @@ with detail JSONB packing {origin_name: value, ...}。
   Bronze.value × N rows → Silver.detail JSONB 集合
 
 Bronze 已 PR #18.5 落地(smoke test 3 stocks 通過,3 個財報 dataset 統一進
-financial_statement_tw 用 event_type 區分)。
+financial_statement 用 event_type 區分);PR #R3(alembic t9u0v1w2x3y4)後升格去 `_tw` 後綴。
 
 7b 階段(orchestrator 動工後)需 monthly_revenue_derived 對齊財報季度日期映射 —
 本 PR #19c-2 階段不做對齊邏輯,純 Bronze → Silver pack;對齊邏輯留 PR #19c-3
@@ -33,7 +33,7 @@ logger = logging.getLogger("collector.silver.builders.financial_statement")
 
 NAME          = "financial_statement"
 SILVER_TABLE  = "financial_statement_derived"
-BRONZE_TABLES = ["financial_statement_tw"]
+BRONZE_TABLES = ["financial_statement"]
 
 
 def _pack(bronze_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -72,7 +72,7 @@ def run(
     start = time.monotonic()
 
     bronze = fetch_bronze(
-        db, "financial_statement_tw",
+        db, "financial_statement",
         stock_ids=stock_ids,
         order_by="market, stock_id, date, event_type, origin_name",
     )
