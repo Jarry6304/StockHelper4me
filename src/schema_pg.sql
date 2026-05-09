@@ -362,8 +362,9 @@ CREATE TABLE IF NOT EXISTS foreign_holding (
 );
 
 
--- 股權分散表
-CREATE TABLE IF NOT EXISTS holding_shares_per (
+-- 股權分散表(v2.0 legacy;PR #R2 rename `_legacy_v2` 進入觀察期,PR #R6 後 DROP)
+-- 主路徑改走 holding_shares_per_tw(PR #18.5);本表保留 21~60 天作 verifier 對照
+CREATE TABLE IF NOT EXISTS holding_shares_per_legacy_v2 (
     market          TEXT NOT NULL,
     stock_id        TEXT NOT NULL,
     date            DATE NOT NULL,
@@ -411,8 +412,9 @@ CREATE TABLE IF NOT EXISTS index_weight_daily (
 );
 
 
--- 月營收
-CREATE TABLE IF NOT EXISTS monthly_revenue (
+-- 月營收(v2.0 legacy;PR #R2 rename `_legacy_v2`,PR #R6 後 DROP)
+-- 主路徑改走 monthly_revenue_tw(PR #18.5)
+CREATE TABLE IF NOT EXISTS monthly_revenue_legacy_v2 (
     market          TEXT NOT NULL,
     stock_id        TEXT NOT NULL,
     date            DATE NOT NULL,         -- FinMind 用當月 1 號代表該月
@@ -425,8 +427,9 @@ CREATE TABLE IF NOT EXISTS monthly_revenue (
 );
 
 
--- 財務報表(損益 / 資產負債 / 現金流共用)
-CREATE TABLE IF NOT EXISTS financial_statement (
+-- 財務報表(損益 / 資產負債 / 現金流共用;v2.0 legacy)
+-- PR #R2 rename `_legacy_v2`,PR #R6 後 DROP;主路徑改走 financial_statement_tw(PR #18.5)
+CREATE TABLE IF NOT EXISTS financial_statement_legacy_v2 (
     market          TEXT NOT NULL,
     stock_id        TEXT NOT NULL,
     date            DATE NOT NULL,         -- 會計期間結束日
@@ -437,13 +440,13 @@ CREATE TABLE IF NOT EXISTS financial_statement (
     CONSTRAINT chk_fin_type CHECK (type IN ('income', 'balance', 'cashflow'))
 );
 
--- 利於以 type 過濾
-CREATE INDEX IF NOT EXISTS idx_financial_type_date
-    ON financial_statement (type, date DESC);
+-- 利於以 type 過濾(PR #R2 rename idx_financial_type_date → _legacy)
+CREATE INDEX IF NOT EXISTS idx_financial_legacy_type_date
+    ON financial_statement_legacy_v2 (type, date DESC);
 
--- 利於 detail JSON 查特定科目(GIN index for JSONB)
-CREATE INDEX IF NOT EXISTS idx_financial_detail_gin
-    ON financial_statement USING GIN (detail jsonb_path_ops);
+-- 利於 detail JSON 查特定科目(GIN index for JSONB;PR #R2 rename _legacy)
+CREATE INDEX IF NOT EXISTS idx_financial_legacy_detail_gin
+    ON financial_statement_legacy_v2 USING GIN (detail jsonb_path_ops);
 
 
 -- =============================================================================
@@ -925,9 +928,10 @@ CREATE INDEX IF NOT EXISTS idx_price_monthly_fwd_dirty
 -- =============================================================================
 -- 因 detail JSONB unpack 不可逆(level taxonomy 未知 / 中→英 origin_name 對應丟失 /
 -- FinMind 月營收 1 row/股/月),3 張表走 Option A 從 FinMind 全量重抓 raw bytes
--- (~30-40h calendar-time)。Coexist with v2.0 表(holding_shares_per /
--- financial_statement / monthly_revenue);_legacy_v2 rename + DROP 留 T0+21 / T0+60。
--- 對應 alembic l1m2n3o4p5q6 + collector.toml dual-write entries。
+-- (~30-40h calendar-time)。Coexist with v2.0 表(已於 PR #R2 rename
+-- holding_shares_per_legacy_v2 / financial_statement_legacy_v2 /
+-- monthly_revenue_legacy_v2);PR #R6 後 DROP _legacy_v2。
+-- 對應 alembic l1m2n3o4p5q6(本表)+ s8t9u0v1w2x3(legacy_v2 rename)+ collector.toml dual-write entries。
 
 -- 股權分散表(每 level 1 row;FinMind raw)
 -- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補回(spec §3.5 明文要求)

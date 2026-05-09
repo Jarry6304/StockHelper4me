@@ -60,11 +60,13 @@ TABLE_GROUPS: dict[str, list[str]] = {
         "exchange_rate_derived", "market_margin_maintenance_derived",
         "business_indicator_derived",
     ],
-    "Legacy v2.0(待 T0+21 後 rename _legacy_v2)": [
+    "Legacy v2.0(PR #R2 已 rename;PR #R6 後 DROP)": [
         "stock_info", "trading_calendar",
         "institutional_daily", "margin_daily", "foreign_holding",
-        "day_trading", "valuation_daily", "monthly_revenue",
-        "financial_statement", "holding_shares_per",
+        "day_trading", "valuation_daily", "index_weight_daily",
+        "monthly_revenue_legacy_v2",          # PR #R2 rename
+        "financial_statement_legacy_v2",      # PR #R2 rename
+        "holding_shares_per_legacy_v2",       # PR #R2 rename
     ],
     "System": [
         "api_sync_progress", "stock_sync_status",

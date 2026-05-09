@@ -338,14 +338,14 @@ notes        = "外資持股"
 name         = "holding_shares_per"
 dataset      = "TaiwanStockHoldingSharesPer"
 param_mode   = "per_stock"
-target_table = "holding_shares_per"
+target_table = "holding_shares_per_legacy_v2"
 phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 365
 field_rename = {}
 aggregation  = "pack_holding_shares"
-notes        = "股權分散表；每日多筆級距 pack → 1 筆 detail JSON"
+notes        = "股權分散表(v2.0 dual-write 進入 _legacy_v2 觀察期;主路徑改走 holding_shares_per_v3 entry)"
 
 [[api]]
 name         = "valuation_daily"
@@ -389,20 +389,20 @@ notes        = "指數成分權重"
 name         = "monthly_revenue"
 dataset      = "TaiwanStockMonthRevenue"
 param_mode   = "per_stock"
-target_table = "monthly_revenue"
+target_table = "monthly_revenue_legacy_v2"
 phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 0
 field_rename = {"revenue_month" = "revenue_mom", "revenue_year" = "revenue_yoy", "country" = "_country", "create_time" = "_create_time"}
 detail_fields = ["_country", "_create_time"]
-notes        = "月營收"
+notes        = "月營收(v2.0 dual-write 進入 _legacy_v2 觀察期;主路徑改走 monthly_revenue_v3 entry)"
 
 [[api]]
 name         = "financial_income"
 dataset      = "TaiwanStockFinancialStatements"
 param_mode   = "per_stock"
-target_table = "financial_statement"
+target_table = "financial_statement_legacy_v2"
 phase        = 5
 enabled      = true
 is_backer    = true
@@ -410,13 +410,13 @@ segment_days = 0
 field_rename = {}
 aggregation  = "pack_financial"
 stmt_type    = "income"
-notes        = "損益表（多筆科目 pack → 1 筆 detail JSON）"
+notes        = "損益表(v2.0 dual-write 進入 _legacy_v2 觀察期;主路徑改走 financial_income_v3 entry)"
 
 [[api]]
 name         = "financial_balance"
 dataset      = "TaiwanStockBalanceSheet"
 param_mode   = "per_stock"
-target_table = "financial_statement"
+target_table = "financial_statement_legacy_v2"
 phase        = 5
 enabled      = true
 is_backer    = true
@@ -424,13 +424,13 @@ segment_days = 0
 field_rename = {}
 aggregation  = "pack_financial"
 stmt_type    = "balance"
-notes        = "資產負債表"
+notes        = "資產負債表(v2.0 dual-write 進入 _legacy_v2 觀察期;主路徑改走 financial_balance_v3 entry)"
 
 [[api]]
 name         = "financial_cashflow"
 dataset      = "TaiwanStockCashFlowsStatement"
 param_mode   = "per_stock"
-target_table = "financial_statement"
+target_table = "financial_statement_legacy_v2"
 phase        = 5
 enabled      = true
 is_backer    = true
@@ -438,7 +438,7 @@ segment_days = 0
 field_rename = {}
 aggregation  = "pack_financial"
 stmt_type    = "cashflow"
-notes        = "現金流量表"
+notes        = "現金流量表(v2.0 dual-write 進入 _legacy_v2 觀察期;主路徑改走 financial_cashflow_v3 entry)"
 
 
 # =============================================================================

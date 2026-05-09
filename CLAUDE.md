@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-fXhK2`，alembic head `r7s8t9u0v1w2_pr_r1_add_source_to_3_tw`（2026-05-09，PR #R1 補 source 欄至 3 張 _tw Bronze）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-fXhK2`，alembic head `s8t9u0v1w2x3_pr_r2_rename_v2_legacy_3_tables`（2026-05-09，PR #R2 v2.0 舊 3 表 rename `_legacy_v2`）。
 
 ---
 
@@ -168,7 +168,103 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ⏳(m2 大重構 R1:source 欄補回 3 張 _tw,2026-05-09)`。m2 大重構 plan 在 PR #24,R1~R6 切片動工中。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅(m2 大重構 R1:source 欄補回 3 張 _tw) → #R2 ⏳(R2:v2.0 舊 3 表 rename _legacy_v2)`。m2 大重構 plan 在 PR #24,R1~R6 切片動工中。
+
+---
+
+## v1.23 — PR #R2 m2 大重構:v2.0 舊 3 表 rename `_legacy_v2`(2026-05-09)
+
+接 R1 落地後動 R2(plan §四)。3 張 v2.0 舊 Bronze 表 rename `_legacy_v2`
+進入 PR #R5 觀察期(21~60 天),PR #R6 後永久 DROP。
+
+### 範圍
+
+| 舊名 | 新名 |
+|---|---|
+| `holding_shares_per` | `holding_shares_per_legacy_v2` |
+| `financial_statement` | `financial_statement_legacy_v2` |
+| `monthly_revenue` | `monthly_revenue_legacy_v2` |
+
+連帶 rename `financial_statement` 的 2 個 explicit index:
+- `idx_financial_type_date` → `idx_financial_legacy_type_date`
+- `idx_financial_detail_gin` → `idx_financial_legacy_detail_gin`
+
+(holding_shares_per / monthly_revenue 無 explicit index;PK 由 PG 自動跟著表 rename。)
+
+### alembic `s8t9u0v1w2x3_pr_r2_rename_v2_legacy_3_tables`
+
+idempotent 設計(`DO $$ ... IF EXISTS ... THEN ALTER TABLE ... RENAME ... END $$`):
+- 既有 DB(舊名)→ rename 走起來
+- fresh DB(schema_pg.sql 已是 _legacy_v2)→ no-op pass through
+
+下面條件:`IF EXISTS old AND NOT EXISTS new`,**只做安全 rename,不會誤踩已 rename 的表**。
+
+### collector.toml dual-write 5 entries 同步
+
+5 個 v2.0 entries 的 target_table 改 `_legacy_v2`(維持 dual-write 行為,只是寫到 legacy 表):
+
+| entry | target_table |
+|---|---|
+| `holding_shares_per` | `holding_shares_per_legacy_v2` |
+| `monthly_revenue` | `monthly_revenue_legacy_v2` |
+| `financial_income` | `financial_statement_legacy_v2` |
+| `financial_balance` | `financial_statement_legacy_v2` |
+| `financial_cashflow` | `financial_statement_legacy_v2` |
+
+5 個 PR #18.5 v3 entries(`*_v3`)不動,主路徑仍寫 `*_tw`。
+
+### 配套改動
+
+- `src/schema_pg.sql`:3 個 CREATE TABLE 改名 `_legacy_v2` + 2 個 INDEX rename + comment 標 PR #R2/#R6
+- `scripts/check_all_tables.py`:Phase 5 區段表名對齊 `_legacy_v2`
+- `scripts/inspect_db.py`:Legacy v2.0 group label + 表名同步
+- `scripts/test_db.py`:Test 9 用 `financial_statement_legacy_v2`
+- 0 Silver builder 改動(builders 讀 `_tw` 不讀 v2.0 legacy)
+- 0 trigger 改動(trigger 都是 ON `_tw` Bronze,不在 v2.0 legacy 上)
+
+### user 本機驗證流程
+
+```powershell
+git pull
+alembic upgrade head                                    # → s8t9u0v1w2x3
+
+# 3 張 _legacy_v2 表存在 + 既有資料完整
+psql $env:DATABASE_URL -c "
+  SELECT 'holding_shares_per_legacy_v2'  AS t, COUNT(*) FROM holding_shares_per_legacy_v2
+  UNION ALL SELECT 'financial_statement_legacy_v2', COUNT(*) FROM financial_statement_legacy_v2
+  UNION ALL SELECT 'monthly_revenue_legacy_v2',     COUNT(*) FROM monthly_revenue_legacy_v2
+"
+
+# 舊名應全部消失
+psql $env:DATABASE_URL -c "SELECT 1 FROM holding_shares_per LIMIT 1"   # ERROR: relation does not exist
+psql $env:DATABASE_URL -c "SELECT 1 FROM financial_statement LIMIT 1"  # 同
+psql $env:DATABASE_URL -c "SELECT 1 FROM monthly_revenue LIMIT 1"      # 同
+
+# 跑 incremental backfill 驗 dual-write 仍正常寫入新名
+python src/main.py validate
+python src/main.py incremental --phases 5 --stocks 2330
+psql $env:DATABASE_URL -c "
+  SELECT MAX(date) FROM holding_shares_per_legacy_v2 WHERE stock_id='2330'
+"
+
+# rollback smoke
+alembic downgrade -1 && alembic upgrade head
+```
+
+### 風險
+
+🟡 中:
+- collector.toml v2.0 entries 必須跟 alembic rename 同步,否則 dual-write 會 INSERT 進不存在的舊名 → upsert 炸
+- 已驗:5 v2.0 entries 全部改 `_legacy_v2`(grep 確認)
+- Silver pipeline 不受影響(讀 `_tw` 不讀 legacy)
+- Rollback:downgrade rename 反向
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`s8t9u0v1w2x3`(待 user 本機 `alembic upgrade head` 落地)
+- PR #R2:本 PR(待 user verify)
+- 下個 PR:**#R3** — 3 張 `_tw` Bronze 升格 rename(去 `_tw` 後綴成主名),
+  trigger / collector.toml v3 entries / Silver builder BRONZE_TABLES 同步遷移
 
 ---
 
