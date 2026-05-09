@@ -272,19 +272,56 @@ class PhaseExecutor:
                   Rust binary 端目前未消費 mode（process_stock 永遠全段重算），
                   但保留參數對齊 CLI 語意，避免 toml execution.mode 與 CLI 命令錯位。
 
+        v1.26 起加入「incremental 模式 dirty queue 偵測」優化:
+          - backfill: 一律傳完整 self._stock_list 給 Rust(全市場重算)
+          - incremental: 先查 price_daily_fwd.is_dirty=TRUE 的 distinct stock_id,
+            只對 dirty stocks 派工;0 dirty → skip Rust dispatch 完整省 ~6 分鐘
+            (1700+ stocks × 200ms/檔 ~= 6 分鐘的 rust pricing latency)
+          - 對齊 silver/orchestrator._run_7c 的同款 dirty queue pattern
+
         註：Rust process_stock 永遠全量重算（後復權 multiplier 從尾端倒推，新除權息
             事件會回頭改全段歷史值，partial 邏輯上是錯的；詳見 main.rs 的 docstring）。
-            mode 參數目前不影響 Rust 行為，但保留供未來「Python 偵測除權息變化後決定
-            要不要叫 Rust」的優化空間。
+            mode 參數目前不影響 Rust 內部行為,但 Python 端 mode=incremental 會走
+            dirty queue filter,只送 dirty stocks 給 Rust。
         """
         if self.rust_runner is None:
             logger.warning("[Phase 4] rust_runner 未設定，跳過 Phase 4")
             return
 
+        if mode == "incremental":
+            dirty_stocks = self._fetch_dirty_fwd_stocks()
+            if not dirty_stocks:
+                logger.info(
+                    "[Phase 4] dirty queue 為空(無新除權息事件),"
+                    "skip Rust dispatch"
+                )
+                return
+            logger.info(
+                f"[Phase 4] Started(dirty queue pull)dirty_stocks={len(dirty_stocks)}, "
+                f"mode={mode}"
+            )
+            await self.rust_runner(mode=mode, stock_ids=dirty_stocks)
+            return
+
+        # backfill:全量送 Rust(對齊 v1.25 之前行為)
         logger.info(
-            f"[Phase 4] Started（呼叫 Rust binary）stocks={len(self._stock_list)}, mode={mode}"
+            f"[Phase 4] Started(全市場重算)stocks={len(self._stock_list)}, mode={mode}"
         )
         await self.rust_runner(mode=mode, stock_ids=self._stock_list)
+
+    def _fetch_dirty_fwd_stocks(self) -> list[str]:
+        """從 price_daily_fwd.is_dirty=TRUE 拉 distinct stock_id(PR #20 dirty queue)。
+
+        對齊 silver/orchestrator._fetch_dirty_fwd_stocks 的相同 pattern。
+        Rust process_stock 跑完會 DELETE+INSERT price_daily_fwd,
+        新 row 的 is_dirty default=FALSE → dirty queue 自動 drain。
+        """
+        sql = (
+            "SELECT DISTINCT stock_id FROM price_daily_fwd "
+            "WHERE is_dirty = TRUE ORDER BY stock_id"
+        )
+        rows = self.db.query(sql)
+        return [r["stock_id"] for r in rows]
 
     # =========================================================================
     # Post-Process

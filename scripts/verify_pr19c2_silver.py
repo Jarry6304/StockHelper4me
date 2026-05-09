@@ -3,8 +3,8 @@ verify_pr19c2_silver.py
 =======================
 PR #19c-2 3 個依賴 PR #18.5 Bronze 的 Silver builder round-trip 驗證。
 
-驗證模式對齊 verify_pr19b_silver.py(對 v2.0 legacy 表逐 PK 比對),因為 3 張表
-v2.0 路徑與 v3.2 Silver 都做相同 pack/rename,輸出應該等值。
+驗證模式對齊 verify_pr19b_silver.py(對 v2.0 legacy_v2 表逐 PK 比對),因為 3 張表
+v2.0 路徑與 v3.2 Silver 都做相同 pack/rename,輸出應該等值(±1% SLO 內)。
 
 3 個 builder:
   - holding_shares_per:Bronze N rows/level → Silver 1 row/(stock,date) + detail
@@ -13,6 +13,17 @@ v2.0 路徑與 v3.2 Silver 都做相同 pack/rename,輸出應該等值。
 
 由於 PR #18.5 user 只 smoke test 了 3 stocks(1101 / 2317 / 2330),verifier 預設
 過濾這 3 支(對齊 PR #18.5 已 backfill 的範圍)。
+
+⚠️ 邊緣日期 1-row delta 屬正常 dual-write 時間錯位
+==================================================
+v3 path(主名 Bronze)和 v2 path(*_legacy_v2)是兩條 incremental segment,
+各自跑的時間點不同 → 最新一兩天可能出現一邊有、另一邊還沒抓的 1-row delta
+(e.g. holding_shares_per: silver=1135 vs legacy_v2=1134,2330 / 2026-04-30)。
+
+plan §7.2 觀察期 SLO:`3 張 _legacy_v2 row count 與主名表 ±1%`。
+1/1135 = 0.088%、1/265 = 0.377%,均落在 SLO 內,不算 R5 觀察期失敗。
+
+連續跑兩輪 incremental 兩條 path 通常會收斂(各自抓到對方那天即可)。
 
 執行:
   python scripts/verify_pr19c2_silver.py                  # 預設 1101,2317,2330

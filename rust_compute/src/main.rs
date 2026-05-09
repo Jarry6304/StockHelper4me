@@ -211,17 +211,26 @@ async fn assert_schema_version(pool: &PgPool) -> Result<()> {
 // C3: DB 查詢實作
 // ─────────────────────────────────────────────
 
-/// fwd_adj_valid 是 SMALLINT 0/1（非 BOOLEAN）
+/// 解析待算 stock_id 清單。
+///
+/// 優先順序：
+///   1. CLI `--stocks` 明確傳入清單 → 直接用(manual ops / Python orchestrator)
+///   2. 否則從 dirty queue 拉:`price_daily_fwd.is_dirty = TRUE` distinct stock_id
+///      (v1.26 起;對齊 silver/orchestrator._fetch_dirty_fwd_stocks 的 PR #20 設計)
+///
+/// v1.26 之前用 `stock_sync_status WHERE fwd_adj_valid = 0` 做 fallback,但 PR #20
+/// trigger 上線後 dirty queue 真相來源已改成 `price_daily_fwd.is_dirty`。Python
+/// orchestrator path 已對齊,這裡是 Rust 端 `--stocks` 不傳時的 fallback 對齊。
 async fn resolve_stock_ids(pool: &PgPool, args: &Args) -> Result<Vec<String>> {
     if let Some(s) = &args.stocks {
         return Ok(s.split(',').map(|x| x.trim().to_string()).collect());
     }
     let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT stock_id FROM stock_sync_status WHERE fwd_adj_valid = 0 ORDER BY stock_id",
+        "SELECT DISTINCT stock_id FROM price_daily_fwd WHERE is_dirty = TRUE ORDER BY stock_id",
     )
     .fetch_all(pool)
     .await
-    .context("查詢 stock_sync_status 失敗")?;
+    .context("查詢 price_daily_fwd dirty queue 失敗")?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
