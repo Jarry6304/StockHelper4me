@@ -80,7 +80,7 @@ pytest scripts/test_db.py -v          # 單檔
 | Bronze | FinMind raw 資料(8 張 `*_tw` 表 + 5 個 PR #18.5 dual-write entries) | Phase 1-6 collector | `phase_executor.py` + `field_mapper.py` + `aggregators.py` |
 | Reference | `stock_info_ref` / `trading_date_ref` 等不變維度 | Phase 1 | 同上 |
 | Silver | 14 張 `*_derived`(13 個 Python builder + `price_limit_merge_events` Rust)+ 4 張 `price_*_fwd`(Rust) | Phase 7a/7b/7c dirty-driven | `silver/orchestrator.py` + `silver/builders/*.py` + Rust |
-| M3 | Cores 層(Wave / Indicator / Chip / Fundamental / Environment / System)— 規格 `m3Spec/chip_cores.md` user 已寫,其他 cores 暫 ref `m2Spec/oldm2Spec/` r2;v1.28 PR-1~PR-CC1 落地 Rust workspace(8 crate)+ `neely_core` Stage 1-10 partial(P0)+ `day_trading_core`(P2 第 1 個 chip core)+ inventory CoreRegistration + alembic 三表 + ohlcv_loader/chip_loader 接 PG | Rust binary `tw_cores` | `rust_compute/cores/` + `rust_compute/cores_shared/` |
+| M3 | Cores 層(Wave / Indicator / Chip / Fundamental / Environment / System)— 規格 `m3Spec/chip_cores.md` user 已寫,其他 cores 暫 ref `m2Spec/oldm2Spec/` r2;v1.28 PR-1~PR-batch 落地 Rust workspace(23 crate)+ `neely_core` Stage 1-10 partial(P0)+ 8 P1 indicator cores + 5 P2 chip cores + 3 P2 fundamental cores + 5 P2 environment cores + inventory CoreRegistration(22 cores 全註冊)+ alembic 三表 + ohlcv/chip/fundamental/environment 4 個 loaders 接 PG | Rust binary `tw_cores` | `rust_compute/cores/` + `rust_compute/cores_shared/` |
 
 ### Phase 1-6（Bronze 收集）
 
@@ -168,7 +168,7 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core(第 1 個 chip core)`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory 落地,2 個 cores 已註冊(neely + day_trading),109 tests 全綠**。
+當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位(chip 4 + fundamental 3 + environment 5 + indicator 8)`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory 落地,22 個 cores 全部註冊(1 Wave + 8 Indicator + 5 Chip + 3 Fundamental + 5 Environment),143 tests 全綠**。
 
 ---
 
@@ -190,12 +190,13 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | **PR-7** | alembic w2x3y4z5a6b7 落 indicator_values / structural_snapshots / facts 三表 + cores_shared/ohlcv_loader 讀 Silver price_*_fwd + tw_cores binary 接 PG(`run --stock-id 2330 --write`)|
 | **PR-8** | cores_shared/core_registry inventory + neely_core 註冊 + workflows/tw_stock_standard.toml 範例 |
 | **PR-CC1** | 第 1 個 chip core:day_trading_core(完整實作)+ chip_loader/DayTradingSeries + inventory 註冊(P2)|
+| **PR-batch** | 剩餘 19 cores 極限推進一次到位(user「不確定的部分直接上 todo,後續一併討論一併檢討測試」):chip 4(institutional/margin/foreign_holding/shareholder)+ fundamental 3(revenue/valuation/financial_statement)+ environment 5(taiex/us_market/exchange_rate/fear_greed/market_margin)+ indicator 8(macd/rsi/kd/adx/ma/bollinger/atr/obv)+ 3 個 loaders(fundamental_loader / environment_loader / chip_loader 擴 4 種 Series)|
 
 0 collector.toml、0 Python 邏輯改變(只 sync `rust_bridge.py` stale-check path)。
 1 個 alembic migration(PR-7,三表新增)。
 
 `alembic head:v1w2x3y4z5a6 → w2x3y4z5a6b7`(PR-7 落地時)。
-`workspace 8 crate;cargo test 109 tests 全綠;neely_core v0.7.0;day_trading_core v0.1.0`
+`workspace 23 crate;cargo test 143 tests 全綠 0 failed;22 cores 全部 inventory 註冊`
 
 ### Spec 來源 — 暫時對 oldm2Spec/
 
@@ -2731,15 +2732,17 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.28 M3 Cores 動工(PR-1 → PR-CC1,2026-05-09 同 session 推到極限)**:
+> **🎯 v1.28 M3 Cores 動工(PR-1 → PR-batch,2026-05-09 同 session 推到極限)**:
 >
-> 9 段 PR 把 neely_core P0 從 0 推到 Stage 1-10 全部走通(R1-R3 完整 + 22 條
-> Deferred / Stage 5-10 best-guess 實作 / Power Rating 查表 / Fibonacci ratios
-> 寫死 / Triggers + facts.rs produce_facts)+ alembic 三表 + ohlcv_loader/
-> chip_loader 接 PG + inventory CoreRegistration + Workflow toml 範例 + 第 1 個
-> chip core day_trading_core(完整 IndicatorCore impl,對齊 m3Spec/chip_cores.md
-> §七)。**workspace 8 crate / 109 unit test 全綠 / neely_core v0.7.0 /
-> day_trading_core v0.1.0 / 2 cores 已 inventory 註冊**。
+> 10 段 PR(neely 9 段 + chip CC1 + 19 cores batch)把 cores 全部 22 個落地:
+> 1 Wave(neely Stage 1-10 partial)+ 8 Indicator(P1)+ 5 Chip(P2)+
+> 3 Fundamental(P2)+ 5 Environment(P2)。每 core IndicatorCore/WaveCore
+> trait impl + inventory::submit! 註冊 + 1-2 unit test。
+> 加 alembic 三表(indicator_values / structural_snapshots / facts)+ 4 個
+> loaders(ohlcv / chip / fundamental / environment 接 Silver)+ Workflow toml
+> 範例 + tw_cores binary 接 PG dry-run / write。
+> **workspace 23 crate / 143 unit tests 全綠 0 failed / 22 cores 全部
+> inventory 註冊 / target/debug/tw_cores list-cores 列出 22 cores 完整 metadata**。
 >
 > alembic head:`v1w2x3y4z5a6 → w2x3y4z5a6b7`(PR-7 落 indicator_values /
 > structural_snapshots / facts 三表;user 本機需 `alembic upgrade head`)。
@@ -2751,32 +2754,58 @@ python scripts\inspect_db.py 2330
 
 ### 阻塞性排序
 
-1. **chip cores 補完 4 個**(對齊 m3Spec/chip_cores.md §三~六,user 已寫定):
-   institutional_core / margin_core / foreign_holding_core / shareholder_core
-   — 各 ~半天,5 個全部完成才能進 Aggregation Layer 整合。
-2. **fundamental cores 3 個**(spec 在 oldm2Spec/fundamental_cores.md):
-   revenue_core / valuation_core / financial_statement_core — 各 ~半天。
-3. **environment cores 5 個**(spec 在 oldm2Spec/environment_cores.md):
-   taiex_core / us_market_core / exchange_rate_core / fear_greed_core /
-   market_margin_core — 各 ~半天。
-4. **P1 indicator cores 8 個**(spec 在 oldm2Spec/indicator_cores_*.md):
-   macd / rsi / kd / adx / ma / bollinger / atr / obv — 各 ~半天 + 共用
-   indicator kernel ~1 天。
-5. **M3 PR-9 Workflow toml orchestrator dispatch**:解析 workflows/*.toml +
-   依 inventory CoreRegistry 動態 dispatch 多 Core(目前 tw_cores 只支援單核
-   `run --stock-id ...`,留 PR-9 補 multi-core orchestration);估 ~1 天
-6. **M3 PR-3c**:Stage 4 補完(22 條 Deferred 規則細節 + Neely 書頁追溯)
-   — **強烈建議 user 先在 m3Spec/ 寫最新 neely_core spec 後再開**;估 ~1 天
-7. **M3 PR-4b/5b/6b**:Diagonal Leading/Ending 區分 / sub_kind 完整 / exhaustive
-   compression paths / Item 9-10 細節 / Power Rating 完整查表 / Fibonacci 接
-   monowave price — **同樣建議 user 先寫最新 spec**;估 各 ~半天
-8. **M3 P0 Gate** 五檔(0050 / 2330 / 3363 / 6547 / 1312)實測 + 校準
-   forest_max_size / compaction_timeout_secs / BeamSearchFallback.k /
-   REVERSAL_ATR_MULTIPLIER / STOCK_NEUTRAL_ATR_MULTIPLIER / BEAM_CAP_MULTIPLIER
-   預設值,寫入 `docs/benchmarks/`(對齊 cores_overview §9.1)
-9. **user 本機驗證**:`alembic upgrade head` → `cargo build --release` →
-   `target/release/tw_cores list-cores`(預期 2 cores)→ `tw_cores run
-   --stock-id 2330` dry-run 驗 Stage 1-10 + facts 產出。
+**22 個 cores 框架已落地**,後續工作分兩條:
+- (A)規則 / spec 校準(等 user m3Spec/ 寫定最新 spec)
+- (B)Pipeline 進階(orchestrator / P0 Gate / 測試策略)
+
+集中 TODO 清單(後續一併討論 / 一併檢討測試):
+
+**A. 規則細節(等 m3Spec/ 寫最新 spec 後 batch 校準)**:
+- chip_cores §3-6 各 EventKind 具體閾值
+- fundamental / environment / indicator 全部規則細節
+- neely_core PR-3c R4-R7 + F/Z/T/W 22 條 Deferred 規則
+- neely_core PR-4b Diagonal Leading/Ending sub_kind 區分
+- neely_core PR-5b exhaustive compaction 真正窮舉合法 paths
+- neely_core PR-6b Power Rating 完整查表 + Fibonacci 接 monowave price
+
+**B. Silver schema 假設**(可能需 alembic 補欄):
+- `margin_daily_derived.margin_maintenance` 是否存在
+- `foreign_holding_derived.foreign_limit_pct` 是否要 stored
+- `holding_shares_per_derived.detail` JSONB schema 細節
+- `market_margin_maintenance_derived` 完整欄位
+- `fear_greed_index` 是否需要 `_derived` 表(目前直讀 Bronze,§6.2 已知例外)
+- `financial_statement_derived.detail` JSONB key 命名(英文 vs 中文)
+
+**C. Pipeline 進階**:
+- **PR-9 Workflow toml orchestrator dispatch**:解析 workflows/*.toml,
+  依 inventory CoreRegistry 動態 dispatch 多 cores(目前 tw_cores 只支援
+  單核 `run --stock-id ...`)
+- **ErasedWaveCore / ErasedIndicatorCore trait wrapper**:CoreRegistry 目前
+  只存 metadata,實際 dispatch 需 dyn-compatible trait 包一層(associated types
+  erase)
+- **indicator_values 表寫入**:目前 PR-7 只寫 `structural_snapshots` +
+  `facts`;P1 indicator cores 上線時需補 `indicator_values` 寫入路徑
+- **inventory 動態 dispatch with type erasure**:需設計 `Box<dyn ErasedCore>`
+  保存 `compute()` 簽章一致的 trait object
+
+**D. 測試策略(後續一併檢討)**:
+- Indicator golden test 對外部標準(TA-Lib / pandas-ta)的指標值比對
+- Integration test 走 PG real data(沙箱無 PG,留 user 本機)
+- Neely Core P0 Gate 五檔股票(0050 / 2330 / 3363 / 6547 / 1312)實測 +
+  校準 forest_max_size / compaction_timeout_secs / BeamSearchFallback.k /
+  REVERSAL_ATR_MULTIPLIER / STOCK_NEUTRAL_ATR_MULTIPLIER / BEAM_CAP_MULTIPLIER
+- 各 core 對 spec §6.1 「機械式 Fact」原則的符合性 review
+- 各 core「best-guess 閾值」對 user 預期行為的對齊(visual review by user)
+
+**user 本機驗證**:
+```powershell
+alembic upgrade head                                     # → w2x3y4z5a6b7
+cd rust_compute && cargo build --release --workspace
+target/release/tw_cores list-cores                       # 22 cores
+$env:DATABASE_URL = "postgresql://..."
+target/release/tw_cores run --stock-id 2330              # dry-run neely
+target/release/tw_cores run --stock-id 2330 --write      # 落 PG
+```
 
 m2 收尾(可平行,**不阻塞 M3**):
 
