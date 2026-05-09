@@ -32,16 +32,8 @@ pub struct MacdCore;
 impl MacdCore { pub fn new() -> Self { MacdCore } }
 impl Default for MacdCore { fn default() -> Self { MacdCore::new() } }
 
-fn ema(values: &[f64], period: usize) -> Vec<f64> {
-    let mut out = vec![0.0; values.len()];
-    if values.is_empty() || period == 0 { return out; }
-    let alpha = 2.0 / (period as f64 + 1.0);
-    out[0] = values[0];
-    for i in 1..values.len() {
-        out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1];
-    }
-    out
-}
+// EMA 抽到 indicator_kernel(本 PR 重構)
+use indicator_kernel::ema;
 
 impl IndicatorCore for MacdCore {
     type Input = OhlcvSeries;

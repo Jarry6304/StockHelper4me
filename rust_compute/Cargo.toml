@@ -9,6 +9,7 @@ members = [
     "cores_shared/fundamental_loader",
     "cores_shared/environment_loader",
     "cores_shared/core_registry",
+    "cores_shared/indicator_kernel",
     # Wave Cores(P0)
     "cores/wave/neely_core",
     # Indicator Cores(P1 — 8 個)

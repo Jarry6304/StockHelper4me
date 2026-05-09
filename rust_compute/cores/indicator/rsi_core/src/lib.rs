@@ -33,35 +33,8 @@ pub struct RsiCore;
 impl RsiCore { pub fn new() -> Self { RsiCore } }
 impl Default for RsiCore { fn default() -> Self { RsiCore::new() } }
 
-pub fn wilder_rsi(closes: &[f64], period: usize) -> Vec<f64> {
-    let n = closes.len();
-    if n < 2 || period == 0 { return vec![0.0; n]; }
-    let mut gains = vec![0.0_f64; n];
-    let mut losses = vec![0.0_f64; n];
-    for i in 1..n {
-        let d = closes[i] - closes[i - 1];
-        if d > 0.0 { gains[i] = d; } else { losses[i] = -d; }
-    }
-    let mut avg_gain = vec![0.0; n];
-    let mut avg_loss = vec![0.0; n];
-    let warmup = period.min(n - 1);
-    let mut sg = 0.0; let mut sl = 0.0;
-    for i in 1..=warmup { sg += gains[i]; sl += losses[i]; }
-    let p = warmup as f64;
-    avg_gain[warmup] = sg / p; avg_loss[warmup] = sl / p;
-    for i in (warmup + 1)..n {
-        avg_gain[i] = ((period as f64 - 1.0) * avg_gain[i - 1] + gains[i]) / period as f64;
-        avg_loss[i] = ((period as f64 - 1.0) * avg_loss[i - 1] + losses[i]) / period as f64;
-    }
-    let mut rsi = vec![0.0; n];
-    for i in warmup..n {
-        rsi[i] = if avg_loss[i] < 1e-12 { 100.0 } else {
-            let rs = avg_gain[i] / avg_loss[i];
-            100.0 - 100.0 / (1.0 + rs)
-        };
-    }
-    rsi
-}
+// Wilder RSI 抽到 indicator_kernel(本 PR 重構)
+pub use indicator_kernel::wilder_rsi;
 
 impl IndicatorCore for RsiCore {
     type Input = OhlcvSeries;

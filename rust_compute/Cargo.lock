@@ -10,6 +10,7 @@ dependencies = [
  "chrono",
  "core_registry",
  "fact_schema",
+ "indicator_kernel",
  "inventory",
  "ohlcv_loader",
  "serde",
@@ -125,6 +126,7 @@ dependencies = [
  "chrono",
  "core_registry",
  "fact_schema",
+ "indicator_kernel",
  "inventory",
  "ohlcv_loader",
  "serde",
@@ -189,6 +191,7 @@ dependencies = [
  "chrono",
  "core_registry",
  "fact_schema",
+ "indicator_kernel",
  "inventory",
  "ohlcv_loader",
  "serde",
@@ -963,6 +966,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "indicator_kernel"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ohlcv_loader",
+]
+
+[[package]]
 name = "institutional_core"
 version = "0.1.0"
 dependencies = [
@@ -1107,6 +1118,7 @@ dependencies = [
  "chrono",
  "core_registry",
  "fact_schema",
+ "indicator_kernel",
  "inventory",
  "ohlcv_loader",
  "serde",
@@ -1121,6 +1133,7 @@ dependencies = [
  "chrono",
  "core_registry",
  "fact_schema",
+ "indicator_kernel",
  "inventory",
  "ohlcv_loader",
  "serde",
@@ -1600,6 +1613,7 @@ dependencies = [
  "chrono",
  "core_registry",
  "fact_schema",
+ "indicator_kernel",
  "inventory",
  "ohlcv_loader",
  "serde",

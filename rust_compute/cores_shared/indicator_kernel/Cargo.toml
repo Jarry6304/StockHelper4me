@@ -1,0 +1,11 @@
+[package]
+name        = "indicator_kernel"
+version     = "0.1.0"
+edition     = "2021"
+description = "Cores 共用 indicator math kernel(SMA/EMA/WMA + Wilder ATR/RSI + true_range + std_dev),對齊 oldm2Spec/indicator_cores_*.md"
+
+[dependencies]
+ohlcv_loader = { path = "../ohlcv_loader" }
+
+[dev-dependencies]
+chrono = { workspace = true }

@@ -5,6 +5,7 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use fact_schema::{Fact, IndicatorCore, Timeframe};
+use indicator_kernel::{sma, standard_deviation};
 use ohlcv_loader::OhlcvSeries;
 use serde::Serialize;
 use serde_json::json;
@@ -44,14 +45,13 @@ impl IndicatorCore for BollingerCore {
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
         let n = input.bars.len();
         let closes: Vec<f64> = input.bars.iter().map(|b| b.close).collect();
+        // SMA + std 抽到 indicator_kernel(本 PR 重構)
+        let means = sma(&closes, params.period);
+        let stds = standard_deviation(&closes, params.period);
         let mut series = Vec::with_capacity(n);
         for i in 0..n {
-            let p = params.period.min(i + 1);
-            let start = i + 1 - p;
-            let win = &closes[start..=i];
-            let mean: f64 = win.iter().sum::<f64>() / p as f64;
-            let var: f64 = win.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / p as f64;
-            let std = var.sqrt();
+            let mean = means[i];
+            let std = stds[i];
             let upper = mean + params.k * std;
             let lower = mean - params.k * std;
             let bw = if mean > 0.0 { (upper - lower) / mean * 100.0 } else { 0.0 };
