@@ -2758,6 +2758,16 @@ python scripts\inspect_db.py 2330
 - (A)規則 / spec 校準(等 user m3Spec/ 寫定最新 spec)
 - (B)Pipeline 進階(orchestrator / P0 Gate / 測試策略)
 
+> ⚠️ **V2 階段禁止做的事**(spec 已明文,避免後續 session 自作主張):
+> - **Indicator kernel 共用化**(`taiex_core` 與個股 Indicator Core 邏輯重複的抽出)
+>   → cores_overview.md §十四 「P3 後考慮,V2 不規劃」。
+>   2026-05-09 嘗試過抽出 `cores_shared/indicator_kernel`(commit 5abca8d),
+>   user 退板「禁止耦合,重複程式碼可以接受」,revert(commit 6f05fb9)。
+>   8 個 indicator cores **保持各自獨立** ema/sma/wma/wilder_atr/wilder_rsi
+>   實作,符合 §四 零耦合原則。
+> - **跨指標訊號獨立 Core**(TTM Squeeze / `chip_concentration_core` 等)
+>   → cores_overview.md §十一 / chip_cores.md §八「不在 Core 層整合」。
+
 集中 TODO 清單(後續一併討論 / 一併檢討測試):
 
 **A. 規則細節(等 m3Spec/ 寫最新 spec 後 batch 校準)**:
