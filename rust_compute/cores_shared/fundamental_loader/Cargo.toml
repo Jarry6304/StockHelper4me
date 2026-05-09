@@ -1,0 +1,13 @@
+[package]
+name        = "fundamental_loader"
+version     = "0.1.0"
+edition     = "2021"
+description = "Cores 共用 Fundamental loader(讀 Silver *_derived 表),對齊 oldm2Spec/fundamental_cores.md §2"
+
+[dependencies]
+fact_schema = { path = "../fact_schema" }
+sqlx       = { workspace = true }
+chrono     = { workspace = true }
+anyhow     = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }

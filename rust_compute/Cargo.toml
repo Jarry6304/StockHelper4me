@@ -2,19 +2,47 @@
 resolver = "2"
 members = [
     "silver_s1_adjustment",
+    # cores_shared(共用基礎建設)
     "cores_shared/fact_schema",
     "cores_shared/ohlcv_loader",
     "cores_shared/chip_loader",
+    "cores_shared/fundamental_loader",
+    "cores_shared/environment_loader",
     "cores_shared/core_registry",
+    # Wave Cores(P0)
     "cores/wave/neely_core",
+    # Indicator Cores(P1 — 8 個)
+    "cores/indicator/macd_core",
+    "cores/indicator/rsi_core",
+    "cores/indicator/kd_core",
+    "cores/indicator/adx_core",
+    "cores/indicator/ma_core",
+    "cores/indicator/bollinger_core",
+    "cores/indicator/atr_core",
+    "cores/indicator/obv_core",
+    # Chip Cores(P2 — 5 個)
     "cores/chip/day_trading_core",
+    "cores/chip/institutional_core",
+    "cores/chip/margin_core",
+    "cores/chip/foreign_holding_core",
+    "cores/chip/shareholder_core",
+    # Fundamental Cores(P2 — 3 個)
+    "cores/fundamental/revenue_core",
+    "cores/fundamental/valuation_core",
+    "cores/fundamental/financial_statement_core",
+    # Environment Cores(P2 — 5 個)
+    "cores/environment/taiex_core",
+    "cores/environment/us_market_core",
+    "cores/environment/exchange_rate_core",
+    "cores/environment/fear_greed_core",
+    "cores/environment/market_margin_core",
+    # System Cores(monolithic binary)
     "cores/system/tw_cores",
 ]
 
 # 共用相依版本鎖在 workspace,各 member 透過 `dep.workspace = true` 引用
 [workspace.dependencies]
 # ─── DB driver ───
-# runtime-tokio / tls-native-tls / postgres / chrono / macros
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "tls-native-tls",
@@ -42,7 +70,7 @@ anyhow = "1"
 # Hash(供 cores fact_schema params_hash 用 — cores_overview §7.4)
 blake3 = "1"
 
-# Tracing(P0 後 cores 階段日誌用,先鎖版避免後續 PR 再加)
+# Tracing
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

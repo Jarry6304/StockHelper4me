@@ -1,6 +1,6 @@
 [package]
 name        = "tw_cores"
-version     = "0.2.0"
+version     = "0.3.0"
 edition     = "2021"
 description = "Cores 層 Monolithic Binary 入口(對齊 m2Spec/oldm2Spec/cores_overview.md §五)"
 
@@ -9,12 +9,47 @@ name = "tw_cores"
 path = "src/main.rs"
 
 [dependencies]
-fact_schema      = { path = "../../../cores_shared/fact_schema" }
-ohlcv_loader     = { path = "../../../cores_shared/ohlcv_loader" }
-chip_loader      = { path = "../../../cores_shared/chip_loader" }
-core_registry    = { path = "../../../cores_shared/core_registry" }
-neely_core       = { path = "../../wave/neely_core" }
-day_trading_core = { path = "../../chip/day_trading_core" }
+# 共用 infrastructure
+fact_schema       = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader      = { path = "../../../cores_shared/ohlcv_loader" }
+chip_loader       = { path = "../../../cores_shared/chip_loader" }
+fundamental_loader = { path = "../../../cores_shared/fundamental_loader" }
+environment_loader = { path = "../../../cores_shared/environment_loader" }
+core_registry     = { path = "../../../cores_shared/core_registry" }
+
+# Wave Core(P0)
+neely_core        = { path = "../../wave/neely_core" }
+
+# Indicator Cores(P1 — 8)
+macd_core         = { path = "../../indicator/macd_core" }
+rsi_core          = { path = "../../indicator/rsi_core" }
+kd_core           = { path = "../../indicator/kd_core" }
+adx_core          = { path = "../../indicator/adx_core" }
+ma_core           = { path = "../../indicator/ma_core" }
+bollinger_core    = { path = "../../indicator/bollinger_core" }
+atr_core          = { path = "../../indicator/atr_core" }
+obv_core          = { path = "../../indicator/obv_core" }
+
+# Chip Cores(P2 — 5)
+day_trading_core      = { path = "../../chip/day_trading_core" }
+institutional_core    = { path = "../../chip/institutional_core" }
+margin_core           = { path = "../../chip/margin_core" }
+foreign_holding_core  = { path = "../../chip/foreign_holding_core" }
+shareholder_core      = { path = "../../chip/shareholder_core" }
+
+# Fundamental Cores(P2 — 3)
+revenue_core              = { path = "../../fundamental/revenue_core" }
+valuation_core            = { path = "../../fundamental/valuation_core" }
+financial_statement_core  = { path = "../../fundamental/financial_statement_core" }
+
+# Environment Cores(P2 — 5)
+taiex_core            = { path = "../../environment/taiex_core" }
+us_market_core        = { path = "../../environment/us_market_core" }
+exchange_rate_core    = { path = "../../environment/exchange_rate_core" }
+fear_greed_core       = { path = "../../environment/fear_greed_core" }
+market_margin_core    = { path = "../../environment/market_margin_core" }
+
+# 一般依賴
 clap          = { workspace = true }
 anyhow        = { workspace = true }
 tokio         = { workspace = true }

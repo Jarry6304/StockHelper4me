@@ -1,0 +1,16 @@
+[package]
+name = "macd_core"
+version = "0.1.0"
+edition = "2021"
+description = "MACD Core(P1,12/26/9 標準參數)"
+[lib]
+path = "src/lib.rs"
+[dependencies]
+fact_schema   = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader  = { path = "../../../cores_shared/ohlcv_loader" }
+core_registry = { path = "../../../cores_shared/core_registry" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+inventory = "0.3"
