@@ -1,26 +1,30 @@
 // tw_cores — Cores 層 Monolithic Binary 入口
 //
 // 對齊 m2Spec/oldm2Spec/cores_overview.md §五(Monolithic Binary 部署模型)
-//   - P0 / P1 / P2 一律單一 binary,inventory 自動註冊(留 PR-8)
+//   - P0 / P1 / P2 一律單一 binary,inventory 自動註冊
 //   - 改任一 Core 重編全部(實測 ~5 分鐘可接受)
 //   - 無法 hot-fix 單一 Core,但台股一日一交易、batch 模式下沒有此需求
 //
-// **M3 PR-7 範圍**:
-//   - PG 連線 + ohlcv_loader 讀 Silver `price_*_fwd`
-//   - 跑 NeelyCore.compute() 產 Forest + Facts
-//   - 寫 `structural_snapshots` + `facts` 兩表
-//   - CLI:--list-cores / --run --stock-id 2330 [--timeframe daily] [--write]
+// **M3 PR-9a 範圍**(本 PR 動工):
+//   - `run-all` subcommand:全市場 × 全 22 cores production run
+//   - 22 個硬編碼 dispatch arm(對齊 V2 禁止抽象原則,§十四)
+//   - 5 個 environment cores run-once(market-level)
+//   - 17 個 stock-level cores per-stock loop
+//   - indicator_values 寫入(本 PR 補)+ structural_snapshots(既有 neely)+ facts
+//   - per-core / per-stock 失敗不阻塞 batch
 //
-// 留後續 PR:
-//   - inventory `CoreRegistration` + `CoreRegistry::discover`(留 PR-8)
-//   - Workflow toml 編排(留 PR-8)
-//   - indicator_values 表寫入(留 P1 後 IndicatorCore 上線時)
+// 留 PR-9b:
+//   - Workflow toml dispatch(取代 hardcoded)
+//   - sqlx pool 並行 per-stock
+//   - ErasedCore trait wrapper(V3 才考慮)
 
 use anyhow::{Context, Result};
+use chrono::{NaiveDate, Utc};
 use clap::{Parser, Subcommand};
-use fact_schema::{Timeframe, WaveCore};
-use neely_core::{NeelyCore, NeelyCoreParams};
+use fact_schema::{params_hash, Fact, IndicatorCore, Timeframe, WaveCore};
+use serde::Serialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use std::time::Instant;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -35,7 +39,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// 列出已連結的 Core(skeleton 階段唯一支援)
+    /// 列出已連結的 22 cores(對齊 inventory CoreRegistry::discover)
     ListCores,
     /// 對指定 stock 跑 neely_core 完整 Stage 1-10 Pipeline
     Run {
@@ -46,6 +50,27 @@ enum Command {
         #[arg(long, default_value = "daily")]
         timeframe: String,
         /// 寫入 PG(structural_snapshots + facts)— 不指定僅 dry-run
+        #[arg(long, default_value_t = false)]
+        write: bool,
+    },
+    /// 全市場 × 全 22 cores production run
+    RunAll {
+        /// 指定股票清單(逗號分隔,例 2330,2317);不指定則拉 price_daily_fwd 全市場
+        #[arg(long)]
+        stocks: Option<String>,
+        /// 限制前 N 檔(test / P0 Gate 用)
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 時間粒度(stock-level cores 用,環境 cores 自己決定)
+        #[arg(long, default_value = "daily")]
+        timeframe: String,
+        /// 跳過 5 個 environment cores(只跑 stock-level)
+        #[arg(long, default_value_t = false)]
+        skip_market: bool,
+        /// 跳過 17 個 stock-level cores(只跑 environment)
+        #[arg(long, default_value_t = false)]
+        skip_stock: bool,
+        /// 寫入 PG(indicator_values + structural_snapshots + facts)— 不指定僅 dry-run
         #[arg(long, default_value_t = false)]
         write: bool,
     },
@@ -68,16 +93,27 @@ async fn main() -> Result<()> {
             stock_id,
             timeframe,
             write,
-        } => run_neely(&stock_id, &timeframe, write).await,
+        } => run_neely_single(&stock_id, &timeframe, write).await,
+        Command::RunAll {
+            stocks,
+            limit,
+            timeframe,
+            skip_market,
+            skip_stock,
+            write,
+        } => run_all(stocks, limit, &timeframe, skip_market, skip_stock, write).await,
     }
 }
+
+// ---------------------------------------------------------------------------
+// list-cores
+// ---------------------------------------------------------------------------
 
 fn list_cores() -> Result<()> {
     println!("== M3 cores binary(Stage 1-10 partial,Pipeline 走通)==");
     println!("workspace = rust_compute/(virtual root)");
     println!();
 
-    // 從 inventory 自動發現所有編譯期註冊的 Core(對齊 cores_overview §五)
     let registry = core_registry::CoreRegistry::discover();
     println!("Linked cores(via inventory CoreRegistry):");
     for core in registry.cores() {
@@ -88,9 +124,7 @@ fn list_cores() -> Result<()> {
     }
 
     // 確保 dep crate 的 inventory::submit! 不被 dead-code 剃掉
-    // Wave
-    let _ = NeelyCore::new();
-    // Indicator(8)
+    let _ = neely_core::NeelyCore::new();
     let _ = macd_core::MacdCore::new();
     let _ = rsi_core::RsiCore::new();
     let _ = kd_core::KdCore::new();
@@ -99,17 +133,14 @@ fn list_cores() -> Result<()> {
     let _ = bollinger_core::BollingerCore::new();
     let _ = atr_core::AtrCore::new();
     let _ = obv_core::ObvCore::new();
-    // Chip(5)
     let _ = day_trading_core::DayTradingCore::new();
     let _ = institutional_core::InstitutionalCore::new();
     let _ = margin_core::MarginCore::new();
     let _ = foreign_holding_core::ForeignHoldingCore::new();
     let _ = shareholder_core::ShareholderCore::new();
-    // Fundamental(3)
     let _ = revenue_core::RevenueCore::new();
     let _ = valuation_core::ValuationCore::new();
     let _ = financial_statement_core::FinancialStatementCore::new();
-    // Environment(5)
     let _ = taiex_core::TaiexCore::new();
     let _ = us_market_core::UsMarketCore::new();
     let _ = exchange_rate_core::ExchangeRateCore::new();
@@ -117,45 +148,20 @@ fn list_cores() -> Result<()> {
     let _ = market_margin_core::MarketMarginCore::new();
 
     println!();
-    println!("Stage 1: Pure Close + Wilder ATR-filtered monowave detection ✅");
-    println!("Stage 2: Rule of Neutrality + Rule of Proportion             ✅");
-    println!("Stage 3: Bottom-up Candidate Generator                       ✅");
-    println!("Stage 4: Validator R1-R3 完整 + R4-R7/F/Z/T/W 22 條 Deferred  🟡");
-    println!("Stage 5: Classifier(Impulse vs Diagonal / Zigzag 基本)       🟡");
-    println!("Stage 6: Post-Constructive Validator skeleton                🟡");
-    println!("Stage 7: Complexity Rule(差距 ≤ 1 級篩選)                    ✅");
-    println!("Stage 8: Compaction(簡化 pass-through + Forest 上限保護)     🟡");
-    println!("Stage 9: Missing Wave / Emulation skeleton                   🟡");
-    println!("Stage 10: Power Rating + Fibonacci ratios + Triggers(基本)  🟡");
-    println!("Facts:    produce_facts() 每 scenario 1 條 + forest summary  ✅");
-    println!("PG IO:    ohlcv_loader 讀 Silver / 寫 snapshots+facts         ✅ PR-7");
-    println!("Inventory: CoreRegistration + CoreRegistry::discover         ✅ PR-8");
-    println!("Workflow: toml 範例 workflows/tw_stock_standard.toml(orchestrator dispatch 留 PR-9)");
-    println!();
-    println!("(對齊 m2Spec/oldm2Spec/neely_core.md §七 Stage 1-10 Pipeline)");
+    println!("Stage 1-10 + Facts + PG IO + Inventory + run-all dispatch ✅(M3 PR-9a)");
+    println!("(對齊 m2Spec/oldm2Spec/cores_overview.md §五 + neely_core.md §七)");
     Ok(())
 }
 
-async fn run_neely(stock_id: &str, timeframe: &str, write: bool) -> Result<()> {
-    let tf = match timeframe.to_lowercase().as_str() {
-        "daily" => Timeframe::Daily,
-        "weekly" => Timeframe::Weekly,
-        "monthly" => Timeframe::Monthly,
-        other => anyhow::bail!("unknown timeframe '{}',expected daily/weekly/monthly", other),
-    };
+// ---------------------------------------------------------------------------
+// run(既有 neely 單核單股 path,M3 PR-7 上線)
+// ---------------------------------------------------------------------------
 
-    let database_url = std::env::var("DATABASE_URL")
-        .context("DATABASE_URL not set — set environment or .env before running")?;
+async fn run_neely_single(stock_id: &str, timeframe: &str, write: bool) -> Result<()> {
+    let tf = parse_timeframe(timeframe)?;
+    let pool = connect_pg().await?;
 
-    tracing::info!(stock_id, ?tf, "connecting to PG");
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&database_url)
-        .await
-        .context("failed to connect to PG")?;
-
-    // Load OHLCV from Silver
-    let mut params = NeelyCoreParams::default();
+    let mut params = neely_core::NeelyCoreParams::default();
     params.timeframe = tf;
     let series = ohlcv_loader::load_for_neely(&pool, stock_id, &params).await?;
 
@@ -165,23 +171,9 @@ async fn run_neely(stock_id: &str, timeframe: &str, write: bool) -> Result<()> {
         "loaded OHLCV from Silver price_*_fwd"
     );
 
-    // Run Stage 1-10
-    let core = NeelyCore::new();
-    let output = core.compute(&series, params)?;
-
-    tracing::info!(
-        stock_id,
-        forest_size = output.scenario_forest.len(),
-        candidates = output.diagnostics.candidate_count,
-        validator_pass = output.diagnostics.validator_pass_count,
-        validator_reject = output.diagnostics.validator_reject_count,
-        elapsed_ms = output.diagnostics.elapsed_ms,
-        "compute() done"
-    );
-
-    // Produce facts
+    let core = neely_core::NeelyCore::new();
+    let output = core.compute(&series, params.clone())?;
     let facts = core.produce_facts(&output);
-    tracing::info!(facts_count = facts.len(), "produced facts");
 
     println!();
     println!("== Stage summary ==");
@@ -194,29 +186,716 @@ async fn run_neely(stock_id: &str, timeframe: &str, write: bool) -> Result<()> {
         "validator pass/rej: {}/{}",
         output.diagnostics.validator_pass_count, output.diagnostics.validator_reject_count
     );
-    println!("compaction paths:   {}", output.diagnostics.compaction_paths);
     println!("forest size:        {}", output.scenario_forest.len());
-    println!("overflow_triggered: {}", output.diagnostics.overflow_triggered);
-    println!("elapsed_ms:         {}", output.diagnostics.elapsed_ms);
     println!("facts produced:     {}", facts.len());
 
     if write {
-        write_outputs(&pool, &output, &facts).await?;
+        let hash = params_hash(&params).unwrap_or_default();
+        write_structural_snapshot(
+            &pool,
+            &output.stock_id,
+            output.data_range.end,
+            tf,
+            "neely_core",
+            core.version(),
+            &hash,
+            &serde_json::to_value(&output)?,
+        )
+        .await?;
+        let n = write_facts(&pool, &facts).await?;
+        println!();
+        println!("== Wrote to PG ==");
+        println!("structural_snapshots: 1 row UPSERT");
+        println!("facts:                {}/{} new", n, facts.len());
     } else {
         println!();
-        println!("(dry-run — 加 --write 落 structural_snapshots + facts)");
+        println!("(dry-run — 加 --write 落 PG)");
     }
 
     Ok(())
 }
 
-async fn write_outputs(
-    pool: &PgPool,
-    output: &neely_core::NeelyCoreOutput,
-    facts: &[fact_schema::Fact],
-) -> Result<()> {
-    let snapshot_json = serde_json::to_value(output).context("serialize NeelyCoreOutput")?;
+// ---------------------------------------------------------------------------
+// run-all(M3 PR-9a 主入口)
+// ---------------------------------------------------------------------------
 
+async fn run_all(
+    stocks: Option<String>,
+    limit: Option<usize>,
+    timeframe_str: &str,
+    skip_market: bool,
+    skip_stock: bool,
+    write: bool,
+) -> Result<()> {
+    let tf = parse_timeframe(timeframe_str)?;
+    let pool = connect_pg().await?;
+    let total_start = Instant::now();
+    let mut summary: Vec<CoreRunSummary> = Vec::new();
+
+    if !skip_market {
+        tracing::info!("== Stage A: 5 environment cores(market-level run-once)==");
+        run_market_cores(&pool, write, &mut summary).await;
+    } else {
+        tracing::info!("--skip-market 已指定,跳過 5 environment cores");
+    }
+
+    if !skip_stock {
+        let stock_ids = resolve_stock_list(&pool, stocks.as_deref(), limit).await?;
+        tracing::info!(
+            "== Stage B: {} stocks × 17 cores(per-stock loop, timeframe={:?})==",
+            stock_ids.len(),
+            tf
+        );
+        for (i, stock_id) in stock_ids.iter().enumerate() {
+            if i % 100 == 0 || i == stock_ids.len() - 1 {
+                tracing::info!("progress: stock {}/{} ({})", i + 1, stock_ids.len(), stock_id);
+            }
+            run_stock_cores(&pool, stock_id, tf, write, &mut summary).await;
+        }
+    } else {
+        tracing::info!("--skip-stock 已指定,跳過 17 stock-level cores");
+    }
+
+    print_summary(&summary, total_start.elapsed(), write);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Environment cores(5,run-once)
+// ---------------------------------------------------------------------------
+
+async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunSummary>) {
+    // 環境 cores 各自 warmup 不一,給 5 年(~1825 天)足量歷史
+    const ENV_LOOKBACK_DAYS: i32 = 365 * 5;
+
+    // 1. taiex_core
+    match environment_loader::load_taiex(pool, ENV_LOOKBACK_DAYS).await {
+        Ok(series) => {
+            let core = taiex_core::TaiexCore::new();
+            summary.push(
+                dispatch_indicator(pool, &core, &series, taiex_core::TaiexParams::default(), write)
+                    .await,
+            );
+        }
+        Err(e) => summary.push(loader_err_summary(
+            "taiex_core",
+            "_index_taiex_",
+            "load_taiex",
+            &e,
+        )),
+    }
+
+    // 2. us_market_core
+    match environment_loader::load_us_market_combined(pool, ENV_LOOKBACK_DAYS).await {
+        Ok(combined) => {
+            let core = us_market_core::UsMarketCore::new();
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &core,
+                    &combined,
+                    us_market_core::UsMarketParams::default(),
+                    write,
+                )
+                .await,
+            );
+        }
+        Err(e) => summary.push(loader_err_summary(
+            "us_market_core",
+            "_global_",
+            "load_us_market_combined",
+            &e,
+        )),
+    }
+
+    // 3. exchange_rate_core(USD/TWD,後續 Params currency_pairs 多幣別留 follow-up)
+    match environment_loader::load_exchange_rate(pool, "USD", ENV_LOOKBACK_DAYS).await {
+        Ok(series) => {
+            let core = exchange_rate_core::ExchangeRateCore::new();
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &core,
+                    &series,
+                    exchange_rate_core::ExchangeRateParams::default(),
+                    write,
+                )
+                .await,
+            );
+        }
+        Err(e) => summary.push(loader_err_summary(
+            "exchange_rate_core",
+            "_global_",
+            "load_exchange_rate",
+            &e,
+        )),
+    }
+
+    // 4. fear_greed_core
+    match environment_loader::load_fear_greed(pool, ENV_LOOKBACK_DAYS).await {
+        Ok(series) => {
+            let core = fear_greed_core::FearGreedCore::new();
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &core,
+                    &series,
+                    fear_greed_core::FearGreedParams::default(),
+                    write,
+                )
+                .await,
+            );
+        }
+        Err(e) => summary.push(loader_err_summary(
+            "fear_greed_core",
+            "_global_",
+            "load_fear_greed",
+            &e,
+        )),
+    }
+
+    // 5. market_margin_core
+    match environment_loader::load_market_margin(pool, ENV_LOOKBACK_DAYS).await {
+        Ok(series) => {
+            let core = market_margin_core::MarketMarginCore::new();
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &core,
+                    &series,
+                    market_margin_core::MarketMarginParams::default(),
+                    write,
+                )
+                .await,
+            );
+        }
+        Err(e) => summary.push(loader_err_summary(
+            "market_margin_core",
+            "_market_",
+            "load_market_margin",
+            &e,
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stock-level cores(17:1 Wave + 8 Indicator + 5 Chip + 3 Fundamental)
+// ---------------------------------------------------------------------------
+
+async fn run_stock_cores(
+    pool: &PgPool,
+    stock_id: &str,
+    tf: Timeframe,
+    write: bool,
+    summary: &mut Vec<CoreRunSummary>,
+) {
+    // Lookback 上限給足:6 年日線(覆蓋各 indicator warmup × 1.2 + 充足實際 series)
+    const STOCK_LOOKBACK_DAYS: i32 = 365 * 6;
+    const STOCK_LOOKBACK_MONTHS: i32 = 6 * 12 + 12;
+    const STOCK_LOOKBACK_QUARTERS: i32 = 6 * 4 + 4;
+
+    // ---- 1. Wave: neely_core(走 structural_snapshots,不寫 indicator_values)----
+    let mut neely_params = neely_core::NeelyCoreParams::default();
+    neely_params.timeframe = tf;
+    match ohlcv_loader::load_for_neely(pool, stock_id, &neely_params).await {
+        Ok(series) => summary.push(dispatch_neely(pool, stock_id, &series, neely_params, write).await),
+        Err(e) => summary.push(loader_err_summary(
+            "neely_core",
+            stock_id,
+            "load_for_neely",
+            &e,
+        )),
+    }
+
+    // ---- 2-9. Indicator(8)— 共用 OhlcvSeries ----
+    let ohlcv_result = match tf {
+        Timeframe::Daily => ohlcv_loader::load_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await,
+        Timeframe::Weekly => ohlcv_loader::load_weekly(pool, stock_id, STOCK_LOOKBACK_DAYS / 7).await,
+        Timeframe::Monthly => ohlcv_loader::load_monthly(pool, stock_id, STOCK_LOOKBACK_MONTHS).await,
+    };
+    match ohlcv_result {
+        Ok(ohlcv) => {
+            // 每個 indicator core 獨立 dispatch,失敗不阻塞其他
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &macd_core::MacdCore::new(),
+                    &ohlcv,
+                    macd_core::MacdParams::default(),
+                    write,
+                )
+                .await,
+            );
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &rsi_core::RsiCore::new(),
+                    &ohlcv,
+                    rsi_core::RsiParams::default(),
+                    write,
+                )
+                .await,
+            );
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &kd_core::KdCore::new(),
+                    &ohlcv,
+                    kd_core::KdParams::default(),
+                    write,
+                )
+                .await,
+            );
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &adx_core::AdxCore::new(),
+                    &ohlcv,
+                    adx_core::AdxParams::default(),
+                    write,
+                )
+                .await,
+            );
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &ma_core::MaCore::new(),
+                    &ohlcv,
+                    ma_core::MaParams::default(),
+                    write,
+                )
+                .await,
+            );
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &bollinger_core::BollingerCore::new(),
+                    &ohlcv,
+                    bollinger_core::BollingerParams::default(),
+                    write,
+                )
+                .await,
+            );
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &atr_core::AtrCore::new(),
+                    &ohlcv,
+                    atr_core::AtrParams::default(),
+                    write,
+                )
+                .await,
+            );
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &obv_core::ObvCore::new(),
+                    &ohlcv,
+                    obv_core::ObvParams::default(),
+                    write,
+                )
+                .await,
+            );
+        }
+        Err(e) => {
+            for name in [
+                "macd_core",
+                "rsi_core",
+                "kd_core",
+                "adx_core",
+                "ma_core",
+                "bollinger_core",
+                "atr_core",
+                "obv_core",
+            ] {
+                summary.push(loader_err_summary(name, stock_id, "load_daily", &e));
+            }
+        }
+    }
+
+    // ---- 10. day_trading_core ----
+    match chip_loader::load_day_trading(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &day_trading_core::DayTradingCore::new(),
+                &series,
+                day_trading_core::DayTradingParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "day_trading_core",
+            stock_id,
+            "load_day_trading",
+            &e,
+        )),
+    }
+
+    // ---- 11. institutional_core ----
+    match chip_loader::load_institutional_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &institutional_core::InstitutionalCore::new(),
+                &series,
+                institutional_core::InstitutionalParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "institutional_core",
+            stock_id,
+            "load_institutional_daily",
+            &e,
+        )),
+    }
+
+    // ---- 12. margin_core ----
+    match chip_loader::load_margin_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &margin_core::MarginCore::new(),
+                &series,
+                margin_core::MarginParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "margin_core",
+            stock_id,
+            "load_margin_daily",
+            &e,
+        )),
+    }
+
+    // ---- 13. foreign_holding_core ----
+    match chip_loader::load_foreign_holding(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &foreign_holding_core::ForeignHoldingCore::new(),
+                &series,
+                foreign_holding_core::ForeignHoldingParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "foreign_holding_core",
+            stock_id,
+            "load_foreign_holding",
+            &e,
+        )),
+    }
+
+    // ---- 14. shareholder_core(週頻 — Params::default() timeframe = Weekly)----
+    match chip_loader::load_holding_shares_per(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &shareholder_core::ShareholderCore::new(),
+                &series,
+                shareholder_core::ShareholderParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "shareholder_core",
+            stock_id,
+            "load_holding_shares_per",
+            &e,
+        )),
+    }
+
+    // ---- 15. revenue_core(月頻)----
+    match fundamental_loader::load_monthly_revenue(pool, stock_id, STOCK_LOOKBACK_MONTHS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &revenue_core::RevenueCore::new(),
+                &series,
+                revenue_core::RevenueParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "revenue_core",
+            stock_id,
+            "load_monthly_revenue",
+            &e,
+        )),
+    }
+
+    // ---- 16. valuation_core(日頻)----
+    match fundamental_loader::load_valuation_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &valuation_core::ValuationCore::new(),
+                &series,
+                valuation_core::ValuationParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "valuation_core",
+            stock_id,
+            "load_valuation_daily",
+            &e,
+        )),
+    }
+
+    // ---- 17. financial_statement_core(季頻)----
+    match fundamental_loader::load_financial_statement(pool, stock_id, STOCK_LOOKBACK_QUARTERS).await
+    {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &financial_statement_core::FinancialStatementCore::new(),
+                &series,
+                financial_statement_core::FinancialStatementParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "financial_statement_core",
+            stock_id,
+            "load_financial_statement",
+            &e,
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic dispatch helper(IndicatorCore + WaveCore 各一)
+// ---------------------------------------------------------------------------
+
+async fn dispatch_indicator<C>(
+    pool: &PgPool,
+    core: &C,
+    input: &C::Input,
+    params: C::Params,
+    write: bool,
+) -> CoreRunSummary
+where
+    C: IndicatorCore,
+{
+    let start = Instant::now();
+    let core_name = core.name().to_string();
+    let core_version = core.version().to_string();
+    let hash = params_hash(&params).unwrap_or_default();
+
+    match core.compute(input, params) {
+        Ok(output) => {
+            let facts = core.produce_facts(&output);
+            let value_json = match serde_json::to_value(&output) {
+                Ok(v) => v,
+                Err(e) => {
+                    return CoreRunSummary::err(
+                        &core_name,
+                        "",
+                        format!("serialize output failed: {}", e),
+                        start,
+                    );
+                }
+            };
+            let (stock_id, value_date, timeframe_str) = extract_indicator_meta(&value_json);
+
+            let mut iv_written = 0u64;
+            let mut fact_written = 0u64;
+            if write {
+                if !stock_id.is_empty() {
+                    match write_indicator_value(
+                        pool,
+                        &stock_id,
+                        value_date,
+                        &timeframe_str,
+                        &core_name,
+                        &core_version,
+                        &hash,
+                        &value_json,
+                    )
+                    .await
+                    {
+                        Ok(()) => iv_written = 1,
+                        Err(e) => tracing::warn!(
+                            core = %core_name,
+                            stock_id,
+                            "write_indicator_value failed: {:#}",
+                            e
+                        ),
+                    }
+                }
+                match write_facts(pool, &facts).await {
+                    Ok(n) => fact_written = n,
+                    Err(e) => tracing::warn!(core = %core_name, "write_facts failed: {:#}", e),
+                }
+            }
+
+            CoreRunSummary {
+                core: core_name,
+                stock_id,
+                status: "ok".to_string(),
+                events: facts.len() as u64,
+                iv_written,
+                fact_written,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                error: None,
+            }
+        }
+        Err(e) => CoreRunSummary::err(&core_name, "", format!("compute failed: {:#}", e), start),
+    }
+}
+
+async fn dispatch_neely(
+    pool: &PgPool,
+    stock_id: &str,
+    series: &neely_core::output::OhlcvSeries,
+    params: neely_core::NeelyCoreParams,
+    write: bool,
+) -> CoreRunSummary {
+    let start = Instant::now();
+    let core = neely_core::NeelyCore::new();
+    let hash = params_hash(&params).unwrap_or_default();
+    let tf = params.timeframe;
+    let core_version = core.version().to_string();
+
+    match core.compute(series, params) {
+        Ok(output) => {
+            let facts = core.produce_facts(&output);
+            let mut iv_written = 0u64; // neely 不寫 indicator_values
+            let mut fact_written = 0u64;
+            if write {
+                let snapshot_json = match serde_json::to_value(&output) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return CoreRunSummary::err(
+                            "neely_core",
+                            stock_id,
+                            format!("serialize output failed: {}", e),
+                            start,
+                        );
+                    }
+                };
+                match write_structural_snapshot(
+                    pool,
+                    &output.stock_id,
+                    output.data_range.end,
+                    tf,
+                    "neely_core",
+                    &core_version,
+                    &hash,
+                    &snapshot_json,
+                )
+                .await
+                {
+                    Ok(()) => iv_written = 1, // 借用欄位記 snapshot 寫 1 row
+                    Err(e) => tracing::warn!(
+                        core = "neely_core",
+                        stock_id,
+                        "write_structural_snapshot failed: {:#}",
+                        e
+                    ),
+                }
+                match write_facts(pool, &facts).await {
+                    Ok(n) => fact_written = n,
+                    Err(e) => {
+                        tracing::warn!(core = "neely_core", "write_facts failed: {:#}", e)
+                    }
+                }
+            }
+
+            CoreRunSummary {
+                core: "neely_core".to_string(),
+                stock_id: stock_id.to_string(),
+                status: "ok".to_string(),
+                events: facts.len() as u64,
+                iv_written,
+                fact_written,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                error: None,
+            }
+        }
+        Err(e) => CoreRunSummary::err(
+            "neely_core",
+            stock_id,
+            format!("compute failed: {:#}", e),
+            start,
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PG IO helpers
+// ---------------------------------------------------------------------------
+
+async fn connect_pg() -> Result<PgPool> {
+    let database_url = std::env::var("DATABASE_URL")
+        .context("DATABASE_URL not set — set environment or .env before running")?;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .context("failed to connect to PG")?;
+    Ok(pool)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn write_indicator_value(
+    pool: &PgPool,
+    stock_id: &str,
+    value_date: NaiveDate,
+    timeframe: &str,
+    source_core: &str,
+    source_version: &str,
+    params_hash_hex: &str,
+    value_json: &serde_json::Value,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO indicator_values
+            (stock_id, value_date, timeframe, source_core, source_version, params_hash, value)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (stock_id, value_date, timeframe, source_core, params_hash)
+        DO UPDATE SET
+            source_version = EXCLUDED.source_version,
+            value          = EXCLUDED.value,
+            created_at     = NOW()
+        "#,
+    )
+    .bind(stock_id)
+    .bind(value_date)
+    .bind(timeframe)
+    .bind(source_core)
+    .bind(source_version)
+    .bind(params_hash_hex)
+    .bind(value_json)
+    .execute(pool)
+    .await
+    .context("insert indicator_values failed")?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn write_structural_snapshot(
+    pool: &PgPool,
+    stock_id: &str,
+    snapshot_date: NaiveDate,
+    timeframe: Timeframe,
+    core_name: &str,
+    source_version: &str,
+    params_hash_hex: &str,
+    snapshot_json: &serde_json::Value,
+) -> Result<()> {
     sqlx::query(
         r#"
         INSERT INTO structural_snapshots
@@ -230,20 +909,22 @@ async fn write_outputs(
             created_at     = NOW()
         "#,
     )
-    .bind(&output.stock_id)
-    .bind(output.data_range.end)
-    .bind(output.timeframe.as_str())
-    .bind("neely_core")
-    .bind("0.7.0")
-    .bind("") // PR-8 改 NeelyCoreParams 的 params_hash
-    .bind(&snapshot_json)
+    .bind(stock_id)
+    .bind(snapshot_date)
+    .bind(timeframe.as_str())
+    .bind(core_name)
+    .bind(source_version)
+    .bind(params_hash_hex)
+    .bind(snapshot_json)
     .execute(pool)
     .await
     .context("insert structural_snapshots failed")?;
+    Ok(())
+}
 
-    let mut inserted = 0;
+async fn write_facts(pool: &PgPool, facts: &[Fact]) -> Result<u64> {
+    let mut inserted = 0u64;
     for fact in facts {
-        let metadata_json = serde_json::to_value(&fact.metadata).unwrap_or(serde_json::json!({}));
         let res = sqlx::query(
             r#"
             INSERT INTO facts
@@ -260,17 +941,206 @@ async fn write_outputs(
         .bind(&fact.source_version)
         .bind(fact.params_hash.as_deref().unwrap_or(""))
         .bind(&fact.statement)
-        .bind(&metadata_json)
+        .bind(&fact.metadata)
         .execute(pool)
         .await
         .context("insert facts failed")?;
         inserted += res.rows_affected();
     }
+    Ok(inserted)
+}
+
+async fn resolve_stock_list(
+    pool: &PgPool,
+    stocks: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<String>> {
+    if let Some(s) = stocks {
+        let list: Vec<String> = s
+            .split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect();
+        if let Some(n) = limit {
+            return Ok(list.into_iter().take(n).collect());
+        }
+        return Ok(list);
+    }
+
+    // 從 price_daily_fwd 拉 distinct stock_id
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT stock_id
+        FROM price_daily_fwd
+        WHERE market = 'TW'
+        ORDER BY stock_id ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .context("query price_daily_fwd distinct stock_id failed")?;
+    let mut list: Vec<String> = rows.into_iter().map(|(s,)| s).collect();
+    if let Some(n) = limit {
+        list.truncate(n);
+    }
+    Ok(list)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn parse_timeframe(s: &str) -> Result<Timeframe> {
+    match s.to_lowercase().as_str() {
+        "daily" => Ok(Timeframe::Daily),
+        "weekly" => Ok(Timeframe::Weekly),
+        "monthly" => Ok(Timeframe::Monthly),
+        other => anyhow::bail!("unknown timeframe '{}',expected daily/weekly/monthly", other),
+    }
+}
+
+/// 從 Output JSON 抽 (stock_id, value_date, timeframe_str)。
+/// 處理 ma_core series_by_spec 例外:fallback 從 series_by_spec[0].series 拿最後 date。
+fn extract_indicator_meta(output_json: &serde_json::Value) -> (String, NaiveDate, String) {
+    let stock_id = output_json
+        .get("stock_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let timeframe = output_json
+        .get("timeframe")
+        .and_then(|v| v.as_str())
+        .unwrap_or("daily")
+        .to_string();
+
+    let last_date_str = output_json
+        .get("series")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.last())
+        .and_then(|p| p.get("date"))
+        .and_then(|d| d.as_str())
+        .or_else(|| {
+            // ma_core 例外
+            output_json
+                .get("series_by_spec")
+                .and_then(|v| v.as_array())
+                .and_then(|outer| outer.first())
+                .and_then(|first| first.get("series"))
+                .and_then(|s| s.as_array())
+                .and_then(|arr| arr.last())
+                .and_then(|p| p.get("date"))
+                .and_then(|d| d.as_str())
+        });
+
+    let last_date = last_date_str
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| Utc::now().date_naive());
+
+    (stock_id, last_date, timeframe)
+}
+
+fn loader_err_summary(
+    core: &str,
+    stock_id: &str,
+    op: &str,
+    e: &anyhow::Error,
+) -> CoreRunSummary {
+    CoreRunSummary {
+        core: core.to_string(),
+        stock_id: stock_id.to_string(),
+        status: "loader_err".to_string(),
+        events: 0,
+        iv_written: 0,
+        fact_written: 0,
+        elapsed_ms: 0,
+        error: Some(format!("{}: {:#}", op, e)),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CoreRunSummary {
+    core: String,
+    stock_id: String,
+    status: String,
+    events: u64,
+    iv_written: u64,
+    fact_written: u64,
+    elapsed_ms: u64,
+    error: Option<String>,
+}
+
+impl CoreRunSummary {
+    fn err(core: &str, stock_id: &str, msg: String, start: Instant) -> Self {
+        Self {
+            core: core.to_string(),
+            stock_id: stock_id.to_string(),
+            status: "err".to_string(),
+            events: 0,
+            iv_written: 0,
+            fact_written: 0,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+            error: Some(msg),
+        }
+    }
+}
+
+fn print_summary(summary: &[CoreRunSummary], total_elapsed: std::time::Duration, write: bool) {
+    use std::collections::BTreeMap;
+    println!();
+    println!("== run-all summary ==");
+    println!(
+        "total elapsed: {:.1}s    write={}    rows={}",
+        total_elapsed.as_secs_f64(),
+        write,
+        summary.len()
+    );
+
+    let mut by_core: BTreeMap<&str, (u64, u64, u64, u64, u64, u64)> = BTreeMap::new();
+    // (ok_count, err_count, total_events, total_iv_written, total_fact_written, total_elapsed_ms)
+    for r in summary {
+        let entry = by_core.entry(&r.core).or_insert((0, 0, 0, 0, 0, 0));
+        if r.status == "ok" {
+            entry.0 += 1;
+        } else {
+            entry.1 += 1;
+        }
+        entry.2 += r.events;
+        entry.3 += r.iv_written;
+        entry.4 += r.fact_written;
+        entry.5 += r.elapsed_ms;
+    }
 
     println!();
-    println!("== Wrote to PG ==");
-    println!("structural_snapshots: 1 row UPSERT");
-    println!("facts:                {}/{} new (others ON CONFLICT DO NOTHING)", inserted, facts.len());
+    println!("{:<28} {:>6} {:>6} {:>9} {:>10} {:>10} {:>10}", "core", "ok", "err", "events", "iv_rows", "facts", "elapsed_s");
+    println!("{}", "-".repeat(86));
+    for (core, (ok, err, events, iv, facts, ms)) in &by_core {
+        println!(
+            "{:<28} {:>6} {:>6} {:>9} {:>10} {:>10} {:>10.1}",
+            core,
+            ok,
+            err,
+            events,
+            iv,
+            facts,
+            *ms as f64 / 1000.0
+        );
+    }
 
-    Ok(())
+    let errs: Vec<&CoreRunSummary> = summary.iter().filter(|r| r.status != "ok").collect();
+    if !errs.is_empty() {
+        println!();
+        println!("== errors(前 20)==");
+        for r in errs.iter().take(20) {
+            println!(
+                "  [{}] {} stock={} — {}",
+                r.status,
+                r.core,
+                if r.stock_id.is_empty() { "-" } else { &r.stock_id },
+                r.error.as_deref().unwrap_or("(no message)")
+            );
+        }
+        if errs.len() > 20 {
+            println!("  ... 其他 {} 條 error 省略", errs.len() - 20);
+        }
+    }
 }

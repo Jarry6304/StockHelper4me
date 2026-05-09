@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.27，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.29，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3 Cores）。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores)。schema v3.2 r1（`schema_metadata`），開發分支 `claude/implement-m3-cores-nD3Fh`，alembic head `v1w2x3y4z5a6_pae_dedup_par_value_split`（2026-05-09，PR #36；v1.28 M3 PR-1 純 Rust 動工 0 alembic）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3 Cores）。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 全市場全核 dispatch)。schema v3.2 r1（`schema_metadata`），開發分支 `claude/implement-m3-cores-nD3Fh`，alembic head `w2x3y4z5a6b7_m3_cores_three_tables`（2026-05-09，PR-7;v1.29 M3 PR-9a 純 Rust 動工 0 alembic)。
 
 ---
 
@@ -168,7 +168,122 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),148 tests 全綠**。
+當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.29 — M3 PR-9a tw_cores 全市場全核 dispatch(2026-05-09)
+
+接 v1.28 spec-comply rewrite + CLAUDE.md 收緊「下次 session 待作事項」後,
+user 拍版「走 pr9a」全市場 × 全 22 cores production run。0 alembic、0 Python
+邏輯、0 collector.toml,純 Rust(只動 `tw_cores/src/main.rs`)。
+
+### 範圍
+
+| 項目 | 內容 |
+|---|---|
+| `tw_cores` 加 `run-all` subcommand | 5 args:`--stocks` / `--limit` / `--timeframe` / `--skip-market` / `--skip-stock` / `--write` |
+| 22 cores 硬編碼 dispatch | 5 environment market-level + 17 stock-level(1 Wave + 8 Indicator + 5 Chip + 3 Fundamental)|
+| 寫表分流 | Wave (neely) → `structural_snapshots`;其他 21 cores → `indicator_values`(JSONB,本 PR 補 INSERT path);全部 → `facts`(per event,UPSERT ON CONFLICT DO NOTHING)|
+| `params_hash` 真實 blake3 | 用 `fact_schema::params_hash()` 算各 core Params,寫進三表(對齊 cores_overview §7.4)|
+| Stock list pull | `SELECT DISTINCT stock_id FROM price_daily_fwd WHERE market='TW' ORDER BY stock_id`,對齊 `silver/orchestrator._fetch_dirty_fwd_stocks` pattern |
+| Per-core / per-stock 失敗不阻塞 batch | match arm 內 loader/compute err 走 `loader_err_summary` / `CoreRunSummary::err`,印 summary table 列出 |
+| Output JSON metadata 抽取 | `extract_indicator_meta(output_json)` 從 `output.stock_id` / `output.timeframe` / `series[-1].date` 拿,ma_core 例外從 `series_by_spec[0].series` fallback |
+
+### Generic dispatch helper(避免 600+ line 重複)
+
+`dispatch_indicator<C: IndicatorCore>(pool, &core, &input, params, write)` 一行包:
+compute → produce_facts → write_indicator_value + write_facts → return CoreRunSummary。
+ma_core / shareholder_core 等 series shape 不同的 core 都 work,因為走 JSON-based
+metadata 抽取(不直接拿 Output 欄位)。
+
+22 core 各自的 loader call + Params::default() 構造仍寫 explicit match arm
+(對齊 V2「禁止抽象」原則,§十四),但 dispatch+寫入邏輯共用 generic helper,
+總 line count ~700 line(對比硬編碼 22 個獨立 fn 的 ~1400 line)。
+
+### 關鍵設計決策
+
+1. **series 整段 serialize 進單 row**(`(stock_id, value_date=last_date,
+   timeframe, source_core, params_hash)`):避免 17M row 爆量,1700 stocks ×
+   21 indicator-class cores ≈ 35K rows / `indicator_values`;query 跨日走
+   JSONB array index
+2. **不引入 ErasedCore trait** — 22 個 match arm 重複但可讀,新 core 上線只
+   要加 1 個 arm。對齊 cores_overview §四「禁止抽象」+ §十四「P3 後考慮,V2
+   不規劃」
+3. **串列跑** — 對齊 v1.16 PostgresWriter thread-safety 限制(2 max_connections);
+   並行優化(per-stock task spawn 共用 pool)留 PR-9b
+4. **Workflow toml 不在本 PR** — orchestrator dispatch 留 PR-9b;本 PR 走
+   hardcoded 全 22 cores
+5. **`run` 既有 path 不動** — neely 單核單股(PR-7 落地)行為對齊,既有 user
+   workflow 不受影響
+
+### 驗證(沙箱已通)
+
+```bash
+cd rust_compute && cargo build --release -p tw_cores      # 1m 29s,0 errors
+cargo test --workspace --release --no-fail-fast            # 145 passed / 0 failed
+./target/release/tw_cores list-cores                       # 22 cores 全列出
+./target/release/tw_cores run-all --help                   # 5 args 解析正確
+```
+
+### user 本機驗證流程(三階段)
+
+```powershell
+git pull
+# 不需 alembic upgrade(本 PR 0 migration)
+cd rust_compute && cargo build --release -p tw_cores
+
+# Stage 1:dry-run smoke(先看 5 stocks 跑得通,~30 秒)
+$env:DATABASE_URL = "postgresql://twstock:twstock@localhost:5432/twstock"
+.\target\release\tw_cores.exe run-all --limit 5
+# 預期:印 5 environment cores + 5 stocks × 17 stock-level cores = 90 條 summary
+#       per-core elapsed_ms / events / status
+
+# Stage 2:小範圍 write(P0 Gate 5 stocks)
+.\target\release\tw_cores.exe run-all --stocks 0050,2330,3363,6547,1312 --write
+psql $env:DATABASE_URL -c "SELECT source_core, COUNT(*) FROM indicator_values GROUP BY source_core ORDER BY 1"
+psql $env:DATABASE_URL -c "SELECT source_core, COUNT(*) FROM facts GROUP BY source_core ORDER BY 1"
+psql $env:DATABASE_URL -c "SELECT core_name, COUNT(*) FROM structural_snapshots GROUP BY 1"
+# 預期:
+#   indicator_values:21 source_core(5 environment + 16 stock-level)各 1 ~ 5 rows
+#   structural_snapshots:1 core (neely_core) × 5 stocks = 5 rows
+#   facts:不定數量(看 best-guess threshold 觸發頻率)
+
+# Stage 3:全市場 production(預估 ~30 分鐘 串列)
+.\target\release\tw_cores.exe run-all --write
+# 預期:1700 stocks × 17 stock-level + 5 environment = ~28905 indicator_values rows
+#       1700 structural_snapshots rows
+#       facts:預估數萬~數十萬(視各 core threshold 觸發)
+```
+
+### 留 PR-9b(下個 session)
+
+- **Workflow toml dispatch**:讀 `workflows/tw_stock_standard.toml` 動態決定
+  跑哪些 cores(目前硬編碼全 22 cores)
+- **sqlx pool 並行** per-stock(需從 `max_connections=2` 升 16 + per-stock
+  task spawn,~10x 加速)
+- **incremental dirty queue** 模式:只跑 `is_dirty=TRUE` 的 stock(目前全跑)
+- **best-guess threshold 校準**:user 跑 Stage 3 後 visual review facts,
+  feedback 進 m3Spec/ 後續 PR 改各 core thresholds 重跑
+
+### 風險
+
+🟢 低:
+- 純 Rust,0 alembic / 0 Python / 0 collector.toml
+- 既有 `tw_cores run --stock-id` neely path 完全不動
+- Rollback:單 commit `git revert` 即可
+- 沙箱 cargo build + cargo test + list-cores + run-all --help 全綠
+- best-guess threshold 跑出來的 facts 多/少需校準 — user 拿 production data
+  visual review 後寫進 m3Spec/
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`w2x3y4z5a6b7`(不變,PR-9a 0 migration)
+- Rust workspace:24 crate,0 errors / 145 tests passed / 22 cores 全 inventory 註冊
+- `tw_cores run-all` 全市場全核 dispatch 落地,寫滿三表(indicator_values /
+  structural_snapshots / facts)
+- 下個 session 建議:**PR-9b**(Workflow toml + 並行 + dirty queue),或
+  **m3Spec/** 寫定 + best-guess threshold 校準
 
 ---
 
@@ -2732,42 +2847,53 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.28 收尾(2026-05-09)**:M3 Cores 從 0 推到 22 cores 全 spec-comply
-> 落地。workspace 23 crate / **148 unit test 全綠 0 failed** / 22 cores 全部
-> inventory 註冊 + Params/Output/EventKind/warmup 全對齊 spec(audit 5/5 PASS)。
+> **🎯 v1.29 收尾(2026-05-09)**:M3 PR-9a `tw_cores run-all` 全市場 × 全 22
+> cores production run 落地。0 alembic / 0 Python / 0 collector.toml,純
+> Rust。workspace 24 crate / **145 unit test 全綠 0 failed** / 22 cores 全部
+> inventory 註冊 + run-all dispatch ✅。
 >
-> alembic head:`v1w2x3y4z5a6 → w2x3y4z5a6b7`(三表已落,**user 本機需先跑
-> `alembic upgrade head`**)。`tw_cores list-cores` 印 22 cores 完整 metadata。
+> alembic head 不變:`w2x3y4z5a6b7`(PR-7 三表;PR-9a 0 migration)。
+> `tw_cores run-all --help` 5 args 解析正確;`tw_cores run-all --limit 5`
+> 一鍵跑 5 environment + 5 stocks × 17 stock-level cores → 印 summary。
 >
 > ⚠️ m3Spec/ 仍只有 user 既有的 `chip_cores.md`,其他 cores spec(neely /
 > fundamental / environment / indicator)code 暫 ref `m2Spec/oldm2Spec/` r2。
 
 ### 1. 立即可動工(無 blocker)
 
-**1a. user 本機 smoke**(blocking,user 端):
+**1a. user 本機 smoke + 全市場 production**(blocking,user 端):
 ```powershell
-alembic upgrade head                                     # → w2x3y4z5a6b7
-cd rust_compute && cargo build --release --workspace
-cargo test --workspace                                   # 預期 148/0
-target/release/tw_cores list-cores                       # 預期 22 cores
-$env:DATABASE_URL = "postgresql://..."
-target/release/tw_cores run --stock-id 2330              # dry-run neely
-target/release/tw_cores run --stock-id 2330 --write      # 落 PG snapshots+facts
+git pull
+# 不需 alembic upgrade(本 PR 0 migration)
+cd rust_compute && cargo build --release -p tw_cores
+$env:DATABASE_URL = "postgresql://twstock:twstock@localhost:5432/twstock"
+
+# Stage 1:dry-run smoke 5 stocks(~30 秒)
+.\target\release\tw_cores.exe run-all --limit 5
+# 預期:5 environment + 5 × 17 = 90 條 summary
+
+# Stage 2:小範圍 write(P0 Gate 5 stocks)
+.\target\release\tw_cores.exe run-all --stocks 0050,2330,3363,6547,1312 --write
+psql $env:DATABASE_URL -c "SELECT source_core, COUNT(*) FROM indicator_values GROUP BY 1 ORDER BY 1"
+psql $env:DATABASE_URL -c "SELECT core_name, COUNT(*) FROM structural_snapshots GROUP BY 1"
+psql $env:DATABASE_URL -c "SELECT source_core, COUNT(*) FROM facts GROUP BY 1 ORDER BY 1"
+
+# Stage 3:全市場 production(~30 分鐘 串列)
+.\target\release\tw_cores.exe run-all --write
 ```
 
-**1b. PR-9 Workflow toml dispatch + ErasedCore trait wrapper**(估 ~1.5 天):
-- 解析 workflows/*.toml 動態 dispatch 多 cores
-- 設計 `ErasedCore` trait 包 IndicatorCore/WaveCore associated types
-  (CoreRegistry 目前只存 metadata,實際 dispatch 需 dyn-compatible)
-- 用 `Box<dyn ErasedCore>` 保存 compute() 簽章一致的 trait object
-- tw_cores 加 `run-workflow --workflow tw_stock_standard --stock-id 2330` 子命令
+**1b. PR-9b 工程進階**(估 ~1.5 天,可拆 sub-PR):
+- **Workflow toml dispatch**:讀 `workflows/tw_stock_standard.toml` 動態決定
+  跑哪些 cores(目前 hardcoded 全 22 cores)
+- **sqlx pool 並行**:`max_connections=2` → 16,per-stock task spawn,
+  ~10x 加速(目前串列預估 30 分鐘 → 並行 ~3 分鐘)
+- **incremental dirty queue**:只跑 `is_dirty=TRUE` stock(對齊 silver
+  orchestrator pattern,目前全跑)
+- **ErasedCore trait wrapper**(可選):若 Workflow toml dispatch 要動態
+  dispatch,需設計 `Box<dyn ErasedCore>` 包 trait associated types。對齊 V2
+  禁止抽象原則,**先看實際需求再決定要不要抽**
 
-**1c. indicator_values 表寫入路徑**(估 ~半天):
-- 目前 PR-7 `tw_cores.write_outputs` 只寫 `structural_snapshots` + `facts`
-- P1 indicator cores 上線時要補 `indicator_values` JSONB 寫入(每日數值)
-- 對齊 cores_overview §7.1 三類資料寫入分流
-
-**1d. RSI Failure Swing**(估 ~半天):
+**1c. RSI Failure Swing**(估 ~半天):
 - spec §4.6 四步全成立才產出(RSI 進超買 → 退出 → 折返但未再進 → 跌破前低)
 - 框架 `RsiEventKind::FailureSwing` 已存在,只需補 detect 邏輯
 
@@ -2829,7 +2955,7 @@ target/release/tw_cores run --stock-id 2330 --write      # 落 PG snapshots+fact
 - shared/timeframe_resampler / data_ref / degree_taxonomy 等 utility crate
   (cores_overview §四 列出但未做)
 - asyncio.gather 7a 平行優化(需 PostgresWriter connection pool;perf gain ~ms)
-- tw_cores `run-all --stock-id 2330`(對單股跑全部 22 cores 並寫 PG)
+- ~~tw_cores `run-all`~~ ✅ v1.29 PR-9a 已落地(全市場 × 全 22 cores hardcoded dispatch)
 
 ### ⚠️ V2 階段禁止做(spec 已明文)
 
