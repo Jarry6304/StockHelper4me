@@ -1,6 +1,6 @@
 // validator — Stage 4:Validator R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2
 //
-// 對齊 m3Spec/neely_core.md §三 / §七 Stage 4 / §十(規則組)。
+// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 4 / §十(規則組)。
 // 子模組(留後續 PR 實作):
 //   - core_rules.rs   — R1-R7
 //   - flat_rules.rs   — F1-F2

@@ -1,6 +1,6 @@
 // triggers — Stage 10c:Invalidation Triggers 生成
 //
-// 對齊 m3Spec/neely_core.md §三 / §七 Stage 10 / §9.2。
+// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 10 / §9.2。
 // Trigger 是 Neely 規則的逆向轉譯,寫進 Scenario.invalidation_triggers。
 //
 // 設計原則(§9.4):

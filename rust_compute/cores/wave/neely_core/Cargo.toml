@@ -2,7 +2,7 @@
 name        = "neely_core"
 version     = "0.1.0"
 edition     = "2021"
-description = "Neely Wave Core(P0;對齊 m3Spec/neely_core.md r2)— skeleton 階段"
+description = "Neely Wave Core(P0;對齊 m2Spec/oldm2Spec/neely_core.md r2)— skeleton 階段"
 
 [lib]
 path = "src/lib.rs"

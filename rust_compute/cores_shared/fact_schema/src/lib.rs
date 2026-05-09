@@ -1,5 +1,5 @@
 // fact_schema:Cores 層共用合約。
-// 對齊 m3Spec/cores_overview.md §3(trait)+ §6.2(Fact schema)+ §13.2.1(命名規範)。
+// 對齊 m2Spec/oldm2Spec/cores_overview.md §3(trait)+ §6.2(Fact schema)+ §13.2.1(命名規範)。
 //
 // 範圍(M3 PR-1 skeleton):
 //   - `Timeframe` enum
@@ -44,7 +44,7 @@ impl Timeframe {
 // Fact
 // ---------------------------------------------------------------------------
 
-/// 統一 Fact schema。對齊 m3Spec/cores_overview.md §6.2。
+/// 統一 Fact schema。對齊 m2Spec/oldm2Spec/cores_overview.md §6.2。
 ///
 /// 寫入 `facts` 表時,Unique constraint 為
 /// `(stock_id, fact_date, timeframe, source_core, COALESCE(params_hash, ''), md5(statement))`
@@ -71,7 +71,7 @@ pub struct Fact {
 // ---------------------------------------------------------------------------
 
 /// Indicator / Chip / Fundamental / Environment 共用 trait。
-/// 對齊 m3Spec/cores_overview.md §3。
+/// 對齊 m2Spec/oldm2Spec/cores_overview.md §3。
 ///
 /// `Input` 由各 Core 自行宣告(OHLCVSeries / InstitutionalDailySeries / ...),
 /// 由對應 loader 提供(§3.4)。
@@ -96,7 +96,7 @@ pub trait IndicatorCore: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Wave Cores(Neely / Traditional)專用 trait。
-/// 對齊 m3Spec/cores_overview.md §3.3。
+/// 對齊 m2Spec/oldm2Spec/cores_overview.md §3.3。
 ///
 /// `Input` 限定為 OHLC 序列(讀 Silver `price_*_fwd`)。
 /// `Output` 為 Scenario Forest 結構,實作 `Serialize` 寫入 `structural_snapshots`。
@@ -118,7 +118,7 @@ pub trait WaveCore: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// blake3(canonical_json(params, sort_keys=ASC))[..16] (hex)
-/// 對齊 m3Spec/cores_overview.md §7.4。
+/// 對齊 m2Spec/oldm2Spec/cores_overview.md §7.4。
 pub fn params_hash<P: Serialize>(params: &P) -> Result<String> {
     let raw = serde_json::to_value(params)?;
     let canonical = canonical_json(&raw);

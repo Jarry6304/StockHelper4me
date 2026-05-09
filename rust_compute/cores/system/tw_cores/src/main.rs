@@ -1,6 +1,6 @@
 // tw_cores — Cores 層 Monolithic Binary 入口
 //
-// 對齊 m3Spec/cores_overview.md §五(Monolithic Binary 部署模型)
+// 對齊 m2Spec/oldm2Spec/cores_overview.md §五(Monolithic Binary 部署模型)
 //   - P0 / P1 / P2 一律單一 binary,inventory 自動註冊
 //   - 改任一 Core 重編全部(實測 ~5 分鐘可接受)
 //   - 無法 hot-fix 單一 Core,但台股一日一交易、batch 模式下沒有此需求
@@ -41,21 +41,31 @@ async fn main() -> Result<()> {
 
     let _cli = Cli::parse();
 
-    println!("== M3 cores skeleton ==");
-    println!("workspace = rust_compute/(virtual root, M3 PR-1)");
+    println!("== M3 cores binary(skeleton + Stage 1-2 partial)==");
+    println!("workspace = rust_compute/(virtual root)");
     println!();
     println!("Linked cores:");
 
     let neely = NeelyCore::new();
     println!(
-        "  - {} v{} (Wave Core, P0, skeleton)",
+        "  - {} v{} (Wave Core, P0, Stage 1-2 partial impl)",
         neely.name(),
         neely.version()
     );
 
     println!();
     println!(
-        "compute() 邏輯留後續 PR(對齊 m3Spec/neely_core.md §七 Stage 1-10 Pipeline)。"
+        "Stage 1: Pure Close + Wilder ATR-filtered monowave detection ✅"
+    );
+    println!(
+        "Stage 2: Rule of Neutrality + Rule of Proportion             ✅"
+    );
+    println!(
+        "Stage 3-10: Candidate / Validator / Compaction / Forest       ⏳ 後續 PR"
+    );
+    println!();
+    println!(
+        "(對齊 m2Spec/oldm2Spec/neely_core.md §七 Stage 1-10 Pipeline)"
     );
 
     Ok(())

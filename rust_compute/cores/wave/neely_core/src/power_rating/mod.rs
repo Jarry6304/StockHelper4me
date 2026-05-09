@@ -1,6 +1,6 @@
 // power_rating — Stage 10a:Power Rating 查表
 //
-// 對齊 m3Spec/neely_core.md §三 / §七 Stage 10 / §十三。
+// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 10 / §十三。
 // 子模組(留後續 PR 實作):
 //   - table.rs — Neely 書裡的 power rating 表(寫死,不可外部化 §6.6)
 //

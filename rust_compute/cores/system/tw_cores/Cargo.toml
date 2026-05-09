@@ -2,7 +2,7 @@
 name        = "tw_cores"
 version     = "0.1.0"
 edition     = "2021"
-description = "Cores 層 Monolithic Binary 入口(對齊 m3Spec/cores_overview.md §五)— skeleton"
+description = "Cores 層 Monolithic Binary 入口(對齊 m2Spec/oldm2Spec/cores_overview.md §五)— skeleton"
 
 [[bin]]
 name = "tw_cores"

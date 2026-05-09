@@ -1,5 +1,5 @@
 // NeelyCoreOutput + Scenario Forest + Diagnostics
-// 對齊 m3Spec/neely_core.md §五 §八 §九 §十(2026-05-06 r2)
+// 對齊 m2Spec/oldm2Spec/neely_core.md §五 §八 §九 §十(2026-05-06 r2)
 //
 // 設計原則:
 //   - **Forest 不選 primary**(§9.3):`scenario_forest: Vec<Scenario>`,
