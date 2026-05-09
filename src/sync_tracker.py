@@ -102,7 +102,12 @@ class SyncTracker:
         if row is None or row["last_end"] is None:
             return None
 
-        return date.fromisoformat(row["last_end"])
+        # PG DATE 欄 → psycopg dict_row 直接回 datetime.date;
+        # SQLite TEXT 殘留的 fromisoformat 在 v2.0 PG migration 後對 date 物件會 TypeError。
+        last_end = row["last_end"]
+        if isinstance(last_end, date):
+            return last_end
+        return date.fromisoformat(last_end)
 
     # =========================================================================
     # 更新
