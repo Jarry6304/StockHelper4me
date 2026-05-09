@@ -212,7 +212,7 @@
 | `margin_daily_derived` | `silver/builders/margin.py` | `margin_purchase_short_sale_tw` ∪ `short_sale_securities_lending_tw`(v1.26 UNION 主∪副 keys 消 stub) | 6 stored + detail JSONB(8 keys) + 3 alias `margin_short_sales_*` + 3 SBL `sbl_short_sales_*` |
 | `foreign_holding_derived` | `silver/builders/foreign_holding.py` | `foreign_investor_share_tw` | 2 stored + detail JSONB pack(9 keys)|
 | `holding_shares_per_derived` | `silver/builders/holding_shares_per.py` | `holding_shares_per`(R3 主名)| N rows/level → 1 row/(stock,date),detail JSONB pack 各 level |
-| `day_trading_derived` | `silver/builders/day_trading.py` | `day_trading_tw` + `price_daily`(LEFT JOIN volume) | 2 stored + detail + 衍生欄 `day_trading_ratio = dt_volume / pd_volume × 100` |
+| `day_trading_derived` | `silver/builders/day_trading.py` | `day_trading_tw` + `price_daily_fwd`(LEFT JOIN volume,v1.27 對齊 spec §6.4) | 2 stored + detail + 衍生欄 `day_trading_ratio = dt_volume / pd_fwd_volume × 100` |
 | `valuation_daily_derived` | `silver/builders/valuation.py` | `valuation_per_tw` + `price_daily` + `foreign_investor_share_tw` | 3 stored + 衍生欄 `market_value_weight = (close × total_issued) / SUM_market_date` |
 
 ### 3.3 S5_derived_fundamental(spec §4.3,SQL builder,2 張)
@@ -337,7 +337,7 @@ CLI: python src/main.py silver phase {7a,7b,7c} [--stocks ...] [--full-rebuild]
 3. **S5_financial_statement**(依賴 monthly_revenue)→ orchestrator 7b
 4. M3 / Cores(未動工)
 
-⚠️ 現行 7a 對 day_trading_derived 用 `price_daily.volume`(Bronze)而非 `price_daily_fwd.volume`(Silver),與 spec §6.4 略有 deviation。後復權後 volume 跟 raw 不同(stock_dividend 切割),理論上 spec 對。修正排程或修 builder 用 fwd.volume 留 follow-up。
+**v1.27**(2026-05-09):day_trading builder 已改 LEFT JOIN `price_daily_fwd`(對齊 spec §6.4 + chip_cores §7.2),歷史 pre-event 日期的 ratio 改用後復權 scale。實際依賴:**S1_adjustment(7c Rust)需先跑過**才有 fwd 資料;若初次 silver phase 7a 跑時 fwd 空 → ratio NULL,7c 跑完下一輪 7a 自動填入。Orchestrator 排程順序(7c 先 / 7a 後)留 follow-up,目前 user 自己 invoke `silver phase 7c` 再跑 `silver phase 7a` 即正確。
 
 ---
 
@@ -412,7 +412,7 @@ financial_statement_derived  (S5,7b)  ← 後跑
 price_daily_fwd  (S1,7c)             ← 先算
         │ volume 計算 ratio
         ▼
-day_trading_derived  (S4,7a)         ← 後算(現行 builder 走 price_daily.volume,deviation)
+day_trading_derived  (S4,7a)         ← 後算(v1.27 起 builder 走 price_daily_fwd.volume,對齊 spec §6.4)
 ```
 
 ---
