@@ -1222,6 +1222,42 @@ CREATE TRIGGER mark_margin_derived_from_short_sale_dirty
 
 
 -- =============================================================================
+-- price_adjustment_events dedup trigger(alembic v1w2x3y4z5a6,2026-05-09)
+-- =============================================================================
+-- 修正 par_value_change + split 同公司行動被 FinMind 兩個 dataset
+-- (TaiwanStockParValueChange + TaiwanStockSplitPrice)同時報告 → vf 累乘 ×0.01
+-- 造成 fwd_volume 多 ×10。invariant: split + par_value_change 同 (key, before/ref/vf)
+-- 同時存在 → DELETE split row(保留 par_value_change 為 primary)
+CREATE OR REPLACE FUNCTION trg_pae_dedup_par_value_split()
+RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM price_adjustment_events s
+    WHERE s.event_type = 'split'
+      AND s.market = NEW.market
+      AND s.stock_id = NEW.stock_id
+      AND s.date = NEW.date
+      AND EXISTS (
+        SELECT 1 FROM price_adjustment_events p
+        WHERE p.event_type = 'par_value_change'
+          AND p.market = s.market
+          AND p.stock_id = s.stock_id
+          AND p.date = s.date
+          AND COALESCE(p.before_price, 0) = COALESCE(s.before_price, 0)
+          AND COALESCE(p.reference_price, 0) = COALESCE(s.reference_price, 0)
+          AND COALESCE(p.volume_factor, 1) = COALESCE(s.volume_factor, 1)
+      );
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_pae_dedup_par_value_split
+    AFTER INSERT OR UPDATE ON price_adjustment_events
+    FOR EACH ROW
+    WHEN (NEW.event_type IN ('split', 'par_value_change'))
+    EXECUTE FUNCTION trg_pae_dedup_par_value_split();
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 
