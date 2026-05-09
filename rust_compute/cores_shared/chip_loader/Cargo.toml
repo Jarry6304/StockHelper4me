@@ -1,0 +1,13 @@
+[package]
+name        = "chip_loader"
+version     = "0.1.0"
+edition     = "2021"
+description = "Cores 共用 Chip loader(讀 Silver *_derived 表),對齊 m3Spec/chip_cores.md §2.1"
+
+[dependencies]
+fact_schema = { path = "../fact_schema" }
+sqlx       = { workspace = true }
+chrono     = { workspace = true }
+anyhow     = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
