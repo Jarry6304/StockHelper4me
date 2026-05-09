@@ -1,0 +1,69 @@
+# tw_stock_standard.toml — 台股標準 Workflow 範例
+#
+# 對齊 m2Spec/oldm2Spec/cores_overview.md §13.1(Workflow vs Orchestrator)。
+#
+# Workflow:從 user 視角宣告「跑哪些 Core,各 Core 用什麼參數」。
+# Orchestrator(tw_cores binary)從 inventory CoreRegistry 動態 dispatch。
+#
+# **M3 PR-8 階段**:Workflow toml 為純宣告檔,tw_cores binary 尚未實作 toml 解析 +
+# orchestrator 依 toml dispatch 多 Core。本範例 toml 為「未來工作藍圖」(留 PR-9+)。
+# 目前 tw_cores 只支援 `run --stock-id ... --timeframe ...` 直接呼叫 NeelyCore。
+
+[workflow]
+name        = "tw_stock_standard"
+description = "台股 P0 + P1 標準 Workflow:Wave Core(neely)+ 8 個 P1 Indicator(留 PR-P1)"
+version     = "0.1.0"
+
+# stock 範圍(可保留字 _index_taiex_ / _market_ / _global_)
+[targets]
+stock_ids = ["2330", "2317", "0050", "_index_taiex_"]
+timeframe = "daily"
+
+# Wave Cores 編排
+[[cores]]
+name     = "neely_core"
+enabled  = true
+priority = "P0"
+
+  [cores.params]
+  timeframe = "daily"
+
+  [cores.params.engine_config]
+  atr_period               = 14
+  beam_width               = 50
+  forest_max_size          = 1000
+  compaction_timeout_secs  = 60
+  neutral_threshold_taiex  = 0.5    # 加權指數 Neutrality 閾值(%)
+
+  [cores.params.engine_config.overflow_strategy]
+  kind = "BeamSearchFallback"
+  k    = 100
+
+# Indicator Cores 留 PR-P1+ 上線(目前 stub,不會被 dispatch)
+[[cores]]
+name     = "macd_core"
+enabled  = false  # 留 PR-P1
+priority = "P1"
+
+[[cores]]
+name     = "rsi_core"
+enabled  = false  # 留 PR-P1
+priority = "P1"
+
+# Chip Cores 留 PR-P2+
+[[cores]]
+name     = "day_trading_core"
+enabled  = false  # 留 PR-P2(本 session 第 1 個 chip core 落地後切 true)
+priority = "P2"
+
+# 寫入策略(對齊 cores_overview §7.1)
+[output]
+write_indicator_values   = true   # IndicatorCore 每日數值寫 PG
+write_structural_snapshots = true # WaveCore Forest 寫 PG(每日全量重算)
+write_facts              = true   # 機械式 Fact append-only
+
+# Batch 排程
+[schedule]
+# 對齊 chip_cores §2.3:籌碼資料 17:00-18:00 發布,batch 排程在 17:30 後啟動
+run_at     = "17:30"
+catch_up   = true   # 開機時補跑昨天的 batch(若有遺漏)

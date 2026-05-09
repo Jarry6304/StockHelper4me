@@ -1,0 +1,8 @@
+[package]
+name        = "core_registry"
+version     = "0.1.0"
+edition     = "2021"
+description = "Cores 共用 inventory CoreRegistration + CoreRegistry::discover(對齊 m2Spec/oldm2Spec/cores_overview.md §五 Monolithic Binary)"
+
+[dependencies]
+inventory = "0.3"

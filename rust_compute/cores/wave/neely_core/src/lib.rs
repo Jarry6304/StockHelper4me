@@ -66,6 +66,17 @@ pub mod validator;
 pub use config::{NeelyCoreParams, NeelyEngineConfig, OverflowStrategy};
 pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 
+// inventory 註冊(對齊 m2Spec/oldm2Spec/cores_overview.md §五 Monolithic Binary 部署模型)
+inventory::submit! {
+    core_registry::CoreRegistration::new(
+        "neely_core",
+        "0.7.0",
+        core_registry::CoreKind::Wave,
+        "P0",
+        "Neely Wave Core(NEoWave 規則,Stage 1-10 Pipeline + Scenario Forest)",
+    )
+}
+
 pub struct NeelyCore;
 
 impl NeelyCore {

@@ -76,14 +76,19 @@ fn list_cores() -> Result<()> {
     println!("== M3 cores binary(Stage 1-10 partial,Pipeline 走通)==");
     println!("workspace = rust_compute/(virtual root)");
     println!();
-    println!("Linked cores:");
+
+    // 從 inventory 自動發現所有編譯期註冊的 Core(對齊 cores_overview §五)
+    let registry = core_registry::CoreRegistry::discover();
+    println!("Linked cores(via inventory CoreRegistry):");
+    for core in registry.cores() {
+        println!(
+            "  - {} v{} [{:?} / {}] — {}",
+            core.name, core.version, core.kind, core.priority, core.description
+        );
+    }
 
     let neely = NeelyCore::new();
-    println!(
-        "  - {} v{} (Wave Core, P0, Stage 1-10 partial impl + facts)",
-        neely.name(),
-        neely.version()
-    );
+    let _ = neely.name(); // 確保 link 進來(否則 inventory::submit! 被 dead-code 剃掉)
 
     println!();
     println!("Stage 1: Pure Close + Wilder ATR-filtered monowave detection ✅");
@@ -98,7 +103,8 @@ fn list_cores() -> Result<()> {
     println!("Stage 10: Power Rating + Fibonacci ratios + Triggers(基本)  🟡");
     println!("Facts:    produce_facts() 每 scenario 1 條 + forest summary  ✅");
     println!("PG IO:    ohlcv_loader 讀 Silver / 寫 snapshots+facts         ✅ PR-7");
-    println!("Workflow: inventory CoreRegistration / Workflow toml          ⏳ PR-8");
+    println!("Inventory: CoreRegistration + CoreRegistry::discover         ✅ PR-8");
+    println!("Workflow: toml 範例 workflows/tw_stock_standard.toml(orchestrator dispatch 留 PR-9)");
     println!();
     println!("(對齊 m2Spec/oldm2Spec/neely_core.md §七 Stage 1-10 Pipeline)");
     Ok(())
