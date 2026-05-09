@@ -16,7 +16,7 @@
 //   - MaintenanceLow 閾值寫死 145(實務常見預警線)— 可外部化但 spec 沒列
 
 use anyhow::Result;
-use chip_loader::{MarginDailyRaw, MarginDailySeries};
+use chip_loader::MarginDailySeries;
 use chrono::NaiveDate;
 use fact_schema::{Fact, IndicatorCore, Timeframe};
 use serde::Serialize;
@@ -73,7 +73,8 @@ pub struct MarginPoint {
     pub margin_change_pct: f64,
     pub short_change_pct: f64,
     pub short_to_margin_ratio: f64,
-    pub margin_maintenance: f64,
+    /// 融資維持率 %(NULL 表示 Silver 沒提供;對齊 spec §4.5)
+    pub margin_maintenance: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,8 +116,12 @@ impl IndicatorCore for MarginCore {
         let mut prev_margin: Option<i64> = None;
         let mut prev_short: Option<i64> = None;
         for p in &input.points {
-            let mb = p.margin_balance.unwrap_or(0);
-            let sb = p.short_balance.unwrap_or(0);
+            // Skip rows with missing margin/short balance — Bronze 未收齊或假日尚未結算。
+            // 不 skip 會踩 unwrap_or(0) → 真實 X 變 0 = 「down 100%」false positive(2026-05-09 dev DB 揭露)。
+            let (mb, sb) = match (p.margin_balance, p.short_balance) {
+                (Some(m), Some(s)) => (m, s),
+                _ => continue,
+            };
             let m_pct = pct_change(prev_margin, mb);
             let s_pct = pct_change(prev_short, sb);
             let ratio = if mb > 0 { sb as f64 / mb as f64 * 100.0 } else { 0.0 };
@@ -127,12 +132,12 @@ impl IndicatorCore for MarginCore {
                 margin_change_pct: m_pct,
                 short_change_pct: s_pct,
                 short_to_margin_ratio: ratio,
-                margin_maintenance: p.margin_maintenance.unwrap_or(0.0),
+                margin_maintenance: p.margin_maintenance,
             });
             prev_margin = Some(mb);
             prev_short = Some(sb);
         }
-        let events = detect_events(&series, &params, &input.points);
+        let events = detect_events(&series, &params);
         Ok(MarginOutput {
             stock_id: input.stock_id.clone(),
             timeframe: params.timeframe,
@@ -155,7 +160,7 @@ fn pct_change(prev: Option<i64>, cur: i64) -> f64 {
     }
 }
 
-fn detect_events(series: &[MarginPoint], params: &MarginParams, raw: &[MarginDailyRaw]) -> Vec<MarginEvent> {
+fn detect_events(series: &[MarginPoint], params: &MarginParams) -> Vec<MarginEvent> {
     let mut events = Vec::new();
     for p in series {
         if p.margin_change_pct >= params.margin_change_pct_threshold {
@@ -205,17 +210,16 @@ fn detect_events(series: &[MarginPoint], params: &MarginParams, raw: &[MarginDai
         }
     }
     // MaintenanceLow — 只對有 margin_maintenance 值的 points
-    for (i, p) in series.iter().enumerate() {
-        if raw[i].margin_maintenance.is_some()
-            && p.margin_maintenance > 0.0
-            && p.margin_maintenance < MAINTENANCE_LOW_THRESHOLD
-        {
-            events.push(MarginEvent {
-                date: p.date,
-                kind: MarginEventKind::MaintenanceLow,
-                value: p.margin_maintenance,
-                metadata: json!({ "maintenance": p.margin_maintenance }),
-            });
+    for p in series {
+        if let Some(m) = p.margin_maintenance {
+            if m > 0.0 && m < MAINTENANCE_LOW_THRESHOLD {
+                events.push(MarginEvent {
+                    date: p.date,
+                    kind: MarginEventKind::MaintenanceLow,
+                    value: m,
+                    metadata: json!({ "maintenance": m }),
+                });
+            }
         }
     }
     events
@@ -246,6 +250,7 @@ fn event_to_fact(output: &MarginOutput, e: &MarginEvent) -> Fact {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chip_loader::MarginDailyRaw;
 
     fn raw(d: &str, mb: i64, sb: i64) -> MarginDailyRaw {
         MarginDailyRaw {
@@ -285,5 +290,41 @@ mod tests {
     #[test]
     fn warmup_is_20() {
         assert_eq!(MarginCore::new().warmup_periods(&MarginParams::default()), 20);
+    }
+
+    /// Regression(2026-05-09 dev DB):假日 / Bronze 未收齊 row(margin_balance / short_balance NULL)
+    /// 之前 unwrap_or(0) 會把 28995 → 0 算成「down 100%」false positive。
+    /// 修法:整個 NULL row skip,series 不寫,events 不誤觸發。
+    #[test]
+    fn null_row_skipped_no_false_drop() {
+        let series = MarginDailySeries {
+            stock_id: "2330".to_string(),
+            points: vec![
+                raw("2026-04-29", 28995, 97),
+                MarginDailyRaw {
+                    date: NaiveDate::parse_from_str("2026-04-30", "%Y-%m-%d").unwrap(),
+                    margin_purchase: None,
+                    margin_sell: None,
+                    margin_balance: None, // ← 假日,Bronze 未收齊
+                    short_sale: None,
+                    short_cover: None,
+                    short_balance: None,
+                    margin_maintenance: None,
+                },
+                raw("2026-05-02", 29100, 102), // 真實復原
+            ],
+        };
+        let core = MarginCore::new();
+        let out = core.compute(&series, MarginParams::default()).unwrap();
+        // NULL row skip → series 只有 2 個 point(2026-04-29, 2026-05-02)
+        assert_eq!(out.series.len(), 2);
+        // 2026-04-29 → 2026-05-02 真實變化僅 +0.36%,不該觸發任何 MarginCrash
+        assert!(out
+            .events
+            .iter()
+            .all(|e| e.kind != MarginEventKind::MarginCrash),
+            "MarginCrash false positive (NULL→0 unwrap bug regression),events = {:?}",
+            out.events.iter().map(|e| e.kind).collect::<Vec<_>>()
+        );
     }
 }

@@ -276,14 +276,41 @@ psql $env:DATABASE_URL -c "SELECT core_name, COUNT(*) FROM structural_snapshots 
 - best-guess threshold 跑出來的 facts 多/少需校準 — user 拿 production data
   visual review 後寫進 m3Spec/
 
+### user 本機 verify 過程 + 4 個 hotfix(2026-05-09 同 session)
+
+User 跑 stage 1 → stage 3 揭露 4 個 issue,同 session 全修:
+
+| commit | 範圍 |
+|---|---|
+| **2c0decc** | clap subcommand explicit `#[command(name = "...")]` annotation(PowerShell + Windows binary 雙端 kebab-case 命名一致)|
+| **c37783e** | 4 個 loaders SQL 加 `::float8` cast 對齊 PG NUMERIC schema(price_*_fwd OHLCV / taiex / us_market / exchange_rate / market_margin / fear_greed / day_trading_ratio / foreign_holding_ratio / valuation per/pbr/yield/mvw / monthly_revenue revenue_yoy/mom)|
+| **c37783e** | fear_greed_index `score` 欄 alias 成 `value`(PG 表欄名是 score,Rust struct field 是 value 對齊 spec §6.5)|
+| **(本 commit)** | margin_core NULL skip:`MarginPoint.margin_maintenance` Option<f64>;compute() 對 margin_balance / short_balance 任一 NULL 整 row skip(避免 unwrap_or(0) → 「Margin balance down 100% on 假日」false positive)+ regression unit test |
+
+### user 本機 stage 1-3 production run(已驗收)
+
+| Stage | 範圍 | 結果 |
+|---|---|---|
+| 1 | dry-run 5 stocks(00632R/00673R/00674R/00676R/1101)| 22 cores 全綠 / 3.2 秒 / 0 error |
+| 2 | P0 Gate 5 檔(0050/2330/3363/6547/1312)`--write` | 13.7 秒 / indicator_values 85 row / structural_snapshots 5 row / facts ~28K row |
+| 3 | dev DB 全市場 30 stocks `--write` | 87.6 秒 / 22 cores × 30 = 660 個 compute() / facts 全部 ON CONFLICT DO NOTHING dedup,facts 表 ~140K 累計 |
+
+dev DB 只有 30 distinct stocks(`SELECT COUNT(DISTINCT stock_id) FROM price_daily_fwd WHERE market='TW'`)— 對齊 v1.10 partial backfill,不是 SQL bug。**production scale 1700 stocks 等 user backfill 補齊後可直接跑同樣命令**(預估 ~80 分鐘串列;PR-9b 並行可降到 ~10 分鐘)。
+
+### 3 個 known limitation 留 m3Spec/ 校準(stage 3 spot check 揭露)
+
+1. **`shareholder_core` + `financial_statement_core` events = 0**:best-guess threshold / detail JSONB key 命名(英文假設不對齊真實 Bronze 欄名),需 user 寫 m3Spec/{chip,fundamental}_cores.md 完整版校準
+2. **`neely_core` 22 條 Stage 4 規則 deferred**:`Wave structure: ... rules passed = 0, deferred = 22`(對齊 v1.28 PR-3b R1-R3 完整 + R4-R7/F/Z/T/W 22 條 Deferred),等 user 寫 m3Spec/neely_core.md 完整版後 PR-3c 補
+3. **`0050` + `6547` snapshot_date = 1900-01-01 / forest_size = 0**:dev DB `price_daily_fwd` 沒這 2 stocks 的料(neely loader 載到空 series → compute() 仍 OK 但 forest 0,data_range fallback 1900-01-01 sentinel),不是 bug,user 補 backfill 即可
+
 ### 已知狀態(下次 session 起點)
 
-- alembic head:`w2x3y4z5a6b7`(不變,PR-9a 0 migration)
-- Rust workspace:24 crate,0 errors / 145 tests passed / 22 cores 全 inventory 註冊
-- `tw_cores run-all` 全市場全核 dispatch 落地,寫滿三表(indicator_values /
-  structural_snapshots / facts)
+- alembic head:`w2x3y4z5a6b7`(user 已 alembic upgrade head 落地)
+- Rust workspace:24 crate,0 errors / **146 tests passed**(原 145 + margin null_row_skipped regression test 新加 1)
+- `tw_cores run-all` 全市場全核 dispatch + 三表寫入路徑全 production verified
 - 下個 session 建議:**PR-9b**(Workflow toml + 並行 + dirty queue),或
-  **m3Spec/** 寫定 + best-guess threshold 校準
+  **m3Spec/** 寫定 + 各 core best-guess threshold 校準(尤其 shareholder /
+  financial_statement / neely R4-R7)
 
 ---
 
