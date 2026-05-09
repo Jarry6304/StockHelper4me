@@ -1,13 +1,20 @@
 """
 silver/builders/day_trading.py
 ==============================
-day_trading_tw + price_daily (Bronze) → day_trading_derived (Silver)。
+day_trading_tw + price_daily_fwd (Bronze + Silver) → day_trading_derived (Silver)。
 
 PR #19b 階段:1:1 直拷 raw 部分(2 stored + detail JSONB 重 pack)。
 PR #21-A:加 day_trading_ratio 衍生欄(% 單位)— 對齊 chip_cores.md §7.4。
-PR #21-A hotfix:formula 改用 day_trading_tw.volume / price_daily.volume × 100
+PR #21-A hotfix:formula 改用 day_trading_tw.volume / pd.volume × 100
               (原本誤用 (buy+sell)×100/volume,但 buy/sell 是金額不是股數,
               撞 4000+ 倍的 bug;見 v1.18 user verify spot-check)。
+v1.27:**改 LEFT JOIN price_daily_fwd 而非 price_daily**(對齊 spec
+       layered_schema_post_refactor.md §6.4 + chip_cores.md §7.2 明文要求)。
+       實質影響:歷史 pre-event(stock_dividend / split 前)日期的 ratio 改
+       對齊「後復權 scale」,跨歷史 cross-comparison 一致性提升。
+       依賴:**S1_adjustment(7c Rust)必須先跑過**才有 fwd 資料;
+       初次 silver phase 7a 跑時 fwd 空 → ratio NULL,7c 跑完下一輪 7a
+       自然填入。
 
 Bronze 欄位語意(per FinMind TaiwanStockDayTrading + collector.toml notes):
   day_trading_buy    = BuyAmount(當沖買進金額,NTD)
@@ -16,9 +23,10 @@ Bronze 欄位語意(per FinMind TaiwanStockDayTrading + collector.toml notes):
   day_trading_tw.volume = Volume(當沖成交股數)— 是當沖部分的股數,不是全日總量
 
 公式:`day_trade_ratio = 當沖股數 / 全日成交股數 × 100`
-  分子:day_trading_tw.volume(Bronze)
-  分母:price_daily.volume(Bronze 跨表)
-LEFT JOIN price_daily — 沒對應日的 price_daily(該股那天沒交易)→ ratio NULL。
+  分子:day_trading_tw.volume(Bronze raw)
+  分母:price_daily_fwd.volume(Silver,後復權 scale)
+LEFT JOIN price_daily_fwd — 沒對應日的 fwd row(該股那天沒交易,或 7c 未跑過)
+                            → ratio NULL。
 
 - 2 stored cols(1:1):day_trading_buy / day_trading_sell
 - detail JSONB 從 2 個 unpack 欄重 pack:day_trading_flag / volume(當沖股數)
@@ -41,7 +49,7 @@ logger = logging.getLogger("collector.silver.builders.day_trading")
 
 NAME          = "day_trading"
 SILVER_TABLE  = "day_trading_derived"
-BRONZE_TABLES = ["day_trading_tw", "price_daily"]
+BRONZE_TABLES = ["day_trading_tw", "price_daily_fwd"]
 
 STORED_COLS = ("day_trading_buy", "day_trading_sell")
 DETAIL_KEYS = ("day_trading_flag", "volume")
@@ -67,7 +75,12 @@ def _compute_ratio(day_trade_volume: Any, total_volume: Any) -> float | None:
 def _fetch_joined_rows(
     db: Any, stock_ids: list[str] | None,
 ) -> list[dict[str, Any]]:
-    """SELECT day_trading_tw LEFT JOIN price_daily,拿當沖股數 + 全日股數。"""
+    """SELECT day_trading_tw LEFT JOIN price_daily_fwd,拿當沖股數(raw)+ 全日股數(fwd)。
+
+    v1.27 起改 join price_daily_fwd(spec §6.4):後復權 volume 跨歷史一致性提升,
+    歷史 pre-event 日期的 ratio 對齊現在 scale。fwd 不存在(7c 未跑)→ pd_volume NULL
+    → ratio NULL。
+    """
     where = ""
     params: list[Any] = []
     if stock_ids:
@@ -81,7 +94,7 @@ def _fetch_joined_rows(
         "       dt.volume AS dt_volume, "
         "       pd.volume AS pd_volume "
         "FROM day_trading_tw dt "
-        "LEFT JOIN price_daily pd "
+        "LEFT JOIN price_daily_fwd pd "
         "  ON dt.market = pd.market AND dt.stock_id = pd.stock_id AND dt.date = pd.date "
         f"{where} "
         "ORDER BY dt.market, dt.stock_id, dt.date"
