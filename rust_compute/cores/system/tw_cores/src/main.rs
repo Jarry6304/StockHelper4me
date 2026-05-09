@@ -41,14 +41,14 @@ async fn main() -> Result<()> {
 
     let _cli = Cli::parse();
 
-    println!("== M3 cores binary(skeleton + Stage 1-2 partial)==");
+    println!("== M3 cores binary(skeleton + Stage 1-3 partial)==");
     println!("workspace = rust_compute/(virtual root)");
     println!();
     println!("Linked cores:");
 
     let neely = NeelyCore::new();
     println!(
-        "  - {} v{} (Wave Core, P0, Stage 1-2 partial impl)",
+        "  - {} v{} (Wave Core, P0, Stage 1-3 partial impl)",
         neely.name(),
         neely.version()
     );
@@ -61,7 +61,10 @@ async fn main() -> Result<()> {
         "Stage 2: Rule of Neutrality + Rule of Proportion             ✅"
     );
     println!(
-        "Stage 3-10: Candidate / Validator / Compaction / Forest       ⏳ 後續 PR"
+        "Stage 3: Bottom-up Candidate Generator                       ✅"
+    );
+    println!(
+        "Stage 4-10: Validator / Classifier / Compaction / Forest      ⏳ 後續 PR"
     );
     println!();
     println!(

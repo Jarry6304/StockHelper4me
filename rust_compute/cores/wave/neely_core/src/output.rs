@@ -166,7 +166,7 @@ pub struct Monowave {
     pub direction: MonowaveDirection,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum MonowaveDirection {
     Up,
     Down,

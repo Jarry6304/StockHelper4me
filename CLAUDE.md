@@ -168,15 +168,16 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅ → #R2 ✅ → #R3 ✅(PR #28) → #R4 ✅(PR #29) → #30 ✅(v1.26 nice-to-haves F/E/A/D/B) → #31~#32 ✅(docs api_pipeline_reference 兩版) → #33 ✅(m3Spec/ 預留) → #34 ✅(docs 對齊 spec + 補 Cores 接點) → #35 ✅(v1.27 day_trading 改用 fwd.volume) → #36 ✅(v1.27 pae dedup par_value+split 16 對 + 防衛 trigger) → #M3-1 ✅(v1.28 Rust workspace + neely_core skeleton) → #M3-2 ✅(v1.28 neely_core Stage 1-2 monowave + Neutrality + Proportion,29 unit test)`。m2 主動工 + nice-to-haves + Bronze data 質量修正全收尾,進入 R5 觀察期 21~60 天 → R6 永久 DROP;**M3 Cores Stage 1-2 partial 落地**。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅ → #R2 ✅ → #R3 ✅(PR #28) → #R4 ✅(PR #29) → #30 ✅(v1.26 nice-to-haves F/E/A/D/B) → #31~#32 ✅(docs api_pipeline_reference 兩版) → #33 ✅(m3Spec/ 預留) → #34 ✅(docs 對齊 spec + 補 Cores 接點) → #35 ✅(v1.27 day_trading 改用 fwd.volume) → #36 ✅(v1.27 pae dedup par_value+split 16 對 + 防衛 trigger) → #M3-1 ✅(v1.28 Rust workspace + neely_core skeleton) → #M3-2 ✅(v1.28 neely_core Stage 1-2 monowave + Neutrality + Proportion) → #M3-3a ✅(v1.28 neely_core Stage 3 Bottom-up Candidate Generator,37 unit test in neely_core)`。m2 主動工 + nice-to-haves + Bronze data 質量修正全收尾,進入 R5 觀察期 21~60 天 → R6 永久 DROP;**M3 Cores Stage 1-3 partial 落地**。
 
 ---
 
-## v1.28 — M3 PR-1 + PR-2 Cores 動工(2026-05-09)
+## v1.28 — M3 PR-1 + PR-2 + PR-3a Cores 動工(2026-05-09)
 
 接 v1.27 m2 大重構 + Bronze 質量修收尾後,M3 Cores 階段正式動工。本版包含
-2 段 PR:**PR-1 Rust workspace + neely_core skeleton**、**PR-2 neely_core
-Stage 1-2 (monowave + Neutrality + Proportion)落地**。0 alembic、0 collector.toml、
+3 段 PR:**PR-1 Rust workspace + neely_core skeleton**、**PR-2 neely_core
+Stage 1-2 (monowave + Neutrality + Proportion)落地**、**PR-3a neely_core
+Stage 3 Bottom-up Candidate Generator 落地**。0 alembic、0 collector.toml、
 0 Python 邏輯改變(只 sync `rust_bridge.py` stale-check path)— 純 Rust 結構工 +
 Stage 實作。
 
@@ -209,6 +210,31 @@ Rust code 對 spec 的 `// 對齊 ...` 註解暫時 ref `m2Spec/oldm2Spec/`,等 
 | `lib.rs::compute()` | 從 `unimplemented!` 改 partial impl:跑 Stage 1+2 → 回 NeelyCoreOutput,scenario_forest 暫空(Stage 8 才產出),monowave_series 已填,diagnostics.stage_elapsed_ms 含 stage_1_monowave / stage_2_classify;version bump 0.1.0 → 0.2.0 |
 | `tw_cores` binary | banner 從「skeleton」改「skeleton + Stage 1-2 partial」並列出已實作 stage 與待做 stage |
 
+### PR-3a 範圍 — neely_core Stage 3 Bottom-up Candidate Generator
+
+| 子模組 | 實作 |
+|---|---|
+| `candidates/generator.rs` | `WaveCandidate` struct(id / monowave_indices / wave_count / initial_direction)+ `generate_candidates(classified, cfg)`:過濾 Neutral → 對 wave_count ∈ {3, 5} 滑動取窗 → 視窗 direction 必須交替 → push candidate;`BEAM_CAP_MULTIPLIER = 10`(候選上限 = `cfg.beam_width * 10`)|
+| `candidates/mod.rs` | expose `generate_candidates` + `WaveCandidate` |
+| `output.rs` | `MonowaveDirection` 加 `PartialEq + Eq` derive(generator 內部 direction 比對需要)|
+| `lib.rs::compute()` | 加 Stage 3 dispatch + `diagnostics.candidate_count` + `stage_3_candidates` 耗時 key;version bump 0.2.0 → 0.3.0;test 加 `candidate_count == 1`(U-D-U 3 monowave 應生 1 個 candidate)|
+| `tw_cores` binary | banner 「Stage 1-2 partial」改「Stage 1-3 partial」+ Stage 3 ✅ 進度條 |
+
+**Stage 3 範圍邊界**:
+- ✅ 純 enumeration:窮舉「可能是 wave structure 的視窗」(交替 Up/Down)
+- ✅ 過濾 Neutral monowaves(Stage 2 已標)
+- ✅ beam_width × 10 上限保護(避免 Stage 4 跑爆)
+- ❌ **不**判 pattern_type(Impulse / Zigzag / ...)— 那是 Stage 5 Classifier
+- ❌ **不**檢查 R1-R7 規則 — 那是 Stage 4 Validator
+- ❌ **不**做 5-wave-of-3 嵌套(Combination 類型)— 留後續 PR
+- ❌ **不**用 ProportionMetrics 預先剔除明顯不對稱視窗 — 留 P0 Gate 校準
+
+**Stage 4 留 PR-3b**(25 條 validator 規則 R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2):
+spec §10.1 寫「每條規則的具體內容(門檻、容差、書頁)在 P0 開發時逐條建檔於
+`validator/*.rs` 註解中,並對照 Neely 書頁」。具體規則細節 oldm2Spec/neely_core.md
+未完整列出,**等 user 在 m3Spec/ 寫最新 neely 版本後再開 PR-3b** — 避免 best-guess
+的規則邏輯跟 user 後續 spec 衝突。
+
 ### Workspace 後新長相
 
 ```
@@ -238,8 +264,10 @@ rust_compute/
             │   ├── pure_close.rs         #     Wilder ATR + monowave detector + 7 test
             │   ├── neutrality.rs         #     Rule of Neutrality + 7 test
             │   └── proportion.rs         #     Rule of Proportion + 6 test
-            ├── candidates/mod.rs         # Stage 3 留 PR-3
-            ├── validator/mod.rs          # Stage 4(R1-R7/F1-F2/Z1-Z4/T1-T10/W1-W2)留 PR-3
+            ├── candidates/                # ✅ PR-3a Stage 3 Bottom-up Candidate Generator
+            │   ├── mod.rs                #     expose generate_candidates + WaveCandidate
+            │   └── generator.rs          #     wave_count ∈ {3,5} 滑窗 + alternation filter + 8 test
+            ├── validator/mod.rs          # Stage 4(R1-R7/F1-F2/Z1-Z4/T1-T10/W1-W2)留 PR-3b
             ├── classifier/mod.rs         # Stage 5 留 PR-4
             ├── post_validator/mod.rs     # Stage 6 留 PR-4
             ├── complexity/mod.rs         # Stage 7 留 PR-4
@@ -266,15 +294,16 @@ User 選擇 P0(對齊 cores_overview §九 開發優先級),理由:
 ```bash
 cd rust_compute
 cargo build --workspace                      # 4 crate 全綠(首次 ~56s,後續 incremental ~1.5s)
-cargo test --workspace                       # 31/31 unit test 全綠
+cargo test --workspace                       # 39/39 unit test 全綠(neely_core 37 + fact_schema 2)
                                              #   fact_schema: 2 (params_hash + Timeframe)
-                                             #   neely_core:  29
-                                             #     - config:       1
-                                             #     - pure_close:   7 (ATR 暖機 / 反轉偵測 / 噪音過濾)
-                                             #     - neutrality:   7 (個股 ATR 比例 vs 加權指數 % 比較)
-                                             #     - proportion:   6 (45° 線 / 巨大斜率 / 邊界 0)
-                                             #     - monowave/mod: 3 (end-to-end zigzag / TAIEX neutral)
-                                             #     - lib(compute): 4 (warmup + version + 2 partial compute)
+                                             #   neely_core:  37
+                                             #     - config:        1
+                                             #     - pure_close:    8 (ATR 暖機 / 反轉偵測 / 噪音過濾)
+                                             #     - neutrality:    7 (個股 ATR 比例 vs 加權指數 % 比較)
+                                             #     - proportion:    6 (45° 線 / 巨大斜率 / 邊界 0)
+                                             #     - monowave/mod:  3 (end-to-end zigzag / TAIEX neutral)
+                                             #     - candidates:    8 (alternation / Neutral 過濾 / beam cap / asc-desc)
+                                             #     - lib(compute):  4 (warmup + version + 2 partial compute w/ Stage 3)
 target/release/tw_cores                      # 印 linked cores 列表 + Stage 進度條
 target/release/tw_stock_compute --help       # 對齊 PR-1 之前(0 行為改變)
 ```
@@ -288,7 +317,7 @@ cd rust_compute
 cargo build --release --workspace
 # 預期:既有 tw_stock_compute(.exe)仍在 target/release/,Python 端 silver phase 7c 跑不變
 cargo test --workspace
-# 預期:31/31 unit test 全綠
+# 預期:39/39 unit test 全綠(neely_core 37 + fact_schema 2)
 
 # 跑既有 silver phase 7c 確認 Phase 4 後復權仍 OK(Rust binary path 不變)
 python src/main.py silver phase 7c
@@ -296,7 +325,7 @@ python src/main.py silver phase 7c
 
 # smoke run M3 cores binary
 target/release/tw_cores
-# 預期輸出:M3 cores binary(skeleton + Stage 1-2 partial)+ neely_core v0.2.0 + Stage 進度條
+# 預期輸出:M3 cores binary(skeleton + Stage 1-3 partial)+ neely_core v0.3.0 + Stage 進度條(Stage 1/2/3 ✅)
 ```
 
 ### 設計關鍵約束(對齊 oldm2Spec/ 暫時 ref)
@@ -307,17 +336,17 @@ target/release/tw_cores
   Trigger.on_trigger 移除 ReduceProbability → WeakenScenario
 - **PowerRating enum**(neely §9.4):取代 v1.1 `i8`,避免 99 等無效值
 - **Neely 規則寫死**(neely §4.4 / §6.6):Fibonacci 比率 / ±4% 容差 /
-  Power Rating 查表 / ATR multiplier 0.5 / Neutral threshold 1.0 ATR 全部寫死
-  Rust 常數,**不可外部化**
+  Power Rating 查表 / ATR multiplier 0.5 / Neutral threshold 1.0 ATR /
+  Stage 3 BEAM_CAP_MULTIPLIER 10 全部寫死 Rust 常數,**不可外部化**
 - **加權指數 Neutral 例外**(neely §10.4.1):`stock_id == "_index_taiex_"`(cores_overview §6.2.1 保留字)走 `neutral_threshold_taiex`(預設 0.5%)而非 ATR 比例
 - **trait `Input` 由各 Core 自宣告**(cores_overview §3.4):IndicatorCore /
   WaveCore 都不限定 OHLCV,各 Core 用對應 loader(`shared/ohlcv_loader/` 等)
 
-### 留 PR 後續(M3 PR-3+)
+### 留 PR 後續(M3 PR-3b+)
 
 | PR | 範圍 | 估時 |
 |---|---|---|
-| M3 PR-3 | Stage 3-4:Bottom-up Candidate Generator + Validator R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2 + deferred rules | ~1.5 天 |
+| M3 PR-3b | Stage 4:Validator R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2 + deferred rules + RuleRejection 完整紀錄。**等 user 在 m3Spec/ 寫最新 neely 版本後動工**(避免 best-guess 規則邏輯與 user spec 衝突) | ~1.5 天 |
 | M3 PR-4 | Stage 5-7:Classifier + Post-Constructive Validator + Complexity Rule | ~1 天 |
 | M3 PR-5 | Stage 8:Compaction(exhaustive + beam_search fallback)+ Forest 上限保護 | ~1.5 天 |
 | M3 PR-6 | Stage 9-10:Missing Wave + Emulation + Power Rating(查表)+ Fibonacci 投影 + Triggers + facts.rs produce_facts | ~1 天 |
@@ -329,11 +358,12 @@ target/release/tw_cores
 
 - alembic head:`v1w2x3y4z5a6`(不變,本版 0 migration)
 - Rust workspace:4 crate(silver_s1_adjustment / fact_schema / neely_core / tw_cores),
-  31/31 unit test 全綠;neely_core v0.2.0(Stage 1-2 partial)
+  39/39 unit test 全綠;neely_core v0.3.0(Stage 1-3 partial)
 - m3Spec/:1 份(`chip_cores.md`,user 既有);其他 cores spec 仍在 `m2Spec/oldm2Spec/` r2,
   待 user 在 m3Spec/ 寫最新版後 batch sync code ref
 - `src/rust_bridge.py` stale-check path 同步 + 4 處 cargo build hint 加 `-p tw_stock_compute`
-- 下個 session:**M3 PR-3** Stage 3-4 candidates + validator(預估範圍最大,建議切 PR-3a / PR-3b)
+- 下個 session:**M3 PR-3b** Stage 4 Validator(R1-R7/F/Z/T/W 25 條規則)— **建議
+  user 先在 m3Spec/ 寫最新 neely_core spec**,避免 best-guess 規則邏輯衝突
 
 ### 風險
 
@@ -2635,14 +2665,16 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.28 M3 PR-1 + PR-2 m3 Cores 動工(2026-05-09)**:
+> **🎯 v1.28 M3 PR-1 + PR-2 + PR-3a m3 Cores 動工(2026-05-09)**:
 > rust_compute/ 改 Cargo workspace + 新 crate `cores_shared/fact_schema`
 > (IndicatorCore / WaveCore trait + Fact + params_hash) + P0 Wave Core
 > `neely_core` skeleton(14 sub-modules + Scenario Forest 合約)+ 新 binary
-> `tw_cores`(Monolithic Binary)。**PR-2** 補 Stage 1-2 真實實作:Pure Close +
+> `tw_cores`(Monolithic Binary)。**PR-2** 補 Stage 1-2:Pure Close +
 > Wilder ATR-filtered monowave detection、Rule of Neutrality(個股 ATR 比例 vs
 > 加權指數 0.5%)、Rule of Proportion(magnitude / 45° slope metrics)。
-> 31/31 unit test 全綠;0 alembic / 0 Python 邏輯。
+> **PR-3a** 補 Stage 3:Bottom-up Candidate Generator(wave_count ∈ {3,5} 滑窗 +
+> alternation filter + beam_width × 10 上限保護)。neely_core v0.3.0;
+> 39/39 unit test 全綠(neely_core 37 + fact_schema 2);0 alembic / 0 Python 邏輯。
 >
 > ⚠️ m3Spec/ 仍只有 user 既有的 `chip_cores.md`,其他 cores spec 暫 ref
 > `m2Spec/oldm2Spec/` r2 — **不**複製 spec 進 m3Spec/(會凍結 r2 為 m3 版本),
@@ -2650,8 +2682,10 @@ python scripts\inspect_db.py 2330
 
 ### 阻塞性排序
 
-1. **M3 PR-3** Stage 3-4 Bottom-up Candidate Generator + Validator R1-R7 / F1-F2
-   / Z1-Z4 / T1-T10 / W1-W2 + deferred rules;估 ~1.5 天(範圍最大,可切 PR-3a/3b)
+1. **M3 PR-3b** Stage 4 Validator(R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2 共 25 條
+   規則 + deferred rules + RuleRejection)。**強烈建議 user 先在 m3Spec/ 寫最新
+   neely_core spec**,避免 PR-3b 規則邏輯走 oldm2Spec r2 後與 user 後續 spec 衝突;
+   估 ~1.5 天
 2. **M3 PR-4** Stage 5-7 Classifier + Post-Constructive Validator + Complexity Rule;
    估 ~1 天
 3. **M3 PR-5** Stage 8 Compaction(exhaustive + beam_search fallback)+ Forest 上限
@@ -2664,8 +2698,8 @@ python scripts\inspect_db.py 2330
    toml;估 ~半天
 7. **M3 P0 Gate** 五檔(0050 / 2330 / 3363 / 6547 / 1312)實測 + 校準
    forest_max_size / compaction_timeout_secs / BeamSearchFallback.k /
-   REVERSAL_ATR_MULTIPLIER / STOCK_NEUTRAL_ATR_MULTIPLIER 預設值,寫入
-   `docs/benchmarks/`(對齊 cores_overview §9.1)
+   REVERSAL_ATR_MULTIPLIER / STOCK_NEUTRAL_ATR_MULTIPLIER / BEAM_CAP_MULTIPLIER
+   預設值,寫入 `docs/benchmarks/`(對齊 cores_overview §9.1)
 
 m2 收尾(可平行,**不阻塞 M3**):
 
