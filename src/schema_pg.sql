@@ -930,6 +930,7 @@ CREATE INDEX IF NOT EXISTS idx_price_monthly_fwd_dirty
 -- 對應 alembic l1m2n3o4p5q6 + collector.toml dual-write entries。
 
 -- 股權分散表(每 level 1 row;FinMind raw)
+-- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補回(spec §3.5 明文要求)
 CREATE TABLE IF NOT EXISTS holding_shares_per_tw (
     market               TEXT NOT NULL,
     stock_id             TEXT NOT NULL,
@@ -938,6 +939,7 @@ CREATE TABLE IF NOT EXISTS holding_shares_per_tw (
     people               BIGINT,
     percent              NUMERIC(8, 4),
     unit                 BIGINT,
+    source               TEXT NOT NULL DEFAULT 'finmind',
     PRIMARY KEY (market, stock_id, date, holding_shares_level)
 );
 CREATE INDEX IF NOT EXISTS idx_holding_shares_per_tw_stock_date_desc
@@ -945,6 +947,7 @@ CREATE INDEX IF NOT EXISTS idx_holding_shares_per_tw_stock_date_desc
 
 
 -- 財報三表合一(event_type ∈ income/balance/cashflow,reuse pae convention)
+-- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補上(spec §3.6 表格漏寫,依 Bronze 一致原則補回)
 CREATE TABLE IF NOT EXISTS financial_statement_tw (
     market      TEXT NOT NULL,
     stock_id    TEXT NOT NULL,
@@ -953,6 +956,7 @@ CREATE TABLE IF NOT EXISTS financial_statement_tw (
     type        TEXT,
     origin_name TEXT NOT NULL,
     value       NUMERIC(20, 4),
+    source      TEXT NOT NULL DEFAULT 'finmind',
     PRIMARY KEY (market, stock_id, date, event_type, origin_name),
     CONSTRAINT chk_fs_tw_event_type CHECK (event_type IN ('income', 'balance', 'cashflow'))
 );
@@ -963,6 +967,7 @@ CREATE INDEX IF NOT EXISTS idx_financial_statement_tw_stock_date_desc
 -- 月營收(raw FinMind 欄名;Silver builder 才 rename revenue_year → revenue_yoy 等)
 -- create_time 用 TEXT(per PR #18.5 hotfix m2n3o4p5q6r7):FinMind 對某些 row 回 ""
 -- 不是 NULL,Bronze raw 保留原始字串,Silver builder cast 用 NULLIF(...)::TIMESTAMPTZ
+-- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補上(spec §3.6 表格漏寫,依 Bronze 一致原則補回)
 CREATE TABLE IF NOT EXISTS monthly_revenue_tw (
     market         TEXT NOT NULL,
     stock_id       TEXT NOT NULL,
@@ -972,6 +977,7 @@ CREATE TABLE IF NOT EXISTS monthly_revenue_tw (
     revenue_month  NUMERIC(10, 4),
     country        TEXT,
     create_time    TEXT,
+    source         TEXT NOT NULL DEFAULT 'finmind',
     PRIMARY KEY (market, stock_id, date)
 );
 CREATE INDEX IF NOT EXISTS idx_monthly_revenue_tw_stock_date_desc
