@@ -1,7 +1,7 @@
 """
 silver/builders/monthly_revenue.py
 ==================================
-monthly_revenue_tw (Bronze) → monthly_revenue_derived (Silver)。
+monthly_revenue (Bronze) → monthly_revenue_derived (Silver)。
 
 Bronze 是 raw FinMind 欄名(revenue_year / revenue_month / country / create_time),
 Silver 用 v2.0 慣用名(revenue_yoy / revenue_mom)+ detail JSONB 收 country /
@@ -16,7 +16,8 @@ create_time:Bronze TEXT(per PR #18.5 hotfix m2n3o4p5q6r7,FinMind 對某些 row
 回 "" 不是 NULL),Silver detail 直接保留 TEXT。Aggregation Layer 之後若要 cast
 TIMESTAMPTZ 用 NULLIF(create_time, '')::TIMESTAMPTZ 處理空字串。
 
-Bronze 已 PR #18.5 落地(smoke test 3 stocks 通過)。
+Bronze 已 PR #18.5 落地(smoke test 3 stocks 通過);PR #R3(alembic t9u0v1w2x3y4)
+後升格去 `_tw` 後綴。
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ logger = logging.getLogger("collector.silver.builders.monthly_revenue")
 
 NAME          = "monthly_revenue"
 SILVER_TABLE  = "monthly_revenue_derived"
-BRONZE_TABLES = ["monthly_revenue_tw"]
+BRONZE_TABLES = ["monthly_revenue"]
 
 DETAIL_KEYS = ("country", "create_time")
 
@@ -61,7 +62,7 @@ def run(
 ) -> dict[str, Any]:
     start = time.monotonic()
 
-    bronze = fetch_bronze(db, "monthly_revenue_tw", stock_ids=stock_ids)
+    bronze = fetch_bronze(db, "monthly_revenue", stock_ids=stock_ids)
     silver = _build_silver_rows(bronze)
     written = upsert_silver(
         db, SILVER_TABLE, silver,

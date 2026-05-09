@@ -66,10 +66,10 @@ def _make_subtests() -> list[dict]:
         ("margin_purchase_short_sale_tw", "margin_daily_derived",      [], []),
         ("securities_lending_tw",       "margin_daily_derived",        ["transaction_type", "fee_rate"], ["議借", 0.0]),
         ("foreign_investor_share_tw",   "foreign_holding_derived",     [], []),
-        ("holding_shares_per_tw",       "holding_shares_per_derived",  ["holding_shares_level"], ["__pr20__"]),
+        ("holding_shares_per",          "holding_shares_per_derived",  ["holding_shares_level"], ["__pr20__"]),
         ("day_trading_tw",              "day_trading_derived",         [], []),
         ("valuation_per_tw",            "valuation_daily_derived",     [], []),
-        ("monthly_revenue_tw",          "monthly_revenue_derived",     [], []),
+        ("monthly_revenue",             "monthly_revenue_derived",     [], []),
         ("market_ohlcv_tw",             "taiex_index_derived",         [], []),
         ("market_index_us",             "us_market_index_derived",     [], []),
     ]
@@ -99,15 +99,15 @@ def _make_subtests() -> list[dict]:
     # ---- 5 special ----
     # financial_statement(Bronze 多 PK col,Silver 4-col PK,event_type → type)
     base.append({
-        "name": "financial_statement_tw → financial_statement_derived (event_type→type)",
+        "name": "financial_statement → financial_statement_derived (event_type→type)",
         "bronze_insert": (
-            "INSERT INTO financial_statement_tw "
+            "INSERT INTO financial_statement "
             "(market, stock_id, date, event_type, origin_name) "
             "VALUES (%s, %s, %s, %s, %s)"
         ),
         "bronze_insert_params": [MARKET, STOCK, SDATE, "income", "__pr20__"],
         "bronze_cleanup": (
-            "DELETE FROM financial_statement_tw "
+            "DELETE FROM financial_statement "
             "WHERE market = %s AND stock_id = %s AND date = %s "
             "AND event_type = %s AND origin_name = %s"
         ),

@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.21，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.24，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/initial-setup-fXhK2`，alembic head `s8t9u0v1w2x3_pr_r2_rename_v2_legacy_3_tables`（2026-05-09，PR #R2 v2.0 舊 3 表 rename `_legacy_v2`）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/bronze-tables-rename-8rawA`，alembic head `t9u0v1w2x3y4_pr_r3_promote_tw_bronze_3_tables`（2026-05-09，PR #R3 `_tw` Bronze 3 表升格主名）。
 
 ---
 
@@ -168,7 +168,150 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅(m2 大重構 R1:source 欄補回 3 張 _tw) → #R2 ⏳(R2:v2.0 舊 3 表 rename _legacy_v2)`。m2 大重構 plan 在 PR #24,R1~R6 切片動工中。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅(m2 大重構 R1:source 欄補回 3 張 _tw) → #R2 ✅(R2:v2.0 舊 3 表 rename _legacy_v2) → #R3 ⏳(R3:_tw Bronze 升格主名)`。m2 大重構 plan 在 PR #24,R1~R6 切片動工中。
+
+---
+
+## v1.24 — PR #R3 m2 大重構:`_tw` Bronze 升格主名(2026-05-09)
+
+接 R2 落地後動 R3(plan §五)。3 張 `_tw` Bronze 表去 `_tw` 後綴升格成主名,
+完成 m2 大重構 schema 升格的最後一步;collector.toml v3 entry name 收回主名留 R4。
+
+### 範圍
+
+| 舊名 | 新名 |
+|---|---|
+| `holding_shares_per_tw` | `holding_shares_per` |
+| `financial_statement_tw` | `financial_statement` |
+| `monthly_revenue_tw` | `monthly_revenue` |
+
+連帶 rename 3 個 explicit index(去 `_tw` 後綴):
+- `idx_holding_shares_per_tw_stock_date_desc` → `idx_holding_shares_per_stock_date_desc`
+- `idx_financial_statement_tw_stock_date_desc` → `idx_financial_statement_stock_date_desc`
+- `idx_monthly_revenue_tw_stock_date_desc` → `idx_monthly_revenue_stock_date_desc`
+
+(PK 由 PG 自動跟著表 rename。)
+
+### Trigger 不需手動 DROP+重建(2026-05-09 sandbox 驗證)
+
+PG trigger 透過 OID 綁 table,不是綁名字 — ALTER TABLE RENAME 後 trigger 自動
+跟著表走,`information_schema.triggers.event_object_table` 自動更新到新名。
+
+驗證:`_smoke_t` → `_smoke_t2` rename 後 `_smoke_trg.event_object_table = _smoke_t2` ✓
+(本機 user PowerShell + here-string + psql 跑過,結果回 `_smoke_t2`)。
+
+3 個受影響的 dirty trigger 全部自動跟到主名,**migration 不動 trigger DDL**:
+- `mark_holding_shares_per_derived_dirty`
+- `mark_financial_stmt_derived_dirty`
+- `mark_monthly_revenue_derived_dirty`
+
+→ `src/schema_pg.sql` 仍要把 CREATE TRIGGER ... ON `*_tw` 改成主名(給 fresh DB
+   走 schema_pg.sql 初始化用),這部分 PR #R3 同步落地。
+
+### alembic `t9u0v1w2x3y4_pr_r3_promote_tw_bronze_3_tables`
+
+idempotent 設計(`DO $$ ... IF EXISTS old AND NOT EXISTS new ... THEN ALTER TABLE ... RENAME ... END $$`):
+- 既有 DB(舊 `_tw`)→ rename 走起來
+- fresh DB(schema_pg.sql 已是主名)→ no-op pass through
+
+下面條件一起檢查:`IF EXISTS old AND NOT EXISTS new`,**只做安全 rename,不會
+誤踩已 rename 的表**。
+
+### 配套改動
+
+- `src/schema_pg.sql`:3 個 CREATE TABLE 改主名 + 3 個 INDEX rename + 3 個 CREATE
+  TRIGGER ON 表名同步 + comment 標 PR #R3
+- `config/collector.toml`:5 個 v3 entry 的 `target_table` 從 `*_tw` 改主名:
+
+  | entry | target_table |
+  |---|---|
+  | `holding_shares_per_v3` | `holding_shares_per` |
+  | `financial_income_v3` | `financial_statement` |
+  | `financial_balance_v3` | `financial_statement` |
+  | `financial_cashflow_v3` | `financial_statement` |
+  | `monthly_revenue_v3` | `monthly_revenue` |
+
+  Entry name 仍留 `_v3` 後綴,等 R4 收回主名(plan §6.3 推薦簡化選項:留 `_v3`
+  作為「重抓 spec 來源」標籤永久,避免 api_sync_progress 遷移)。
+
+  5 個 v2.0 entries(target=`_legacy_v2`)**不動** — R2 已落地。
+
+- `src/silver/builders/{holding_shares_per,financial_statement,monthly_revenue}.py`:
+  `BRONZE_TABLES` + `fetch_bronze()` 表名改主名 + docstring 標 PR #R3
+
+- `scripts/inspect_db.py`:Bronze 區段 3 表名同步主名
+
+- `scripts/verify_pr20_triggers.py`:trigger spec 表名同步主名(holding_shares_per
+  generic spec / financial_statement special spec / monthly_revenue generic spec)
+
+### user 本機驗證流程
+
+```powershell
+git pull
+alembic upgrade head                                    # → t9u0v1w2x3y4
+
+# 3 張主名表存在 + 既有資料完整
+psql $env:DATABASE_URL -c "
+  SELECT 'holding_shares_per'  AS t, COUNT(*) FROM holding_shares_per
+  UNION ALL SELECT 'financial_statement', COUNT(*) FROM financial_statement
+  UNION ALL SELECT 'monthly_revenue',     COUNT(*) FROM monthly_revenue
+"
+
+# 舊 _tw 名應全部消失
+psql $env:DATABASE_URL -c "SELECT 1 FROM holding_shares_per_tw LIMIT 1"   # ERROR: relation does not exist
+psql $env:DATABASE_URL -c "SELECT 1 FROM financial_statement_tw LIMIT 1"  # 同
+psql $env:DATABASE_URL -c "SELECT 1 FROM monthly_revenue_tw LIMIT 1"      # 同
+
+# 3 個 dirty trigger 自動跟著表 rename(無需 DROP+重建)
+psql $env:DATABASE_URL -c "
+  SELECT trigger_name, event_object_table FROM information_schema.triggers
+  WHERE trigger_name IN (
+    'mark_holding_shares_per_derived_dirty',
+    'mark_financial_stmt_derived_dirty',
+    'mark_monthly_revenue_derived_dirty'
+  )
+"
+# 預期 event_object_table 全部 = 主名(holding_shares_per / financial_statement / monthly_revenue)
+
+# Silver builders 讀新名 OK
+python src/main.py silver phase 7a --full-rebuild --stocks 2330
+python src/main.py silver phase 7b --full-rebuild --stocks 2330
+
+# dual-write 仍正常(主路徑寫主名 / legacy 路徑寫 _legacy_v2)
+python src/main.py validate
+python src/main.py incremental --phases 5 --stocks 2330
+psql $env:DATABASE_URL -c "
+  SELECT MAX(date) FROM holding_shares_per WHERE stock_id='2330'
+"
+
+# rollback smoke
+alembic downgrade -1 && alembic upgrade head
+```
+
+### 風險
+
+🟡 中(R3 是 m2 大重構最複雜的 PR):
+- collector.toml 5 個 v3 entries 的 target_table 必須跟 alembic rename 同步,
+  否則 dual-write 會 INSERT 進不存在的舊名 → upsert 炸
+- 已驗:5 v3 entries 全部改主名(grep 確認)
+- 3 個 Silver builder BRONZE_TABLES + fetch_bronze() 必須同步主名(已驗)
+- v2.0 entries(target=`_legacy_v2`)**不動** — R2 已落地
+- PR 順序強約束:必須 R2 → R3,否則 R3 rename 會撞既有 v2.0 表 PK 衝突
+  (R2 已落,空出主名,R3 才能升格)
+- Rollback:downgrade rename 反向(主名 → `*_tw`,索引同步反向)
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`t9u0v1w2x3y4`(待 user 本機 `alembic upgrade head` 落地)
+- PR #R3:本 PR(待 user verify)
+- 下個 PR:**#R4**(plan §六)— collector.toml v3 entry name 從 `_v3` 後綴
+  收回主名(`holding_shares_per_v3` → `holding_shares_per` 等)。**改 entry name
+  會改 `api_sync_progress.api_name`**,要小心 backfill 進度紀錄遷移
+  (用 SQL UPDATE 同步改名;plan §6.2 有寫流程)。
+  推薦走 plan §6.3 簡化選項:**保留 `_v3` 後綴永久作為「重抓 spec 來源」標籤**,
+  避免 api_sync_progress 遷移複雜度,只把 v2.0 entry 改 `_legacy` 後綴 + target
+  改 `_legacy_v2`(R2 已做)
+- R5 觀察期 21~60 天後,PR #R6 才會 DROP `_legacy_v2`
 
 ---
 
@@ -1950,28 +2093,37 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.21 PR #21 deprecated path 全砍(2026-05-09)**:刪除
-> `bronze/dirty_marker.py` 整檔 + `post_process.invalidate_fwd_cache` 函式體,
-> 清理 `bronze/__init__.py` / `phase_executor` 殘留 comment。PR #20 trigger
-> 成為唯一真相來源。沙箱 6 case import / AST 全綠。
-> v3.2 r1 PR sequencing 全收尾(#17~#22 + #21 cleanup 全綠)。
+> **🎯 v1.24 PR #R3 m2 大重構:`_tw` Bronze 升格主名(2026-05-09)**:
+> 3 張 `_tw` Bronze rename 去 suffix 升格主名 + 索引同步 + 5 v3 entry target 改主名 +
+> 3 Silver builder 同步 + schema_pg.sql / inspect_db / verify_pr20_triggers
+> 表名對齊。trigger 由 PG OID 自動跟著表 rename(已 sandbox 驗證),migration
+> 不需 DROP+重建。alembic head:`t9u0v1w2x3y4`(待 user verify)。
 
 ### 阻塞性排序
 
-無 critical-path 任務。剩 nice-to-have:
+m2 大重構接續(R5 觀察期 + R6 DROP 之間,先把 R4 收掉):
 
-1. **Rust binary 自接 dirty queue**(收尾用,非 critical)
+1. **PR #R4** — collector.toml v3 entry name 從 `_v3` 後綴收主名,或走
+   plan §6.3 簡化選項(永久保留 `_v3` 標籤)。**改 entry name 會改
+   `api_sync_progress.api_name`**,需要 SQL UPDATE 同步遷移 backfill 進度紀錄。
+   若選簡化選項,只把 v2.0 entry 改 `_legacy` 後綴(target 已在 R2 落地),
+   範圍縮成純 collector.toml 改名,1~2h 可完成。
+
+剩 nice-to-have:
+
+2. **Rust binary 自接 dirty queue**(收尾用,非 critical)
    讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`。
    orchestrator path 已接,Rust 自接是 belt-and-suspenders;當前生產環境完整 work。
 
-2. **margin / market_margin builder UNION 升級**(可選 nice-to-have)
+3. **margin / market_margin builder UNION 升級**(可選 nice-to-have)
    讓 builder iterate(主 Bronze ∪ 副 Bronze)keys,避免 Silver 永遠有 stub row
    (目前 9706 stub from SBL trigger / 10 stub from total_margin trigger)。
    不影響衍生欄 fill rate,只影響 Silver row count 漂亮度。
 
-3. **m2 milestone 完整收尾** — Silver views(spec §2.5)+ legacy_v2 rename
-   (blueprint §八.2)+ M3 prep,blueprint §十 PR 切法。是離開 v3.2 r1 進入 M3
-   indicator core 之前的最後一段。
+4. **PR #R5 觀察期 21~60 天 → PR #R6 DROP `_legacy_v2`** — m2 大重構最後一段
+   (永久 DROP,不可 rollback)。觀察 SLO:Silver builder 持續每日 12/12 OK +
+   api_sync_progress.status='failed' = 0 + 3 張 `_legacy_v2` row count 與
+   主名表 ±1%(plan §7.2)。
 
 ### 中期 backlog(non-blocking)
 
