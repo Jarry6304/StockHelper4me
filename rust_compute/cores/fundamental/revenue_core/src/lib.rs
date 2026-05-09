@@ -1,15 +1,10 @@
 // revenue_core(P2)— Fundamental Core(月頻)
 //
-// 對齊 oldm2Spec/fundamental_cores.md(spec user m3Spec 還沒寫,暫 ref oldm2)。
+// 對齊 m2Spec/oldm2Spec/fundamental_cores.md §三 revenue_core(spec r2 2026-05-07)。
 //
-// **本 PR 範圍**(極限推進):
-//   - RevenueParams + Output + 4 EventKind(YoY 高 / 低 / 連續正成長 / 連續負成長)
-//   - compute():逐筆組 series + 連續 streak detection
-//   - produce_facts():對 YoY 異常 / streak 出 Fact
-//
-// TODO(後續討論):
-//   - 預設 thresholds 由 best-guess 設(YoY ±20% / streak ≥ 3 月);user m3Spec 校準
-//   - 月頻資料時間對齊:每月 10 號前發布,batch 排程留 user 設定
+// 範圍:Params §3.3 / Output §3.5 / EventKind 8 個 / warmup §3.4。
+// 部分計算邏輯(cumulative_yoy_pct / historical high)為 best-guess,P0 後對 Silver
+// `monthly_revenue_derived.detail` JSONB schema 校準。
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -20,32 +15,39 @@ use serde_json::json;
 
 inventory::submit! {
     core_registry::CoreRegistration::new(
-        "revenue_core",
-        "0.1.0",
-        core_registry::CoreKind::Fundamental,
-        "P2",
-        "Revenue Core(月營收 YoY/MoM + streak)",
+        "revenue_core", "0.1.0", core_registry::CoreKind::Fundamental, "P2",
+        "Revenue Core(月營收 YoY/MoM/累計/創新高)",
     )
 }
 
+// ---------------------------------------------------------------------------
+// Params(對齊 spec §3.3)
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RevenueParams {
-    pub timeframe: Timeframe,
-    pub yoy_high_threshold: f64,    // 預設 20.0(%)
-    pub yoy_low_threshold: f64,     // 預設 -20.0(%)
-    pub streak_min_months: usize,   // 預設 3
+    pub yoy_high_threshold: f64,                // 預設 30.0(%)
+    pub yoy_low_threshold: f64,                 // 預設 -10.0(%)
+    pub mom_significant_threshold: f64,         // 預設 20.0(%)
+    pub streak_min_months: usize,               // 連續成長月數,預設 3
+    pub historical_high_lookback_months: usize, // 創高回看,預設 60
 }
 
 impl Default for RevenueParams {
     fn default() -> Self {
         Self {
-            timeframe: Timeframe::Monthly,
-            yoy_high_threshold: 20.0,
-            yoy_low_threshold: -20.0,
+            yoy_high_threshold: 30.0,
+            yoy_low_threshold: -10.0,
+            mom_significant_threshold: 20.0,
             streak_min_months: 3,
+            historical_high_lookback_months: 60,
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Output(對齊 spec §3.5)
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RevenueOutput {
@@ -57,15 +59,19 @@ pub struct RevenueOutput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RevenuePoint {
-    pub date: NaiveDate,
-    pub revenue: i64,
-    pub revenue_yoy: f64,
-    pub revenue_mom: f64,
+    pub period: String,            // "2026-03"
+    pub fact_date: NaiveDate,      // 月底日(對齊 spec §3.7)
+    pub report_date: NaiveDate,    // 實際發布日(從 detail.report_date parse,fallback fact_date)
+    pub revenue: i64,              // 月營收
+    pub yoy_pct: f64,
+    pub mom_pct: f64,
+    pub cumulative: i64,           // 年累計(從年初到本月加總)
+    pub cumulative_yoy_pct: f64,   // 累計年增率(vs 去年同期累計)
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RevenueEvent {
-    pub date: NaiveDate,
+    pub date: NaiveDate,           // = fact_date(月底日)
     pub kind: RevenueEventKind,
     pub value: f64,
     pub metadata: serde_json::Value,
@@ -73,11 +79,19 @@ pub struct RevenueEvent {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum RevenueEventKind {
-    YoYExtremeHigh,
-    YoYExtremeLow,
-    PositiveYoYStreak,
-    NegativeYoYStreak,
+    YoyHigh,
+    YoyLow,
+    YoyStreakUp,
+    YoyStreakDown,
+    MomSignificantUp,
+    MomSignificantDown,
+    HistoricalHigh,
+    HistoricalLow,
 }
+
+// ---------------------------------------------------------------------------
+// Core
+// ---------------------------------------------------------------------------
 
 pub struct RevenueCore;
 impl RevenueCore { pub fn new() -> Self { RevenueCore } }
@@ -91,44 +105,91 @@ impl IndicatorCore for RevenueCore {
     fn name(&self) -> &'static str { "revenue_core" }
     fn version(&self) -> &'static str { "0.1.0" }
 
+    /// §3.4:`historical_high_lookback_months + 12`
+    fn warmup_periods(&self, params: &Self::Params) -> usize {
+        params.historical_high_lookback_months + 12
+    }
+
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
-        let series: Vec<RevenuePoint> = input.points.iter().map(|p| RevenuePoint {
-            date: p.date,
-            revenue: p.revenue.unwrap_or(0),
-            revenue_yoy: p.revenue_yoy.unwrap_or(0.0),
-            revenue_mom: p.revenue_mom.unwrap_or(0.0),
-        }).collect();
+        let mut series = Vec::with_capacity(input.points.len());
+        // 累計算法:依年份 reset
+        let mut cum_by_year: std::collections::HashMap<i32, i64> = std::collections::HashMap::new();
+        let mut cum_by_year_prev: std::collections::HashMap<i32, i64> = std::collections::HashMap::new();
+        for raw in &input.points {
+            use chrono::Datelike;
+            let year = raw.date.year();
+            let revenue = raw.revenue.unwrap_or(0);
+            let cur_cum = cum_by_year.entry(year).or_insert(0);
+            *cur_cum += revenue;
+            let cum = *cur_cum;
+            // 累計 YoY:對比前一年同月累計
+            let cum_prev = cum_by_year_prev.get(&(year - 1)).copied().unwrap_or(0);
+            let cum_yoy = if cum_prev > 0 {
+                (cum - cum_prev) as f64 / cum_prev as f64 * 100.0
+            } else {
+                0.0
+            };
+            cum_by_year_prev.insert(year, cum);
+
+            let report_date = raw.detail.as_ref()
+                .and_then(|d| d.get("report_date"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+                .unwrap_or(raw.date);
+            series.push(RevenuePoint {
+                period: format!("{:04}-{:02}", raw.date.year(), raw.date.month()),
+                fact_date: raw.date,
+                report_date,
+                revenue,
+                yoy_pct: raw.revenue_yoy.unwrap_or(0.0),
+                mom_pct: raw.revenue_mom.unwrap_or(0.0),
+                cumulative: cum,
+                cumulative_yoy_pct: cum_yoy,
+            });
+        }
 
         let mut events = Vec::new();
         for p in &series {
-            if p.revenue_yoy >= params.yoy_high_threshold {
-                events.push(RevenueEvent {
-                    date: p.date,
-                    kind: RevenueEventKind::YoYExtremeHigh,
-                    value: p.revenue_yoy,
-                    metadata: json!({ "yoy": p.revenue_yoy, "threshold": params.yoy_high_threshold }),
-                });
-            } else if p.revenue_yoy <= params.yoy_low_threshold {
-                events.push(RevenueEvent {
-                    date: p.date,
-                    kind: RevenueEventKind::YoYExtremeLow,
-                    value: p.revenue_yoy,
-                    metadata: json!({ "yoy": p.revenue_yoy, "threshold": params.yoy_low_threshold }),
-                });
+            if p.yoy_pct >= params.yoy_high_threshold {
+                events.push(RevenueEvent { date: p.fact_date, kind: RevenueEventKind::YoyHigh, value: p.yoy_pct,
+                    metadata: json!({"period": p.period, "yoy": p.yoy_pct, "revenue": p.revenue, "report_date": p.report_date}) });
+            } else if p.yoy_pct <= params.yoy_low_threshold {
+                events.push(RevenueEvent { date: p.fact_date, kind: RevenueEventKind::YoyLow, value: p.yoy_pct,
+                    metadata: json!({"period": p.period, "yoy": p.yoy_pct}) });
+            }
+            if p.mom_pct >= params.mom_significant_threshold {
+                events.push(RevenueEvent { date: p.fact_date, kind: RevenueEventKind::MomSignificantUp, value: p.mom_pct,
+                    metadata: json!({"period": p.period, "mom": p.mom_pct}) });
+            } else if p.mom_pct <= -params.mom_significant_threshold {
+                events.push(RevenueEvent { date: p.fact_date, kind: RevenueEventKind::MomSignificantDown, value: p.mom_pct,
+                    metadata: json!({"period": p.period, "mom": p.mom_pct}) });
+            }
+        }
+        // YoY streak detection
+        streak(&series, params.streak_min_months,
+            |p| p.yoy_pct > 0.0,
+            RevenueEventKind::YoyStreakUp, &mut events);
+        streak(&series, params.streak_min_months,
+            |p| p.yoy_pct < 0.0,
+            RevenueEventKind::YoyStreakDown, &mut events);
+        // Historical High / Low(回看 N 月)
+        let lb = params.historical_high_lookback_months;
+        for i in lb..series.len() {
+            let win = &series[i - lb..i];
+            let prev_max = win.iter().map(|p| p.revenue).max().unwrap_or(0);
+            let prev_min = win.iter().map(|p| p.revenue).min().unwrap_or(i64::MAX);
+            if series[i].revenue > prev_max {
+                events.push(RevenueEvent { date: series[i].fact_date, kind: RevenueEventKind::HistoricalHigh, value: series[i].revenue as f64,
+                    metadata: json!({"period": series[i].period, "lookback_months": lb}) });
+            } else if series[i].revenue < prev_min {
+                events.push(RevenueEvent { date: series[i].fact_date, kind: RevenueEventKind::HistoricalLow, value: series[i].revenue as f64,
+                    metadata: json!({"period": series[i].period, "lookback_months": lb}) });
             }
         }
 
-        // YoY streak detection
-        streak(&series, params.streak_min_months,
-            |p| p.revenue_yoy > 0.0,
-            RevenueEventKind::PositiveYoYStreak, &mut events);
-        streak(&series, params.streak_min_months,
-            |p| p.revenue_yoy < 0.0,
-            RevenueEventKind::NegativeYoYStreak, &mut events);
-
         Ok(RevenueOutput {
             stock_id: input.stock_id.clone(),
-            timeframe: params.timeframe,
+            timeframe: Timeframe::Monthly,
             series,
             events,
         })
@@ -146,8 +207,6 @@ impl IndicatorCore for RevenueCore {
             metadata: e.metadata.clone(),
         }).collect()
     }
-
-    fn warmup_periods(&self, _: &Self::Params) -> usize { 12 } // 12 個月,YoY 比較需上一年
 }
 
 fn streak(
@@ -165,10 +224,10 @@ fn streak(
             let months = i - s;
             if months >= min_months {
                 out.push(RevenueEvent {
-                    date: series[i - 1].date,
+                    date: series[i - 1].fact_date,
                     kind,
                     value: months as f64,
-                    metadata: json!({ "months": months, "start_date": series[s].date, "end_date": series[i - 1].date }),
+                    metadata: json!({"months": months, "start_period": series[s].period, "end_period": series[i - 1].period}),
                 });
             }
         }
@@ -177,10 +236,10 @@ fn streak(
         let months = series.len() - s;
         if months >= min_months {
             out.push(RevenueEvent {
-                date: series.last().unwrap().date,
+                date: series.last().unwrap().fact_date,
                 kind,
                 value: months as f64,
-                metadata: json!({ "months": months, "start_date": series[s].date, "end_date": series.last().unwrap().date }),
+                metadata: json!({"months": months, "start_period": series[s].period, "end_period": series.last().unwrap().period}),
             });
         }
     }
@@ -201,18 +260,34 @@ mod tests {
                     revenue: Some(100_000_000),
                     revenue_yoy: Some(35.0),
                     revenue_mom: Some(5.0),
+                    detail: None,
                 },
             ],
         };
         let core = RevenueCore::new();
         let out = core.compute(&series, RevenueParams::default()).unwrap();
-        assert!(out.events.iter().any(|e| e.kind == RevenueEventKind::YoYExtremeHigh));
+        assert!(out.events.iter().any(|e| e.kind == RevenueEventKind::YoyHigh));
     }
 
     #[test]
-    fn name_version() {
+    fn name_warmup() {
         let core = RevenueCore::new();
         assert_eq!(core.name(), "revenue_core");
-        assert_eq!(core.warmup_periods(&RevenueParams::default()), 12);
+        assert_eq!(core.warmup_periods(&RevenueParams::default()), 72); // 60 + 12
+    }
+
+    #[test]
+    fn point_period_format() {
+        let series = MonthlyRevenueSeries {
+            stock_id: "2330".to_string(),
+            points: vec![MonthlyRevenueRaw {
+                date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
+                revenue: Some(100_000_000), revenue_yoy: Some(10.0), revenue_mom: Some(2.0),
+                detail: None,
+            }],
+        };
+        let out = RevenueCore::new().compute(&series, RevenueParams::default()).unwrap();
+        assert_eq!(out.series[0].period, "2026-03");
+        assert_eq!(out.series[0].fact_date, out.series[0].report_date); // detail None → fallback
     }
 }

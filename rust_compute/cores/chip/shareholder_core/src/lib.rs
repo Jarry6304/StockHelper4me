@@ -43,8 +43,6 @@ pub struct ShareholderParams {
     pub large_holder_threshold: usize,
     pub concentration_change_threshold: f64,
     pub small_holder_count_change_threshold: usize,
-    /// 連續 streak 最小週數,預設 4
-    pub streak_min_weeks: usize,
 }
 
 impl Default for ShareholderParams {
@@ -55,10 +53,12 @@ impl Default for ShareholderParams {
             large_holder_threshold: 1000,
             concentration_change_threshold: 1.0,
             small_holder_count_change_threshold: 500,
-            streak_min_weeks: 4,
         }
     }
 }
+
+/// 連續 streak 最小週數(spec §6.5 EventKind 列出 streak 事件,§6.3 Params 未列;寫死 const)
+const STREAK_MIN_WEEKS: usize = 4;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ShareholderOutput {
@@ -150,16 +150,16 @@ fn detect_events(series: &[ShareholderPoint], params: &ShareholderParams) -> Vec
     if series.len() < 2 { return events; }
 
     // streak detection — 連續 N 週小戶減少 / 大戶累積
-    streak(series, params.streak_min_weeks,
+    streak(series, STREAK_MIN_WEEKS,
         |a, b| (b.small_holders_count as i64) < (a.small_holders_count as i64),
         ShareholderEventKind::SmallHoldersDecreasing, &mut events);
-    streak(series, params.streak_min_weeks,
+    streak(series, STREAK_MIN_WEEKS,
         |a, b| (b.small_holders_count as i64) > (a.small_holders_count as i64),
         ShareholderEventKind::SmallHoldersIncreasing, &mut events);
-    streak(series, params.streak_min_weeks,
+    streak(series, STREAK_MIN_WEEKS,
         |a, b| b.large_holders_pct > a.large_holders_pct,
         ShareholderEventKind::LargeHoldersAccumulating, &mut events);
-    streak(series, params.streak_min_weeks,
+    streak(series, STREAK_MIN_WEEKS,
         |a, b| b.large_holders_pct < a.large_holders_pct,
         ShareholderEventKind::LargeHoldersReducing, &mut events);
 

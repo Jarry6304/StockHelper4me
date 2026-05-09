@@ -25,6 +25,8 @@ pub struct MonthlyRevenueRaw {
     pub revenue_yoy: Option<f64>,
     /// MoM 成長率(%)
     pub revenue_mom: Option<f64>,
+    /// detail JSONB,可能含 report_date / cumulative 等(spec §3.2)
+    pub detail: Option<serde_json::Value>,
 }
 
 pub async fn load_monthly_revenue(
@@ -34,7 +36,7 @@ pub async fn load_monthly_revenue(
 ) -> Result<MonthlyRevenueSeries> {
     let points: Vec<MonthlyRevenueRaw> = sqlx::query_as(
         r#"
-        SELECT date, revenue, revenue_yoy, revenue_mom
+        SELECT date, revenue, revenue_yoy, revenue_mom, detail
         FROM monthly_revenue_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - ($2::int * 31))

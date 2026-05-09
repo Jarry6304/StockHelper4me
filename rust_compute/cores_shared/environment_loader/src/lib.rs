@@ -78,6 +78,19 @@ pub async fn load_us_market(pool: &PgPool, stock_id: &str, lookback_days: i32) -
     Ok(MarketIndexUsSeries { stock_id: stock_id.to_string(), points })
 }
 
+/// SPY + VIX 兩 series 的組合(對齊 us_market_core spec §4.6 同 Point 含兩者欄位)
+#[derive(Debug, Clone, Serialize)]
+pub struct UsMarketCombinedSeries {
+    pub spy: MarketIndexUsSeries,
+    pub vix: MarketIndexUsSeries,
+}
+
+pub async fn load_us_market_combined(pool: &PgPool, lookback_days: i32) -> Result<UsMarketCombinedSeries> {
+    let spy = load_us_market(pool, "SPY", lookback_days).await?;
+    let vix = load_us_market(pool, "^VIX", lookback_days).await?;
+    Ok(UsMarketCombinedSeries { spy, vix })
+}
+
 // ===========================================================================
 // ExchangeRate(PK 含 currency,不含 stock_id)
 // ===========================================================================

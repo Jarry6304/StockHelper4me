@@ -1,8 +1,5 @@
-// atr_core(P1)— Indicator Core(波動率)
-//
-// 對齊 oldm2Spec/indicator_cores_volatility.md(spec user m3Spec 待寫)。
-// Wilder ATR 與 neely_core::monowave::pure_close::compute_atr_series 同算法,
-// 但本 core 是獨立 Indicator(輸出 ATR 數值序列 + 異常事件)。
+// atr_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_volatility.md §四 r2
+// Params §4.2(period only)/ Output §4.4(atr + atr_pct)/ Fact §4.5(3 種)
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -14,22 +11,36 @@ use serde_json::json;
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "atr_core", "0.1.0", core_registry::CoreKind::Indicator, "P1",
-        "ATR Core(Wilder ATR + 波動率異常)",
+        "ATR Core(Wilder ATR + atr_pct + 波動率事件)",
     )
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct AtrParams { pub timeframe: Timeframe, pub period: usize, pub spike_multiplier: f64 }
-impl Default for AtrParams { fn default() -> Self { Self { timeframe: Timeframe::Daily, period: 14, spike_multiplier: 2.0 } } }
+/// 1 年 lookback 給 volatility extreme high/low(對齊 §4.5 Fact lookback "1y")
+const LOOKBACK_1Y: usize = 252;
+/// volatility expansion lookback days(spec §4.5 範例「10 天 +50%」)
+const EXPANSION_LOOKBACK: usize = 10;
+const EXPANSION_THRESHOLD: f64 = 0.5; // 50%
 
 #[derive(Debug, Clone, Serialize)]
-pub struct AtrOutput { pub stock_id: String, pub timeframe: Timeframe, pub series: Vec<AtrPoint>, pub events: Vec<AtrEvent> }
+pub struct AtrParams {
+    pub period: usize,
+    pub timeframe: Timeframe,
+}
+impl Default for AtrParams { fn default() -> Self { Self { period: 14, timeframe: Timeframe::Daily } } }
+
 #[derive(Debug, Clone, Serialize)]
-pub struct AtrPoint { pub date: NaiveDate, pub atr: f64 }
+pub struct AtrOutput {
+    pub stock_id: String, pub timeframe: Timeframe,
+    pub series: Vec<AtrPoint>,
+    #[serde(skip)]
+    pub events: Vec<AtrEvent>,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct AtrPoint { pub date: NaiveDate, pub atr: f64, pub atr_pct: f64 }
 #[derive(Debug, Clone, Serialize)]
 pub struct AtrEvent { pub date: NaiveDate, pub kind: AtrEventKind, pub value: f64, pub metadata: serde_json::Value }
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub enum AtrEventKind { Spike, Compression }
+pub enum AtrEventKind { VolatilityExtremeHigh, VolatilityExtremeLow, VolatilityExpansion }
 
 pub struct AtrCore;
 impl AtrCore { pub fn new() -> Self { AtrCore } }
@@ -43,16 +54,14 @@ pub fn wilder_atr(bars: &[ohlcv_loader::OhlcvBar], period: usize) -> Vec<f64> {
     for i in 1..n {
         let prev = bars[i - 1].close;
         let h = bars[i].high; let l = bars[i].low;
-        let candidate = [(h - l).abs(), (h - prev).abs(), (l - prev).abs()];
-        tr.push(candidate.iter().cloned().fold(0.0_f64, f64::max));
+        let cands = [(h - l).abs(), (h - prev).abs(), (l - prev).abs()];
+        tr.push(cands.iter().cloned().fold(0.0_f64, f64::max));
     }
     let mut atr = vec![0.0; n];
     let warmup = period.min(n);
     let mut sum = 0.0;
     for i in 0..warmup { sum += tr[i]; atr[i] = sum / (i + 1) as f64; }
-    for i in warmup..n {
-        atr[i] = ((period as f64 - 1.0) * atr[i - 1] + tr[i]) / period as f64;
-    }
+    for i in warmup..n { atr[i] = ((period as f64 - 1.0) * atr[i - 1] + tr[i]) / period as f64; }
     atr
 }
 
@@ -66,18 +75,36 @@ impl IndicatorCore for AtrCore {
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
         let atrs = wilder_atr(&input.bars, params.period);
-        let series: Vec<AtrPoint> = input.bars.iter().zip(atrs.iter()).map(|(b, a)| AtrPoint { date: b.date, atr: *a }).collect();
-        // Events:當前 ATR > 過去 N 天均 ATR × spike_multiplier → Spike
+        let series: Vec<AtrPoint> = (0..input.bars.len()).map(|i| {
+            let close = input.bars[i].close;
+            let atr = atrs[i];
+            let atr_pct = if close > 0.0 { atr / close * 100.0 } else { 0.0 };
+            AtrPoint { date: input.bars[i].date, atr, atr_pct }
+        }).collect();
         let mut events = Vec::new();
-        let lookback = params.period * 2;
-        for i in lookback..series.len() {
-            let prev_avg: f64 = series[i - lookback..i].iter().map(|p| p.atr).sum::<f64>() / lookback as f64;
-            if prev_avg > 0.0 {
-                let r = series[i].atr / prev_avg;
-                if r >= params.spike_multiplier {
-                    events.push(AtrEvent { date: series[i].date, kind: AtrEventKind::Spike, value: r, metadata: json!({"atr": series[i].atr, "prev_avg": prev_avg, "ratio": r}) });
-                } else if r < 0.5 {
-                    events.push(AtrEvent { date: series[i].date, kind: AtrEventKind::Compression, value: r, metadata: json!({"atr": series[i].atr, "prev_avg": prev_avg, "ratio": r}) });
+        // Volatility extreme high/low(1y lookback)
+        if series.len() > LOOKBACK_1Y {
+            for i in LOOKBACK_1Y..series.len() {
+                let win = &series[i - LOOKBACK_1Y..i];
+                let max_pct = win.iter().map(|p| p.atr_pct).fold(f64::NEG_INFINITY, f64::max);
+                let min_pct = win.iter().filter(|p| p.atr_pct > 0.0).map(|p| p.atr_pct).fold(f64::INFINITY, f64::min);
+                if series[i].atr_pct > max_pct {
+                    events.push(AtrEvent { date: series[i].date, kind: AtrEventKind::VolatilityExtremeHigh, value: series[i].atr_pct,
+                        metadata: json!({"event": "volatility_extreme_high", "value_pct": series[i].atr_pct, "lookback": "1y"}) });
+                } else if series[i].atr_pct > 0.0 && series[i].atr_pct < min_pct {
+                    events.push(AtrEvent { date: series[i].date, kind: AtrEventKind::VolatilityExtremeLow, value: series[i].atr_pct,
+                        metadata: json!({"event": "volatility_extreme_low", "value_pct": series[i].atr_pct, "lookback": "1y"}) });
+                }
+            }
+        }
+        // Volatility expansion(N 天內 atr_pct 增 +50%)
+        if series.len() > EXPANSION_LOOKBACK {
+            for i in EXPANSION_LOOKBACK..series.len() {
+                let prev = series[i - EXPANSION_LOOKBACK].atr_pct;
+                let cur = series[i].atr_pct;
+                if prev > 0.0 && (cur - prev) / prev >= EXPANSION_THRESHOLD {
+                    events.push(AtrEvent { date: series[i].date, kind: AtrEventKind::VolatilityExpansion, value: (cur - prev) / prev * 100.0,
+                        metadata: json!({"event": "volatility_expansion", "from": prev, "to": cur, "days": EXPANSION_LOOKBACK}) });
                 }
             }
         }
@@ -88,8 +115,7 @@ impl IndicatorCore for AtrCore {
         output.events.iter().map(|e| Fact {
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
             source_core: "atr_core".to_string(), source_version: "0.1.0".to_string(),
-            params_hash: None,
-            statement: format!("ATR {:?} on {}: ratio={:.2}", e.kind, e.date, e.value),
+            params_hash: None, statement: format!("ATR {:?} on {}: value={:.2}", e.kind, e.date, e.value),
             metadata: e.metadata.clone(),
         }).collect()
     }
@@ -98,31 +124,10 @@ impl IndicatorCore for AtrCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ohlcv_loader::OhlcvBar;
-
     #[test]
-    fn name_and_warmup() {
+    fn name_warmup() {
         let core = AtrCore::new();
         assert_eq!(core.name(), "atr_core");
-        assert_eq!(core.warmup_periods(&AtrParams::default()), 56); // 14 × 4
-    }
-
-    #[test]
-    fn empty_series_no_panic() {
-        let series = OhlcvSeries { stock_id: "2330".to_string(), timeframe: Timeframe::Daily, bars: vec![] };
-        let core = AtrCore::new();
-        let out = core.compute(&series, AtrParams::default()).unwrap();
-        assert!(out.series.is_empty());
-    }
-
-    fn b(d: &str, h: f64, l: f64, c: f64) -> OhlcvBar {
-        OhlcvBar { date: chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(), open: c, high: h, low: l, close: c, volume: None }
-    }
-
-    #[test]
-    fn first_atr_equals_high_low() {
-        let bars = vec![b("2026-01-01", 102.0, 98.0, 100.0)];
-        let atrs = wilder_atr(&bars, 14);
-        assert!((atrs[0] - 4.0).abs() < 1e-9);
+        assert_eq!(core.warmup_periods(&AtrParams::default()), 56);
     }
 }

@@ -1,9 +1,5 @@
-// adx_core(P1)— Indicator Core(動量 / 趨勢強度類)
-// 對齊 oldm2Spec/indicator_cores_momentum.md §六
-// Welles Wilder ADX(1978):+DI / -DI / DX / ADX
-//
-// **本 PR 範圍**:基本 ADX 計算 + Trending(ADX>25)/Ranging(ADX<20)事件
-// TODO:+DI/-DI cross 事件 — 留 PR-future
+// adx_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §六 r2
+// Params §6.2(strong_trend / very_strong)/ Output §6.4(僅 adx/+DI/-DI)/ warmup §6.3 ×6
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -15,22 +11,32 @@ use serde_json::json;
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "adx_core", "0.1.0", core_registry::CoreKind::Indicator, "P1",
-        "ADX Core(Wilder ADX 趨勢強度)",
+        "ADX Core(Wilder ADX 14 + DI cross)",
     )
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct AdxParams { pub timeframe: Timeframe, pub period: usize, pub trending_threshold: f64, pub ranging_threshold: f64 }
-impl Default for AdxParams { fn default() -> Self { Self { timeframe: Timeframe::Daily, period: 14, trending_threshold: 25.0, ranging_threshold: 20.0 } } }
+pub struct AdxParams {
+    pub period: usize,                // 預設 14
+    pub strong_trend_threshold: f64,  // 預設 25.0
+    pub very_strong_threshold: f64,   // 預設 50.0
+    pub timeframe: Timeframe,
+}
+impl Default for AdxParams { fn default() -> Self { Self { period: 14, strong_trend_threshold: 25.0, very_strong_threshold: 50.0, timeframe: Timeframe::Daily } } }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct AdxOutput { pub stock_id: String, pub timeframe: Timeframe, pub series: Vec<AdxPoint>, pub events: Vec<AdxEvent> }
+pub struct AdxOutput {
+    pub stock_id: String, pub timeframe: Timeframe,
+    pub series: Vec<AdxPoint>,
+    #[serde(skip)]
+    pub events: Vec<AdxEvent>,
+}
 #[derive(Debug, Clone, Serialize)]
-pub struct AdxPoint { pub date: NaiveDate, pub plus_di: f64, pub minus_di: f64, pub adx: f64 }
+pub struct AdxPoint { pub date: NaiveDate, pub adx: f64, pub plus_di: f64, pub minus_di: f64 }
 #[derive(Debug, Clone, Serialize)]
 pub struct AdxEvent { pub date: NaiveDate, pub kind: AdxEventKind, pub value: f64, pub metadata: serde_json::Value }
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub enum AdxEventKind { Trending, Ranging, BullishDiCross, BearishDiCross }
+pub enum AdxEventKind { StrongTrendStart, VeryStrongTrend, BullishDiCross, BearishDiCross, AdxPeak, UptrendStrength }
 
 pub struct AdxCore;
 impl AdxCore { pub fn new() -> Self { AdxCore } }
@@ -50,42 +56,34 @@ impl IndicatorCore for AdxCore {
             return Ok(AdxOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series: Vec::new(), events: Vec::new() });
         }
         let p = params.period as f64;
-        // True Range / +DM / -DM
-        let mut tr = vec![0.0; n];
-        let mut plus_dm = vec![0.0; n];
-        let mut minus_dm = vec![0.0; n];
+        let mut tr = vec![0.0; n]; let mut pdm = vec![0.0; n]; let mut mdm = vec![0.0; n];
         for i in 1..n {
-            let cur = &input.bars[i];
-            let prev = &input.bars[i - 1];
-            let up_move = cur.high - prev.high;
-            let down_move = prev.low - cur.low;
-            if up_move > down_move && up_move > 0.0 { plus_dm[i] = up_move; }
-            if down_move > up_move && down_move > 0.0 { minus_dm[i] = down_move; }
+            let cur = &input.bars[i]; let prev = &input.bars[i - 1];
+            let up = cur.high - prev.high; let dn = prev.low - cur.low;
+            if up > dn && up > 0.0 { pdm[i] = up; }
+            if dn > up && dn > 0.0 { mdm[i] = dn; }
             tr[i] = (cur.high - cur.low).max((cur.high - prev.close).abs()).max((cur.low - prev.close).abs());
         }
-        // Wilder smoothing
-        let mut atr = vec![0.0; n]; let mut pdi_sm = vec![0.0; n]; let mut mdi_sm = vec![0.0; n];
+        let mut atr = vec![0.0; n]; let mut psm = vec![0.0; n]; let mut msm = vec![0.0; n];
         let warmup = params.period.min(n - 1);
-        let sum_tr: f64 = tr[1..=warmup].iter().sum();
-        let sum_p: f64 = plus_dm[1..=warmup].iter().sum();
-        let sum_m: f64 = minus_dm[1..=warmup].iter().sum();
-        atr[warmup] = sum_tr / p; pdi_sm[warmup] = sum_p / p; mdi_sm[warmup] = sum_m / p;
+        let s_tr: f64 = tr[1..=warmup].iter().sum();
+        let s_p: f64 = pdm[1..=warmup].iter().sum();
+        let s_m: f64 = mdm[1..=warmup].iter().sum();
+        atr[warmup] = s_tr / p; psm[warmup] = s_p / p; msm[warmup] = s_m / p;
         for i in (warmup + 1)..n {
             atr[i] = ((p - 1.0) * atr[i - 1] + tr[i]) / p;
-            pdi_sm[i] = ((p - 1.0) * pdi_sm[i - 1] + plus_dm[i]) / p;
-            mdi_sm[i] = ((p - 1.0) * mdi_sm[i - 1] + minus_dm[i]) / p;
+            psm[i] = ((p - 1.0) * psm[i - 1] + pdm[i]) / p;
+            msm[i] = ((p - 1.0) * msm[i - 1] + mdm[i]) / p;
         }
-        // +DI / -DI / DX / ADX
         let mut series = Vec::with_capacity(n);
         let mut dx = vec![0.0; n];
         for i in 0..n {
-            let plus_di = if atr[i] > 0.0 { 100.0 * pdi_sm[i] / atr[i] } else { 0.0 };
-            let minus_di = if atr[i] > 0.0 { 100.0 * mdi_sm[i] / atr[i] } else { 0.0 };
+            let plus_di = if atr[i] > 0.0 { 100.0 * psm[i] / atr[i] } else { 0.0 };
+            let minus_di = if atr[i] > 0.0 { 100.0 * msm[i] / atr[i] } else { 0.0 };
             let denom = plus_di + minus_di;
             dx[i] = if denom > 0.0 { 100.0 * (plus_di - minus_di).abs() / denom } else { 0.0 };
             series.push(AdxPoint { date: input.bars[i].date, plus_di, minus_di, adx: 0.0 });
         }
-        // ADX = Wilder smoothing of DX,從 warmup * 2 起算
         let adx_start = (warmup * 2).min(n);
         if adx_start < n {
             let init_sum: f64 = dx[warmup..adx_start].iter().sum();
@@ -97,24 +95,40 @@ impl IndicatorCore for AdxCore {
         }
         let mut events = Vec::new();
         for i in 1..series.len() {
-            let s = &series[i];
-            if s.adx >= params.trending_threshold {
-                events.push(AdxEvent { date: s.date, kind: AdxEventKind::Trending, value: s.adx,
-                    metadata: json!({"adx": s.adx, "plus_di": s.plus_di, "minus_di": s.minus_di}) });
-            } else if s.adx > 0.0 && s.adx <= params.ranging_threshold {
-                events.push(AdxEvent { date: s.date, kind: AdxEventKind::Ranging, value: s.adx,
-                    metadata: json!({"adx": s.adx, "plus_di": s.plus_di, "minus_di": s.minus_di}) });
+            let prev = &series[i - 1]; let cur = &series[i];
+            // StrongTrendStart:adx 跨越 threshold
+            if prev.adx < params.strong_trend_threshold && cur.adx >= params.strong_trend_threshold {
+                events.push(AdxEvent { date: cur.date, kind: AdxEventKind::StrongTrendStart, value: cur.adx,
+                    metadata: json!({"event": "strong_trend_start", "adx": cur.adx}) });
             }
-            // +DI/-DI cross
-            let prev = &series[i - 1];
+            // VeryStrongTrend
+            if prev.adx < params.very_strong_threshold && cur.adx >= params.very_strong_threshold {
+                events.push(AdxEvent { date: cur.date, kind: AdxEventKind::VeryStrongTrend, value: cur.adx,
+                    metadata: json!({"event": "very_strong_trend", "adx": cur.adx}) });
+            }
+            // DI cross
             let prev_above = prev.plus_di > prev.minus_di;
-            let cur_above = s.plus_di > s.minus_di;
+            let cur_above = cur.plus_di > cur.minus_di;
             if !prev_above && cur_above {
-                events.push(AdxEvent { date: s.date, kind: AdxEventKind::BullishDiCross, value: s.plus_di,
-                    metadata: json!({"plus_di": s.plus_di, "minus_di": s.minus_di}) });
+                events.push(AdxEvent { date: cur.date, kind: AdxEventKind::BullishDiCross, value: cur.plus_di,
+                    metadata: json!({"event": "di_bullish_cross"}) });
             } else if prev_above && !cur_above {
-                events.push(AdxEvent { date: s.date, kind: AdxEventKind::BearishDiCross, value: s.plus_di,
-                    metadata: json!({"plus_di": s.plus_di, "minus_di": s.minus_di}) });
+                events.push(AdxEvent { date: cur.date, kind: AdxEventKind::BearishDiCross, value: cur.plus_di,
+                    metadata: json!({"event": "di_bearish_cross"}) });
+            }
+        }
+        // ADX peak detection(連續 5 根降後,前一峰標 peak)
+        for i in 5..series.len() {
+            let cur = series[i].adx;
+            let win_max = series[i - 5..i].iter().map(|s| s.adx).fold(f64::NEG_INFINITY, f64::max);
+            if win_max > cur && win_max >= params.strong_trend_threshold {
+                // 找 peak idx
+                if let Some(peak_idx) = series[i - 5..i].iter().position(|s| (s.adx - win_max).abs() < 1e-9).map(|p| p + i - 5) {
+                    if peak_idx == i - 5 {
+                        events.push(AdxEvent { date: series[peak_idx].date, kind: AdxEventKind::AdxPeak, value: win_max,
+                            metadata: json!({"event": "adx_peak", "value": win_max}) });
+                    }
+                }
             }
         }
         Ok(AdxOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series, events })
@@ -134,5 +148,9 @@ impl IndicatorCore for AdxCore {
 mod tests {
     use super::*;
     #[test]
-    fn name() { assert_eq!(AdxCore::new().name(), "adx_core"); }
+    fn name_warmup() {
+        let core = AdxCore::new();
+        assert_eq!(core.name(), "adx_core");
+        assert_eq!(core.warmup_periods(&AdxParams::default()), 14 * 6);
+    }
 }

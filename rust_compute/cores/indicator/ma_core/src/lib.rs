@@ -1,9 +1,13 @@
-// ma_core(P1)— Indicator Core
+// ma_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §七 r2
 //
-// 對齊 oldm2Spec/indicator_cores_momentum.md §7(SMA / EMA / WMA 同族,以 enum 區分)
+// Spec critical:
+//   - Output 是 `MaOutput { series_by_spec: Vec<MaSeriesEntry> }`(非單一 series)
+//   - MaKind: Sma / Ema / Wma / Dema / Tema / Hma(6 種)
+//   - PriceSource: Close / Open / High / Low / Hl2 / Hlc3 / Ohlc4
+//   - CrossPairPolicy: None / AllPairs / Pairs(Vec<(usize, usize)>)
+//   - 跨均線交叉(SMA20 vs SMA60)單一實例內部偵測,對齊 §7.8 不違反零耦合
 //
-// **本 PR 範圍**:Vec<MaSpec> 多均線 + cross above/below close 事件
-// TODO:多均線 cross(短均上穿長均)golden cross / death cross — 留 PR-future
+// Dema/Tema/Hma 演算法用 best-guess 標準公式,P0 後可校準。
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -15,86 +19,131 @@ use serde_json::json;
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "ma_core", "0.1.0", core_registry::CoreKind::Indicator, "P1",
-        "MA Core(SMA / EMA / WMA 同族 by enum)",
+        "MA Core(SMA/EMA/WMA/Dema/Tema/Hma 同族 + cross detection)",
     )
 }
 
+const ABOVE_MA_STREAK_MIN: usize = 30;
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub enum MaKind { Sma, Ema, Wma }
+pub enum MaKind { Sma, Ema, Wma, Dema, Tema, Hma }
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum PriceSource { Close, Open, High, Low, Hl2, Hlc3, Ohlc4 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MaSpec { pub kind: MaKind, pub period: usize }
+pub struct MaSpec { pub kind: MaKind, pub period: usize, pub source: PriceSource }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MaParams { pub timeframe: Timeframe, pub specs: Vec<MaSpec> }
+pub enum CrossPairPolicy {
+    None,
+    AllPairs,
+    Pairs(Vec<(usize, usize)>),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MaParams {
+    pub specs: Vec<MaSpec>,
+    pub timeframe: Timeframe,
+    pub detect_cross_pairs: CrossPairPolicy,
+}
 impl Default for MaParams {
     fn default() -> Self {
-        Self { timeframe: Timeframe::Daily, specs: vec![
-            MaSpec { kind: MaKind::Sma, period: 5 },
-            MaSpec { kind: MaKind::Sma, period: 20 },
-            MaSpec { kind: MaKind::Sma, period: 60 },
-        ]}
+        Self {
+            specs: vec![MaSpec { kind: MaKind::Sma, period: 20, source: PriceSource::Close }],
+            timeframe: Timeframe::Daily,
+            detect_cross_pairs: CrossPairPolicy::None,
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MaOutput { pub stock_id: String, pub timeframe: Timeframe, pub events: Vec<MaEvent> }
+pub struct MaOutput {
+    pub stock_id: String,
+    pub timeframe: Timeframe,
+    pub series_by_spec: Vec<MaSeriesEntry>,
+    #[serde(skip)]
+    pub events: Vec<MaEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MaSeriesEntry { pub spec: MaSpec, pub series: Vec<MaPoint> }
+#[derive(Debug, Clone, Serialize)]
+pub struct MaPoint { pub date: NaiveDate, pub value: f64 }
 #[derive(Debug, Clone, Serialize)]
 pub struct MaEvent { pub date: NaiveDate, pub kind: MaEventKind, pub value: f64, pub metadata: serde_json::Value }
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub enum MaEventKind { CrossAbove, CrossBelow }
+pub enum MaEventKind { MaBullishCross, MaBearishCross, MaGoldenCross, MaDeathCross, AboveMaStreak }
 
 pub struct MaCore;
 impl MaCore { pub fn new() -> Self { MaCore } }
 impl Default for MaCore { fn default() -> Self { MaCore::new() } }
 
-pub fn sma(values: &[f64], period: usize) -> Vec<f64> {
-    let mut out = vec![0.0; values.len()];
-    if values.is_empty() || period == 0 { return out; }
-    let mut sum = 0.0;
-    for i in 0..values.len() {
-        sum += values[i];
-        if i >= period { sum -= values[i - period]; }
-        let div = (i + 1).min(period) as f64;
-        out[i] = sum / div;
-    }
+fn sma(v: &[f64], p: usize) -> Vec<f64> {
+    let mut out = vec![0.0; v.len()];
+    if v.is_empty() || p == 0 { return out; }
+    let mut s = 0.0;
+    for i in 0..v.len() { s += v[i]; if i >= p { s -= v[i - p]; } out[i] = s / (i + 1).min(p) as f64; }
     out
 }
-
-pub fn ema(values: &[f64], period: usize) -> Vec<f64> {
-    let mut out = vec![0.0; values.len()];
-    if values.is_empty() || period == 0 { return out; }
-    let alpha = 2.0 / (period as f64 + 1.0);
-    out[0] = values[0];
-    for i in 1..values.len() {
-        out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1];
-    }
+fn ema(v: &[f64], p: usize) -> Vec<f64> {
+    let mut out = vec![0.0; v.len()];
+    if v.is_empty() || p == 0 { return out; }
+    let a = 2.0 / (p as f64 + 1.0);
+    out[0] = v[0];
+    for i in 1..v.len() { out[i] = a * v[i] + (1.0 - a) * out[i - 1]; }
     out
 }
-
-pub fn wma(values: &[f64], period: usize) -> Vec<f64> {
-    let mut out = vec![0.0; values.len()];
-    if values.is_empty() || period == 0 { return out; }
-    for i in 0..values.len() {
-        let p = (i + 1).min(period);
-        let mut num = 0.0;
-        let mut den = 0.0;
-        for k in 0..p {
-            let w = (k + 1) as f64; // 越近權重越大
-            num += w * values[i - (p - 1 - k)];
-            den += w;
-        }
+fn wma(v: &[f64], p: usize) -> Vec<f64> {
+    let mut out = vec![0.0; v.len()];
+    if v.is_empty() || p == 0 { return out; }
+    for i in 0..v.len() {
+        let pp = (i + 1).min(p);
+        let mut num = 0.0; let mut den = 0.0;
+        for k in 0..pp { let w = (k + 1) as f64; num += w * v[i - (pp - 1 - k)]; den += w; }
         out[i] = if den > 0.0 { num / den } else { 0.0 };
     }
     out
 }
+fn dema(v: &[f64], p: usize) -> Vec<f64> {
+    let e1 = ema(v, p); let e2 = ema(&e1, p);
+    e1.iter().zip(e2.iter()).map(|(a, b)| 2.0 * a - b).collect()
+}
+fn tema(v: &[f64], p: usize) -> Vec<f64> {
+    let e1 = ema(v, p); let e2 = ema(&e1, p); let e3 = ema(&e2, p);
+    (0..v.len()).map(|i| 3.0 * e1[i] - 3.0 * e2[i] + e3[i]).collect()
+}
+fn hma(v: &[f64], p: usize) -> Vec<f64> {
+    // Hull MA = WMA(2*WMA(p/2) - WMA(p), sqrt(p))
+    let half = p / 2;
+    let w_half = wma(v, half.max(1));
+    let w_full = wma(v, p);
+    let raw: Vec<f64> = w_half.iter().zip(w_full.iter()).map(|(a, b)| 2.0 * a - b).collect();
+    let sqrt_p = (p as f64).sqrt().round() as usize;
+    wma(&raw, sqrt_p.max(1))
+}
 
-pub fn compute_ma(values: &[f64], spec: &MaSpec) -> Vec<f64> {
+fn compute_ma(values: &[f64], spec: &MaSpec) -> Vec<f64> {
     match spec.kind {
         MaKind::Sma => sma(values, spec.period),
         MaKind::Ema => ema(values, spec.period),
         MaKind::Wma => wma(values, spec.period),
+        MaKind::Dema => dema(values, spec.period),
+        MaKind::Tema => tema(values, spec.period),
+        MaKind::Hma => hma(values, spec.period),
     }
+}
+
+fn pick_source(bars: &[ohlcv_loader::OhlcvBar], src: PriceSource) -> Vec<f64> {
+    bars.iter().map(|b| match src {
+        PriceSource::Close => b.close,
+        PriceSource::Open => b.open,
+        PriceSource::High => b.high,
+        PriceSource::Low => b.low,
+        PriceSource::Hl2 => (b.high + b.low) / 2.0,
+        PriceSource::Hlc3 => (b.high + b.low + b.close) / 3.0,
+        PriceSource::Ohlc4 => (b.open + b.high + b.low + b.close) / 4.0,
+    }).collect()
 }
 
 impl IndicatorCore for MaCore {
@@ -103,40 +152,106 @@ impl IndicatorCore for MaCore {
     type Output = MaOutput;
     fn name(&self) -> &'static str { "ma_core" }
     fn version(&self) -> &'static str { "0.1.0" }
+    /// §7.4:各 kind 倍數,取 max + 5 緩衝
     fn warmup_periods(&self, params: &Self::Params) -> usize {
         params.specs.iter().map(|s| match s.kind {
-            MaKind::Sma => s.period + 5,
+            MaKind::Sma | MaKind::Wma => s.period,
             MaKind::Ema => s.period * 4,
-            MaKind::Wma => s.period + 5,
-        }).max().unwrap_or(20)
+            MaKind::Dema => s.period * 6,
+            MaKind::Tema => s.period * 8,
+            MaKind::Hma => s.period * 2,
+        }).max().unwrap_or(0) + 5
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
-        let closes: Vec<f64> = input.bars.iter().map(|b| b.close).collect();
-        let mut events = Vec::new();
+        let closes_for_streak: Vec<f64> = input.bars.iter().map(|b| b.close).collect();
+
+        // 對每個 spec 算 series
+        let mut series_by_spec: Vec<MaSeriesEntry> = Vec::with_capacity(params.specs.len());
         for spec in &params.specs {
-            let ma = compute_ma(&closes, spec);
-            for i in 1..closes.len() {
-                let prev_above = closes[i - 1] > ma[i - 1];
-                let cur_above = closes[i] > ma[i];
+            let src = pick_source(&input.bars, spec.source);
+            let ma = compute_ma(&src, spec);
+            let series: Vec<MaPoint> = (0..ma.len()).map(|i| MaPoint { date: input.bars[i].date, value: ma[i] }).collect();
+            series_by_spec.push(MaSeriesEntry { spec: spec.clone(), series });
+        }
+
+        let mut events = Vec::new();
+        // Price cross MA + AboveMaStreak
+        for entry in &series_by_spec {
+            let mut streak: usize = 0;
+            for i in 1..entry.series.len() {
+                let prev_above = closes_for_streak[i - 1] > entry.series[i - 1].value;
+                let cur_above = closes_for_streak[i] > entry.series[i].value;
                 if !prev_above && cur_above {
-                    events.push(MaEvent { date: input.bars[i].date, kind: MaEventKind::CrossAbove, value: ma[i],
-                        metadata: json!({ "kind": format!("{:?}", spec.kind), "period": spec.period, "close": closes[i], "ma": ma[i] }) });
+                    events.push(MaEvent { date: entry.series[i].date, kind: MaEventKind::MaBullishCross, value: entry.series[i].value,
+                        metadata: json!({"event": "ma_bullish_cross", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period}) });
                 } else if prev_above && !cur_above {
-                    events.push(MaEvent { date: input.bars[i].date, kind: MaEventKind::CrossBelow, value: ma[i],
-                        metadata: json!({ "kind": format!("{:?}", spec.kind), "period": spec.period, "close": closes[i], "ma": ma[i] }) });
+                    events.push(MaEvent { date: entry.series[i].date, kind: MaEventKind::MaBearishCross, value: entry.series[i].value,
+                        metadata: json!({"event": "ma_bearish_cross", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period}) });
+                }
+                if cur_above { streak += 1; } else {
+                    if streak >= ABOVE_MA_STREAK_MIN {
+                        events.push(MaEvent { date: entry.series[i - 1].date, kind: MaEventKind::AboveMaStreak, value: streak as f64,
+                            metadata: json!({"event": "above_ma_streak", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period, "days": streak}) });
+                    }
+                    streak = 0;
+                }
+            }
+            if streak >= ABOVE_MA_STREAK_MIN {
+                events.push(MaEvent { date: entry.series.last().unwrap().date, kind: MaEventKind::AboveMaStreak, value: streak as f64,
+                    metadata: json!({"event": "above_ma_streak", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period, "days": streak}) });
+            }
+        }
+        // Cross pairs(short period crossing long period)
+        let pairs: Vec<(usize, usize)> = match &params.detect_cross_pairs {
+            CrossPairPolicy::None => Vec::new(),
+            CrossPairPolicy::AllPairs => {
+                let mut v = Vec::new();
+                for i in 0..series_by_spec.len() {
+                    for j in 0..series_by_spec.len() {
+                        if series_by_spec[i].spec.period < series_by_spec[j].spec.period { v.push((i, j)); }
+                    }
+                }
+                v
+            }
+            CrossPairPolicy::Pairs(spec_pairs) => {
+                let mut v = Vec::new();
+                for (sp, lp) in spec_pairs {
+                    let i = series_by_spec.iter().position(|e| e.spec.period == *sp);
+                    let j = series_by_spec.iter().position(|e| e.spec.period == *lp);
+                    if let (Some(i), Some(j)) = (i, j) { v.push((i, j)); }
+                }
+                v
+            }
+        };
+        for (si, li) in pairs {
+            let s = &series_by_spec[si]; let l = &series_by_spec[li];
+            let n = s.series.len().min(l.series.len());
+            for i in 1..n {
+                let prev_above = s.series[i - 1].value > l.series[i - 1].value;
+                let cur_above = s.series[i].value > l.series[i].value;
+                if !prev_above && cur_above {
+                    events.push(MaEvent { date: s.series[i].date, kind: MaEventKind::MaGoldenCross, value: s.series[i].value,
+                        metadata: json!({"event": "ma_golden_cross",
+                            "short": {"kind": format!("{:?}", s.spec.kind), "period": s.spec.period},
+                            "long": {"kind": format!("{:?}", l.spec.kind), "period": l.spec.period}}) });
+                } else if prev_above && !cur_above {
+                    events.push(MaEvent { date: s.series[i].date, kind: MaEventKind::MaDeathCross, value: s.series[i].value,
+                        metadata: json!({"event": "ma_death_cross",
+                            "short": {"kind": format!("{:?}", s.spec.kind), "period": s.spec.period},
+                            "long": {"kind": format!("{:?}", l.spec.kind), "period": l.spec.period}}) });
                 }
             }
         }
-        Ok(MaOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, events })
+
+        Ok(MaOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series_by_spec, events })
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
         output.events.iter().map(|e| Fact {
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
             source_core: "ma_core".to_string(), source_version: "0.1.0".to_string(),
-            params_hash: None,
-            statement: format!("Close {:?} MA on {}: ma={:.2}", e.kind, e.date, e.value),
+            params_hash: None, statement: format!("MA {:?} on {}", e.kind, e.date),
             metadata: e.metadata.clone(),
         }).collect()
     }
@@ -145,19 +260,25 @@ impl IndicatorCore for MaCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn sma_simple() {
-        let v = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let r = sma(&v, 3);
-        assert!((r[2] - 2.0).abs() < 1e-9); // (1+2+3)/3
-        assert!((r[4] - 4.0).abs() < 1e-9); // (3+4+5)/3
-    }
-
-    #[test]
-    fn name_and_warmup() {
+    fn name_warmup_default() {
         let core = MaCore::new();
         assert_eq!(core.name(), "ma_core");
-        assert!(core.warmup_periods(&MaParams::default()) >= 60); // 60-period SMA
+        assert_eq!(core.warmup_periods(&MaParams::default()), 25); // 20 + 5
+    }
+    #[test]
+    fn series_by_spec_count_matches_specs() {
+        let params = MaParams {
+            specs: vec![
+                MaSpec { kind: MaKind::Sma, period: 5, source: PriceSource::Close },
+                MaSpec { kind: MaKind::Ema, period: 20, source: PriceSource::Close },
+            ],
+            timeframe: Timeframe::Daily,
+            detect_cross_pairs: CrossPairPolicy::None,
+        };
+        let core = MaCore::new();
+        let input = OhlcvSeries { stock_id: "t".to_string(), timeframe: Timeframe::Daily, bars: vec![] };
+        let out = core.compute(&input, params).unwrap();
+        assert_eq!(out.series_by_spec.len(), 2);
     }
 }

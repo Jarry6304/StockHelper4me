@@ -39,7 +39,6 @@ pub struct MarginParams {
     pub short_change_pct_threshold: f64,
     pub short_to_margin_ratio_high: f64,
     pub short_to_margin_ratio_low: f64,
-    pub maintenance_low_threshold: f64,
 }
 
 impl Default for MarginParams {
@@ -50,10 +49,13 @@ impl Default for MarginParams {
             short_change_pct_threshold: 10.0,
             short_to_margin_ratio_high: 30.0,
             short_to_margin_ratio_low: 5.0,
-            maintenance_low_threshold: 145.0, // 實務預警線(non-spec,可校準)
         }
     }
 }
+
+/// MaintenanceLow 警戒閾值(spec §4.5 EventKind 列出 MaintenanceLow,但 §4.3 Params 未列;寫死 const)
+/// 145% 為融資維持率實務預警線(對齊 market_margin_core 同 const)
+const MAINTENANCE_LOW_THRESHOLD: f64 = 145.0;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MarginOutput {
@@ -206,7 +208,7 @@ fn detect_events(series: &[MarginPoint], params: &MarginParams, raw: &[MarginDai
     for (i, p) in series.iter().enumerate() {
         if raw[i].margin_maintenance.is_some()
             && p.margin_maintenance > 0.0
-            && p.margin_maintenance < params.maintenance_low_threshold
+            && p.margin_maintenance < MAINTENANCE_LOW_THRESHOLD
         {
             events.push(MarginEvent {
                 date: p.date,
