@@ -1,0 +1,18 @@
+[package]
+name        = "tw_cores"
+version     = "0.1.0"
+edition     = "2021"
+description = "Cores 層 Monolithic Binary 入口(對齊 m3Spec/cores_overview.md §五)— skeleton"
+
+[[bin]]
+name = "tw_cores"
+path = "src/main.rs"
+
+[dependencies]
+fact_schema = { path = "../../../cores_shared/fact_schema" }
+neely_core  = { path = "../../wave/neely_core" }
+clap        = { workspace = true }
+anyhow      = { workspace = true }
+tokio       = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }

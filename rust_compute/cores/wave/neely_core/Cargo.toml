@@ -1,0 +1,15 @@
+[package]
+name        = "neely_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Neely Wave Core(P0;對齊 m3Spec/neely_core.md r2)— skeleton 階段"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fact_schema = { path = "../../../cores_shared/fact_schema" }
+anyhow      = { workspace = true }
+chrono      = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }

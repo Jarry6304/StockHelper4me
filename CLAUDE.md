@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/bronze-tables-rename-8rawA`，alembic head `v1w2x3y4z5a6_pae_dedup_par_value_split`（2026-05-09，PR #36 修 par_value_change + split 16 對 dup + 防衛 trigger）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3 Cores）。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores)。schema v3.2 r1（`schema_metadata`），開發分支 `claude/implement-m3-cores-nD3Fh`，alembic head `v1w2x3y4z5a6_pae_dedup_par_value_split`（2026-05-09，PR #36；v1.28 M3 PR-1 純 Rust 動工 0 alembic）。
 
 ---
 
@@ -80,7 +80,7 @@ pytest scripts/test_db.py -v          # 單檔
 | Bronze | FinMind raw 資料(8 張 `*_tw` 表 + 5 個 PR #18.5 dual-write entries) | Phase 1-6 collector | `phase_executor.py` + `field_mapper.py` + `aggregators.py` |
 | Reference | `stock_info_ref` / `trading_date_ref` 等不變維度 | Phase 1 | 同上 |
 | Silver | 14 張 `*_derived`(13 個 Python builder + `price_limit_merge_events` Rust)+ 4 張 `price_*_fwd`(Rust) | Phase 7a/7b/7c dirty-driven | `silver/orchestrator.py` + `silver/builders/*.py` + Rust |
-| M3 | 下游波浪 / indicator core(規格在 `m2Spec/`,未動工) | — | — |
+| M3 | Cores 層(Wave / Indicator / Chip / Fundamental / Environment / System)— 規格在 `m3Spec/`(10 份);v1.28 PR-1 落地 Rust workspace + `neely_core` skeleton(P0) | Rust binary `tw_cores` | `rust_compute/cores/` + `rust_compute/cores_shared/` |
 
 ### Phase 1-6（Bronze 收集）
 
@@ -168,7 +168,153 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅ → #R2 ✅ → #R3 ✅(PR #28) → #R4 ✅(PR #29) → #30 ✅(v1.26 nice-to-haves F/E/A/D/B) → #31~#32 ✅(docs api_pipeline_reference 兩版) → #33 ✅(m3Spec/ 預留) → #34 ✅(docs 對齊 spec + 補 Cores 接點) → #35 ✅(v1.27 day_trading 改用 fwd.volume) → #36 ✅(v1.27 pae dedup par_value+split 16 對 + 防衛 trigger)`。m2 主動工 + nice-to-haves + Bronze data 質量修正全收尾,進入 R5 觀察期 21~60 天 → R6 永久 DROP。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅ → #R2 ✅ → #R3 ✅(PR #28) → #R4 ✅(PR #29) → #30 ✅(v1.26 nice-to-haves F/E/A/D/B) → #31~#32 ✅(docs api_pipeline_reference 兩版) → #33 ✅(m3Spec/ 預留) → #34 ✅(docs 對齊 spec + 補 Cores 接點) → #35 ✅(v1.27 day_trading 改用 fwd.volume) → #36 ✅(v1.27 pae dedup par_value+split 16 對 + 防衛 trigger) → #M3-1 ✅(v1.28 m3 cores spec 搬齊 + Rust workspace + neely_core skeleton)`。m2 主動工 + nice-to-haves + Bronze data 質量修正全收尾,進入 R5 觀察期 21~60 天 → R6 永久 DROP;**M3 Cores 動工(PR-1 落地)**。
+
+---
+
+## v1.28 — M3 PR-1 m3Spec 搬齊 + Rust workspace + neely_core skeleton(2026-05-09)
+
+接 v1.27 m2 大重構 + Bronze 質量修收尾後,M3 Cores 階段正式動工。本 PR 是
+M3 切分的第 1 段:**spec 搬齊到 m3Spec/ + Rust 從單 binary 改 workspace + 第 1
+個 Wave Core(neely_core)skeleton 落地**。0 alembic、0 collector.toml、0 Python
+邏輯改變(只 sync `rust_bridge.py` stale-check path)— 純 Rust 結構工。
+
+### 範圍
+
+| 項目 | 內容 |
+|---|---|
+| spec 搬齊 | `m3Spec/` 從 1 份(chip_cores)補成 10 份:cores_overview / fundamental / environment / 4 個 indicator / chip / neely / traditional cores;源頭 `m2Spec/oldm2Spec/` r2(2026-05-06~05-07)100% 內容 verbatim |
+| Rust workspace | `rust_compute/Cargo.toml` 從 [package] 改 [workspace] virtual root,既有 `tw_stock_compute` binary 搬進 member `silver_s1_adjustment/`(name + binary 名仍 `tw_stock_compute`,Python 端 path 不動)|
+| 新 crate 1 | `cores_shared/fact_schema/` — `Fact` struct + `IndicatorCore` / `WaveCore` trait + `Timeframe` enum + `params_hash()`(blake3 + canonical JSON,對齊 cores_overview §7.4)|
+| 新 crate 2 | `cores/wave/neely_core/` — WaveCore trait impl skeleton + 14 sub-modules(monowave / candidates / validator / classifier / post_validator / complexity / compaction / missing_wave / emulation / power_rating / fibonacci / triggers / degree / facts)+ `config.rs`(NeelyCoreParams + NeelyEngineConfig + OverflowStrategy)+ `output.rs`(完整 Scenario Forest 合約)|
+| 新 binary | `cores/system/tw_cores/` — Cores 層 Monolithic Binary 入口(對齊 cores_overview §五);M3 PR-1 階段只 print 已連結 cores 列表 + 退出 |
+| Python sync | `src/rust_bridge.py:_check_binary_freshness` main.rs path 從 `rust_compute/src/main.rs` 改 `rust_compute/silver_s1_adjustment/src/main.rs`;4 處 `cargo build --release` hint 加 `-p tw_stock_compute`(避免 user 重編整個 workspace)|
+
+### Workspace 後新長相
+
+```
+rust_compute/
+├── Cargo.toml                            # virtual workspace + workspace.dependencies
+├── target/release/{tw_stock_compute,tw_cores}   # 雙 binary
+├── silver_s1_adjustment/                 # 既有 Silver S1 後復權 binary
+│   ├── Cargo.toml                        # name = "tw_stock_compute"(對齊 Python rust_bridge.py)
+│   └── src/main.rs                       # 638 行,內容 verbatim
+├── cores_shared/
+│   └── fact_schema/                      # IndicatorCore / WaveCore trait + Fact + params_hash
+│       ├── Cargo.toml
+│       └── src/lib.rs                    # 含 2 unit test(params_hash + Timeframe)
+└── cores/
+    ├── system/tw_cores/                  # Monolithic Binary 入口(skeleton)
+    │   ├── Cargo.toml
+    │   └── src/main.rs                   # CLI + print linked cores
+    └── wave/neely_core/                  # P0 Wave Core skeleton
+        ├── Cargo.toml
+        └── src/
+            ├── lib.rs                    # NeelyCore + WaveCore trait impl + 3 unit test
+            ├── config.rs                 # NeelyCoreParams + NeelyEngineConfig + 1 unit test
+            ├── output.rs                 # Scenario Forest 合約(§八 §九 §十 完整定義)
+            ├── facts.rs                  # 留 PR-2:Fact 產出規則
+            ├── monowave/mod.rs           # Stage 1 留 PR-2
+            ├── candidates/mod.rs         # Stage 3 留 PR-2
+            ├── validator/mod.rs          # Stage 4(R1-R7/F1-F2/Z1-Z4/T1-T10/W1-W2)留 PR-2
+            ├── classifier/mod.rs         # Stage 5 留 PR-2
+            ├── post_validator/mod.rs     # Stage 6 留 PR-2
+            ├── complexity/mod.rs         # Stage 7 留 PR-2
+            ├── compaction/{mod.rs}       # Stage 8(exhaustive + beam_search 子檔留 PR-2)
+            ├── missing_wave/mod.rs       # Stage 9a 留 PR-2
+            ├── emulation/mod.rs          # Stage 9b 留 PR-2
+            ├── power_rating/{mod.rs,table.rs}    # Stage 10a 查表留 PR-2
+            ├── fibonacci/mod.rs          # Stage 10b(ratios + projection 子檔留 PR-2)
+            ├── triggers/mod.rs           # Stage 10c 留 PR-2
+            └── degree/mod.rs             # Degree 詞彙留 PR-2
+```
+
+### 為什麼第 1 個實作的 Wave Core 選 neely 而非簡單 chip core
+
+User 選擇 P0(對齊 cores_overview §九 開發優先級),理由:
+- P0 是 Gate(完成 + 五檔股票實測校準後才能進 P1)
+- WaveCore trait 與 IndicatorCore trait 簽章不同(Output 是 Scenario Forest),
+  P0 結束前 trait 簽章可能微調,先把這層落地避免後續返工
+- spec 已完整(neely_core.md 1144 行 r2)
+- skeleton 階段只落 struct 合約 + trait 簽章,不寫 compute() 內部 Stage 1-10
+  Pipeline,風險可控
+
+### 編譯 + 測試驗證(沙箱已通)
+
+```bash
+cd rust_compute
+cargo build --workspace                      # 4 crate 全綠(56s,首次)
+cargo test --workspace                       # 5/5 unit test 全綠
+                                             #   fact_schema: 2 (params_hash + Timeframe)
+                                             #   neely_core:  3 (warmup + name/version + Default cfg)
+cargo build --release --workspace            # 1m34s 產出 2 binary
+target/release/tw_cores                      # smoke run 印 linked cores 列表
+target/release/tw_stock_compute --help       # 對齊 PR-1 之前(0 行為改變)
+```
+
+### user 本機驗證流程
+
+```powershell
+git pull
+# 不需 alembic upgrade(本 PR 0 migration)
+cd rust_compute
+cargo build --release --workspace
+# 預期:既有 tw_stock_compute(.exe)仍在 target/release/,Python 端 silver phase 7c 跑不變
+cargo test --workspace
+# 預期:5/5 unit test 全綠
+
+# 跑既有 silver phase 7c 確認 Phase 4 後復權仍 OK(Rust binary path 不變)
+python src/main.py silver phase 7c
+# 預期:行為對齊 v1.27,無 stale warning,無 binary 不存在 error
+
+# smoke run M3 cores binary
+target/release/tw_cores
+# 預期輸出 == M3 cores skeleton == + neely_core v0.1.0 (Wave Core, P0, skeleton)
+```
+
+### 設計關鍵約束(對齊 m3Spec/)
+
+- **Forest 不選 primary**(neely §9.3):`scenario_forest: Vec<Scenario>`,
+  順序不反映優先級,Aggregation Layer 可依 power_rating 提供 UI 篩選
+- **不引入機率語意**(neely §9.4):移除 v1.1 `confidence` / `composite_score`,
+  Trigger.on_trigger 移除 ReduceProbability → WeakenScenario
+- **PowerRating enum**(neely §9.4):取代 v1.1 `i8`,避免 99 等無效值
+- **Neely 規則寫死**(neely §4.4 / §6.6):Fibonacci 比率 / ±4% 容差 /
+  Power Rating 查表全部寫死 Rust 常數,**不可外部化**
+- **trait `Input` 由各 Core 自宣告**(cores_overview §3.4):IndicatorCore /
+  WaveCore 都不限定 OHLCV,各 Core 用對應 loader(`shared/ohlcv_loader/` 等)
+
+### 留 PR 後續(M3 PR-2+)
+
+| PR | 範圍 | 估時 |
+|---|---|---|
+| M3 PR-2 | neely_core Stage 1-2(monowave + Rule of Proportion/Neutrality)+ 第 1 個 unit test 對 Neely 書範例 | ~1 天 |
+| M3 PR-3 | Stage 3-4(candidates + validator R1-R7)+ deferred rules | ~1.5 天 |
+| M3 PR-4 | Stage 5-7(classifier + post_validator + complexity)| ~1 天 |
+| M3 PR-5 | Stage 8(compaction exhaustive + beam_search fallback)+ Forest 上限保護 | ~1.5 天 |
+| M3 PR-6 | Stage 9-10(missing_wave + emulation + power_rating + fibonacci + triggers)+ produce_facts | ~1 天 |
+| M3 PR-7 | `shared/ohlcv_loader/` + `tw_cores` binary 接 PG + 寫 `structural_snapshots` / `facts` 表 + alembic 落地三表 | ~1 天 |
+| M3 PR-8 | inventory `CoreRegistration` + `CoreRegistry::discover` + Workflow toml | ~半天 |
+| M3 P0 Gate | 五檔(0050 / 2330 / 3363 / 6547 / 1312)實測 + 校準 forest_max_size / compaction_timeout / BeamSearchFallback.k 預設值,寫入 `docs/benchmarks/` | ~1 天 + 校準 |
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`v1w2x3y4z5a6`(不變,M3 PR-1 0 migration)
+- Rust workspace:4 crate(silver_s1_adjustment / fact_schema / neely_core / tw_cores),
+  release build 1m34s,5 unit test 全綠
+- m3Spec/:10 份 cores spec verbatim from oldm2Spec/(r2 2026-05-06~05-07)
+- `src/rust_bridge.py` stale-check path 同步 + 4 處 cargo build hint 加 `-p tw_stock_compute`
+- 下個 session:**M3 PR-2** Stage 1-2 monowave + Rule of Proportion/Neutrality 實作
+
+### 風險
+
+🟢 低:
+- 純 Rust 結構工,0 alembic / 0 Python 邏輯 / 0 collector.toml
+- Python `rust_bridge.py` stale-check path 改 1 處(舊 path `rust_compute/src/main.rs`
+  不存在 → defense-in-depth `return`,不洗 false warning)
+- target/release/ 雙 binary 名字 + path 對齊 PR-1 之前,既有 silver phase 7c 不需動
+- Rollback:`git revert` 單 commit 即可(workspace 結構 revert 後 user 需重跑
+  `cargo build --release` 但不阻塞既有 incremental backfill)
 
 ---
 
@@ -2458,32 +2604,44 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.27 day_trading 對齊 spec + Bronze pae dedup(2026-05-09)**:
-> PR #35 day_trading builder 改 LEFT JOIN price_daily_fwd(對齊 spec §6.4 +
-> chip_cores §7.2);PR #36 alembic v1w2x3y4z5a6 修 par_value_change + split
-> 16 對 dup + 防衛 trigger。alembic head:`v1w2x3y4z5a6`(user 已落並驗證
-> 5278 fwd_volume 從 ×108 修正成 ×10.83 ✓)。
+> **🎯 v1.28 M3 PR-1 m3 Cores 動工(2026-05-09)**:
+> m3Spec/ 從 1 份補成 10 份 cores spec(verbatim from oldm2Spec/ r2);
+> rust_compute/ 改 Cargo workspace + 新 crate `cores_shared/fact_schema` +
+> P0 Wave Core `neely_core` skeleton(WaveCore trait + 14 sub-modules + Scenario
+> Forest 合約)+ 新 binary `tw_cores`(Monolithic Binary 入口 stub)。
+> 5/5 unit test 全綠,release 雙 binary 1m34s 編完;0 alembic / 0 Python 邏輯。
 
 ### 阻塞性排序
 
-m2 主動工 + nice-to-haves + Bronze data 質量修 全部收尾:
+1. **M3 PR-2** neely_core Stage 1-2 monowave + Rule of Proportion / Neutrality
+   實作(對齊 m3Spec/neely_core.md §三 / §七 Stage 1-2);估 ~1 天
+2. **M3 PR-3** Stage 3-4 candidates + validator R1-R7 + deferred rules;估 ~1.5 天
+3. **M3 PR-4 ~ PR-6** Stage 5-10 剩 6 stage(classifier / post_validator /
+   complexity / compaction / missing_wave / emulation / power_rating / fibonacci /
+   triggers)+ produce_facts;估 ~3.5 天
+4. **M3 PR-7** `shared/ohlcv_loader/` + tw_cores 接 PG + alembic 落地三表
+   (`indicator_values` / `structural_snapshots` / `facts`);估 ~1 天
+5. **M3 PR-8** inventory `CoreRegistration` + `CoreRegistry::discover` + Workflow
+   toml;估 ~半天
+6. **M3 P0 Gate** 五檔(0050 / 2330 / 3363 / 6547 / 1312)實測 + 校準
+   forest_max_size / compaction_timeout_secs / BeamSearchFallback.k 預設值,
+   寫入 `docs/benchmarks/`(對齊 cores_overview §9.1)
 
-1. **PR #R5** 觀察期 21~60 天(2026-05-09 啟動,最早 2026-05-30 進 R6)
+m2 收尾(可平行,**不阻塞 M3**):
+
+7. **PR #R5** 觀察期 21~60 天(2026-05-09 啟動,最早 2026-05-30 進 R6)
    - Silver builder 持續每日 12/12 OK
    - api_sync_progress.status='failed' = 0
    - 3 張 `_legacy_v2` row count 與主名表 ±1%
-2. **PR #R6** DROP 3 張 `_legacy_v2`(永久 DROP,需 backup 後執行 — 不可 rollback)
+8. **PR #R6** DROP 3 張 `_legacy_v2`(永久 DROP,需 backup 後執行 — 不可 rollback)
    + 對應 5 個 v2.0 `_legacy` entry 從 collector.toml 移除
-3. **M3 Cores 動工** — `m3Spec/chip_cores.md` 已 merge(spec §7.2 day_trading
-   接點對齊已驗),缺 fundamental / environment / indicator / wave 4 個 cores spec
-   + 對應 Rust binary `tw_cores` 實作
 
 剩 nice-to-have(可平行):
 
-4. **asyncio.gather 7a 平行優化** — 需先升 PostgresWriter 為 connection pool;
+9. **asyncio.gather 7a 平行優化** — 需先升 PostgresWriter 為 connection pool;
    perf gain ~ms 量級,排序低
-5. **Orchestrator 7c-first 排程修正** — 目前 user 自己 invoke `silver phase 7c`
-   再跑 `silver phase 7a` 即正確;orchestrator 自動 chain 留 follow-up
+10. **Orchestrator 7c-first 排程修正** — 目前 user 自己 invoke `silver phase 7c`
+    再跑 `silver phase 7a` 即正確;orchestrator 自動 chain 留 follow-up
 
 ### 中期 backlog(non-blocking)
 

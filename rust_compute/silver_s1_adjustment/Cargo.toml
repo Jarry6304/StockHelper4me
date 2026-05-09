@@ -1,0 +1,18 @@
+[package]
+name        = "tw_stock_compute"
+version     = "0.2.0"
+edition     = "2021"
+description = "台股後復權計算與 K 線聚合(Silver S1_adjustment,Postgres + sqlx)"
+
+[[bin]]
+name = "tw_stock_compute"
+path = "src/main.rs"
+
+[dependencies]
+sqlx       = { workspace = true }
+tokio      = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+chrono     = { workspace = true }
+clap       = { workspace = true }
+anyhow     = { workspace = true }

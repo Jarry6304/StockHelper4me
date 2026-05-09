@@ -78,7 +78,7 @@ class RustBridge:
         if not binary_path.exists():
             raise FileNotFoundError(
                 f"Rust binary 不存在:{self.binary}。"
-                f"請先執行:cd rust_compute && cargo build --release"
+                f"請先執行:cd rust_compute && cargo build --release -p tw_stock_compute"
             )
 
     def _check_binary_freshness(self) -> None:
@@ -99,7 +99,11 @@ class RustBridge:
         # mtime 警告(dev 階段救命)
         try:
             project_root = Path(__file__).resolve().parent.parent
-            main_rs = project_root / "rust_compute" / "src" / "main.rs"
+            # M3 PR-1 起 rust_compute/ 改成 workspace,silver S1 binary source 搬到
+            # silver_s1_adjustment/ member;workspace virtual root Cargo.toml 也檢
+            main_rs = (
+                project_root / "rust_compute" / "silver_s1_adjustment" / "src" / "main.rs"
+            )
             cargo_toml = project_root / "rust_compute" / "Cargo.toml"
             if not main_rs.exists():
                 return  # production:source 不在同台機器,不打擾
@@ -113,7 +117,7 @@ class RustBridge:
                 names = ", ".join(p.name for p in stale_sources)
                 logger.warning(
                     f"Rust binary 比 source 舊 ({names} 較新)。"
-                    f"如剛改過 Rust code,請執行:cd rust_compute && cargo build --release"
+                    f"如剛改過 Rust code,請執行:cd rust_compute && cargo build --release -p tw_stock_compute"
                 )
         except OSError as e:
             # stat 失敗(權限 / 競態檔案被刪)→ debug log 帶過,不影響執行
@@ -229,14 +233,14 @@ class RustBridge:
         if not rust_schema:
             raise RustComputeError(
                 f"Rust binary 輸出缺 schema_version 欄位,可能是舊版 binary。"
-                f"請執行 `cargo build --release` 重新編譯 "
-                f"rust_compute/target/release/tw_stock_compute。"
+                f"請執行 `cd rust_compute && cargo build --release -p tw_stock_compute` "
+                f"重新編譯 rust_compute/target/release/tw_stock_compute。"
             )
         if rust_schema != EXPECTED_SCHEMA_VERSION:
             raise RustComputeError(
                 f"Rust binary schema_version={rust_schema}, "
                 f"expected={EXPECTED_SCHEMA_VERSION}。"
-                f"請確認:(1) `cargo build --release` 已重編,"
+                f"請確認:(1) `cd rust_compute && cargo build --release -p tw_stock_compute` 已重編,"
                 f"(2) Python 端 EXPECTED_SCHEMA_VERSION 已同步升級,"
                 f"(3) DB 已執行 `alembic upgrade head`。"
             )
