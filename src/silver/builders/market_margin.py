@@ -20,10 +20,19 @@ builder 走 pivot:
     name='MarginPurchase' 那 row 的 today_balance → total_margin_purchase_balance
     name='ShortSale'      那 row 的 today_balance → total_short_sale_balance
 
-Bronze 缺對應 (market, date) → 兩欄 NULL(LEFT JOIN 行為)。
+Bronze 缺對應 (market, date) → 兩欄 NULL(UNION 行為)。
 
 Bronze 欄位:market / date / ratio
-Silver 1:1 直拷 ratio + 2 衍生欄(LEFT JOIN total_margin Bronze pivot)+ dirty 欄。
+Silver 1:1 直拷 ratio + 2 衍生欄(UNION total_margin Bronze pivot)+ dirty 欄。
+
+v1.26 nice-to-have:builder 改 iterate UNION(主, 副) keys,避免 PR #20 trigger
+mark stub row(total_margin Bronze 寫入觸發)後 builder 沒 iterate 副 Bronze 留下
+永久 stub row 10 筆。
+
+UNION 行為:
+- 主有 + 副有:full row(ratio + 2 衍生欄 = total_margin pivot 值)
+- 主有 + 副無:ratio + 2 衍生欄 = NULL
+- 主無 + 副有:ratio = NULL,2 衍生欄 = total_margin pivot 值(避免 PR #20 stub row)
 """
 
 from __future__ import annotations
@@ -91,14 +100,21 @@ def _build_silver_rows(
     bronze_rows: list[dict[str, Any]],
     total_margin_lookup: dict[tuple, dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """v1.26 起 iterate UNION(主, 副) keys,避免 total_margin-only stub row 殘留。"""
+    main_lookup: dict[tuple, dict[str, Any]] = {
+        (r.get("market"), r.get("date")): r for r in bronze_rows
+    }
+    all_keys: set[tuple] = set(main_lookup.keys()) | set(total_margin_lookup.keys())
+
     out: list[dict[str, Any]] = []
-    for row in bronze_rows:
-        key = (row.get("market"), row.get("date"))
-        tm = total_margin_lookup.get(key, {})
+    for key in sorted(all_keys, key=lambda k: (k[0] or "", k[1] or "")):
+        market, date = key
+        main = main_lookup.get(key)
+        tm   = total_margin_lookup.get(key, {})
         out.append({
-            "market": row.get("market"),
-            "date":   row.get("date"),
-            "ratio":  row.get("ratio"),
+            "market": market,
+            "date":   date,
+            "ratio":  main.get("ratio") if main is not None else None,
             "total_margin_purchase_balance": tm.get("total_margin_purchase_balance"),
             "total_short_sale_balance":      tm.get("total_short_sale_balance"),
         })
@@ -129,7 +145,7 @@ def run(
     elapsed_ms = int((time.monotonic() - start) * 1000)
     logger.info(
         f"[{NAME}] read={len(bronze)} margin + {len(total_margin)} total_margin "
-        f"(pivot to {len(total_margin_lookup)} dates) → "
+        f"(pivot to {len(total_margin_lookup)} dates,union to {len(silver)} silver rows) → "
         f"wrote={written}({elapsed_ms}ms)"
     )
     return {

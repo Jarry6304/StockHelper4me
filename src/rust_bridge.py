@@ -71,25 +71,30 @@ class RustBridge:
                 "或在初始化時傳入 database_url 參數。"
             )
 
-        # Binary 存在性與新鮮度檢查(dev 階段救命用)
-        # production 部署 binary 跟 source 通常不在同一台機器,
-        # source 不存在時 silently 跳過,不打擾。
-        self._check_binary_freshness()
-
-    def _check_binary_freshness(self) -> None:
-        """
-        Binary 健全性檢查:
-          1. binary 不存在 → raise FileNotFoundError(早於 subprocess 啟動)
-          2. main.rs 比 binary 新 → 警告但不 raise(dev 場景常見)
-        Production 場景下 main.rs 不會跟 binary 在同一台機器,
-        source 找不到時 silently 跳過,不洗版。
-        """
+        # Binary 存在性檢查 — 早於 subprocess 啟動,讓 ImportError-like 訊息易讀。
+        # mtime freshness 警告留 run_phase4 才檢(避免 incremental --phases 5 等
+        # 不派 Rust 的場景洗 warning;v1.26 nice-to-have)。
         binary_path = Path(self.binary)
         if not binary_path.exists():
             raise FileNotFoundError(
                 f"Rust binary 不存在:{self.binary}。"
                 f"請先執行:cd rust_compute && cargo build --release"
             )
+
+    def _check_binary_freshness(self) -> None:
+        """
+        Binary mtime 健全性檢查(dev 階段救命用):
+          - main.rs 比 binary 新 → 警告但不 raise
+        Production 場景下 main.rs 不會跟 binary 在同一台機器,
+        source 找不到時 silently 跳過,不洗版。
+
+        僅在 run_phase4 / 7c 真正 dispatch Rust 時呼叫(v1.26 起);
+        早期版本在 __init__ 呼叫,造成 incremental --phases 5 等不派 Rust
+        的場景也會洗 warning。
+        """
+        binary_path = Path(self.binary)
+        if not binary_path.exists():
+            return  # 早在 __init__ 已 raise,這條 defense-in-depth
 
         # mtime 警告(dev 階段救命)
         try:
@@ -143,6 +148,9 @@ class RustBridge:
             RustComputeError: Rust binary 執行失敗
             FileNotFoundError: binary_path 不存在
         """
+        # mtime freshness check(只在實際 dispatch 才檢,避免不派 Rust 的場景洗 warning)
+        self._check_binary_freshness()
+
         # 組裝 CLI 指令
         # 注意：Rust binary 的 CLI 是 --database-url（不是 --db）
         # 對應 main.rs: #[arg(long, env = "DATABASE_URL")] database_url: String

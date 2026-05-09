@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.25，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.26，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -168,7 +168,122 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅(m2 大重構 R1:source 欄補回 3 張 _tw) → #R2 ✅(R2:v2.0 舊 3 表 rename _legacy_v2) → #R3 ⏳(R3:_tw Bronze 升格主名;PR #28) → #R4 ⏳(R4:v2.0 entry name 加 _legacy 後綴;同 PR #28)`。m2 大重構 plan 在 PR #24,R1~R6 切片動工中。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅(R1:source 欄補回 3 張 _tw) → #R2 ✅(R2:v2.0 舊 3 表 rename _legacy_v2) → #R3 ✅(R3:_tw Bronze 升格主名;PR #28) → #R4 ✅(R4:v2.0 entry name 加 _legacy 後綴;PR #29) → v1.26 nice-to-haves ⏳(F/E/A/D/B 一輪收尾,asyncio.gather 7a 留)`。m2 大重構主動工(R1~R4)收尾,進入 R5 觀察期 21~60 天 → R6 永久 DROP。
+
+---
+
+## v1.26 — nice-to-have 一輪收尾(F/E/A/D/B)(2026-05-09)
+
+接 R4(PR #29)merge 後動工 nice-to-have 收尾。範圍純 collateral fix,**不動 schema、
+不動 alembic head**(仍 `u0v1w2x3y4z5`),只 Python + Rust code 改良。
+
+### 範圍 5 項
+
+| ID | 項目 | 影響檔 | 風險 |
+|---|---|---|---|
+| F | Rust binary stale warning 從 `__init__` 移到 `run_phase4`(只在實際 dispatch 才檢) | `src/rust_bridge.py` | 🟢 低 |
+| E | `verify_pr19c2_silver` docstring 加邊緣日期 1-row delta SLO 說明 | `scripts/verify_pr19c2_silver.py` | 🟢 低(純 docs) |
+| A | Rust `resolve_stock_ids` fallback 從 `stock_sync_status.fwd_adj_valid=0` 改成 `price_daily_fwd.is_dirty=TRUE` | `rust_compute/src/main.rs` | 🟢 低(只改 fallback SQL,Python orchestrator path 不受影響) |
+| D | Phase 4 `_run_phase4` 加 incremental dirty queue filter — 0 dirty → skip Rust dispatch | `src/bronze/phase_executor.py` | 🟡 中(改 dispatch 邏輯,backfill 維持原狀) |
+| B | margin / market_margin builder 改 iterate UNION(主, 副) Bronze keys,消除 PR #20 trigger 留下的 stub row(9706 SBL stub + 10 total_margin stub) | `src/silver/builders/{margin,market_margin}.py` | 🟡 中(builder 邏輯改變,但 round-trip 仍對齊 v2.0 legacy_v2) |
+
+C(asyncio.gather 7a 平行)**留 follow-up** — 需先升 PostgresWriter 為 connection pool,
+~半天 refactor + 風險中,獨立 PR 處理。
+
+### F:Rust stale warning relocate
+
+```
+__init__ 只保留 binary 不存在 → raise FileNotFoundError(早於 subprocess);
+run_phase4 開頭 call _check_binary_freshness()(只在真要派 Rust 才檢)
+```
+
+incremental --phases 5(不派 Rust)不再洗 stale warning。
+
+### A:Rust `resolve_stock_ids` fallback
+
+```rust
+// 舊
+SELECT stock_id FROM stock_sync_status WHERE fwd_adj_valid = 0
+// 新(v1.26)
+SELECT DISTINCT stock_id FROM price_daily_fwd WHERE is_dirty = TRUE
+```
+
+對齊 silver/orchestrator._fetch_dirty_fwd_stocks 同款 SQL。Rust binary 直接被
+manual ops invoke(無 --stocks 傳入)時,會走 PR #20 trigger 維護的 dirty queue,
+而非 deprecated `stock_sync_status.fwd_adj_valid` flag。
+
+### D:Phase 4 incremental dirty queue skip
+
+`bronze/phase_executor._run_phase4` 加分支:
+
+- `mode == "backfill"` → 全市場 dispatch(對齊 v1.25 之前)
+- `mode == "incremental"` → query `price_daily_fwd.is_dirty=TRUE` distinct stock_id
+  - 0 dirty → log skip,**不 dispatch Rust**(完整省 ~6 分鐘 / 1700 stocks × 200ms)
+  - 否則只送 dirty stocks 給 Rust
+
+對齊 silver/orchestrator._run_7c 的同款 dirty queue pattern。新加
+`_fetch_dirty_fwd_stocks()` helper(對齊 orchestrator 名稱)。
+
+### B:margin / market_margin UNION 升級
+
+PR #20 trigger 設計:Bronze upsert 觸發 Silver dirty row insert(stub)。
+v1.26 之前,builder 只 iterate 主 Bronze keys → 副 Bronze 的 dates/stocks 在 Silver
+留下永久 stub row(margin 9706 stub from SBL trigger / market_margin 10 stub from
+total_margin trigger)。
+
+Fix:builder 改 iterate `set(主 keys) ∪ set(副 keys)`:
+
+| Bronze 狀態 | Silver row 內容 |
+|---|---|
+| 主有 + 副有 | full row |
+| 主有 + 副無 | 主 cols 正常 + 副衍生 cols = NULL |
+| 主無 + 副有 | 主 cols = NULL + detail = `{}` + 副衍生 cols = 副 Bronze 值 |
+
+避免 stub row 殘留;Silver row count 對齊真實 (主 ∪ 副) 集合。
+
+沙箱合成資料 4 個 case 全綠(margin: 主+副 / 主 only / 副 only / mixed;
+market_margin: 主+副 / 主 only / 副 only)。
+
+### user 本機驗證(預期全綠)
+
+```powershell
+git pull
+# 不需 alembic upgrade(本 PR 0 migration)
+cd rust_compute && cargo build --release && cd ..    # A 改 Rust SQL,需重編
+
+# F: incremental --phases 5 不再洗 Rust stale warning
+python src/main.py incremental --phases 5 --stocks 2330
+# 預期:不再見 "Rust binary 比 source 舊" warning(因為 phase 5 不派 Rust)
+
+# D: incremental --phases 4 dirty queue skip(預期 skip,因 dirty 為 0)
+python src/main.py incremental --phases 4
+# 預期:[Phase 4] dirty queue 為空(無新除權息事件),skip Rust dispatch
+
+# B: 跑 Silver phase 7a 全市場後 Silver row count 應 = 主 ∪ 副(不再有 stub)
+python src/main.py silver phase 7a --full-rebuild
+# 預期 log:[margin] read=X margin + Y sbl (union to Z rows) → wrote=Z
+#         [market_margin] read=A margin + B total_margin (... union to C silver rows) → wrote=C
+
+# E: verify_pr19c2 docstring 加 SLO 說明,跑起來行為不變
+python scripts/verify_pr19c2_silver.py    # 仍應 ±1% SLO 內(可能仍有 1-row deltas)
+```
+
+### 風險
+
+🟡 中:
+- D dirty queue filter 在 incremental 模式生效,backfill 維持原狀
+- B builder 改 UNION 後 Silver row count 可能微增(把過去 stub row 真實化);
+  v2.0 legacy_v2 round-trip 仍應對齊(verifier 用 skip_silver_cols 處理 SBL/total_margin 衍生欄)
+- A 只改 Rust binary fallback 路徑,Python orchestrator 路徑不變
+- Rollback:單 commit revert(無 alembic 動作)
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`u0v1w2x3y4z5`(不變,本 PR 0 migration)
+- v1.26 nice-to-haves:5/5 done(F/E/A/D/B);C 留 follow-up
+- m2 大重構主動工(R1~R4)+ nice-to-haves 收尾,進入 R5 觀察期
+- 下個 PR:**M3 indicator core 動工** 或 **C asyncio.gather 7a 平行優化**
+  (需 PostgresWriter → connection pool refactor,獨立 PR)
 
 ---
 
@@ -2128,9 +2243,12 @@ CLAUDE.md v1.4 第 6 點提到「要不要切支線開始建 agent-review-mcp（
 
 `claude/review-collector-dependencies-n03rE` → `m1/postgres-migration` 的 PR 已開（review #3 + #4 共 8 commit + 本次 docs commit = 9 commit）。等 base 維護者 / Codex / Cursor review。
 
-### 🟡 待研究：Phase 4 真正的 incremental 優化（v1.7 新提）
+### ~~🟡 待研究：Phase 4 真正的 incremental 優化~~（v1.26 已落地）
 
-Rust `process_stock` 全量重算是必要設計（multiplier 倒推），但 Python 層可加「該股票自從上次 Phase 4 以後沒新除權息事件就跳過」的偵測。目前每天 incremental 跑 1700+ 檔都全炒，效能優化空間大（每檔約 200ms × 1700 = ~6 分鐘可省）。實作要點：在 phase_executor 跑 Phase 4 前查 `price_adjustment_events.date > stock_sync_status.last_phase4_at`，只把 dirty 股票傳給 Rust。
+v1.26 nice-to-have D 完成:`bronze/phase_executor._run_phase4` 加 incremental
+dirty queue filter — `mode=="incremental"` 時查 `price_daily_fwd.is_dirty=TRUE`
+distinct stock_id,0 dirty → skip Rust dispatch 完整省 ~6 分鐘。對齊
+`silver/orchestrator._run_7c` 同款 PR #20 dirty queue pattern。
 
 ### ~~🟡 待研究：CLAUDE.md 章節重組~~（v1.8 已重組）
 
@@ -2226,16 +2344,15 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.25 PR #R4 m2 大重構:v2.0 entry name 加 `_legacy` 後綴(2026-05-09)**:
-> 走 plan §6.3 簡化選項 — 5 個 v2.0 entry name 加 `_legacy` 後綴 +
-> alembic UPDATE api_sync_progress.api_name 5 條(idempotent);v3 entry 永遠
-> 保留 `_v3` 標籤不動。順手收 verify_pr19c2 R2 follow-up legacy_table refs
-> (3 處 `*_legacy_v2`)。alembic head:`u0v1w2x3y4z5`(待 user verify);
-> R3 R4 同 PR #28。
+> **🎯 v1.26 nice-to-have 收尾(2026-05-09)**:F/E/A/D/B 5 項一輪做完
+> (Rust stale warning relocate / verify_pr19c2 SLO note / Rust dirty queue
+> self-pull / Phase 4 incremental skip / margin & market_margin UNION 升級)。
+> alembic head 不變(`u0v1w2x3y4z5`),純 Python + Rust code 改良。
+> C(asyncio.gather 7a 平行)留 follow-up。
 
 ### 阻塞性排序
 
-m2 大重構僅剩 R5 觀察期 + R6 永久 DROP:
+m2 大重構主動工(R1~R4 + nice-to-haves)收尾,僅剩 R5 觀察期 + R6 永久 DROP:
 
 1. **PR #R5** 觀察期 21~60 天(無 code change,純驗證 SLO)
    - Silver builder 持續每日 12/12 OK
