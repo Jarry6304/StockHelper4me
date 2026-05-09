@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.26，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.27，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/bronze-tables-rename-8rawA`，alembic head `u0v1w2x3y4z5_pr_r4_rename_v2_entry_names_legacy`（2026-05-09，PR #R4 v2.0 entry name 加 `_legacy` 後綴）。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3）。Python 3.11+ + Rust（Phase 4 後復權 / Phase 7c K 線聚合）。schema v3.2 r1（`schema_metadata`），開發分支 `claude/bronze-tables-rename-8rawA`，alembic head `v1w2x3y4z5a6_pae_dedup_par_value_split`（2026-05-09，PR #36 修 par_value_change + split 16 對 dup + 防衛 trigger）。
 
 ---
 
@@ -168,7 +168,121 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅(R1:source 欄補回 3 張 _tw) → #R2 ✅(R2:v2.0 舊 3 表 rename _legacy_v2) → #R3 ✅(R3:_tw Bronze 升格主名;PR #28) → #R4 ✅(R4:v2.0 entry name 加 _legacy 後綴;PR #29) → v1.26 nice-to-haves ⏳(F/E/A/D/B 一輪收尾,asyncio.gather 7a 留)`。m2 大重構主動工(R1~R4)收尾,進入 R5 觀察期 21~60 天 → R6 永久 DROP。
+當前 PR sequencing：`#17 ✅ → #18 ✅(2026-05-08 回頭補完 4 張全市場) → #19a ✅ → #19b ✅ → #18.5 ⚠️(smoke ✓) → #19c-1 ✅ → #19c-2 ✅ → #19c-3 ✅ → #20 ✅(15/15 OK) → #21-A ✅ → #21-B ✅(4/5 衍生欄 ~99% fill) → #22 ✅(TAIEX/TPEx daily OHLCV) → #21 ✅(deprecated path 全砍,2026-05-09) → #R1 ✅ → #R2 ✅ → #R3 ✅(PR #28) → #R4 ✅(PR #29) → #30 ✅(v1.26 nice-to-haves F/E/A/D/B) → #31~#32 ✅(docs api_pipeline_reference 兩版) → #33 ✅(m3Spec/ 預留) → #34 ✅(docs 對齊 spec + 補 Cores 接點) → #35 ✅(v1.27 day_trading 改用 fwd.volume) → #36 ✅(v1.27 pae dedup par_value+split 16 對 + 防衛 trigger)`。m2 主動工 + nice-to-haves + Bronze data 質量修正全收尾,進入 R5 觀察期 21~60 天 → R6 永久 DROP。
+
+---
+
+## v1.27 — day_trading 對齊 spec + Bronze pae dedup(2026-05-09)
+
+接 v1.26 nice-to-haves merge + docs api_pipeline_reference 重寫對齊
+`m2Spec/layered_schema_post_refactor.md` 後,doc §6 揭露的 `day_trading` builder
+deviation 修正,連帶踩出 Bronze data 質量問題並修。
+
+### 範圍 2 PR
+
+| PR | 主題 | scope |
+|---|---|---|
+| #35 | day_trading builder 改 LEFT JOIN price_daily_fwd(spec §6.4 + chip_cores §7.2)| 1 builder + 3 docs lines;0 alembic |
+| #36 | pae dedup par_value_change + split duplicates(修 16 對 + 防衛 trigger)| 1 alembic v1w2x3y4z5a6 + schema_pg.sql sync;0 builder |
+
+### PR #35:day_trading 改用 price_daily_fwd.volume
+
+`src/silver/builders/day_trading.py`:`BRONZE_TABLES` + SQL JOIN target
+從 `price_daily` 改 `price_daily_fwd`。對齊雙處 spec 明文要求:
+- `m2Spec/layered_schema_post_refactor.md` §6.4 流向圖
+- `m2Spec/oldm2Spec/chip_cores.md` §7.2(M3 Cores 接點規範)
+- `m3Spec/chip_cores.md` §7.2(本輪 main merge 同樣規範)
+
+實質影響:
+- POST-event 日(無未來 stock_dividend / split):fwd.volume == raw.volume
+  → ratio 不變
+- PRE-event 日:fwd.volume = raw × cumulative_vf(scaled to post-event)
+  → ratio 對齊「後復權 scale」,跨歷史 cross-comparison 一致
+
+依賴:S1_adjustment(7c Rust)需先跑過才有 fwd 資料;初次 silver phase 7a 跑時
+fwd 空 → ratio NULL(LEFT JOIN safe degradation)。Orchestrator 排程順序
+(7c 先 / 7a 後)留 follow-up,目前 user 自己 invoke 順序即可。
+
+### PR #36:Bronze pae dedup(根因發現 + 修)
+
+PR #35 merge 後 user spot check 5278 fwd_volume 揭露 ×108 異常(預期 ×10.83)。
+trace 發現 `price_adjustment_events` 對 16 個 (stock, date) 同時記錄 par_value_change
++ split 兩個 event_type(同 vf=0.1),Rust 累乘 0.01 → fwd_volume 多 ×10。
+
+根因:FinMind `TaiwanStockParValueChange` + `TaiwanStockSplitPrice` 兩 dataset
+同時報告同一個面額變更(e.g. 5278 在 2024-12-09 從面額 1000 NTD 改 100 NTD)
+→ collector 兩條 path 都收 → Bronze 變兩 row。
+
+dev DB query 揭露 16 對:2327 / 3093 / 4763 / 5278 / 5314 / 5536 / 6415 /
+6531 / 6548 ×2 / 6613 / 6763 / 6919 / 8070 / 8476 / 8932(同股可能多次)。
+
+#### alembic v1w2x3y4z5a6 三階段
+
+1. **既有 16 dup cleanup**:DELETE split row WHERE 同 (market, stock_id, date,
+   before_price, reference_price, vf) 有 par_value_change row。保留
+   par_value_change 為 primary(命名更具體 + FinMind ParValueChange 是
+   authoritative source)。
+2. **Mark 4 fwd 表 is_dirty=TRUE**:UPDATE price_daily_fwd / price_weekly_fwd /
+   price_monthly_fwd / price_limit_merge_events SET is_dirty=TRUE for stocks
+   that ever had par_value_change event。
+3. **CREATE 防衛 trigger** `trg_pae_dedup_par_value_split`:AFTER INSERT
+   OR UPDATE on price_adjustment_events,WHEN event_type IN ('split',
+   'par_value_change'),DELETE 同 (key, before/ref/vf) 的 split row(保留
+   par_value_change)。涵蓋 INSERT + UPDATE(UPSERT case)+ 任意寫入順序。
+
+#### user 本機驗證(已通)
+
+```powershell
+git pull
+alembic upgrade head    # → v1w2x3y4z5a6
+
+# dup cleanup 驗證:0 row
+psql $env:DATABASE_URL -c "
+  SELECT stock_id, date, COUNT(*) FROM price_adjustment_events
+  WHERE event_type IN ('par_value_change','split')
+  GROUP BY stock_id, date HAVING COUNT(*) > 1
+"
+
+# trigger 落地(預期 2 row,INSERT + UPDATE 兩 event_manipulation)
+psql $env:DATABASE_URL -c "
+  SELECT trigger_name FROM information_schema.triggers
+  WHERE trigger_name = 'trg_pae_dedup_par_value_split'
+"
+
+# 重算 fwd
+python src/main.py silver phase 7c    # 預期 dirty queue 拉 15 unique stocks(16 pair - 6548 重複)
+
+# 5278 fwd_volume 驗證(從 ×108 修正到 ×10.83)
+psql $env:DATABASE_URL -c "
+  SELECT date, volume FROM price_daily_fwd
+  WHERE stock_id='5278' ORDER BY date LIMIT 3
+"
+```
+
+實際結果:
+| date | 修前 | 修後 | 縮回 |
+|---|---|---|---|
+| 2019-01-02 | 6,927,633 | **692,763** | × 10 ✓ |
+| 2019-01-03 | 4,875,105 | 487,511 | × 10 ✓ |
+| 2019-01-04 | 2,056,641 | 205,664 | × 10 ✓ |
+
+驗算:`64000 raw → 692,763 fwd` = ×10.824 ≈ `1 / (0.1 × 0.9663329597 × 0.9560229446)
+= 10.825`。**精確對上**(差 < 0.01% float rounding)。
+
+### 連動修正
+
+- 5278 day_trading_ratio for 2019~2024-12 歷史日期(原本因分母多 ×10 → ratio 縮小 1/10)→ 自動修正
+- 其他 14 股(2327/3093/4763/5314/5536/6415/6531/6548/6613/6763/6919/8070/8476/8932)同樣連動修正
+- VWAP / OBV / day_trading_ratio 等讀 fwd.volume 的 Cores 計算全部受惠
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`v1w2x3y4z5a6_pae_dedup_par_value_split`(user 已落)
+- m2 主動工 + nice-to-haves + Bronze 質量修 + docs 對齊 全部收尾
+- R5 觀察期 21~60 天啟動;最早 2026-05-30 進 R6 永久 DROP `_legacy_v2`
+- 下個 PR:**M3 Cores 動工**(`m3Spec/` 已有 chip_cores.md,缺 fundamental /
+  environment / indicator / wave 4 個 cores)或 **#R5 觀察期 SLO telemetry**
+  (純驗證,無 code change)
 
 ---
 
@@ -2344,38 +2458,32 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.26 nice-to-have 收尾(2026-05-09)**:F/E/A/D/B 5 項一輪做完
-> (Rust stale warning relocate / verify_pr19c2 SLO note / Rust dirty queue
-> self-pull / Phase 4 incremental skip / margin & market_margin UNION 升級)。
-> alembic head 不變(`u0v1w2x3y4z5`),純 Python + Rust code 改良。
-> C(asyncio.gather 7a 平行)留 follow-up。
+> **🎯 v1.27 day_trading 對齊 spec + Bronze pae dedup(2026-05-09)**:
+> PR #35 day_trading builder 改 LEFT JOIN price_daily_fwd(對齊 spec §6.4 +
+> chip_cores §7.2);PR #36 alembic v1w2x3y4z5a6 修 par_value_change + split
+> 16 對 dup + 防衛 trigger。alembic head:`v1w2x3y4z5a6`(user 已落並驗證
+> 5278 fwd_volume 從 ×108 修正成 ×10.83 ✓)。
 
 ### 阻塞性排序
 
-m2 大重構主動工(R1~R4 + nice-to-haves)收尾,僅剩 R5 觀察期 + R6 永久 DROP:
+m2 主動工 + nice-to-haves + Bronze data 質量修 全部收尾:
 
-1. **PR #R5** 觀察期 21~60 天(無 code change,純驗證 SLO)
+1. **PR #R5** 觀察期 21~60 天(2026-05-09 啟動,最早 2026-05-30 進 R6)
    - Silver builder 持續每日 12/12 OK
    - api_sync_progress.status='failed' = 0
    - 3 張 `_legacy_v2` row count 與主名表 ±1%
 2. **PR #R6** DROP 3 張 `_legacy_v2`(永久 DROP,需 backup 後執行 — 不可 rollback)
    + 對應 5 個 v2.0 `_legacy` entry 從 collector.toml 移除
+3. **M3 Cores 動工** — `m3Spec/chip_cores.md` 已 merge(spec §7.2 day_trading
+   接點對齊已驗),缺 fundamental / environment / indicator / wave 4 個 cores spec
+   + 對應 Rust binary `tw_cores` 實作
 
-剩 nice-to-have:
+剩 nice-to-have(可平行):
 
-2. **Rust binary 自接 dirty queue**(收尾用,非 critical)
-   讀 `price_daily_fwd.is_dirty=TRUE` 取代 `stock_sync_status.fwd_adj_valid=0`。
-   orchestrator path 已接,Rust 自接是 belt-and-suspenders;當前生產環境完整 work。
-
-3. **margin / market_margin builder UNION 升級**(可選 nice-to-have)
-   讓 builder iterate(主 Bronze ∪ 副 Bronze)keys,避免 Silver 永遠有 stub row
-   (目前 9706 stub from SBL trigger / 10 stub from total_margin trigger)。
-   不影響衍生欄 fill rate,只影響 Silver row count 漂亮度。
-
-4. **PR #R5 觀察期 21~60 天 → PR #R6 DROP `_legacy_v2`** — m2 大重構最後一段
-   (永久 DROP,不可 rollback)。觀察 SLO:Silver builder 持續每日 12/12 OK +
-   api_sync_progress.status='failed' = 0 + 3 張 `_legacy_v2` row count 與
-   主名表 ±1%(plan §7.2)。
+4. **asyncio.gather 7a 平行優化** — 需先升 PostgresWriter 為 connection pool;
+   perf gain ~ms 量級,排序低
+5. **Orchestrator 7c-first 排程修正** — 目前 user 自己 invoke `silver phase 7c`
+   再跑 `silver phase 7a` 即正確;orchestrator 自動 chain 留 follow-up
 
 ### 中期 backlog(non-blocking)
 

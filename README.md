@@ -1,220 +1,249 @@
 # StockHelper4me — tw-stock-collector
 
-> 台股資料蒐集程式，透過 FinMind API 抓取歷史與即時資料，存入本地 SQLite，供波浪分析引擎使用。
+> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,採 **4 層 Medallion** 架構(Reference / Bronze / Silver / M3 預留),Python 3.11+ + Rust 後復權計算層。
+
+**版本**:v3.2 r1(alembic head `v1w2x3y4z5a6` / 2026-05-09)
+**狀態**:m2 大重構 + nice-to-haves + Bronze data 質量修 全部收尾;R5 觀察期 21~60 天啟動
 
 ---
 
-## 系統需求
+## 文件導覽
 
-| 項目 | 版本 |
-|------|------|
-| Python | 3.11+ |
-| Rust / Cargo | 1.75+（Phase 4 計算層） |
-| SQLite | 3.35+（支援 UPSERT） |
-| FinMind 方案 | Backer（1,600 次/小時） |
+跨 session 銜接 / Schema 細節 / 動工前必看:
+
+| 文件 | 用途 |
+|---|---|
+| **`m2Spec/layered_schema_post_refactor.md`** | Bronze + Silver schema 規範(主要 spec)|
+| **`docs/api_pipeline_reference.md`** | collector.toml entry × Bronze schema × code path 索引(配套本檔)|
+| **`CLAUDE.md`** | v1.X 跨 session 歷程紀錄(改 schema / 加 entry 前必看 v1.27 + 「關鍵架構決策」)|
+| `m2Spec/data_refactor_plan.md` | R1~R6 重構 plan |
+| `m2Spec/oldm2Spec/cores_overview.md` 等 | 各 Core 計算規格(M3 動工 reference)|
+| `m3Spec/` | M3 / Cores 層 spec(動工中,首份 `chip_cores.md`)|
+| `collectorSpec/` | v1.2 collector 程式架構規格(歷史)|
 
 ---
 
-## 專案結構
+## 1. 架構總覽
+
+### 4 層 Medallion(spec v3.2 r1)
+
+| 層 | 內容 | producer / 進入點 |
+|---|---|---|
+| **Reference** | `trading_date_ref` / `stock_info_ref` | collector(`bronze/phase_executor`) |
+| **Bronze**(原始)| 21+ FinMind raw 表(7 個分類 B0~B6)| collector backfill / incremental |
+| **Silver**(進階計算)| 14 個 `*_derived` 表 — 12 SQL builder + 4 Rust fwd + price_limit_merge | orchestrator(`silver/orchestrator`)+ Rust binary |
+| **M3 / Cores**(預留)| chip / fundamental / environment / indicator / wave cores | `m3Spec/`(spec 寫中,code 未動工) |
+
+```
+                 FinMind / 外部資料
+                       │  (HTTP)
+                       ▼
+       ┌─── Bronze ──────────────────────────┐
+       │  21+ raw 表(B0_calendar / B1_meta /│
+       │  B2_events / B3_price_raw / B4_chip /│
+       │  B5_fundamental / B6_environment)   │
+       └────────────────┬────────────────────┘
+                        │  (PG trigger)
+                        ▼
+       ┌─── Silver(進階計算)────────────────┐
+       │  S1_adjustment(Rust fwd 4 表)     │
+       │  S4_chip / S5_fundamental /          │
+       │  S6_environment(SQL builders)        │
+       └────────────────┬────────────────────┘
+                        │  (PyO3, 未動工)
+                        ▼
+                 M3 / Cores layer
+```
+
+詳細 entry × table × code 對映見 `docs/api_pipeline_reference.md`。
+
+---
+
+## 2. 系統需求
+
+| 項目 | 版本 | 備註 |
+|---|---|---|
+| Python | 3.11+ | `tomllib` / `asyncio.TaskGroup` |
+| **PostgreSQL** | **17+** | JSONB / partial index / generic trigger function |
+| Rust / Cargo | 1.75+ | Phase 4 後復權計算層(`rust_compute/`) |
+| FinMind 方案 | Backer(1,600 reqs/h) | sponsor tier 為 nice-to-have(`government_bank_buy_sell_v3` 需要)|
+| psycopg | `psycopg[binary,pool]>=3.2` | PG 連線 |
+
+⚠️ v2.0 後從 SQLite 遷移到 PG 17;舊版 README 提到的 SQLite path 已棄用。
+
+---
+
+## 3. 專案結構
 
 ```
 StockHelper4me/
+├── alembic/                          # Schema migration(2019_~ 2026_)
+│   ├── env.py / alembic.ini
+│   └── versions/                     # 30+ migrations 包括 v3.2 r1 / R1~R4 / v1.26 / v1.27
 ├── config/
-│   ├── collector.toml          # 主設定檔（API registry、排程、rate limit）
-│   └── stock_list.toml         # 股票清單（可手動增減）
+│   ├── collector.toml                # 39 個 [[api]] entry(38 enabled)+ rate limit
+│   └── stock_list.toml               # dev mode 股票清單
 ├── src/
-│   ├── main.py                 # CLI 進入點
-│   ├── logger_setup.py         # 日誌初始化
-│   ├── config_loader.py        # TOML 解析 + 驗證
-│   ├── rate_limiter.py         # Token Bucket 流量控制
-│   ├── phase_executor.py       # Phase 1-6 排程引擎
-│   ├── api_client.py           # FinMind HTTP client
-│   ├── date_segmenter.py       # 歷史回補日期分段
-│   ├── stock_resolver.py       # 股票清單解析
-│   ├── db.py                   # SQLite 連線管理 + UPSERT
-│   ├── field_mapper.py         # 欄位映射 + detail JSON 打包
-│   ├── sync_tracker.py         # 斷點續傳追蹤
-│   ├── aggregators.py          # Phase 5-6 聚合策略（法人 pivot、財報 pack）
-│   ├── post_process.py         # 除權息後處理 + 現增事件偵測
-│   └── rust_bridge.py          # 呼叫 Rust binary（Phase 4）
-├── rust_compute/               # Rust binary 專案
+│   ├── main.py                       # CLI(collector / silver / status / validate)
+│   ├── bronze/
+│   │   └── phase_executor.py         # Bronze 排程(Phase 1-6)+ Rust 7c 派工
+│   ├── silver/
+│   │   ├── orchestrator.py           # Silver 排程(7a/7b/7c)
+│   │   ├── _common.py                # fetch_bronze / upsert_silver / get_trading_dates
+│   │   └── builders/                 # 13 個 builder(institutional / margin / ... / financial)
+│   ├── api_client.py                 # FinMind aiohttp v4 client + rate limit
+│   ├── rate_limiter.py               # token bucket(1600/h, 2250ms, 429 cooldown 120s)
+│   ├── sync_tracker.py               # api_sync_progress 5-status 斷點續傳
+│   ├── date_segmenter.py             # backfill 段切割
+│   ├── field_mapper.py               # API → schema 映射 + detail JSONB pack
+│   ├── aggregators.py                # pivot/pack 4 個(institutional / financial / 等)
+│   ├── post_process.py               # dividend_policy → events 拆分
+│   ├── db.py                         # DBWriter + PostgresWriter
+│   ├── rust_bridge.py                # subprocess 派 Rust binary
+│   ├── stock_resolver.py             # stock 清單解析
+│   └── schema_pg.sql                 # 完整 schema DDL(給 fresh DB init)
+├── rust_compute/                     # Rust binary 專案
 │   ├── Cargo.toml
-│   └── src/
-│       └── main.rs             # 後復權 + 週K/月K 聚合
-├── collectorSpec/              # 程式規格文件
-│   ├── tw_stock_collector_program_spec_v1.2_p1.md
-│   ├── tw_stock_collector_program_spec_v1.2_p2.md
-│   └── tw_stock_collector_program_spec_v1.2_p3.md
-├── data/
-│   └── tw_stock.db             # SQLite 資料庫（gitignore）
-└── logs/
-    └── collector_YYYYMMDD.log  # 每日日誌（gitignore）
+│   └── src/main.rs                   # tw_market_core 後復權 + 週/月聚合 + dirty queue self-pull
+├── scripts/                          # verifier / inspect / reverse-pivot 工具
+├── docs/
+│   └── api_pipeline_reference.md     # entry × table × code 索引(配套本檔)
+├── m2Spec/                           # 主要 spec(layered_schema_post_refactor + data_refactor_plan)
+│   └── oldm2Spec/                    # 各 Core 規格(M3 reference)
+├── m3Spec/                           # M3 / Cores 層 spec(動工中)
+│   ├── .gitkeep
+│   └── chip_cores.md                 # chip cores spec
+├── collectorSpec/                    # v1.2 collector 架構規格(歷史)
+└── CLAUDE.md                         # v1.X 跨 session 歷程紀錄
 ```
 
 ---
 
-## 快速開始
+## 4. 快速開始
 
-### 1. 安裝 Python 依賴
-
-```bash
-pip install aiohttp tomllib
-```
-
-### 2. 設定 FinMind Token
+### 4.1 設定 Postgres + 環境變數
 
 ```bash
-export FINMIND_TOKEN="your_token_here"
+# 1. 起 PG 17(本機 service or docker)
+#    docker compose up -d 或 Windows: postgresql-x64-17
+
+# 2. .env 填 FINMIND_TOKEN + DATABASE_URL
+cp .env.example .env
+# DATABASE_URL=postgresql://twstock:twstock@localhost:5432/twstock
+# FINMIND_TOKEN=your_finmind_token
+
+# 3. pip install + alembic upgrade head 落 schema(包含 v1.27 trigger)
+pip install -e .                      # editable install:src/silver / src/bronze / src/ 全部 importable
+alembic upgrade head                  # → v1w2x3y4z5a6
 ```
 
-或直接寫入 `config/collector.toml`（見下方說明）。
-
-### 3. 編譯 Rust binary（Phase 4）
+### 4.2 編 Rust binary
 
 ```bash
-cd rust_compute
-cargo build --release
-cd ..
+cd rust_compute && cargo build --release && cd ..
 ```
 
-### 4. 設定 collector.toml
-
-將 `config/collector.toml` 中的 `token` 欄位填入你的 FinMind API Token：
-
-```toml
-[global]
-token = "your_finmind_token"
-```
-
-### 5. 執行全量歷史回補
+### 4.3 Bronze 全量回補(估 ~107h @ 1600 reqs/h)
 
 ```bash
-# 完整回補（約 4.5 天）
-python src/main.py backfill
-
-# 只跑 Phase 1-4（取得可分析的基礎資料，約 20 小時）
-python src/main.py backfill --phases 1,2,3,4
-
-# 開發測試：只跑特定股票
-python src/main.py backfill --stocks 2330,2317,2442
+python src/main.py backfill                              # 全 phase
+python src/main.py backfill --phases 1,2,3,4             # 只到 Phase 4(可分析的最小集)
+python src/main.py backfill --stocks 2330,2317           # 開發測試:覆蓋股票清單
 ```
 
-### 6. 日常增量更新
+### 4.4 Silver 進階計算
 
 ```bash
-python src/main.py incremental
+# 7c 必須先跑(產 fwd 4 表)
+python src/main.py silver phase 7c [--stocks ...] [--full-rebuild]
+
+# 7a 12 個獨立 builder(讀 fwd.volume 算 day_trading_ratio 等)
+python src/main.py silver phase 7a [--stocks ...] [--full-rebuild]
+
+# 7b financial_statement(跨表依賴 monthly_revenue)
+python src/main.py silver phase 7b [--stocks ...] [--full-rebuild]
+```
+
+### 4.5 日常 incremental(含 v1.26 dirty queue skip)
+
+```bash
+python src/main.py incremental                           # 全 phase
+python src/main.py incremental --phases 4                # Phase 4 dirty queue 為空 → skip Rust
+python src/main.py incremental --phases 5 --stocks 2330  # 部分股
 ```
 
 ---
 
-## 執行流程（6 個 Phase）
-
-```
-Phase 1  META          →  stock_info、trading_calendar、market_index_tw
-Phase 2  EVENTS        →  price_adjustment_events（除權息、減資、分割、面額變更、現增）
-Phase 3  RAW PRICE     →  price_daily、price_limit
-Phase 4  RUST 計算      →  price_daily_fwd、price_weekly_fwd、price_monthly_fwd（後復權）
-Phase 5  CHIP/FUND     →  三大法人、融資融券、財報、月營收...
-Phase 6  MACRO         →  SPY/VIX、匯率、恐懼貪婪指數
-```
-
-> **Phase 1-4 完成後**，即可開始波浪分析引擎開發。Phase 5-6 為輔助資料，優先度較低。
-
----
-
-## CLI 指令
+## 5. CLI 指令
 
 ```
 python src/main.py <command> [options]
 
 commands:
-  backfill        全量歷史回補
-  incremental     增量同步（日常排程用）
-  phase <N>       只跑指定 Phase
-  status          顯示同步進度摘要
-  validate        驗證 config 格式
+  backfill              全量歷史回補(Phase 1-6 + Rust)
+  incremental           增量同步(日常排程)
+  phase <N>             只跑指定 Phase(0-6)
+  silver phase <X>      Silver 計算層(7a / 7b / 7c)
+  status                api_sync_progress 5-status 摘要
+  validate              collector.toml 格式檢查
 
 options:
-  --config <path>       指定 collector.toml 路徑（預設 config/collector.toml）
-  --stock-list <path>   指定 stock_list.toml 路徑（預設 config/stock_list.toml）
-  --stocks <id1,id2>    覆蓋股票清單（開發用）
-  --phases <1,2,3>      只跑指定 Phase
-  --dry-run             只印出計劃，不實際呼叫 API
+  --config <path>       指定 collector.toml 路徑
+  --stocks <id1,id2>    覆蓋股票清單(開發用)
+  --phases <1,2,3>      只跑指定 Phase(collector 用)
+  --full-rebuild        Silver 忽略 dirty queue 全部重算
+  --dry-run             只印計劃,不呼叫 API
   --verbose             DEBUG 級別日誌
 ```
 
 ---
 
-## 開發進度
+## 6. Schema 概覽
 
-| Phase | 狀態 | 主要模組 / 說明 |
-|-------|------|----------------|
-| A — 基礎骨架 | ✅ 完成 | `logger_setup`, `config_loader`, `db`（17 張表）, `rate_limiter`, `api_client` |
-| B — Phase 1 排程通路 | ✅ 完成 | `phase_executor`, `field_mapper`（schema 驗證 + 衍生欄位）, `stock_resolver` |
-| C — Phase 2-3 斷點續傳 | ✅ 完成 | `date_segmenter`（年度分段）, `sync_tracker`（5 種狀態）, `post_process`（除權息拆分 + 現增）|
-| D — Phase 4 Rust 計算層 | ✅ 完成 | `rust_bridge`（SIGTERM/SIGKILL）, `rust_compute`（後復權 + 週K/月K） |
-| E — Phase 5-6 籌碼 & 總經 | ✅ 完成 | `aggregators`（三大法人 pivot、財報 pack）, 28 個 API 設定補全 |
-| 缺漏修正 | ✅ 完成 | `DateSegmenter` 補傳 `sync_tracker`；`cooldown_on_429_sec` 從 config 讀取；`updated_at` 使用 Python 真實時間；`schema_mismatch` 寫入 `sync_tracker` |
+完整詳見 `docs/api_pipeline_reference.md` 與 `m2Spec/layered_schema_post_refactor.md`。
 
----
-
-## 資料庫 Schema（SQLite）
-
-| 資料表 | 說明 | PK |
-|--------|------|----|
-| `stock_info` | 股票基本資料（名稱、市場、產業、上市日） | market, stock_id |
-| `trading_calendar` | 交易日曆 | market, date |
-| `market_index_tw` | 台灣加權報酬指數 | market, date |
-| `price_adjustment_events` | 除權息 / 減資 / 分割 / 面額變更 / 現增 | market, stock_id, date, event_type |
-| `price_daily` | 日K 原始收盤價 | market, stock_id, date |
-| `price_limit` | 漲跌停價格 | market, stock_id, date |
-| `price_daily_fwd` | 後復權日K（Rust Phase 4 產出） | market, stock_id, date |
-| `price_weekly_fwd` | 後復權週K | market, stock_id, year, week |
-| `price_monthly_fwd` | 後復權月K | market, stock_id, year, month |
-| `institutional_daily` | 三大法人買賣超（外資/投信/自營商） | market, stock_id, date |
-| `margin_daily` | 融資融券餘額 | market, stock_id, date |
-| `foreign_holding` | 外資持股比例 | market, stock_id, date |
-| `holding_shares_per` | 股權分散表（detail JSON 各級距） | market, stock_id, date |
-| `valuation_daily` | 本益比 / 殖利率 / 淨值比 | market, stock_id, date |
-| `day_trading` | 當沖買賣量 | market, stock_id, date |
-| `index_weight_daily` | 指數成分權重 | market, stock_id, date |
-| `monthly_revenue` | 月營收 + YoY / MoM | market, stock_id, date |
-| `financial_statement` | 損益表 / 資負表 / 現金流量（detail JSON） | market, stock_id, date, type |
-| `market_index_us` | SPY / VIX 美股指數 | market, stock_id, date |
-| `exchange_rate` | 台幣匯率（spot_buy 為主欄位） | market, date, currency |
-| `institutional_market_daily` | 全市場三大法人 | market, date |
-| `market_margin_maintenance` | 整體融資維持率 | market, date |
-| `fear_greed_index` | CNN 恐懼貪婪指數 | market, date |
-| `api_sync_progress` | 斷點續傳進度（per segment） | api_name, stock_id, segment_start |
-| `stock_sync_status` | 每支股票同步時間戳 + fwd_adj_valid | market, stock_id |
+| 層 | 數量 | 例 |
+|---|---|---|
+| Reference | 2 | `trading_date_ref` / `stock_info_ref` |
+| Bronze raw | ~28 | `price_daily` / `price_adjustment_events` / `institutional_investors_tw` / `financial_statement`(R3 主名)/ `monthly_revenue` |
+| Silver derived | 14 | 12 `*_derived`(SQL builder)+ 4 fwd 表(Rust)+ `price_limit_merge_events` |
+| 觀察期 legacy_v2 | 3 | R5 觀察 21~60 天,R6 後 DROP |
+| 退場候選(spec §7.3)| 6 | `institutional_daily` / `margin_daily` / `foreign_holding` / `day_trading` / `valuation_daily` / `index_weight_daily` |
+| 系統 | 3 | `schema_metadata` / `stock_sync_status` / `api_sync_progress` |
+| **總計** | **~56 張**(觀察期 + 退場候選全退後 → ~47 張)| — |
 
 ---
 
-## 呼叫量估算（初次全量回補）
+## 7. 主要 PR 里程碑(2026-05 m2 重構 + nice-to-haves + 質量修)
 
-| Phase | 估算呼叫次數 |
-|-------|-------------|
-| Phase 1 | ~30 次 |
-| Phase 2 | ~7,500 次 |
-| Phase 3 | ~25,200 次 |
-| Phase 5 | ~138,600 次 |
-| Phase 6 | ~40 次 |
-| **合計** | **~171,370 次** |
+```
+v3.2 r1(2026-05-初):
+  #17 Rust schema_version + AF 拆 multiplier 對齊
+  #18 5 張 PR #18 reverse-pivot Bronze raw + 全市場驗證
+  #19a/b/c Silver 14 表 schema + 13 builder 實作
+  #20  18 個 Bronze→Silver dirty trigger ENABLE
+  #21-A/B 衍生欄補完 + Bronze 3 條
+  #22  TAIEX/TPEx daily OHLCV
+  #21  deprecated path 全砍
 
-以 1,600 次/小時計算：**約 107 小時（4.5 天）**
+m2 大重構(2026-05-09):
+  #25 R1 source 欄補回 3 張 _tw
+  #26 R2 v2.0 舊 3 表 rename _legacy_v2
+  #27 hotfix sync_tracker fromisoformat
+  #28 R3 _tw Bronze 升格主名(去 _tw 後綴)
+  #29 R4 v2.0 entry name 加 _legacy 後綴
+  #30 v1.26 nice-to-haves(Rust dirty queue / Phase 4 incremental skip / margin UNION 等 5 項)
+  #32 docs api_pipeline_reference 屬性分層版
+  #33 m3Spec/ 資料夾預留
+  #34 docs 對齊 m2Spec/layered_schema_post_refactor.md + 補 Cores 接點
+
+v1.27 質量修(2026-05-09):
+  #35 day_trading builder 改 LEFT JOIN price_daily_fwd(spec §6.4 + chip_cores §7.2)
+  #36 pae dedup par_value_change + split 16 對 + 防衛 trigger
+```
 
 ---
 
-## 規格文件
-
-詳細實作規格見 `collectorSpec/` 目錄：
-
-- `tw_stock_collector_program_spec_v1.2_p1.md` — 架構總覽、Config Schema、股票清單
-- `tw_stock_collector_program_spec_v1.2_p2.md` — Rate Limiter、Phase Executor、API Client、Field Mapper、Rust Bridge
-- `tw_stock_collector_program_spec_v1.2_p3.md` — Sync Tracker、Post-Process、Logging、CLI 介面
-
----
-
-## License
+## 8. License
 
 MIT
