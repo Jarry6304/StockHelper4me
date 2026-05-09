@@ -1,0 +1,13 @@
+[package]
+name        = "ohlcv_loader"
+version     = "0.1.0"
+edition     = "2021"
+description = "Cores 共用 OHLC loader(讀 Silver price_*_fwd 表),對齊 m2Spec/oldm2Spec/cores_overview.md §3.4 §4.4"
+
+[dependencies]
+fact_schema = { path = "../fact_schema" }
+neely_core  = { path = "../../cores/wave/neely_core" }
+sqlx       = { workspace = true }
+chrono     = { workspace = true }
+anyhow     = { workspace = true }
+serde      = { workspace = true }

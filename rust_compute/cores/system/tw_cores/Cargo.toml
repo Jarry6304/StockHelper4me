@@ -1,18 +1,23 @@
 [package]
 name        = "tw_cores"
-version     = "0.1.0"
+version     = "0.2.0"
 edition     = "2021"
-description = "Cores 層 Monolithic Binary 入口(對齊 m2Spec/oldm2Spec/cores_overview.md §五)— skeleton"
+description = "Cores 層 Monolithic Binary 入口(對齊 m2Spec/oldm2Spec/cores_overview.md §五)"
 
 [[bin]]
 name = "tw_cores"
 path = "src/main.rs"
 
 [dependencies]
-fact_schema = { path = "../../../cores_shared/fact_schema" }
-neely_core  = { path = "../../wave/neely_core" }
-clap        = { workspace = true }
-anyhow      = { workspace = true }
-tokio       = { workspace = true }
+fact_schema   = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader  = { path = "../../../cores_shared/ohlcv_loader" }
+neely_core    = { path = "../../wave/neely_core" }
+clap          = { workspace = true }
+anyhow        = { workspace = true }
+tokio         = { workspace = true }
+sqlx          = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+chrono        = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }

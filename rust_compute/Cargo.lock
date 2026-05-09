@@ -1028,6 +1028,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ohlcv_loader"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fact_schema",
+ "neely_core",
+ "serde",
+ "sqlx",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1941,12 +1953,17 @@ dependencies = [
 
 [[package]]
 name = "tw_cores"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "fact_schema",
  "neely_core",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
