@@ -8,10 +8,9 @@ description = "ATR Core(P1,Wilder ATR + Volatility 異常事件,對齊 oldm2Spec
 path = "src/lib.rs"
 
 [dependencies]
-fact_schema      = { path = "../../../cores_shared/fact_schema" }
-ohlcv_loader     = { path = "../../../cores_shared/ohlcv_loader" }
-core_registry    = { path = "../../../cores_shared/core_registry" }
-indicator_kernel = { path = "../../../cores_shared/indicator_kernel" }
+fact_schema   = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader  = { path = "../../../cores_shared/ohlcv_loader" }
+core_registry = { path = "../../../cores_shared/core_registry" }
 anyhow        = { workspace = true }
 chrono        = { workspace = true }
 serde         = { workspace = true }

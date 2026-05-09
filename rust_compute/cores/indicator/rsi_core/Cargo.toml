@@ -6,10 +6,9 @@ description = "RSI Core(P1,Wilder RSI overbought/oversold)"
 [lib]
 path = "src/lib.rs"
 [dependencies]
-fact_schema      = { path = "../../../cores_shared/fact_schema" }
-ohlcv_loader     = { path = "../../../cores_shared/ohlcv_loader" }
-core_registry    = { path = "../../../cores_shared/core_registry" }
-indicator_kernel = { path = "../../../cores_shared/indicator_kernel" }
+fact_schema   = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader  = { path = "../../../cores_shared/ohlcv_loader" }
+core_registry = { path = "../../../cores_shared/core_registry" }
 anyhow        = { workspace = true }
 chrono        = { workspace = true }
 serde         = { workspace = true }

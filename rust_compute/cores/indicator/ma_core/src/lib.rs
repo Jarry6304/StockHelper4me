@@ -48,9 +48,46 @@ pub struct MaCore;
 impl MaCore { pub fn new() -> Self { MaCore } }
 impl Default for MaCore { fn default() -> Self { MaCore::new() } }
 
-// SMA / EMA / WMA 計算抽到 indicator_kernel(本 PR 重構 — 各 indicator core 不再自己重新實作)。
-// Re-export 給後續 ma_core 內部 + Tests 用,signature 對齊 indicator_kernel。
-pub use indicator_kernel::{ema, sma, wma};
+pub fn sma(values: &[f64], period: usize) -> Vec<f64> {
+    let mut out = vec![0.0; values.len()];
+    if values.is_empty() || period == 0 { return out; }
+    let mut sum = 0.0;
+    for i in 0..values.len() {
+        sum += values[i];
+        if i >= period { sum -= values[i - period]; }
+        let div = (i + 1).min(period) as f64;
+        out[i] = sum / div;
+    }
+    out
+}
+
+pub fn ema(values: &[f64], period: usize) -> Vec<f64> {
+    let mut out = vec![0.0; values.len()];
+    if values.is_empty() || period == 0 { return out; }
+    let alpha = 2.0 / (period as f64 + 1.0);
+    out[0] = values[0];
+    for i in 1..values.len() {
+        out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1];
+    }
+    out
+}
+
+pub fn wma(values: &[f64], period: usize) -> Vec<f64> {
+    let mut out = vec![0.0; values.len()];
+    if values.is_empty() || period == 0 { return out; }
+    for i in 0..values.len() {
+        let p = (i + 1).min(period);
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for k in 0..p {
+            let w = (k + 1) as f64; // 越近權重越大
+            num += w * values[i - (p - 1 - k)];
+            den += w;
+        }
+        out[i] = if den > 0.0 { num / den } else { 0.0 };
+    }
+    out
+}
 
 pub fn compute_ma(values: &[f64], spec: &MaSpec) -> Vec<f64> {
     match spec.kind {

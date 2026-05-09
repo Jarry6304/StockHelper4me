@@ -8,10 +8,9 @@ description = "MA Core(P1,SMA/EMA/WMA 同族,以 enum 區分子型號,對齊 old
 path = "src/lib.rs"
 
 [dependencies]
-fact_schema      = { path = "../../../cores_shared/fact_schema" }
-ohlcv_loader     = { path = "../../../cores_shared/ohlcv_loader" }
-core_registry    = { path = "../../../cores_shared/core_registry" }
-indicator_kernel = { path = "../../../cores_shared/indicator_kernel" }
+fact_schema   = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader  = { path = "../../../cores_shared/ohlcv_loader" }
+core_registry = { path = "../../../cores_shared/core_registry" }
 anyhow        = { workspace = true }
 chrono        = { workspace = true }
 serde         = { workspace = true }

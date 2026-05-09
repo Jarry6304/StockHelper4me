@@ -8,7 +8,6 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use fact_schema::{Fact, IndicatorCore, Timeframe};
-use indicator_kernel::{true_range, wilder_smooth_step};
 use ohlcv_loader::OhlcvSeries;
 use serde::Serialize;
 use serde_json::json;
@@ -51,9 +50,8 @@ impl IndicatorCore for AdxCore {
             return Ok(AdxOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series: Vec::new(), events: Vec::new() });
         }
         let p = params.period as f64;
-        // True Range 抽到 indicator_kernel
-        let tr = true_range(&input.bars);
-        // +DM / -DM(ADX 特有)
+        // True Range / +DM / -DM
+        let mut tr = vec![0.0; n];
         let mut plus_dm = vec![0.0; n];
         let mut minus_dm = vec![0.0; n];
         for i in 1..n {
@@ -63,8 +61,9 @@ impl IndicatorCore for AdxCore {
             let down_move = prev.low - cur.low;
             if up_move > down_move && up_move > 0.0 { plus_dm[i] = up_move; }
             if down_move > up_move && down_move > 0.0 { minus_dm[i] = down_move; }
+            tr[i] = (cur.high - cur.low).max((cur.high - prev.close).abs()).max((cur.low - prev.close).abs());
         }
-        // Wilder smoothing(暖機 sum 風格,對齊 Wilder 1978 ADX 標準)
+        // Wilder smoothing
         let mut atr = vec![0.0; n]; let mut pdi_sm = vec![0.0; n]; let mut mdi_sm = vec![0.0; n];
         let warmup = params.period.min(n - 1);
         let sum_tr: f64 = tr[1..=warmup].iter().sum();
@@ -72,9 +71,9 @@ impl IndicatorCore for AdxCore {
         let sum_m: f64 = minus_dm[1..=warmup].iter().sum();
         atr[warmup] = sum_tr / p; pdi_sm[warmup] = sum_p / p; mdi_sm[warmup] = sum_m / p;
         for i in (warmup + 1)..n {
-            atr[i] = wilder_smooth_step(atr[i - 1], tr[i], params.period);
-            pdi_sm[i] = wilder_smooth_step(pdi_sm[i - 1], plus_dm[i], params.period);
-            mdi_sm[i] = wilder_smooth_step(mdi_sm[i - 1], minus_dm[i], params.period);
+            atr[i] = ((p - 1.0) * atr[i - 1] + tr[i]) / p;
+            pdi_sm[i] = ((p - 1.0) * pdi_sm[i - 1] + plus_dm[i]) / p;
+            mdi_sm[i] = ((p - 1.0) * mdi_sm[i - 1] + minus_dm[i]) / p;
         }
         // +DI / -DI / DX / ADX
         let mut series = Vec::with_capacity(n);
@@ -93,7 +92,7 @@ impl IndicatorCore for AdxCore {
             let init_n = (adx_start - warmup) as f64;
             if init_n > 0.0 { series[adx_start - 1].adx = init_sum / init_n; }
             for i in adx_start..n {
-                series[i].adx = wilder_smooth_step(series[i - 1].adx, dx[i], params.period);
+                series[i].adx = ((p - 1.0) * series[i - 1].adx + dx[i]) / p;
             }
         }
         let mut events = Vec::new();

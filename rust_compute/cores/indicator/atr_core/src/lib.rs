@@ -35,8 +35,26 @@ pub struct AtrCore;
 impl AtrCore { pub fn new() -> Self { AtrCore } }
 impl Default for AtrCore { fn default() -> Self { AtrCore::new() } }
 
-// Wilder ATR 抽到 indicator_kernel(本 PR 重構)
-pub use indicator_kernel::wilder_atr;
+pub fn wilder_atr(bars: &[ohlcv_loader::OhlcvBar], period: usize) -> Vec<f64> {
+    let n = bars.len();
+    if n == 0 || period == 0 { return vec![0.0; n]; }
+    let mut tr = Vec::with_capacity(n);
+    tr.push(bars[0].high - bars[0].low);
+    for i in 1..n {
+        let prev = bars[i - 1].close;
+        let h = bars[i].high; let l = bars[i].low;
+        let candidate = [(h - l).abs(), (h - prev).abs(), (l - prev).abs()];
+        tr.push(candidate.iter().cloned().fold(0.0_f64, f64::max));
+    }
+    let mut atr = vec![0.0; n];
+    let warmup = period.min(n);
+    let mut sum = 0.0;
+    for i in 0..warmup { sum += tr[i]; atr[i] = sum / (i + 1) as f64; }
+    for i in warmup..n {
+        atr[i] = ((period as f64 - 1.0) * atr[i - 1] + tr[i]) / period as f64;
+    }
+    atr
+}
 
 impl IndicatorCore for AtrCore {
     type Input = OhlcvSeries;
