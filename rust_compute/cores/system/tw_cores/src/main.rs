@@ -960,32 +960,54 @@ async fn write_structural_snapshot(
     Ok(())
 }
 
+/// PR-9c batch INSERT 取代 per-event loop:用 UNNEST array bind 一次插入 N row。
+/// per-event INSERT 是 stage 5 主要 bottleneck(2M facts × 每 row 1 round-trip
+/// = 巨大 IO overhead);batch INSERT 降至 N stocks × N batches round-trip。
+/// 8000 row / batch 上限對齊 PG 65535 placeholder 限制(這裡 8 array bind 沒有
+/// placeholder 限制,但保留 8000 conservative,避免單筆 query 過大)。
 async fn write_facts(pool: &PgPool, facts: &[Fact]) -> Result<u64> {
-    let mut inserted = 0u64;
-    for fact in facts {
+    if facts.is_empty() {
+        return Ok(0);
+    }
+    const BATCH_SIZE: usize = 4000;
+    let mut total_inserted = 0u64;
+    for chunk in facts.chunks(BATCH_SIZE) {
+        // 對齊 PG UNNEST 8 array bind:每個 array len = chunk.len()
+        let stock_ids:      Vec<&str>             = chunk.iter().map(|f| f.stock_id.as_str()).collect();
+        let fact_dates:     Vec<chrono::NaiveDate> = chunk.iter().map(|f| f.fact_date).collect();
+        let timeframes:     Vec<&str>             = chunk.iter().map(|f| f.timeframe.as_str()).collect();
+        let source_cores:   Vec<&str>             = chunk.iter().map(|f| f.source_core.as_str()).collect();
+        let source_versions:Vec<&str>             = chunk.iter().map(|f| f.source_version.as_str()).collect();
+        let params_hashes:  Vec<&str>             = chunk.iter().map(|f| f.params_hash.as_deref().unwrap_or("")).collect();
+        let statements:     Vec<&str>             = chunk.iter().map(|f| f.statement.as_str()).collect();
+        let metadatas:      Vec<&serde_json::Value> = chunk.iter().map(|f| &f.metadata).collect();
+
         let res = sqlx::query(
             r#"
             INSERT INTO facts
                 (stock_id, fact_date, timeframe, source_core,
                  source_version, params_hash, statement, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            SELECT * FROM UNNEST(
+                $1::text[], $2::date[], $3::text[], $4::text[],
+                $5::text[], $6::text[], $7::text[], $8::jsonb[]
+            )
             ON CONFLICT DO NOTHING
             "#,
         )
-        .bind(&fact.stock_id)
-        .bind(fact.fact_date)
-        .bind(fact.timeframe.as_str())
-        .bind(&fact.source_core)
-        .bind(&fact.source_version)
-        .bind(fact.params_hash.as_deref().unwrap_or(""))
-        .bind(&fact.statement)
-        .bind(&fact.metadata)
+        .bind(&stock_ids)
+        .bind(&fact_dates)
+        .bind(&timeframes)
+        .bind(&source_cores)
+        .bind(&source_versions)
+        .bind(&params_hashes)
+        .bind(&statements)
+        .bind(&metadatas)
         .execute(pool)
         .await
-        .context("insert facts failed")?;
-        inserted += res.rows_affected();
+        .context("batch insert facts failed")?;
+        total_inserted += res.rows_affected();
     }
-    Ok(inserted)
+    Ok(total_inserted)
 }
 
 async fn resolve_stock_list(
