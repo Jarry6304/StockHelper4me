@@ -308,7 +308,7 @@
 | 項目 | 估時 | 預期收益 |
 |---|---|---|
 | Workflow toml dispatch | 半天 | 動態決定跑哪些 cores(目前 hardcode 全 22) |
-| sqlx pool 並行(`max_connections=2 → 16`)+ per-stock task spawn | 半天 | 30 stocks 87.6s 串列 → ~10s 並行(~9× 加速) |
+| ~~sqlx pool 並行 + per-stock task spawn~~ | ~~半天~~ | ✅ **2026-05-10 落地**:`max_connections` 對齊 `--concurrency`(default 16),`for_each_concurrent` 並行 Stage B per-stock |
 | incremental dirty queue(只跑 `is_dirty=TRUE` stocks) | 半天 | 每日增量大幅省時 |
 | dev DB scale up to 1700 stocks | 30~40h calendar | 真 production scale data 反饋 |
 

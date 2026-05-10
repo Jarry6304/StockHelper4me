@@ -63,3 +63,6 @@ tracing-subscriber = { workspace = true }
 # 從 .env 自動 load DATABASE_URL(避免每次新 PS window 都得手動 set env)
 # walks up from cwd 找 .env;repo root 的 .env 從 rust_compute/ 也 work
 dotenvy = "0.15"
+
+# Async stream concurrency(PR-9b run-all per-stock task spawn)
+futures = { workspace = true }
