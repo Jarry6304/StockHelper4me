@@ -76,9 +76,9 @@ enum Command {
         /// 寫入 PG(indicator_values + structural_snapshots + facts)— 不指定僅 dry-run
         #[arg(long, default_value_t = false)]
         write: bool,
-        /// Stage B per-stock 並行度(預設 16,需 ≤ PG max_connections)
-        /// 串列跑用 1;全市場 1700 stocks 從 ~60min 降到 ~5min(對齊 v1.29 PR-9b)
-        #[arg(long, default_value_t = 16)]
+        /// Stage B per-stock 並行度(預設 32,需 ≤ PG max_connections - 4 buffer)
+        /// 串列跑用 1;全市場 1263 stocks 從 ~9min 降到 ~5min(PR-9d 升 16→32)
+        #[arg(long, default_value_t = 32)]
         concurrency: usize,
     },
 }
