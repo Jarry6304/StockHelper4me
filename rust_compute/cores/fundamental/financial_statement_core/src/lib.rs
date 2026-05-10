@@ -6,8 +6,14 @@
 // 4 維 PK(market, stock_id, date, type),type ∈ {income, balance, cashflow}。
 // 載入器負責拉 raw row,本 core 把同 date 的三類 row 組裝成 FinancialPoint。
 //
-// JSONB key 對齊 best-guess(對齊 PR #18.5 dual-write entries),P0 後對 Silver
-// `financial_statement_derived.detail` 校準。
+// **detail JSONB key**:對齊 Silver `financial_statement_derived.detail`(2026-05-10
+// fix):
+//   Bronze `financial_statement.origin_name` 是中文(IFRS 會計科目),Silver builder
+//   `financial_statement.py:60-62` 直接 pack origin_name → value,故 detail JSONB
+//   key 是中文(「營業收入合計」/「本期淨利(淨損)」等)。
+//   FinMind 不同年代用不同括號(半形 vs 全形)+ 同概念多命名變體,故 12 個欄位
+//   各列 fallback chain via `jget_first_i64/f64`。
+// **shareholder/financial_statement spec 校準清單**見 docs/m3_cores_spec_pending.md §3.3 / §4.3
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -142,21 +148,23 @@ impl IndicatorCore for FinancialStatementCore {
 
         let series: Vec<FinancialPoint> = by_date.into_iter().map(|(date, slots)| {
             let inc = slots[0]; let bal = slots[1]; let cf = slots[2];
-            let revenue = jget_i64(inc, "Revenue");
-            let gross_profit = jget_i64(inc, "GrossProfit");
+            // 12 個直接從 detail JSONB 取的欄位,各用 fallback chain 對齊真實 IFRS 中文
+            // origin_name + FinMind 半形/全形括號變體
+            let revenue = jget_first_i64(inc, REVENUE_KEYS);
+            let gross_profit = jget_first_i64(inc, GROSS_PROFIT_KEYS);
             let gross_margin_pct = if revenue > 0 { gross_profit as f64 / revenue as f64 * 100.0 } else { 0.0 };
-            let operating_profit = jget_i64(inc, "OperatingProfit");
+            let operating_profit = jget_first_i64(inc, OPERATING_PROFIT_KEYS);
             let operating_margin_pct = if revenue > 0 { operating_profit as f64 / revenue as f64 * 100.0 } else { 0.0 };
-            let net_income = jget_i64(inc, "NetIncome");
+            let net_income = jget_first_i64(inc, NET_INCOME_KEYS);
             let net_margin_pct = if revenue > 0 { net_income as f64 / revenue as f64 * 100.0 } else { 0.0 };
-            let eps = jget_f64(inc, "EPS");
-            let total_assets = jget_i64(bal, "TotalAssets");
-            let total_liabilities = jget_i64(bal, "TotalLiabilities");
-            let total_equity = jget_i64(bal, "TotalEquity");
+            let eps = jget_first_f64(inc, EPS_KEYS);
+            let total_assets = jget_first_i64(bal, TOTAL_ASSETS_KEYS);
+            let total_liabilities = jget_first_i64(bal, TOTAL_LIABILITIES_KEYS);
+            let total_equity = jget_first_i64(bal, TOTAL_EQUITY_KEYS);
             let debt_ratio_pct = if total_assets > 0 { total_liabilities as f64 / total_assets as f64 * 100.0 } else { 0.0 };
-            let operating_cash_flow = jget_i64(cf, "OperatingCashFlow");
-            let investing_cash_flow = jget_i64(cf, "InvestingCashFlow");
-            let financing_cash_flow = jget_i64(cf, "FinancingCashFlow");
+            let operating_cash_flow = jget_first_i64(cf, OPERATING_CASH_FLOW_KEYS);
+            let investing_cash_flow = jget_first_i64(cf, INVESTING_CASH_FLOW_KEYS);
+            let financing_cash_flow = jget_first_i64(cf, FINANCING_CASH_FLOW_KEYS);
             let free_cash_flow = operating_cash_flow + investing_cash_flow; // FCF = OCF + ICF(經典定義)
             let roe_pct = if total_equity > 0 { net_income as f64 / total_equity as f64 * 100.0 } else { 0.0 };
             let roa_pct = if total_assets > 0 { net_income as f64 / total_assets as f64 * 100.0 } else { 0.0 };
@@ -257,12 +265,89 @@ impl IndicatorCore for FinancialStatementCore {
     }
 }
 
-fn jget_i64(detail: Option<&serde_json::Value>, key: &str) -> i64 {
-    detail.and_then(|d| d.get(key)).and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).unwrap_or(0)
+/// 找第一個非 None 的 detail key(支援 i64 / f64 任一型別,自動轉 i64)
+fn jget_first_i64(detail: Option<&serde_json::Value>, keys: &[&str]) -> i64 {
+    let Some(d) = detail else { return 0; };
+    for k in keys {
+        if let Some(v) = d.get(*k) {
+            if let Some(n) = v.as_i64() { return n; }
+            if let Some(f) = v.as_f64() { return f as i64; }
+        }
+    }
+    0
 }
-fn jget_f64(detail: Option<&serde_json::Value>, key: &str) -> f64 {
-    detail.and_then(|d| d.get(key)).and_then(|v| v.as_f64()).unwrap_or(0.0)
+
+/// 找第一個非 None 的 detail key(f64;i64 自動轉)
+fn jget_first_f64(detail: Option<&serde_json::Value>, keys: &[&str]) -> f64 {
+    let Some(d) = detail else { return 0.0; };
+    for k in keys {
+        if let Some(v) = d.get(*k) {
+            if let Some(f) = v.as_f64() { return f; }
+            if let Some(n) = v.as_i64() { return n as f64; }
+        }
+    }
+    0.0
 }
+
+// ---------------------------------------------------------------------------
+// 12 個 detail JSONB key fallback chain(對齊 Silver `financial_statement_derived.detail`
+// 真實 origin_name 中文)
+//
+// 來源:Bronze `financial_statement.origin_name` 直接 pack(原 IFRS 中文會計科目);
+// FinMind 不同年代用半形(流出)vs 全形(流出)括號,雙列防衛。
+//
+// **回退測試**:仍保留英文 PascalCase key 對齊既有 unit test(`test::assembles_*`
+// 用英文 key,fallback chain 末位放英文,既有 test 不會 break)。
+// 新增 mock 中文 key 的 unit test 直接驗 production data path。
+// ---------------------------------------------------------------------------
+
+const REVENUE_KEYS: &[&str] = &[
+    "營業收入合計", "營業收入", "銷貨收入", "收入合計",
+    "Revenue",
+];
+const GROSS_PROFIT_KEYS: &[&str] = &[
+    "營業毛利(毛損)", "營業毛利(毛損)", "營業毛利", "銷貨毛利",
+    "GrossProfit",
+];
+const OPERATING_PROFIT_KEYS: &[&str] = &[
+    "營業利益(損失)", "營業利益(損失)", "營業利益", "稅前淨利",
+    "OperatingProfit",
+];
+const NET_INCOME_KEYS: &[&str] = &[
+    "本期淨利(淨損)", "本期淨利(淨損)", "本期淨利", "本期綜合損益總額",
+    "NetIncome",
+];
+const EPS_KEYS: &[&str] = &[
+    "基本每股盈餘", "每股盈餘", "基本每股盈餘(元)",
+    "EPS",
+];
+const TOTAL_ASSETS_KEYS: &[&str] = &[
+    "資產總計", "資產總額",
+    "TotalAssets",
+];
+const TOTAL_LIABILITIES_KEYS: &[&str] = &[
+    "負債總額", "負債總計",
+    "TotalLiabilities",
+];
+const TOTAL_EQUITY_KEYS: &[&str] = &[
+    "權益總額", "權益總計", "股東權益總計",
+    "TotalEquity",
+];
+const OPERATING_CASH_FLOW_KEYS: &[&str] = &[
+    "營業活動之淨現金流入(流出)", "營業活動之淨現金流入(流出)",
+    "營業活動之現金流量",
+    "OperatingCashFlow",
+];
+const INVESTING_CASH_FLOW_KEYS: &[&str] = &[
+    "投資活動之淨現金流入(流出)", "投資活動之淨現金流入(流出)",
+    "投資活動之現金流量",
+    "InvestingCashFlow",
+];
+const FINANCING_CASH_FLOW_KEYS: &[&str] = &[
+    "籌資活動之淨現金流入(流出)", "籌資活動之淨現金流入(流出)",
+    "籌資活動之現金流量",
+    "FinancingCashFlow",
+];
 
 fn format_period(date: NaiveDate) -> String {
     use chrono::Datelike;
@@ -327,5 +412,63 @@ mod tests {
         let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
         assert!(out.events.is_empty());
         assert!(out.series.is_empty());
+    }
+
+    /// Regression(2026-05-10):detail JSONB key 改用真實 IFRS 中文 origin_name +
+    /// fallback chain。對齊 Silver `financial_statement_derived.detail` 真結構
+    /// (對齊 Bronze `financial_statement.origin_name` 中文)。
+    #[test]
+    fn parses_chinese_origin_name_keys() {
+        let series = FinancialStatementSeries {
+            stock_id: "2330".to_string(),
+            points: vec![
+                FinancialStatementRaw {
+                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
+                    r#type: "income".to_string(),
+                    detail: json!({
+                        "營業收入合計":     100_000_000,
+                        "營業毛利(毛損)":   50_000_000,
+                        "營業利益(損失)":   30_000_000,
+                        "本期淨利(淨損)":   20_000_000,
+                        "基本每股盈餘":     5.5_f64,
+                    }),
+                },
+                FinancialStatementRaw {
+                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
+                    r#type: "balance".to_string(),
+                    detail: json!({
+                        "資產總計":   500_000_000_i64,
+                        "負債總額":   200_000_000_i64,
+                        "權益總額":   300_000_000_i64,
+                    }),
+                },
+                FinancialStatementRaw {
+                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
+                    r#type: "cashflow".to_string(),
+                    // 用全形括號(對齊 query 看到 28 row 全形變體)
+                    detail: json!({
+                        "營業活動之淨現金流入(流出)":  30_000_000,
+                        "投資活動之淨現金流入(流出)": -10_000_000,
+                        "籌資活動之淨現金流入(流出)":  -5_000_000,
+                    }),
+                },
+            ],
+        };
+        let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
+        assert_eq!(out.series.len(), 1);
+        let p = &out.series[0];
+        assert_eq!(p.revenue, 100_000_000);
+        assert_eq!(p.gross_profit, 50_000_000);
+        assert_eq!(p.net_income, 20_000_000);
+        assert!((p.eps - 5.5).abs() < 1e-9);
+        assert_eq!(p.total_assets, 500_000_000);
+        assert_eq!(p.total_liabilities, 200_000_000);
+        assert_eq!(p.operating_cash_flow, 30_000_000);
+        assert_eq!(p.investing_cash_flow, -10_000_000);
+        assert_eq!(p.financing_cash_flow, -5_000_000);
+        assert_eq!(p.free_cash_flow, 20_000_000); // 30M + (-10M)
+        // 驗計算欄
+        assert!((p.gross_margin_pct - 50.0).abs() < 1e-6);
+        assert!((p.debt_ratio_pct - 40.0).abs() < 1e-6);
     }
 }

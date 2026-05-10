@@ -152,12 +152,14 @@
 | `MAINTENANCE_LOW_THRESHOLD` | 145.0 const | spec §4.5 列 EventKind 但 §4.3 未列 Param,目前寫死 |
 | 「historical high」label | 未實作 | spec §4.6 範例 |
 
-### 3.3 shareholder_core(stage 3 揭露 0 events)
+### 3.3 shareholder_core(2026-05-10 修)
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
 | `STREAK_MIN_WEEKS` | 4 const | spec 對齊? |
-| **detail JSONB key 命名** | best-guess 英文(`small_holders_count` / `concentration_pct` / 等) | **必須對齊真實 Bronze `holding_shares_per_derived.detail` schema** |
-| 為何 0 events | best-guess threshold 太嚴 / detail key 對不上 → 讀不到值 → 永遠不觸發 | user spec 校準 |
+| ~~detail JSONB key 命名~~ | ~~best-guess 英文~~ → ✅ **iterate 真 17 levels(2026-05-10 fix)** | 已對齊 Silver `holding_shares_per_derived.detail` 真結構 |
+| **small/mid/large 邊界**(目前 best-guess) | small ≤ 5,000 股 / mid ≤ 50,000 股 / large > 50,000 股 | spec 拍版邊界張數 |
+| **`concentration_index` 公式**(目前 best-guess) | `= large_holders_pct`(大戶集中度) | spec 是否要改 Top10 持股比 / Gini 等 |
+| Skip rules | `差異數調整(說明4)` 異常 row 不算 | 確認 |
 
 ### 3.4 foreign_holding_core
 | 項目 | 目前值 | 待 user 確認 |
@@ -190,13 +192,14 @@
 | `PerNegative` 邏輯 | 簡化(per < 0 觸發) | spec §4.7 完整邏輯待寫 |
 | `history_lookback_years` | 5(影響 warmup = years × 252) | spec |
 
-### 4.3 financial_statement_core(stage 3 揭露 0 events)
+### 4.3 financial_statement_core(2026-05-10 修)
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
-| **18 個 FinancialPoint 欄** detail JSONB key 命名 | **best-guess 英文**(EPS / Revenue / GrossProfitMargin / OperatingIncome / NetIncome / TotalAssets / TotalLiabilities / Equity / OperatingCashFlow / 等) | **必須對齊真實 Bronze `financial_statement_derived.detail` JSONB origin_name 欄(可能中文)** |
-| 為何 0 events | detail key 全部讀不到 → series 全 None → 永遠不觸發 | user spec 校準 |
+| ~~12 個 detail JSONB key 命名~~ | ~~best-guess 英文~~ → ✅ **改 IFRS 中文 fallback chain(2026-05-10 fix)** | 已對齊 Bronze `origin_name` 中文 |
+| **fallback chain 完整性** | 12 欄各列 3~4 個變體(全形 vs 半形括號 + 多命名) | user 跑 query 列出全 type × 全 origin_name,缺漏 key 加進 const |
 | Quarterly approximation | `Timeframe::Monthly`(enum 缺 Quarterly variant) | 是否需要加 Quarterly enum variant? |
 | 8 EventKind | best-guess 對齊 spec §5.5 | spec 校準 |
+| Threshold 預設 | `gross_margin_change_threshold=2.0` / `roe_high_threshold=15.0` / `debt_ratio_high_threshold=60.0` / `fcf_negative_streak_quarters=4` | spec 校準 |
 
 ---
 
