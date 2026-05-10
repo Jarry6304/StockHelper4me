@@ -299,18 +299,60 @@ dev DB 只有 30 distinct stocks(`SELECT COUNT(DISTINCT stock_id) FROM price_dai
 
 ### 3 個 known limitation 留 m3Spec/ 校準(stage 3 spot check 揭露)
 
-1. **`shareholder_core` + `financial_statement_core` events = 0**:best-guess threshold / detail JSONB key 命名(英文假設不對齊真實 Bronze 欄名),需 user 寫 m3Spec/{chip,fundamental}_cores.md 完整版校準
+1. **`shareholder_core` + `financial_statement_core` events = 0**:best-guess threshold / detail JSONB key 命名(英文假設不對齊真實 Bronze 欄名),需 user 寫 m3Spec/{chip,fundamental}_cores.md 完整版校準 — **2026-05-10 Round 1+2 fix 解決**(見下方)
 2. **`neely_core` 22 條 Stage 4 規則 deferred**:`Wave structure: ... rules passed = 0, deferred = 22`(對齊 v1.28 PR-3b R1-R3 完整 + R4-R7/F/Z/T/W 22 條 Deferred),等 user 寫 m3Spec/neely_core.md 完整版後 PR-3c 補
 3. **`0050` + `6547` snapshot_date = 1900-01-01 / forest_size = 0**:dev DB `price_daily_fwd` 沒這 2 stocks 的料(neely loader 載到空 series → compute() 仍 OK 但 forest 0,data_range fallback 1900-01-01 sentinel),不是 bug,user 補 backfill 即可
 
+### Round 1-4 + PR-9b/c/d 後續(2026-05-10 同 session 連續推進)
+
+接 v1.29 PR-9a 1263 stocks production run 收尾後,user 拍版往兩條路推:
+**(A) 量級降量 + 加速 production**(PR-9b/c/d + Round 4)+ **(B) 對齊真實
+schema 解 0-events 問題**(Round 1/2)。同 session 全推完。
+
+| Commit | 範圍 | wall time / facts |
+|---|---|---|
+| **e368fc8 Round 1** | financial_statement / shareholder detail JSONB key 改中文 + 17 levels iterate | 解 2 cores 永久 0 events(從 0 → 27880 financial / 106157 shareholder) |
+| **7eb9a96 Round 2** | financial_statement 全形括號 fallback chain + balance type 是 % common-size 處理(ROE/ROA 永久 0 避免 false positive) | 修 RoeHigh value=8478 億 false positive;GrossMarginRising/Falling/EpsTurn 等 5 EventKind 觸發 |
+| **615a8eb PR-9b** | tw_cores Stage B `for_each_concurrent` 並行(default 16);`max_connections` 對齊 | 1263 stocks:**3666s → 1388s(↓62%)** |
+| **d2e0594 PR-9c** | `write_facts` UNNEST array batch INSERT(取代 per-event loop;BATCH_SIZE=4000) | 1263 stocks:**1388s → 554s(↓60%)** |
+| **91804df Round 4** | valuation/margin/bollinger 3 cores stay-in-zone EventKind 改 EnteredX/ExitedX transition pattern(對齊 fear_greed 範本)| facts:**9M → 4.4M(↓51%)**;valuation 2.0M → 189K(↓91%);margin 1.3M → 605K(↓54%);bollinger 466K → 457K(bouncy 本質,僅 ↓2%) |
+| **ef855b8 PR-9d** | concurrency default 16 → 32 + `max_connections` 升 36 | wall time **不變**(PG IO 已是 hard ceiling;`per-core elapsed_s` 升但 contention 抵消) |
+
+User 拍版核心原則:**「去耦合 + 減少抽象 + 重工 OK」**(對齊 cores_overview §四 / §十四)。
+
+### Production verify milestone
+
+| Stage | 配置 | wall time | facts 量級 |
+|---|---|---|---|
+| Stage 5(初始)| 串列 concurrency=1 | 3666s = 61min | ~9M(stay-in-zone)|
+| PR-9b | concurrency=16 | 1388s = 23min | 同上 |
+| PR-9c batch INSERT | concurrency=16 | 554s = 9.2min | 同上 |
+| Round 4 transition | concurrency=16 | 535s = 8.9min | **4.4M(↓51%)**|
+| PR-9d concurrency 32 | concurrency=32 | 535s | 同上 |
+
+**起點 → 收尾比**:**~7× wall time 加速 + 51% facts 降量**
+
 ### 已知狀態(下次 session 起點)
 
-- alembic head:`w2x3y4z5a6b7`(user 已 alembic upgrade head 落地)
-- Rust workspace:24 crate,0 errors / **146 tests passed**(原 145 + margin null_row_skipped regression test 新加 1)
-- `tw_cores run-all` 全市場全核 dispatch + 三表寫入路徑全 production verified
-- 下個 session 建議:**PR-9b**(Workflow toml + 並行 + dirty queue),或
-  **m3Spec/** 寫定 + 各 core best-guess threshold 校準(尤其 shareholder /
-  financial_statement / neely R4-R7)
+- alembic head:`w2x3y4z5a6b7`(user 已落地)
+- Rust workspace:24 crate,0 errors / **153 tests passed**(原 146 + Round 1/2 5 + Round 4 新 3 - 1 砍 = 153)
+- production state:**4.4M facts / 9.2 分鐘 wall time / 1263 stocks production verified**
+- m3Spec/ 仍待寫:詳見 `docs/m3_cores_spec_pending.md`(12 段 spec writing checklist)
+- 下個 session 建議優先序:
+  1. **m3Spec/ 寫定** — 14 個 Round 4 EventKind 命名 + bollinger zone 邊界 + neely 22 條 R4-R7 + shareholder small/mid/large 邊界
+  2. **dev DB scale up** to 1369 stocks(user ops,~12h backfill)補滿 production scale
+  3. **PR-9e batch indicator_values INSERT**(對齊 PR-9c facts batch,預估再降 20-30% wall time)
+  4. **bollinger Round 5**(若需要)— 加 deadband 解 bouncy(違反「不防衛」拍版,需 user 同意)
+
+### m3Spec/ 寫定阻塞清單(對齊 docs/m3_cores_spec_pending.md)
+
+| Core | 待 user 拍板項 |
+|---|---|
+| financial_statement_core | 18 欄 detail JSONB key 完整 fallback chain + balance % vs 元值設計 + Quarterly enum variant |
+| shareholder_core | small/mid/large 邊界(目前 best-guess 5,000 / 50,000 張)+ concentration_index 公式 |
+| neely_core | 22 條 R4-R7/F/Z/T/W deferred 規則具體門檻 + Neely 書頁追溯 |
+| valuation/margin/bollinger | Round 4 重命名 EventKind 對齊 spec 寫定(EnteredX/ExitedX 是否要加 streak 防衛 bouncy) |
+| 各 core threshold | best-guess 預設值校準(GrossMargin±2.0 / DebtRatio≥60 / 等)|
 
 ---
 
