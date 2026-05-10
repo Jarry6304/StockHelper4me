@@ -28,6 +28,19 @@ FINMIND_BASE_URL = "https://api.finmindtrade.com/api/v4/data"
 # all_market 模式使用的 sentinel stock_id（api_client 看到此值不送 data_id）
 ALL_MARKET_SENTINEL = "__ALL__"
 
+# 網路 / HTTP retry backoff sequence(秒)
+# 對 DNS / 網路層短暫錯誤,給較長 wait 等待恢復(2026-05-10 修:原 exp 5/10/20 太短)
+# attempt 0 失敗等 60s(1 分鐘)→ attempt 1 失敗等 300s(5 分鐘)→ attempt 2 失敗 raise
+# 取代 RetryConfig.backoff_base_sec / backoff_max_sec(留 collector.toml 欄位不影響 schema,api_client 不再讀)
+RETRY_BACKOFF_SEC = [60, 300]
+
+
+def _retry_wait_sec(attempt: int) -> int:
+    """attempt 索引對應的 wait 秒數;超出索引則用最後一個值"""
+    if attempt < len(RETRY_BACKOFF_SEC):
+        return RETRY_BACKOFF_SEC[attempt]
+    return RETRY_BACKOFF_SEC[-1]
+
 
 class APIError(Exception):
     """FinMind API 回傳非預期結果時拋出"""
@@ -137,10 +150,7 @@ class FinMindClient:
                             # 觸發全域冷卻，冷卻秒數從 rate_limiter 讀取（來自 RateLimitConfig）
                             self.rate_limiter.cooldown(self.rate_limiter.cooldown_on_429_sec)
 
-                        wait = min(
-                            self.retry.backoff_base_sec * (2 ** attempt),
-                            self.retry.backoff_max_sec,
-                        )
+                        wait = _retry_wait_sec(attempt)
                         logger.warning(
                             f"HTTP {resp.status}, retry {attempt + 1}/{self.retry.max_attempts} "
                             f"in {wait}s. dataset={api_config.dataset}, stock={stock_id}"
@@ -152,9 +162,9 @@ class FinMindClient:
                     raise APIError(f"HTTP {resp.status}，dataset={api_config.dataset}, stock={stock_id}")
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                # 網路層錯誤，同樣指數退避後重試
+                # 網路層錯誤(DNS / connection reset 等),用 RETRY_BACKOFF_SEC 較長 wait 等待恢復
                 if attempt < self.retry.max_attempts - 1:
-                    wait = self.retry.backoff_base_sec * (2 ** attempt)
+                    wait = _retry_wait_sec(attempt)
                     logger.warning(
                         f"網路錯誤 {type(e).__name__}，retry {attempt + 1}/{self.retry.max_attempts} "
                         f"in {wait}s. dataset={api_config.dataset}, stock={stock_id}"
