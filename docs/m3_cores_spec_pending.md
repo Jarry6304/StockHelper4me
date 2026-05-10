@@ -152,12 +152,14 @@
 | `MAINTENANCE_LOW_THRESHOLD` | 145.0 const | spec §4.5 列 EventKind 但 §4.3 未列 Param,目前寫死 |
 | 「historical high」label | 未實作 | spec §4.6 範例 |
 
-### 3.3 shareholder_core(stage 3 揭露 0 events)
+### 3.3 shareholder_core(2026-05-10 修)
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
 | `STREAK_MIN_WEEKS` | 4 const | spec 對齊? |
-| **detail JSONB key 命名** | best-guess 英文(`small_holders_count` / `concentration_pct` / 等) | **必須對齊真實 Bronze `holding_shares_per_derived.detail` schema** |
-| 為何 0 events | best-guess threshold 太嚴 / detail key 對不上 → 讀不到值 → 永遠不觸發 | user spec 校準 |
+| ~~detail JSONB key 命名~~ | ~~best-guess 英文~~ → ✅ **iterate 真 17 levels(2026-05-10 fix)** | 已對齊 Silver `holding_shares_per_derived.detail` 真結構 |
+| **small/mid/large 邊界**(目前 best-guess) | small ≤ 5,000 股 / mid ≤ 50,000 股 / large > 50,000 股 | spec 拍版邊界張數 |
+| **`concentration_index` 公式**(目前 best-guess) | `= large_holders_pct`(大戶集中度) | spec 是否要改 Top10 持股比 / Gini 等 |
+| Skip rules | `差異數調整(說明4)` 異常 row 不算 | 確認 |
 
 ### 3.4 foreign_holding_core
 | 項目 | 目前值 | 待 user 確認 |
@@ -190,13 +192,16 @@
 | `PerNegative` 邏輯 | 簡化(per < 0 觸發) | spec §4.7 完整邏輯待寫 |
 | `history_lookback_years` | 5(影響 warmup = years × 252) | spec |
 
-### 4.3 financial_statement_core(stage 3 揭露 0 events)
+### 4.3 financial_statement_core(2026-05-10 修 round 2)
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
-| **18 個 FinancialPoint 欄** detail JSONB key 命名 | **best-guess 英文**(EPS / Revenue / GrossProfitMargin / OperatingIncome / NetIncome / TotalAssets / TotalLiabilities / Equity / OperatingCashFlow / 等) | **必須對齊真實 Bronze `financial_statement_derived.detail` JSONB origin_name 欄(可能中文)** |
-| 為何 0 events | detail key 全部讀不到 → series 全 None → 永遠不觸發 | user spec 校準 |
+| detail JSONB key | ✅ **全形括號 `\u{FF08}` `\u{FF09}` + IFRS 中文 fallback chain** | 對齊 user 揭露 2330 真 detail key |
+| **balance type 是 % common-size**(2026-05-10 揭露) | balance 全部是 % 對總資產比(`資產總額`=100,`權益總額`=68.84 等);income/cashflow 維持元值 | 是否要 user 寫 spec / 改 Silver builder pack 元值 + % 雙 dict?或維持 % only? |
+| **ROE / ROA / TotalAssets / TotalLiabilities / TotalEquity 元值欄** | 全 = 0(skip cross-type 計算 income元 / balance%)| 等 user m3Spec/ 拍版 balance 元值 vs %;若拍 % only,RoeHigh / RoaHigh EventKind 永久不觸發,留作概念占位 |
+| `debt_ratio_pct` | 直接讀「負債總額」% value(不再除 total_assets) | 對齊 balance 是 % 的事實 |
 | Quarterly approximation | `Timeframe::Monthly`(enum 缺 Quarterly variant) | 是否需要加 Quarterly enum variant? |
-| 8 EventKind | best-guess 對齊 spec §5.5 | spec 校準 |
+| 8 EventKind | RoeHigh / DebtRatioRising 等待 balance 元值版 | spec 校準 |
+| Threshold 預設 | `gross_margin_change_threshold=2.0` / `roe_high_threshold=15.0` / `debt_ratio_high_threshold=60.0` / `fcf_negative_streak_quarters=4` | spec 校準 |
 
 ---
 
@@ -305,7 +310,7 @@
 | 項目 | 估時 | 預期收益 |
 |---|---|---|
 | Workflow toml dispatch | 半天 | 動態決定跑哪些 cores(目前 hardcode 全 22) |
-| sqlx pool 並行(`max_connections=2 → 16`)+ per-stock task spawn | 半天 | 30 stocks 87.6s 串列 → ~10s 並行(~9× 加速) |
+| ~~sqlx pool 並行 + per-stock task spawn~~ | ~~半天~~ | ✅ **2026-05-10 落地**:`max_connections` 對齊 `--concurrency`(default 16),`for_each_concurrent` 並行 Stage B per-stock |
 | incremental dirty queue(只跑 `is_dirty=TRUE` stocks) | 半天 | 每日增量大幅省時 |
 | dev DB scale up to 1700 stocks | 30~40h calendar | 真 production scale data 反饋 |
 

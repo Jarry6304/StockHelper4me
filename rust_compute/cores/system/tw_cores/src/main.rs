@@ -76,11 +76,19 @@ enum Command {
         /// 寫入 PG(indicator_values + structural_snapshots + facts)— 不指定僅 dry-run
         #[arg(long, default_value_t = false)]
         write: bool,
+        /// Stage B per-stock 並行度(預設 16,需 ≤ PG max_connections)
+        /// 串列跑用 1;全市場 1700 stocks 從 ~60min 降到 ~5min(對齊 v1.29 PR-9b)
+        #[arg(long, default_value_t = 16)]
+        concurrency: usize,
     },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env from cwd or any parent dir(silently ignored if not found)
+    // 對齊 Python 端 db.create_writer 的 load_dotenv 行為,user 不用每次 PS window 手動 set env
+    let _ = dotenvy::dotenv();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -104,7 +112,8 @@ async fn main() -> Result<()> {
             skip_market,
             skip_stock,
             write,
-        } => run_all(stocks, limit, &timeframe, skip_market, skip_stock, write).await,
+            concurrency,
+        } => run_all(stocks, limit, &timeframe, skip_market, skip_stock, write, concurrency).await,
     }
 }
 
@@ -162,7 +171,7 @@ fn list_cores() -> Result<()> {
 
 async fn run_neely_single(stock_id: &str, timeframe: &str, write: bool) -> Result<()> {
     let tf = parse_timeframe(timeframe)?;
-    let pool = connect_pg().await?;
+    let pool = connect_pg(2).await?; // 單股單核,2 connections 足夠
 
     let mut params = neely_core::NeelyCoreParams::default();
     params.timeframe = tf;
@@ -229,37 +238,63 @@ async fn run_all(
     skip_market: bool,
     skip_stock: bool,
     write: bool,
+    concurrency: usize,
 ) -> Result<()> {
+    use futures::stream::{self, StreamExt};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
     let tf = parse_timeframe(timeframe_str)?;
-    let pool = connect_pg().await?;
+    // PR-9b:max_connections 對齊 concurrency,額外 +4 給 environment cores / 進度 query
+    let max_conns: u32 = (concurrency.max(2) + 4) as u32;
+    let pool = connect_pg(max_conns).await?;
     let total_start = Instant::now();
-    let mut summary: Vec<CoreRunSummary> = Vec::new();
+    let summary: Arc<Mutex<Vec<CoreRunSummary>>> = Arc::new(Mutex::new(Vec::new()));
 
     if !skip_market {
         tracing::info!("== Stage A: 5 environment cores(market-level run-once)==");
-        run_market_cores(&pool, write, &mut summary).await;
+        let mut env_summary = Vec::new();
+        run_market_cores(&pool, write, &mut env_summary).await;
+        summary.lock().await.extend(env_summary);
     } else {
         tracing::info!("--skip-market 已指定,跳過 5 environment cores");
     }
 
     if !skip_stock {
         let stock_ids = resolve_stock_list(&pool, stocks.as_deref(), limit).await?;
+        let total = stock_ids.len();
         tracing::info!(
-            "== Stage B: {} stocks × 17 cores(per-stock loop, timeframe={:?})==",
-            stock_ids.len(),
+            "== Stage B: {} stocks × 17 cores(concurrency={}, timeframe={:?})==",
+            total,
+            concurrency,
             tf
         );
-        for (i, stock_id) in stock_ids.iter().enumerate() {
-            if i % 100 == 0 || i == stock_ids.len() - 1 {
-                tracing::info!("progress: stock {}/{} ({})", i + 1, stock_ids.len(), stock_id);
-            }
-            run_stock_cores(&pool, stock_id, tf, write, &mut summary).await;
-        }
+        let progress = Arc::new(AtomicUsize::new(0));
+        // PR-9b:per-stock task spawn 並行,sqlx pool 自動分配 connection
+        // for_each_concurrent 限 N 個 future 同時 active;summary 用 Mutex 保護累加
+        stream::iter(stock_ids)
+            .for_each_concurrent(concurrency, |stock_id| {
+                let pool = pool.clone();
+                let summary = summary.clone();
+                let progress = progress.clone();
+                async move {
+                    let mut local: Vec<CoreRunSummary> = Vec::new();
+                    run_stock_cores(&pool, &stock_id, tf, write, &mut local).await;
+                    let n = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n % 100 == 0 || n == total {
+                        tracing::info!("progress: stock {}/{} ({})", n, total, stock_id);
+                    }
+                    summary.lock().await.extend(local);
+                }
+            })
+            .await;
     } else {
         tracing::info!("--skip-stock 已指定,跳過 17 stock-level cores");
     }
 
-    print_summary(&summary, total_start.elapsed(), write);
+    let final_summary = summary.lock().await.clone();
+    print_summary(&final_summary, total_start.elapsed(), write);
     Ok(())
 }
 
@@ -841,11 +876,11 @@ async fn dispatch_neely(
 // PG IO helpers
 // ---------------------------------------------------------------------------
 
-async fn connect_pg() -> Result<PgPool> {
+async fn connect_pg(max_connections: u32) -> Result<PgPool> {
     let database_url = std::env::var("DATABASE_URL")
         .context("DATABASE_URL not set — set environment or .env before running")?;
     let pool = PgPoolOptions::new()
-        .max_connections(2)
+        .max_connections(max_connections)
         .connect(&database_url)
         .await
         .context("failed to connect to PG")?;
