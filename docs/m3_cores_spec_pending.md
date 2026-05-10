@@ -192,13 +192,15 @@
 | `PerNegative` 邏輯 | 簡化(per < 0 觸發) | spec §4.7 完整邏輯待寫 |
 | `history_lookback_years` | 5(影響 warmup = years × 252) | spec |
 
-### 4.3 financial_statement_core(2026-05-10 修)
+### 4.3 financial_statement_core(2026-05-10 修 round 2)
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
-| ~~12 個 detail JSONB key 命名~~ | ~~best-guess 英文~~ → ✅ **改 IFRS 中文 fallback chain(2026-05-10 fix)** | 已對齊 Bronze `origin_name` 中文 |
-| **fallback chain 完整性** | 12 欄各列 3~4 個變體(全形 vs 半形括號 + 多命名) | user 跑 query 列出全 type × 全 origin_name,缺漏 key 加進 const |
+| detail JSONB key | ✅ **全形括號 `\u{FF08}` `\u{FF09}` + IFRS 中文 fallback chain** | 對齊 user 揭露 2330 真 detail key |
+| **balance type 是 % common-size**(2026-05-10 揭露) | balance 全部是 % 對總資產比(`資產總額`=100,`權益總額`=68.84 等);income/cashflow 維持元值 | 是否要 user 寫 spec / 改 Silver builder pack 元值 + % 雙 dict?或維持 % only? |
+| **ROE / ROA / TotalAssets / TotalLiabilities / TotalEquity 元值欄** | 全 = 0(skip cross-type 計算 income元 / balance%)| 等 user m3Spec/ 拍版 balance 元值 vs %;若拍 % only,RoeHigh / RoaHigh EventKind 永久不觸發,留作概念占位 |
+| `debt_ratio_pct` | 直接讀「負債總額」% value(不再除 total_assets) | 對齊 balance 是 % 的事實 |
 | Quarterly approximation | `Timeframe::Monthly`(enum 缺 Quarterly variant) | 是否需要加 Quarterly enum variant? |
-| 8 EventKind | best-guess 對齊 spec §5.5 | spec 校準 |
+| 8 EventKind | RoeHigh / DebtRatioRising 等待 balance 元值版 | spec 校準 |
 | Threshold 預設 | `gross_margin_change_threshold=2.0` / `roe_high_threshold=15.0` / `debt_ratio_high_threshold=60.0` / `fcf_negative_streak_quarters=4` | spec 校準 |
 
 ---

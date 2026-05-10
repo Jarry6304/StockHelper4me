@@ -158,16 +158,28 @@ impl IndicatorCore for FinancialStatementCore {
             let net_income = jget_first_i64(inc, NET_INCOME_KEYS);
             let net_margin_pct = if revenue > 0 { net_income as f64 / revenue as f64 * 100.0 } else { 0.0 };
             let eps = jget_first_f64(inc, EPS_KEYS);
-            let total_assets = jget_first_i64(bal, TOTAL_ASSETS_KEYS);
-            let total_liabilities = jget_first_i64(bal, TOTAL_LIABILITIES_KEYS);
-            let total_equity = jget_first_i64(bal, TOTAL_EQUITY_KEYS);
-            let debt_ratio_pct = if total_assets > 0 { total_liabilities as f64 / total_assets as f64 * 100.0 } else { 0.0 };
+            // balance 是 common-size %(2026-05-10 user 揭露)。
+            // total_* 都是 % 對總資產(total_assets ≡ 100.0)。直接讀 _f64,不轉 i64。
+            // i64 路徑保留以防 user m3Spec/ 拍版改 Silver builder 改成元值。
+            let total_assets_pct = jget_first_f64(bal, TOTAL_ASSETS_KEYS);
+            let total_liabilities_pct = jget_first_f64(bal, TOTAL_LIABILITIES_KEYS);
+            let total_equity_pct = jget_first_f64(bal, TOTAL_EQUITY_KEYS);
+            // 資產 / 負債 / 權益元值無法從 balance % 推回(只在 user 改 Silver 才有)
+            let total_assets: i64 = 0;
+            let total_liabilities: i64 = 0;
+            let total_equity: i64 = 0;
+            // debt_ratio 直接讀 % 自身(「負債總額」% 已是 debt/assets ratio)
+            let debt_ratio_pct = total_liabilities_pct;
             let operating_cash_flow = jget_first_i64(cf, OPERATING_CASH_FLOW_KEYS);
             let investing_cash_flow = jget_first_i64(cf, INVESTING_CASH_FLOW_KEYS);
             let financing_cash_flow = jget_first_i64(cf, FINANCING_CASH_FLOW_KEYS);
             let free_cash_flow = operating_cash_flow + investing_cash_flow; // FCF = OCF + ICF(經典定義)
-            let roe_pct = if total_equity > 0 { net_income as f64 / total_equity as f64 * 100.0 } else { 0.0 };
-            let roa_pct = if total_assets > 0 { net_income as f64 / total_assets as f64 * 100.0 } else { 0.0 };
+            // ROE / ROA 跨 type 算(income 元 / balance %)會炸成 1e11+ false positive,
+            // 設 0 skip RoeHigh / 留 EventKind 等 user m3Spec/ 拍版 balance 元值版本
+            let roe_pct = 0.0;
+            let roa_pct = 0.0;
+            // 防止 unused warning(總資產 / 負債 / 權益元值欄位本 PR 設 0,等 user 拍版)
+            let _ = (total_assets_pct, total_equity_pct);
             let report_date = inc.and_then(|v| v.get("report_date"))
                 .and_then(|v| v.as_str())
                 .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
@@ -294,35 +306,52 @@ fn jget_first_f64(detail: Option<&serde_json::Value>, keys: &[&str]) -> f64 {
 // 真實 origin_name 中文)
 //
 // 來源:Bronze `financial_statement.origin_name` 直接 pack(原 IFRS 中文會計科目);
-// FinMind 不同年代用半形(流出)vs 全形(流出)括號,雙列防衛。
+// FinMind 元值 row 跟 _per(%) row 都用同 origin_name,Silver builder dict 後寫覆蓋
+// 前寫 → balance 實際全變 %(common-size analysis,2026-05-10 user 揭露)。
 //
-// **回退測試**:仍保留英文 PascalCase key 對齊既有 unit test(`test::assembles_*`
-// 用英文 key,fallback chain 末位放英文,既有 test 不會 break)。
-// 新增 mock 中文 key 的 unit test 直接驗 production data path。
+// 中文括號 user query 揭露用「（）」全形(Unicode U+FF08 / U+FF09),不是半形「()」
+// (U+0028 / U+0029)。FinMind 不同年代可能混用,fallback chain 兩個都列防衛。
+//
+// **balance 是 %**(common-size,not 元值)→ ROE / ROA 不能跨 type 算(income 元 /
+// balance %),設 0 skip RoeHigh / RoaHigh 觸發。debt_ratio_pct 直接讀「負債總額」
+// % value(不再除 total_assets)。等 user m3Spec/ 拍版 balance 元值 vs %。
+// 詳見 docs/m3_cores_spec_pending.md §4.3。
+//
+// **回退測試**:既有 mock 用英文 PascalCase key,fallback chain 末位放英文末位
+// 維持 backward compat。新增 mock 全形中文 key 的 unit test 直驗 production data path。
 // ---------------------------------------------------------------------------
 
 const REVENUE_KEYS: &[&str] = &[
-    "營業收入合計", "營業收入", "銷貨收入", "收入合計",
+    "營業收入", "營業收入合計", "銷貨收入", "收入合計",
     "Revenue",
 ];
 const GROSS_PROFIT_KEYS: &[&str] = &[
-    "營業毛利(毛損)", "營業毛利(毛損)", "營業毛利", "銷貨毛利",
+    "營業毛利\u{FF08}毛損\u{FF09}",   // 全形 U+FF08/FF09(實際 user 真 key)
+    "營業毛利(毛損)",                  // 半形(防衛)
+    "營業毛利", "銷貨毛利",
     "GrossProfit",
 ];
 const OPERATING_PROFIT_KEYS: &[&str] = &[
-    "營業利益(損失)", "營業利益(損失)", "營業利益", "稅前淨利",
+    "營業利益\u{FF08}損失\u{FF09}",   // 全形 U+FF08/FF09
+    "營業利益(損失)",                  // 半形
+    "營業利益",
     "OperatingProfit",
 ];
 const NET_INCOME_KEYS: &[&str] = &[
-    "本期淨利(淨損)", "本期淨利(淨損)", "本期淨利", "本期綜合損益總額",
+    "本期淨利\u{FF08}淨損\u{FF09}",   // 全形 U+FF08/FF09
+    "本期淨利(淨損)",                  // 半形
+    "繼續營業單位本期淨利\u{FF08}淨損\u{FF09}",  // 全形
+    "淨利\u{FF08}淨損\u{FF09}歸屬於母公司業主",  // 全形
+    "本期淨利", "本期綜合損益總額",
     "NetIncome",
 ];
 const EPS_KEYS: &[&str] = &[
     "基本每股盈餘", "每股盈餘", "基本每股盈餘(元)",
     "EPS",
 ];
+// Balance keys 是 % common-size(不是元值;2026-05-10 user 揭露)
 const TOTAL_ASSETS_KEYS: &[&str] = &[
-    "資產總計", "資產總額",
+    "資產總額", "資產總計",
     "TotalAssets",
 ];
 const TOTAL_LIABILITIES_KEYS: &[&str] = &[
@@ -330,21 +359,25 @@ const TOTAL_LIABILITIES_KEYS: &[&str] = &[
     "TotalLiabilities",
 ];
 const TOTAL_EQUITY_KEYS: &[&str] = &[
-    "權益總額", "權益總計", "股東權益總計",
+    "權益總額", "權益總計", "股東權益總計", "歸屬於母公司業主之權益合計",
     "TotalEquity",
 ];
 const OPERATING_CASH_FLOW_KEYS: &[&str] = &[
-    "營業活動之淨現金流入(流出)", "營業活動之淨現金流入(流出)",
+    "營業活動之淨現金流入\u{FF08}流出\u{FF09}",   // 全形
+    "營業活動之淨現金流入(流出)",                  // 半形
+    "營業活動之淨現金流入",                         // 簡稱(無括號)
     "營業活動之現金流量",
     "OperatingCashFlow",
 ];
 const INVESTING_CASH_FLOW_KEYS: &[&str] = &[
-    "投資活動之淨現金流入(流出)", "投資活動之淨現金流入(流出)",
+    "投資活動之淨現金流入\u{FF08}流出\u{FF09}",   // 全形
+    "投資活動之淨現金流入(流出)",                  // 半形
     "投資活動之現金流量",
     "InvestingCashFlow",
 ];
 const FINANCING_CASH_FLOW_KEYS: &[&str] = &[
-    "籌資活動之淨現金流入(流出)", "籌資活動之淨現金流入(流出)",
+    "籌資活動之淨現金流入\u{FF08}流出\u{FF09}",   // 全形
+    "籌資活動之淨現金流入(流出)",                  // 半形
     "籌資活動之現金流量",
     "FinancingCashFlow",
 ];
@@ -373,8 +406,87 @@ mod tests {
         assert_eq!(format_period(NaiveDate::parse_from_str("2026-09-30", "%Y-%m-%d").unwrap()), "2026Q3");
     }
 
+
     #[test]
-    fn assembles_three_types_into_one_point() {
+    fn empty_input_no_panic() {
+        let series = FinancialStatementSeries { stock_id: "2330".to_string(), points: vec![] };
+        let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
+        assert!(out.events.is_empty());
+        assert!(out.series.is_empty());
+    }
+
+    /// Regression(2026-05-10):detail JSONB key 改用真實 IFRS 中文 origin_name +
+    /// fallback chain。對齊 Silver `financial_statement_derived.detail` 真結構:
+    /// - income / cashflow:**全形括號**(實際 user 揭露的 key)+ 元值
+    /// - balance:全部是 common-size %(對總資產比;不是元值)
+    #[test]
+    fn parses_chinese_origin_name_keys() {
+        let series = FinancialStatementSeries {
+            stock_id: "2330".to_string(),
+            points: vec![
+                FinancialStatementRaw {
+                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
+                    r#type: "income".to_string(),
+                    // 全形括號 \u{FF08}/\u{FF09} 對齊 user 揭露 2330 2025-12-31 真實 detail key
+                    detail: json!({
+                        "營業收入":                                       100_000_000_i64,
+                        "營業毛利\u{FF08}毛損\u{FF09}":                   50_000_000_i64,
+                        "營業利益\u{FF08}損失\u{FF09}":                   30_000_000_i64,
+                        "本期淨利\u{FF08}淨損\u{FF09}":                   20_000_000_i64,
+                        "基本每股盈餘":                                   5.5_f64,
+                    }),
+                },
+                FinancialStatementRaw {
+                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
+                    r#type: "balance".to_string(),
+                    // balance 全是 % 對總資產比(common-size analysis)
+                    detail: json!({
+                        "資產總額":   100.0_f64,
+                        "負債總額":    31.16_f64,
+                        "權益總額":    68.84_f64,
+                    }),
+                },
+                FinancialStatementRaw {
+                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
+                    r#type: "cashflow".to_string(),
+                    detail: json!({
+                        "營業活動之淨現金流入\u{FF08}流出\u{FF09}":  30_000_000_i64,
+                        "投資活動之淨現金流入\u{FF08}流出\u{FF09}": -10_000_000_i64,
+                        "籌資活動之淨現金流入\u{FF08}流出\u{FF09}":  -5_000_000_i64,
+                    }),
+                },
+            ],
+        };
+        let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
+        assert_eq!(out.series.len(), 1);
+        let p = &out.series[0];
+        // income 元值
+        assert_eq!(p.revenue, 100_000_000);
+        assert_eq!(p.gross_profit, 50_000_000);
+        assert_eq!(p.net_income, 20_000_000);
+        assert!((p.eps - 5.5).abs() < 1e-9);
+        // cashflow 元值 + 全形括號 fallback chain
+        assert_eq!(p.operating_cash_flow, 30_000_000);
+        assert_eq!(p.investing_cash_flow, -10_000_000);
+        assert_eq!(p.financing_cash_flow, -5_000_000);
+        assert_eq!(p.free_cash_flow, 20_000_000); // 30M + (-10M)
+        // margin pct(income 元值內計算)
+        assert!((p.gross_margin_pct - 50.0).abs() < 1e-6);
+        // balance 是 %:debt_ratio 直接 = 「負債總額」% value(31.16),不再除 total_assets
+        assert!((p.debt_ratio_pct - 31.16).abs() < 1e-6);
+        // ROE / ROA 跨 type 不算(balance 是 %),設 0 避免 false positive
+        assert_eq!(p.roe_pct, 0.0);
+        assert_eq!(p.roa_pct, 0.0);
+        // 元值 i64 欄位本 PR 設 0(等 user m3Spec/ 拍版 balance 元值版)
+        assert_eq!(p.total_assets, 0);
+        assert_eq!(p.total_liabilities, 0);
+        assert_eq!(p.total_equity, 0);
+    }
+
+    /// Regression:既有 mock 用 balance 元值跑(舊 spec 假設),確認 fallback chain
+    /// 末位英文 key 仍 work — 但 ROE / ROA 邏輯改了,無條件 = 0(不依賴 total_equity)
+    #[test]
+    fn assembles_three_types_into_one_point_no_roe_false_positive() {
         let series = FinancialStatementSeries {
             stock_id: "2330".to_string(),
             points: vec![
@@ -386,7 +498,8 @@ mod tests {
                 FinancialStatementRaw {
                     date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
                     r#type: "balance".to_string(),
-                    detail: json!({"TotalAssets": 500_000_000, "TotalLiabilities": 200_000_000, "TotalEquity": 300_000_000}),
+                    // 英文 key fallback,但 balance 仍視為 %(2026-05-10 fix)
+                    detail: json!({"TotalAssets": 100_000_000, "TotalLiabilities": 40_000_000, "TotalEquity": 60_000_000}),
                 },
                 FinancialStatementRaw {
                     date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
@@ -396,79 +509,13 @@ mod tests {
             ],
         };
         let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
-        assert_eq!(out.series.len(), 1);
         let p = &out.series[0];
-        assert_eq!(p.period, "2026Q1");
-        assert!((p.gross_margin_pct - 50.0).abs() < 1e-6);
-        assert!((p.debt_ratio_pct - 40.0).abs() < 1e-6);
-        assert_eq!(p.free_cash_flow, 30_000_000 - 10_000_000); // 經典 FCF
-        // ROE = 20M / 300M = 6.67%
-        assert!((p.roe_pct - 6.6667).abs() < 0.01);
-    }
-
-    #[test]
-    fn empty_input_no_panic() {
-        let series = FinancialStatementSeries { stock_id: "2330".to_string(), points: vec![] };
-        let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
-        assert!(out.events.is_empty());
-        assert!(out.series.is_empty());
-    }
-
-    /// Regression(2026-05-10):detail JSONB key 改用真實 IFRS 中文 origin_name +
-    /// fallback chain。對齊 Silver `financial_statement_derived.detail` 真結構
-    /// (對齊 Bronze `financial_statement.origin_name` 中文)。
-    #[test]
-    fn parses_chinese_origin_name_keys() {
-        let series = FinancialStatementSeries {
-            stock_id: "2330".to_string(),
-            points: vec![
-                FinancialStatementRaw {
-                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
-                    r#type: "income".to_string(),
-                    detail: json!({
-                        "營業收入合計":     100_000_000,
-                        "營業毛利(毛損)":   50_000_000,
-                        "營業利益(損失)":   30_000_000,
-                        "本期淨利(淨損)":   20_000_000,
-                        "基本每股盈餘":     5.5_f64,
-                    }),
-                },
-                FinancialStatementRaw {
-                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
-                    r#type: "balance".to_string(),
-                    detail: json!({
-                        "資產總計":   500_000_000_i64,
-                        "負債總額":   200_000_000_i64,
-                        "權益總額":   300_000_000_i64,
-                    }),
-                },
-                FinancialStatementRaw {
-                    date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
-                    r#type: "cashflow".to_string(),
-                    // 用全形括號(對齊 query 看到 28 row 全形變體)
-                    detail: json!({
-                        "營業活動之淨現金流入(流出)":  30_000_000,
-                        "投資活動之淨現金流入(流出)": -10_000_000,
-                        "籌資活動之淨現金流入(流出)":  -5_000_000,
-                    }),
-                },
-            ],
-        };
-        let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
-        assert_eq!(out.series.len(), 1);
-        let p = &out.series[0];
-        assert_eq!(p.revenue, 100_000_000);
-        assert_eq!(p.gross_profit, 50_000_000);
-        assert_eq!(p.net_income, 20_000_000);
-        assert!((p.eps - 5.5).abs() < 1e-9);
-        assert_eq!(p.total_assets, 500_000_000);
-        assert_eq!(p.total_liabilities, 200_000_000);
-        assert_eq!(p.operating_cash_flow, 30_000_000);
-        assert_eq!(p.investing_cash_flow, -10_000_000);
-        assert_eq!(p.financing_cash_flow, -5_000_000);
-        assert_eq!(p.free_cash_flow, 20_000_000); // 30M + (-10M)
-        // 驗計算欄
-        assert!((p.gross_margin_pct - 50.0).abs() < 1e-6);
-        assert!((p.debt_ratio_pct - 40.0).abs() < 1e-6);
+        assert_eq!(p.eps, 5.5);
+        assert_eq!(p.free_cash_flow, 20_000_000);
+        // ROE / ROA 永遠 0(skip cross-type 計算)
+        assert_eq!(p.roe_pct, 0.0);
+        assert_eq!(p.roa_pct, 0.0);
+        // RoeHigh / RoaHigh 不該觸發
+        assert!(out.events.iter().all(|e| e.kind != FinancialEventKind::RoeHigh));
     }
 }
