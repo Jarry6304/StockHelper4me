@@ -305,6 +305,23 @@
 
 ---
 
+## 8.5. Round 4 transition pattern fix(2026-05-10 落地)
+
+對齊 fear_greed / market_margin 既有 EnteredX/ExitedX pattern,把 stay-in-zone
+連日重複觸發改成 transition 只在進 zone / 出 zone 觸發一次。
+
+| Core | EventKind 改動 | 預期 facts 量級降 |
+|---|---|---|
+| valuation_core | 6 改 12(加 PerExtremeHigh/Low / PbrExtremeHigh/Low / YieldExtremeHigh / YieldHighThreshold 各 Entered+Exited) | ~70%(2.0M → ~600K) |
+| margin_core | 3 改 6(ShortRatioExtremeHigh/Low / MaintenanceLow Entered+Exited) | ~47%(1.3M → ~700K) |
+| bollinger_core | 4 改 8(UpperBandTouch / LowerBandTouch / AboveUpperBand / BelowLowerBand Entered+Exited) | ~83%(466K → ~80K) |
+| atr_core | **不改**(既有「new max/min」邏輯本身就是 transition,非 stay-in-zone) | n/a |
+
+設計:不引入 Zone enum(對齊 user 拍版「去耦合 + 減少抽象 + 重工 OK」),用
+獨立 bool `prev_*_in_zone` tracking。bouncy 不防衛(對齊 fear_greed 範本)。
+
+舊 facts 處理:user 拍版 TRUNCATE facts 全清 + run-all 重跑(10 分鐘內完成)。
+
 ## 9. PR-9b 工程進階(spec 之外,可平行)
 
 | 項目 | 估時 | 預期收益 |

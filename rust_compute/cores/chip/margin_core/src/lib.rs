@@ -87,13 +87,18 @@ pub struct MarginEvent {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum MarginEventKind {
+    // 既有 day-over-day pattern(無需改動)
     MarginSurge,
     MarginCrash,
     ShortSqueeze,
     ShortBuildUp,
-    ShortRatioExtremeHigh,
-    ShortRatioExtremeLow,
-    MaintenanceLow,
+    // Round 4 transition pattern(2026-05-10):3 個 stay-in-zone → 6 個 Entered/Exited
+    EnteredShortRatioExtremeHigh,
+    ExitedShortRatioExtremeHigh,
+    EnteredShortRatioExtremeLow,
+    ExitedShortRatioExtremeLow,
+    EnteredMaintenanceLow,
+    ExitedMaintenanceLow,
 }
 
 pub struct MarginCore;
@@ -162,7 +167,12 @@ fn pct_change(prev: Option<i64>, cur: i64) -> f64 {
 
 fn detect_events(series: &[MarginPoint], params: &MarginParams) -> Vec<MarginEvent> {
     let mut events = Vec::new();
+    // Round 4 transition tracking(2026-05-10):3 個 bool prev_in_zone
+    let mut prev_short_ratio_extreme_high: bool = false;
+    let mut prev_short_ratio_extreme_low: bool = false;
+    let mut prev_maintenance_low: bool = false;
     for p in series {
+        // Day-over-day(既有,無需改)
         if p.margin_change_pct >= params.margin_change_pct_threshold {
             events.push(MarginEvent {
                 date: p.date,
@@ -193,34 +203,65 @@ fn detect_events(series: &[MarginPoint], params: &MarginParams) -> Vec<MarginEve
                 metadata: json!({ "change_pct": p.short_change_pct, "balance": p.short_balance }),
             });
         }
-        if p.short_to_margin_ratio >= params.short_to_margin_ratio_high {
+        // ShortRatio zone(transition pattern,Round 4)
+        let cur_short_ratio_extreme_high = p.short_to_margin_ratio >= params.short_to_margin_ratio_high;
+        let cur_short_ratio_extreme_low = p.short_to_margin_ratio > 0.0
+            && p.short_to_margin_ratio <= params.short_to_margin_ratio_low;
+        if !prev_short_ratio_extreme_high && cur_short_ratio_extreme_high {
             events.push(MarginEvent {
                 date: p.date,
-                kind: MarginEventKind::ShortRatioExtremeHigh,
+                kind: MarginEventKind::EnteredShortRatioExtremeHigh,
                 value: p.short_to_margin_ratio,
-                metadata: json!({ "ratio": p.short_to_margin_ratio, "lookback": "60d" }), // TODO P0 後接真實 lookback
+                metadata: json!({ "ratio": p.short_to_margin_ratio, "threshold": params.short_to_margin_ratio_high }),
             });
-        } else if p.short_to_margin_ratio > 0.0 && p.short_to_margin_ratio <= params.short_to_margin_ratio_low {
+        } else if prev_short_ratio_extreme_high && !cur_short_ratio_extreme_high {
             events.push(MarginEvent {
                 date: p.date,
-                kind: MarginEventKind::ShortRatioExtremeLow,
+                kind: MarginEventKind::ExitedShortRatioExtremeHigh,
                 value: p.short_to_margin_ratio,
-                metadata: json!({ "ratio": p.short_to_margin_ratio }),
+                metadata: json!({ "ratio": p.short_to_margin_ratio, "threshold": params.short_to_margin_ratio_high }),
             });
         }
-    }
-    // MaintenanceLow — 只對有 margin_maintenance 值的 points
-    for p in series {
-        if let Some(m) = p.margin_maintenance {
-            if m > 0.0 && m < MAINTENANCE_LOW_THRESHOLD {
+        if !prev_short_ratio_extreme_low && cur_short_ratio_extreme_low {
+            events.push(MarginEvent {
+                date: p.date,
+                kind: MarginEventKind::EnteredShortRatioExtremeLow,
+                value: p.short_to_margin_ratio,
+                metadata: json!({ "ratio": p.short_to_margin_ratio, "threshold": params.short_to_margin_ratio_low }),
+            });
+        } else if prev_short_ratio_extreme_low && !cur_short_ratio_extreme_low {
+            events.push(MarginEvent {
+                date: p.date,
+                kind: MarginEventKind::ExitedShortRatioExtremeLow,
+                value: p.short_to_margin_ratio,
+                metadata: json!({ "ratio": p.short_to_margin_ratio, "threshold": params.short_to_margin_ratio_low }),
+            });
+        }
+        prev_short_ratio_extreme_high = cur_short_ratio_extreme_high;
+        prev_short_ratio_extreme_low = cur_short_ratio_extreme_low;
+        // MaintenanceLow zone(transition pattern,Round 4)— 只對有 margin_maintenance 值
+        let cur_maintenance_low = matches!(p.margin_maintenance,
+            Some(m) if m > 0.0 && m < MAINTENANCE_LOW_THRESHOLD);
+        if !prev_maintenance_low && cur_maintenance_low {
+            if let Some(m) = p.margin_maintenance {
                 events.push(MarginEvent {
                     date: p.date,
-                    kind: MarginEventKind::MaintenanceLow,
+                    kind: MarginEventKind::EnteredMaintenanceLow,
                     value: m,
-                    metadata: json!({ "maintenance": m }),
+                    metadata: json!({ "maintenance": m, "threshold": MAINTENANCE_LOW_THRESHOLD }),
                 });
             }
+        } else if prev_maintenance_low && !cur_maintenance_low {
+            // exited:用當前 maintenance(可能 None,則用 0)
+            let val = p.margin_maintenance.unwrap_or(0.0);
+            events.push(MarginEvent {
+                date: p.date,
+                kind: MarginEventKind::ExitedMaintenanceLow,
+                value: val,
+                metadata: json!({ "maintenance": val, "threshold": MAINTENANCE_LOW_THRESHOLD }),
+            });
         }
+        prev_maintenance_low = cur_maintenance_low;
     }
     events
 }
@@ -231,9 +272,13 @@ fn event_to_fact(output: &MarginOutput, e: &MarginEvent) -> Fact {
         MarginEventKind::MarginCrash => format!("Margin balance down {:.1}% on {}", e.value.abs(), e.date),
         MarginEventKind::ShortSqueeze => format!("Short balance down {:.1}% on {}(short squeeze)", e.value.abs(), e.date),
         MarginEventKind::ShortBuildUp => format!("Short balance up {:.1}% on {}(short build-up)", e.value, e.date),
-        MarginEventKind::ShortRatioExtremeHigh => format!("Short-to-margin ratio reached {:.1}% on {}", e.value, e.date),
-        MarginEventKind::ShortRatioExtremeLow => format!("Short-to-margin ratio dropped to {:.1}% on {}", e.value, e.date),
-        MarginEventKind::MaintenanceLow => format!("Margin maintenance dropped to {:.1}% on {}", e.value, e.date),
+        // Round 4 transition statements
+        MarginEventKind::EnteredShortRatioExtremeHigh => format!("Short-to-margin ratio entered ExtremeHigh zone on {}: ratio={:.1}%", e.date, e.value),
+        MarginEventKind::ExitedShortRatioExtremeHigh => format!("Short-to-margin ratio exited ExtremeHigh zone on {}: ratio={:.1}%", e.date, e.value),
+        MarginEventKind::EnteredShortRatioExtremeLow => format!("Short-to-margin ratio entered ExtremeLow zone on {}: ratio={:.1}%", e.date, e.value),
+        MarginEventKind::ExitedShortRatioExtremeLow => format!("Short-to-margin ratio exited ExtremeLow zone on {}: ratio={:.1}%", e.date, e.value),
+        MarginEventKind::EnteredMaintenanceLow => format!("Margin maintenance entered Low zone on {}: maintenance={:.1}%", e.date, e.value),
+        MarginEventKind::ExitedMaintenanceLow => format!("Margin maintenance exited Low zone on {}: maintenance={:.1}%", e.date, e.value),
     };
     Fact {
         stock_id: output.stock_id.clone(),
@@ -290,6 +335,26 @@ mod tests {
     #[test]
     fn warmup_is_20() {
         assert_eq!(MarginCore::new().warmup_periods(&MarginParams::default()), 20);
+    }
+
+    /// Round 4 transition test:short_to_margin_ratio 從 normal 進 ExtremeHigh 觸發 1 次,
+    /// 連日 stay 不重複,離開觸發 ExitedShortRatioExtremeHigh 1 次。
+    #[test]
+    fn short_ratio_zone_transition() {
+        let series = MarginDailySeries {
+            stock_id: "2330".to_string(),
+            points: vec![
+                raw("2026-04-21", 10_000, 1_000), // ratio=10%(normal)
+                raw("2026-04-22", 10_000, 4_000), // ratio=40%(entered ExtremeHigh)
+                raw("2026-04-23", 10_000, 4_500), // ratio=45%(stay,不該重複)
+                raw("2026-04-24", 10_000, 1_500), // ratio=15%(exited)
+            ],
+        };
+        let out = MarginCore::new().compute(&series, MarginParams::default()).unwrap();
+        let entered = out.events.iter().filter(|e| e.kind == MarginEventKind::EnteredShortRatioExtremeHigh).count();
+        let exited = out.events.iter().filter(|e| e.kind == MarginEventKind::ExitedShortRatioExtremeHigh).count();
+        assert_eq!(entered, 1, "EnteredShortRatioExtremeHigh 應只 1 次");
+        assert_eq!(exited, 1, "ExitedShortRatioExtremeHigh 應只 1 次");
     }
 
     /// Regression(2026-05-09 dev DB):假日 / Bronze 未收齊 row(margin_balance / short_balance NULL)
