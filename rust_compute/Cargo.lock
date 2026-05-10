@@ -2283,6 +2283,7 @@ dependencies = [
  "clap",
  "core_registry",
  "day_trading_core",
+ "dotenvy",
  "environment_loader",
  "exchange_rate_core",
  "fact_schema",

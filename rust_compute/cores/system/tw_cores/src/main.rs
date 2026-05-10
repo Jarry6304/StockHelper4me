@@ -81,6 +81,10 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env from cwd or any parent dir(silently ignored if not found)
+    // 對齊 Python 端 db.create_writer 的 load_dotenv 行為,user 不用每次 PS window 手動 set env
+    let _ = dotenvy::dotenv();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
