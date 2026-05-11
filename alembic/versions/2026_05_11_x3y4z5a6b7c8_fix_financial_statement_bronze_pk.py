@@ -24,12 +24,36 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # 1. Remove rows where type IS NULL or empty (should be none, but guard for safety)
+    # 1. Free up the 'financial_statement_pkey' index name. PR #R2 renamed the legacy
+    #    table 'financial_statement' → 'financial_statement_legacy_v2' but PG's ALTER
+    #    TABLE RENAME does NOT rename the underlying PK constraint/index, so the legacy
+    #    table still owns the index name 'financial_statement_pkey'. Rename it to align
+    #    with the legacy table name so the new PK on the active table can use the canonical
+    #    name.
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            legacy_pk_name TEXT;
+        BEGIN
+            SELECT conname INTO legacy_pk_name
+            FROM pg_constraint
+            WHERE conrelid = 'financial_statement_legacy_v2'::regclass
+              AND contype = 'p';
+            IF legacy_pk_name = 'financial_statement_pkey' THEN
+                ALTER TABLE financial_statement_legacy_v2
+                    RENAME CONSTRAINT financial_statement_pkey TO financial_statement_legacy_v2_pkey;
+            END IF;
+        END $$;
+        """
+    )
+
+    # 2. Remove rows where type IS NULL or empty (should be none, but guard for safety)
     op.execute("DELETE FROM financial_statement WHERE type IS NULL OR type = ''")
 
-    # 2. Drop the existing primary key — name varies (PR #R3 ALTER TABLE RENAME does not
-    #    rename constraints, so it may still be 'financial_statement_tw_pkey' on existing
-    #    deployments). Look up by relation + contype='p' for portability.
+    # 3. Drop the existing primary key on the active table. PR #R3 renamed
+    #    'financial_statement_tw' → 'financial_statement' but kept the original constraint
+    #    name 'financial_statement_tw_pkey'. Look up by relation + contype='p' for portability.
     op.execute(
         """
         DO $$
@@ -47,10 +71,10 @@ def upgrade() -> None:
         """
     )
 
-    # 3. Make type NOT NULL now that NULLs are cleared
+    # 4. Make type NOT NULL now that NULLs are cleared
     op.execute("ALTER TABLE financial_statement ALTER COLUMN type SET NOT NULL")
 
-    # 4. Add new primary key using type (allows TotalAssets + TotalAssets_per to coexist)
+    # 5. Add new primary key using type (allows TotalAssets + TotalAssets_per to coexist)
     op.execute(
         "ALTER TABLE financial_statement "
         "ADD CONSTRAINT financial_statement_pkey "
@@ -83,6 +107,25 @@ def downgrade() -> None:
 
     op.execute(
         "ALTER TABLE financial_statement "
-        "ADD CONSTRAINT financial_statement_pkey "
+        "ADD CONSTRAINT financial_statement_tw_pkey "
         "PRIMARY KEY (market, stock_id, date, event_type, origin_name)"
+    )
+
+    # Restore the legacy table's original constraint name (reverse of upgrade step 1)
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            legacy_pk_name TEXT;
+        BEGIN
+            SELECT conname INTO legacy_pk_name
+            FROM pg_constraint
+            WHERE conrelid = 'financial_statement_legacy_v2'::regclass
+              AND contype = 'p';
+            IF legacy_pk_name = 'financial_statement_legacy_v2_pkey' THEN
+                ALTER TABLE financial_statement_legacy_v2
+                    RENAME CONSTRAINT financial_statement_legacy_v2_pkey TO financial_statement_pkey;
+            END IF;
+        END $$;
+        """
     )
