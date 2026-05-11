@@ -960,11 +960,14 @@ CREATE TABLE IF NOT EXISTS financial_statement (
     stock_id    TEXT NOT NULL,
     date        DATE NOT NULL,
     event_type  TEXT NOT NULL,
-    type        TEXT,
+    type        TEXT NOT NULL,
     origin_name TEXT NOT NULL,
     value       NUMERIC(20, 4),
     source      TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date, event_type, origin_name),
+    -- PK uses type (FinMind English code e.g. 'TotalAssets' vs 'TotalAssets_per') so both
+    -- element value and common-size % row for the same origin_name can coexist.
+    -- PR #18.5 originally keyed on origin_name; x3y4z5a6b7c8 changed to type.
+    PRIMARY KEY (market, stock_id, date, event_type, type),
     CONSTRAINT chk_fs_tw_event_type CHECK (event_type IN ('income', 'balance', 'cashflow'))
 );
 CREATE INDEX IF NOT EXISTS idx_financial_statement_stock_date_desc
