@@ -21,13 +21,16 @@ use serde::{Deserialize, Serialize};
 // Timeframe
 // ---------------------------------------------------------------------------
 
-/// 時間粒度。Daily 為主,Weekly / Monthly 由 Silver `price_*_fwd` 已聚合。
+/// 時間粒度。Daily 為主,Weekly / Monthly / Quarterly 由 Silver 已聚合。
+/// Quarterly 對齊 financial_statement_core 季頻財報(2026-05-10 加,
+/// 取代 Monthly approximation)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Timeframe {
     Daily,
     Weekly,
     Monthly,
+    Quarterly,
 }
 
 impl Timeframe {
@@ -36,6 +39,7 @@ impl Timeframe {
             Timeframe::Daily => "daily",
             Timeframe::Weekly => "weekly",
             Timeframe::Monthly => "monthly",
+            Timeframe::Quarterly => "quarterly",
         }
     }
 }

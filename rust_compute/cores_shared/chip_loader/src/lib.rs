@@ -216,13 +216,16 @@ pub async fn load_foreign_holding(
     lookback_days: i32,
 ) -> Result<ForeignHoldingSeries> {
     // foreign_holding_ratio NUMERIC(8,4):explicit cast → float8 對齊 Rust Option<f64>
-    // foreign_limit_pct 目前 Silver 沒 expose 為 stored col,先 NULL placeholder
+    // foreign_limit_pct(2026-05-10 Round 1 user 拍版 (a) 嘗試):從 Silver detail JSONB
+    // `upper_limit_ratio` key 取(Bronze `foreign_investor_share_tw.upper_limit_ratio`
+    // 已 pack 進 detail JSONB by silver builder foreign_holding.py:33)。
+    // 若 detail 無 upper_limit_ratio(舊 Bronze 沒料)→ NULL,LimitNearAlert 不觸發。
     let points: Vec<ForeignHoldingRaw> = sqlx::query_as(
         r#"
         SELECT date,
                foreign_holding_shares,
                foreign_holding_ratio::float8 AS foreign_holding_ratio,
-               NULL::float8                  AS foreign_limit_pct
+               (detail->>'upper_limit_ratio')::float8 AS foreign_limit_pct
         FROM foreign_holding_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - $2::int)

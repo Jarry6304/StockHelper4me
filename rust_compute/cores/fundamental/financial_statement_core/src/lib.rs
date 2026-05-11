@@ -257,7 +257,7 @@ impl IndicatorCore for FinancialStatementCore {
 
         Ok(FinancialStatementOutput {
             stock_id: input.stock_id.clone(),
-            timeframe: Timeframe::Monthly, // 季頻沒對應 Timeframe enum,取 Monthly approximation
+            timeframe: Timeframe::Quarterly, // 2026-05-10 加 Timeframe::Quarterly variant 對齊 spec §5.5 季頻
             series,
             events,
         })

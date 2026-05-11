@@ -152,13 +152,14 @@
 | `MAINTENANCE_LOW_THRESHOLD` | 145.0 const | spec §4.5 列 EventKind 但 §4.3 未列 Param,目前寫死 |
 | 「historical high」label | 未實作 | spec §4.6 範例 |
 
-### 3.3 shareholder_core(2026-05-10 修)
-| 項目 | 目前值 | 待 user 確認 |
+### 3.3 shareholder_core(2026-05-10 Round 1 完成 — user 拍版)
+| 項目 | 拍版值 | 來源 |
 |---|---|---|
-| `STREAK_MIN_WEEKS` | 4 const | spec 對齊? |
-| ~~detail JSONB key 命名~~ | ~~best-guess 英文~~ → ✅ **iterate 真 17 levels(2026-05-10 fix)** | 已對齊 Silver `holding_shares_per_derived.detail` 真結構 |
-| **small/mid/large 邊界**(目前 best-guess) | small ≤ 5,000 股 / mid ≤ 50,000 股 / large > 50,000 股 | spec 拍版邊界張數 |
-| **`concentration_index` 公式**(目前 best-guess) | `= large_holders_pct`(大戶集中度) | spec 是否要改 Top10 持股比 / Gini 等 |
+| ~~detail JSONB key 命名~~ | ✅ iterate 真 17 levels | 對齊 Silver real structure |
+| ~~`STREAK_MIN_WEEKS`~~ | ✅ **8 週** | Moskowitz, Ooi, Pedersen (2012) "Time Series Momentum" JFE(⚠️ 跨領域援引,需 Phase 2 回測驗證) |
+| ~~分類邊界~~ | ✅ **4-level**:small ≤ 50 張(8 levels)/ mid 50-400 張(3)/ large 400-1000 張(3)/ super_large > 1000 張(1) | Money 錢雜誌 50/400 + 凱基/集保 1000 張大戶 |
+| ~~`concentration_index` 公式~~ | ✅ `(large.unit + super_large.unit) / total.unit` | 業務「籌碼集中度」標準定義,採 unit (股數) |
+| EventKind | 加 `SuperLargeHoldersAccumulating` / `SuperLargeHoldersReducing` 2 個 | 對齊 4-level 完整 streak coverage |
 | Skip rules | `差異數調整(說明4)` 異常 row 不算 | 確認 |
 
 ### 3.4 foreign_holding_core

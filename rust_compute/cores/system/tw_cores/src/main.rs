@@ -450,6 +450,9 @@ async fn run_stock_cores(
         Timeframe::Daily => ohlcv_loader::load_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await,
         Timeframe::Weekly => ohlcv_loader::load_weekly(pool, stock_id, STOCK_LOOKBACK_DAYS / 7).await,
         Timeframe::Monthly => ohlcv_loader::load_monthly(pool, stock_id, STOCK_LOOKBACK_MONTHS).await,
+        Timeframe::Quarterly => Err(anyhow::anyhow!(
+            "Quarterly 不適用 OHLCV(season 報表專用 Timeframe);stock_level indicator cores 不該帶 Quarterly"
+        )),
     };
     match ohlcv_result {
         Ok(ohlcv) => {

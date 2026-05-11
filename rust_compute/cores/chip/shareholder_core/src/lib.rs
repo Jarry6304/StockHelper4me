@@ -2,27 +2,23 @@
 //
 // 對齊 m3Spec/chip_cores.md §六 shareholder_core(集保中心週頻發布)。
 //
-// **本 PR 範圍**:
-//   - 完整 ShareholderParams + Output + 6 EventKind(對齊 §6.5)
-//   - compute():iterate Silver `holding_shares_per_derived.detail` 17 levels →
-//     合成 small/mid/large 三類分布
-//   - SmallHoldersDecreasing / Increasing / LargeHoldersAccumulating / Reducing(streak)
-//   - ConcentrationRising / Decreasing(threshold-based)
+// **2026-05-10 Round 1 user 拍板邊界 + 公式**:
+//   small(散戶):≤ 50 張(8 levels)
+//   mid(中實戶):50 ~ 400 張(3 levels)
+//   large(大戶):400 ~ 1000 張(3 levels)
+//   super_large(千張):> 1000 張(1 level)
+//   來源:Money 錢雜誌 50/400 散戶/中實/大戶 + 凱基/集保中心 1000 張大戶
+//   concentration_index = (large.unit + super_large.unit) / total.unit
+//   來源:業務「籌碼集中度」標準定義,採 unit (股數) 非 percent (人數)
+//   STREAK_MIN_WEEKS = 8 週
+//   來源:Moskowitz, Ooi, Pedersen (2012) "Time Series Momentum" JFE
+//   ⚠️ 限制聲明:實證對象為「價格報酬 momentum」,非「持股集中度 streak」,
+//      跨領域援引,需 Phase 2 用 tw_stock 歷史資料回測驗證
 //
-// **detail JSONB key**:對齊 Silver 真實結構(2026-05-10 fix):
-//   Silver builder `holding_shares_per.py:53-54` pack 結構為
-//     `{level_str: {people, percent, unit}, ...}`
+// detail JSONB key:對齊 Silver `holding_shares_per_derived.detail` 真結構:
 //   17 levels:1-999 / 1,000-5,000 / 5,001-10,000 / ... / more than 1,000,001 /
 //             total / 差異數調整(說明4)
-//   非預期的 flat key (small_holders_count 等),需 iterate level dict 加總合成。
-//
-// **best-guess 邊界(等 user m3Spec/ 拍版校準)**:
-//   small  ≤ 5,000 股   ← 散戶
-//   mid    ≤ 50,000 股  ← 中實戶
-//   large  > 50,000 股  ← 大戶
-//   concentration_index = large_holders_pct(預設大戶集中度公式)
-//
-// 詳見 docs/m3_cores_spec_pending.md §3.3 待校準項目。
+//   skip 差異數調整(說明4) 異常 row。
 
 use anyhow::Result;
 use chip_loader::HoldingSharesPerSeries;
@@ -62,8 +58,10 @@ impl Default for ShareholderParams {
     }
 }
 
-/// 連續 streak 最小週數(spec §6.5 EventKind 列出 streak 事件,§6.3 Params 未列;寫死 const)
-const STREAK_MIN_WEEKS: usize = 4;
+/// 連續 streak 最小週數(2026-05-10 user 拍板)
+/// 來源:Moskowitz, Ooi, Pedersen (2012) "Time Series Momentum" JFE,8-12 month look-back
+/// ⚠️ 跨領域援引(原為價格報酬 momentum,非持股集中度 streak),需 Phase 2 回測驗證
+const STREAK_MIN_WEEKS: usize = 8;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ShareholderOutput {
@@ -76,13 +74,21 @@ pub struct ShareholderOutput {
 #[derive(Debug, Clone, Serialize)]
 pub struct ShareholderPoint {
     pub date: NaiveDate,
+    // 散戶 ≤ 50 張(2026-05-10 user 拍板 4-level)
     pub small_holders_count: usize,
     pub small_holders_pct: f64,
+    // 中實戶 50 ~ 400 張
     pub mid_holders_count: usize,
     pub mid_holders_pct: f64,
+    // 大戶 400 ~ 1000 張
     pub large_holders_count: usize,
     pub large_holders_pct: f64,
+    // 千張大戶 > 1000 張
+    pub super_large_holders_count: usize,
+    pub super_large_holders_pct: f64,
     pub total_holders: usize,
+    /// concentration_index = (large.unit + super_large.unit) / total.unit
+    /// 籌碼集中度,採 unit (股數) 非 percent (人數)
     pub concentration_index: f64,
 }
 
@@ -98,8 +104,11 @@ pub struct ShareholderEvent {
 pub enum ShareholderEventKind {
     SmallHoldersDecreasing,
     SmallHoldersIncreasing,
+    // 4-level Round 1(2026-05-10):分大戶 / 千張大戶
     LargeHoldersAccumulating,
     LargeHoldersReducing,
+    SuperLargeHoldersAccumulating,
+    SuperLargeHoldersReducing,
     ConcentrationRising,
     ConcentrationDecreasing,
 }
@@ -136,35 +145,55 @@ impl IndicatorCore for ShareholderCore {
 }
 
 // ---------------------------------------------------------------------------
-// 17 持股級距 → small/mid/large 合成
+// 17 持股級距 → 4-level 合成(2026-05-10 user 拍板)
 // ---------------------------------------------------------------------------
 
 /// FinMind 集保中心 17 個 level string(對齊 Bronze `holding_shares_per.holding_shares_level`)
-/// 順序:從小到大 + total + 異常 row;邊界以「股數上限」分類(5,000 / 50,000)
-const SMALL_LEVELS: &[&str] = &["1-999", "1,000-5,000"];
-const MID_LEVELS: &[&str] = &[
-    "5,001-10,000", "10,001-15,000", "15,001-20,000",
-    "20,001-30,000", "30,001-40,000", "40,001-50,000",
+/// 4-level 邊界:50 張 / 400 張 / 1000 張(對應股數 50,000 / 400,000 / 1,000,000)
+
+/// 散戶:≤ 50 張(8 levels)
+const SMALL_LEVELS: &[&str] = &[
+    "1-999", "1,000-5,000", "5,001-10,000", "10,001-15,000",
+    "15,001-20,000", "20,001-30,000", "30,001-40,000", "40,001-50,000",
 ];
-const LARGE_LEVELS: &[&str] = &[
+
+/// 中實戶:50 ~ 400 張(3 levels)
+const MID_LEVELS: &[&str] = &[
     "50,001-100,000", "100,001-200,000", "200,001-400,000",
+];
+
+/// 大戶:400 ~ 1000 張(3 levels)
+const LARGE_LEVELS: &[&str] = &[
     "400,001-600,000", "600,001-800,000", "800,001-1,000,000",
+];
+
+/// 千張大戶:> 1000 張(1 level)
+const SUPER_LARGE_LEVELS: &[&str] = &[
     "more than 1,000,001",
 ];
-const TOTAL_LEVEL: &str = "total";
-// "差異數調整(說明4)" 為 FinMind 異常 row,iterate 時 skip(不在三類任一)
 
-/// 從 17 level dict 加總 people / percent 合成 ShareholderPoint
+const TOTAL_LEVEL: &str = "total";
+// "差異數調整(說明4)" 為 FinMind 異常 row,iterate 時 skip(不在四類任一)
+
+/// 從 17 level dict 加總 people / percent / unit 合成 ShareholderPoint
 fn synthesize_point(date: NaiveDate, detail: &serde_json::Value) -> ShareholderPoint {
-    let (small_count, small_pct) = sum_levels(detail, SMALL_LEVELS);
-    let (mid_count, mid_pct) = sum_levels(detail, MID_LEVELS);
-    let (large_count, large_pct) = sum_levels(detail, LARGE_LEVELS);
+    let (small_count, small_pct, _) = sum_levels(detail, SMALL_LEVELS);
+    let (mid_count, mid_pct, _) = sum_levels(detail, MID_LEVELS);
+    let (large_count, large_pct, large_unit) = sum_levels(detail, LARGE_LEVELS);
+    let (super_large_count, super_large_pct, super_large_unit) = sum_levels(detail, SUPER_LARGE_LEVELS);
     let total_holders = detail.get(TOTAL_LEVEL)
         .and_then(|v| v.get("people"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
-    // best-guess concentration_index = large_holders_pct(大戶集中度);等 user spec 拍板
-    let concentration_index = large_pct;
+    let total_unit = detail.get(TOTAL_LEVEL)
+        .and_then(|v| v.get("unit"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as f64;
+    // user 拍板:concentration_index = (large.unit + super_large.unit) / total.unit
+    // 採 unit (股數) 非 percent (人數)— 對齊「籌碼集中度」業務定義
+    let concentration_index = if total_unit > 0.0 {
+        (large_unit + super_large_unit) / total_unit
+    } else { 0.0 };
     ShareholderPoint {
         date,
         small_holders_count: small_count,
@@ -173,15 +202,18 @@ fn synthesize_point(date: NaiveDate, detail: &serde_json::Value) -> ShareholderP
         mid_holders_pct: mid_pct,
         large_holders_count: large_count,
         large_holders_pct: large_pct,
+        super_large_holders_count: super_large_count,
+        super_large_holders_pct: super_large_pct,
         total_holders,
         concentration_index,
     }
 }
 
-/// 在 levels list 上加總每個 level dict 的 people / percent
-fn sum_levels(detail: &serde_json::Value, levels: &[&str]) -> (usize, f64) {
+/// 在 levels list 上加總每個 level dict 的 people / percent / unit
+fn sum_levels(detail: &serde_json::Value, levels: &[&str]) -> (usize, f64, f64) {
     let mut count: usize = 0;
     let mut pct: f64 = 0.0;
+    let mut unit: f64 = 0.0;
     for level in levels {
         if let Some(level_data) = detail.get(*level) {
             if let Some(p) = level_data.get("people").and_then(|v| v.as_u64()) {
@@ -190,9 +222,12 @@ fn sum_levels(detail: &serde_json::Value, levels: &[&str]) -> (usize, f64) {
             if let Some(pc) = level_data.get("percent").and_then(|v| v.as_f64()) {
                 pct += pc;
             }
+            if let Some(u) = level_data.get("unit").and_then(|v| v.as_u64()) {
+                unit += u as f64;
+            }
         }
     }
-    (count, pct)
+    (count, pct, unit)
 }
 
 fn detect_events(series: &[ShareholderPoint], params: &ShareholderParams) -> Vec<ShareholderEvent> {
@@ -212,6 +247,13 @@ fn detect_events(series: &[ShareholderPoint], params: &ShareholderParams) -> Vec
     streak(series, STREAK_MIN_WEEKS,
         |a, b| b.large_holders_pct < a.large_holders_pct,
         ShareholderEventKind::LargeHoldersReducing, &mut events);
+    // 千張大戶 streak(Round 1 user 拍板加 4th level)
+    streak(series, STREAK_MIN_WEEKS,
+        |a, b| b.super_large_holders_pct > a.super_large_holders_pct,
+        ShareholderEventKind::SuperLargeHoldersAccumulating, &mut events);
+    streak(series, STREAK_MIN_WEEKS,
+        |a, b| b.super_large_holders_pct < a.super_large_holders_pct,
+        ShareholderEventKind::SuperLargeHoldersReducing, &mut events);
 
     // ConcentrationRising / Decreasing — 與前一筆比較,變化超過 threshold
     for i in 1..series.len() {
@@ -286,10 +328,14 @@ fn event_to_fact(output: &ShareholderOutput, e: &ShareholderEvent) -> Fact {
             "Large holders accumulating for {} consecutive weeks ending on {}", e.value as i64, e.date),
         ShareholderEventKind::LargeHoldersReducing => format!(
             "Large holders reducing for {} consecutive weeks ending on {}", e.value as i64, e.date),
+        ShareholderEventKind::SuperLargeHoldersAccumulating => format!(
+            "Super-large (>1000 lots) holders accumulating for {} consecutive weeks ending on {}", e.value as i64, e.date),
+        ShareholderEventKind::SuperLargeHoldersReducing => format!(
+            "Super-large (>1000 lots) holders reducing for {} consecutive weeks ending on {}", e.value as i64, e.date),
         ShareholderEventKind::ConcentrationRising => format!(
-            "Concentration index up {:.2} on {}(week)", e.value, e.date),
+            "Concentration index up {:.4} on {}(week)", e.value, e.date),
         ShareholderEventKind::ConcentrationDecreasing => format!(
-            "Concentration index down {:.2} on {}(week)", e.value.abs(), e.date),
+            "Concentration index down {:.4} on {}(week)", e.value.abs(), e.date),
     };
     Fact {
         stock_id: output.stock_id.clone(),
@@ -309,62 +355,68 @@ mod tests {
     use chip_loader::HoldingSharesPerRaw;
 
     /// Mock raw 用真實 level dict 結構(對齊 Silver `holding_shares_per_derived.detail`)。
-    /// `small_count` 全部塞進 `1-999` level(對齊 SMALL_LEVELS 第一個);其他 levels
-    /// 用固定 mid + large 數值,測試專注於 small_holders 遞減 streak。
-    fn raw(d: &str, small_count: u64, large_pct: f64) -> HoldingSharesPerRaw {
+    /// 4-level 邊界(2026-05-10 user 拍板):
+    ///   small 全塞 1-999 / mid 全塞 50,001-100,000 / large 全塞 400,001-600,000 /
+    ///   super_large 全塞 more than 1,000,001
+    fn raw(d: &str, small_count: u64, super_large_unit: u64) -> HoldingSharesPerRaw {
         HoldingSharesPerRaw {
             date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
             detail: json!({
-                "1-999":              {"people": small_count, "percent": 30.0, "unit": 0},
-                "1,000-5,000":        {"people": 0,           "percent": 0.0,  "unit": 0},
-                "5,001-10,000":       {"people": 5_000,       "percent": 30.0, "unit": 0},
-                "10,001-15,000":      {"people": 0,           "percent": 0.0,  "unit": 0},
-                "15,001-20,000":      {"people": 0,           "percent": 0.0,  "unit": 0},
-                "20,001-30,000":      {"people": 0,           "percent": 0.0,  "unit": 0},
-                "30,001-40,000":      {"people": 0,           "percent": 0.0,  "unit": 0},
-                "40,001-50,000":      {"people": 0,           "percent": 0.0,  "unit": 0},
-                "50,001-100,000":     {"people": 200,         "percent": large_pct, "unit": 0},
-                "100,001-200,000":    {"people": 0,           "percent": 0.0,  "unit": 0},
-                "200,001-400,000":    {"people": 0,           "percent": 0.0,  "unit": 0},
-                "400,001-600,000":    {"people": 0,           "percent": 0.0,  "unit": 0},
-                "600,001-800,000":    {"people": 0,           "percent": 0.0,  "unit": 0},
-                "800,001-1,000,000":  {"people": 0,           "percent": 0.0,  "unit": 0},
-                "more than 1,000,001":{"people": 0,           "percent": 0.0,  "unit": 0},
-                "total":              {"people": small_count + 5_000 + 200, "percent": 100.0, "unit": 0},
+                // small (8 levels) — 全部 unit 0,people 全塞 1-999
+                "1-999":              {"people": small_count, "percent": 30.0, "unit": 0_u64},
+                "1,000-5,000":        {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                "5,001-10,000":       {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                "10,001-15,000":      {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                "15,001-20,000":      {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                "20,001-30,000":      {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                "30,001-40,000":      {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                "40,001-50,000":      {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                // mid (3 levels)
+                "50,001-100,000":     {"people": 5_000_u64, "percent": 30.0, "unit": 100_000_u64},
+                "100,001-200,000":    {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                "200,001-400,000":    {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                // large (3 levels)
+                "400,001-600,000":    {"people": 200_u64, "percent": 5.0, "unit": 500_000_u64},
+                "600,001-800,000":    {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                "800,001-1,000,000":  {"people": 0_u64, "percent": 0.0, "unit": 0_u64},
+                // super_large (1 level)
+                "more than 1,000,001":{"people": 50_u64, "percent": 0.5, "unit": super_large_unit},
+                "total":              {"people": small_count + 5_000 + 200 + 50, "percent": 100.0, "unit": 1_000_000_u64},
             }),
         }
     }
 
     #[test]
     fn small_holders_streak_detected() {
-        // 5 連續週數小戶遞減
-        let points = vec![
-            raw("2026-04-04", 50_000, 40.0),
-            raw("2026-04-11", 49_000, 40.0),
-            raw("2026-04-18", 48_000, 40.0),
-            raw("2026-04-25", 47_000, 40.0),
-            raw("2026-05-02", 46_000, 40.0),
-        ];
+        // 8 連續週數小戶遞減(對齊 STREAK_MIN_WEEKS=8)
+        let mut points = Vec::new();
+        for (i, count) in [50_000, 49_000, 48_000, 47_000, 46_000, 45_000, 44_000, 43_000, 42_000].iter().enumerate() {
+            let date = NaiveDate::from_ymd_opt(2026, 4, 4).unwrap() + chrono::Duration::weeks(i as i64);
+            points.push(raw(&date.to_string(), *count, 0));
+        }
         let series = HoldingSharesPerSeries { stock_id: "2330".to_string(), points };
         let core = ShareholderCore::new();
         let out = core.compute(&series, ShareholderParams::default()).unwrap();
-        assert!(out.events.iter().any(|e| e.kind == ShareholderEventKind::SmallHoldersDecreasing));
+        assert!(out.events.iter().any(|e| e.kind == ShareholderEventKind::SmallHoldersDecreasing),
+                "SmallHoldersDecreasing 8-week streak should fire");
     }
 
     #[test]
-    fn synthesize_aggregates_levels() {
-        // 1 row,small = 50_000(全在 1-999) + 0(1,000-5,000) = 50_000
-        let row = raw("2026-04-04", 50_000, 40.0);
+    fn synthesize_aggregates_4_level_with_concentration_unit() {
+        // 1 row 驗 4-level 合成 + concentration_index = (large.unit + super_large.unit) / total.unit
+        let row = raw("2026-04-04", 50_000, 300_000);
         let series = HoldingSharesPerSeries { stock_id: "2330".to_string(), points: vec![row] };
         let out = ShareholderCore::new().compute(&series, ShareholderParams::default()).unwrap();
         let p = &out.series[0];
         assert_eq!(p.small_holders_count, 50_000);
+        assert_eq!(p.mid_holders_count, 5_000);
         assert_eq!(p.large_holders_count, 200);
-        assert!((p.large_holders_pct - 40.0).abs() < 1e-9);
-        // concentration_index = large_holders_pct(預設公式)
-        assert!((p.concentration_index - 40.0).abs() < 1e-9);
-        // total_holders 取自 "total" level 的 people
-        assert_eq!(p.total_holders, 55_200);
+        assert_eq!(p.super_large_holders_count, 50);
+        // total_holders 取自 "total" level 的 people = 50_000 + 5_000 + 200 + 50 = 55_250
+        assert_eq!(p.total_holders, 55_250);
+        // concentration_index = (large.unit 500_000 + super_large.unit 300_000) / total.unit 1_000_000 = 0.8
+        assert!((p.concentration_index - 0.8).abs() < 1e-9,
+                "concentration_index 應 = 0.8(800K large+super 股 / 1M total 股),實際 {}", p.concentration_index);
     }
 
     #[test]

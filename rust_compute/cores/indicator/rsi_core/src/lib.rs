@@ -105,7 +105,12 @@ impl IndicatorCore for RsiCore {
                 }
             }
         }
-        // Failure Swing 留 PR-future(spec §4.6 四步全成立才產出)— TODO
+        // Failure Swing(2026-05-10 落實作)— 對齊 Wilder (1978) "New Concepts in Technical
+        // Trading Systems" §7 RSI Failure Swing 定義:
+        //   Bearish FS 四步:RSI ≥ 70 → < 70(local high) → 反彈但 < 70(failure)
+        //     → 跌破前 step 2 local low → 觸發 reversal
+        //   Bullish FS 對稱:RSI ≤ 30 → > 30 → 反彈失敗 → 突破前 high → 觸發
+        detect_failure_swing(&series, params.overbought, params.oversold, &mut events);
 
         Ok(RsiOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series, events })
     }
@@ -117,6 +122,91 @@ impl IndicatorCore for RsiCore {
             params_hash: None, statement: format!("RSI {:?} on {}: rsi={:.2}", e.kind, e.date, e.value),
             metadata: e.metadata.clone(),
         }).collect()
+    }
+}
+
+/// Failure Swing 4-step detection(Wilder 1978)
+///
+/// 用 state machine 追蹤 RSI 在 overbought / oversold zone 的進出 + reversal:
+/// 1. RSI ≥ overbought(進入 overbought 區)
+/// 2. RSI < overbought(退出 overbought 區)— 記 step-2 local low
+/// 3. RSI 反彈但仍 < overbought(failure to re-enter)— 記 step-3 local high
+/// 4. RSI 跌破 step-2 local low → Bearish Failure Swing 觸發
+///
+/// Bullish FS 對稱(oversold zone),symmetry: ≤ oversold → > → > oversold low high → 突破 step-2 local high
+fn detect_failure_swing(series: &[RsiPoint], overbought: f64, oversold: f64, out: &mut Vec<RsiEvent>) {
+    // Bearish state machine
+    let mut bear_state: u8 = 0; // 0: idle, 1: in OB, 2: exited OB(have local low), 3: had failure rally
+    let mut bear_local_low: f64 = 0.0;
+    let mut bear_local_low_date: NaiveDate = series.first().map_or(
+        NaiveDate::from_ymd_opt(1900, 1, 1).unwrap(), |p| p.date);
+    let mut bear_failure_high: f64 = 0.0;
+    // Bullish state machine
+    let mut bull_state: u8 = 0;
+    let mut bull_local_high: f64 = 0.0;
+    let mut bull_local_high_date: NaiveDate = bear_local_low_date;
+    let mut bull_failure_low: f64 = 0.0;
+
+    for (i, p) in series.iter().enumerate() {
+        if p.value <= 0.0 { continue; } // warmup skip
+
+        // ===== Bearish FS =====
+        match bear_state {
+            0 => { if p.value >= overbought { bear_state = 1; } }
+            1 => { if p.value < overbought { bear_state = 2; bear_local_low = p.value; bear_local_low_date = p.date; } }
+            2 => {
+                if p.value < bear_local_low { bear_local_low = p.value; bear_local_low_date = p.date; }
+                else if p.value >= overbought { bear_state = 1; } // 再進 OB,reset 到 step 1
+                else if i > 0 && p.value > series[i - 1].value {
+                    bear_state = 3; bear_failure_high = p.value;
+                }
+            }
+            3 => {
+                if p.value > bear_failure_high { bear_failure_high = p.value; }
+                if p.value >= overbought { bear_state = 1; } // 再進 OB,reset
+                else if p.value < bear_local_low {
+                    // Step 4: Bearish FS confirmed
+                    out.push(RsiEvent { date: p.date, kind: RsiEventKind::FailureSwing, value: p.value,
+                        metadata: json!({
+                            "type": "bearish",
+                            "step2_local_low": bear_local_low,
+                            "step2_low_date": bear_local_low_date,
+                            "step3_failure_high": bear_failure_high,
+                        }) });
+                    bear_state = 0; // reset
+                }
+            }
+            _ => bear_state = 0,
+        }
+
+        // ===== Bullish FS =====
+        match bull_state {
+            0 => { if p.value > 0.0 && p.value <= oversold { bull_state = 1; } }
+            1 => { if p.value > oversold { bull_state = 2; bull_local_high = p.value; bull_local_high_date = p.date; } }
+            2 => {
+                if p.value > bull_local_high { bull_local_high = p.value; bull_local_high_date = p.date; }
+                else if p.value <= oversold && p.value > 0.0 { bull_state = 1; }
+                else if i > 0 && p.value < series[i - 1].value {
+                    bull_state = 3; bull_failure_low = p.value;
+                }
+            }
+            3 => {
+                if p.value < bull_failure_low && p.value > 0.0 { bull_failure_low = p.value; }
+                if p.value <= oversold && p.value > 0.0 { bull_state = 1; }
+                else if p.value > bull_local_high {
+                    // Step 4: Bullish FS confirmed
+                    out.push(RsiEvent { date: p.date, kind: RsiEventKind::FailureSwing, value: p.value,
+                        metadata: json!({
+                            "type": "bullish",
+                            "step2_local_high": bull_local_high,
+                            "step2_high_date": bull_local_high_date,
+                            "step3_failure_low": bull_failure_low,
+                        }) });
+                    bull_state = 0;
+                }
+            }
+            _ => bull_state = 0,
+        }
     }
 }
 
@@ -155,5 +245,41 @@ mod tests {
     fn wilder_steady_uptrend_100() {
         let closes: Vec<f64> = (0..30).map(|i| 100.0 + i as f64).collect();
         assert!((wilder_rsi(&closes, 14)[20] - 100.0).abs() < 1e-9);
+    }
+
+    /// Bearish FailureSwing(Wilder 1978):RSI 進 OB → 退出 → 反彈 fail → 跌破前低
+    #[test]
+    fn bearish_failure_swing_detected() {
+        // 構造 RSI 序列(直接 mock RSI value,跳過 close → RSI 計算)
+        // 4 步:75 (in OB) → 65 (exit, local_low=65) → 68 (failure rally < 70) → 60 (break local_low)
+        let series = vec![
+            RsiPoint { date: NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), value: 75.0 }, // step 1
+            RsiPoint { date: NaiveDate::from_ymd_opt(2026, 4, 2).unwrap(), value: 65.0 }, // step 2
+            RsiPoint { date: NaiveDate::from_ymd_opt(2026, 4, 3).unwrap(), value: 68.0 }, // step 3 failure rally
+            RsiPoint { date: NaiveDate::from_ymd_opt(2026, 4, 4).unwrap(), value: 60.0 }, // step 4 break low
+        ];
+        let mut events = Vec::new();
+        detect_failure_swing(&series, 70.0, 30.0, &mut events);
+        let fs = events.iter().filter(|e| e.kind == RsiEventKind::FailureSwing).count();
+        assert_eq!(fs, 1, "Bearish FailureSwing 應觸發 1 次");
+        let ev = events.iter().find(|e| e.kind == RsiEventKind::FailureSwing).unwrap();
+        assert_eq!(ev.metadata["type"], "bearish");
+    }
+
+    /// Bullish FailureSwing 對稱
+    #[test]
+    fn bullish_failure_swing_detected() {
+        let series = vec![
+            RsiPoint { date: NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), value: 25.0 }, // step 1 in OS
+            RsiPoint { date: NaiveDate::from_ymd_opt(2026, 4, 2).unwrap(), value: 35.0 }, // step 2 exit, local_high=35
+            RsiPoint { date: NaiveDate::from_ymd_opt(2026, 4, 3).unwrap(), value: 32.0 }, // step 3 failure dip > 30
+            RsiPoint { date: NaiveDate::from_ymd_opt(2026, 4, 4).unwrap(), value: 40.0 }, // step 4 break high
+        ];
+        let mut events = Vec::new();
+        detect_failure_swing(&series, 70.0, 30.0, &mut events);
+        let fs = events.iter().filter(|e| e.kind == RsiEventKind::FailureSwing).count();
+        assert_eq!(fs, 1, "Bullish FailureSwing 應觸發 1 次");
+        let ev = events.iter().find(|e| e.kind == RsiEventKind::FailureSwing).unwrap();
+        assert_eq!(ev.metadata["type"], "bullish");
     }
 }
