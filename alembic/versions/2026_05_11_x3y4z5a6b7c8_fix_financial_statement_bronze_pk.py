@@ -24,11 +24,28 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # 1. Remove rows where type IS NULL (should be none, but guard for safety)
+    # 1. Remove rows where type IS NULL or empty (should be none, but guard for safety)
     op.execute("DELETE FROM financial_statement WHERE type IS NULL OR type = ''")
 
-    # 2. Drop old primary key (keyed on origin_name)
-    op.execute("ALTER TABLE financial_statement DROP CONSTRAINT financial_statement_pkey")
+    # 2. Drop the existing primary key — name varies (PR #R3 ALTER TABLE RENAME does not
+    #    rename constraints, so it may still be 'financial_statement_tw_pkey' on existing
+    #    deployments). Look up by relation + contype='p' for portability.
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            pk_name TEXT;
+        BEGIN
+            SELECT conname INTO pk_name
+            FROM pg_constraint
+            WHERE conrelid = 'financial_statement'::regclass
+              AND contype = 'p';
+            IF pk_name IS NOT NULL THEN
+                EXECUTE format('ALTER TABLE financial_statement DROP CONSTRAINT %I', pk_name);
+            END IF;
+        END $$;
+        """
+    )
 
     # 3. Make type NOT NULL now that NULLs are cleared
     op.execute("ALTER TABLE financial_statement ALTER COLUMN type SET NOT NULL")
@@ -46,7 +63,22 @@ def downgrade() -> None:
     # origin_name entries under the old PK). Re-backfill will restore element values.
     op.execute("DELETE FROM financial_statement WHERE type LIKE '%_per'")
 
-    op.execute("ALTER TABLE financial_statement DROP CONSTRAINT financial_statement_pkey")
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            pk_name TEXT;
+        BEGIN
+            SELECT conname INTO pk_name
+            FROM pg_constraint
+            WHERE conrelid = 'financial_statement'::regclass
+              AND contype = 'p';
+            IF pk_name IS NOT NULL THEN
+                EXECUTE format('ALTER TABLE financial_statement DROP CONSTRAINT %I', pk_name);
+            END IF;
+        END $$;
+        """
+    )
     op.execute("ALTER TABLE financial_statement ALTER COLUMN type DROP NOT NULL")
 
     op.execute(
