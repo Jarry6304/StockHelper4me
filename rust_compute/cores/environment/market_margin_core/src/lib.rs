@@ -3,6 +3,11 @@
 // Output §7.6(maintenance_rate / change_pct / MarginZone)
 // EventKind 4 個(EnteredWarning/Danger / Exited / SignificantSingleDayDrop)
 // stock_id 保留字 _market_
+//
+// **Reference(2026-05-10 加)**:
+//   maintenance_warning=145 / danger=130:**證交所《有價證券借貸辦法》§39** —
+//                                          130% 追繳線 + 145% 預警(監管文件依據)
+//   significant_change=5.0%:無學術,業界經驗值「市場融資維持率單日 5% 變化」為大事件
 
 use anyhow::Result;
 use chrono::NaiveDate;

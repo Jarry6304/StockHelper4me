@@ -1,6 +1,15 @@
 // us_market_core(P2)— Environment Core
 // 對齊 m2Spec/oldm2Spec/environment_cores.md §四 r2
 // Params §4.4 / Output §4.6(spy/vix 同點 + VixZone)/ stock_id 保留字 _global_
+//
+// **Reference(2026-05-10 加)**:
+//   VIX low=15 / high=25 / extreme=35:**Whaley, Robert E. (2000).
+//                                       "The Investor Fear Gauge". Journal of Portfolio
+//                                       Management 26(3), 12-17.** + CBOE 歷史均值區間
+//                                       (<20 低 / 20-30 中 / >30 高 / >40 極端)
+//                                       拿了 Bernstein Fabozzi/Jacobs Levy Award
+//   SPY MACD 12/26/9:對齊 macd_core(Appel 1979)
+//   spy_overnight_change=1.5%:無學術,經驗值美股 daily volatility ~1%
 
 use anyhow::Result;
 use chrono::NaiveDate;

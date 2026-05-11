@@ -10,7 +10,13 @@
 > Rust 常數即可。
 >
 > alembic head:`w2x3y4z5a6b7`(三表落地;本文 0 migration)
-> Rust workspace:24 crate / 146 tests passed / 22 cores 全 inventory 註冊
+> Rust workspace:24 crate / 155 tests passed / 22 cores 全 inventory 註冊
+>
+> **2026-05-10 production state**:
+>   - 1263 stocks(production scale 上限;另 340 stocks 為已退市 empty status)
+>   - 4.4M facts production verified
+>   - 9.2 分鐘 wall time(PR-9b/9c/9d 並行 + batch INSERT)
+>   - 9 個阻塞點拍版決策見 §13(2026-05-10 user 拍板紀錄)
 
 ---
 
@@ -152,13 +158,14 @@
 | `MAINTENANCE_LOW_THRESHOLD` | 145.0 const | spec §4.5 列 EventKind 但 §4.3 未列 Param,目前寫死 |
 | 「historical high」label | 未實作 | spec §4.6 範例 |
 
-### 3.3 shareholder_core(2026-05-10 修)
-| 項目 | 目前值 | 待 user 確認 |
+### 3.3 shareholder_core(2026-05-10 Round 1 完成 — user 拍版)
+| 項目 | 拍版值 | 來源 |
 |---|---|---|
-| `STREAK_MIN_WEEKS` | 4 const | spec 對齊? |
-| ~~detail JSONB key 命名~~ | ~~best-guess 英文~~ → ✅ **iterate 真 17 levels(2026-05-10 fix)** | 已對齊 Silver `holding_shares_per_derived.detail` 真結構 |
-| **small/mid/large 邊界**(目前 best-guess) | small ≤ 5,000 股 / mid ≤ 50,000 股 / large > 50,000 股 | spec 拍版邊界張數 |
-| **`concentration_index` 公式**(目前 best-guess) | `= large_holders_pct`(大戶集中度) | spec 是否要改 Top10 持股比 / Gini 等 |
+| ~~detail JSONB key 命名~~ | ✅ iterate 真 17 levels | 對齊 Silver real structure |
+| ~~`STREAK_MIN_WEEKS`~~ | ✅ **8 週** | Moskowitz, Ooi, Pedersen (2012) "Time Series Momentum" JFE(⚠️ 跨領域援引,需 Phase 2 回測驗證) |
+| ~~分類邊界~~ | ✅ **4-level**:small ≤ 50 張(8 levels)/ mid 50-400 張(3)/ large 400-1000 張(3)/ super_large > 1000 張(1) | Money 錢雜誌 50/400 + 凱基/集保 1000 張大戶 |
+| ~~`concentration_index` 公式~~ | ✅ `(large.unit + super_large.unit) / total.unit` | 業務「籌碼集中度」標準定義,採 unit (股數) |
+| EventKind | 加 `SuperLargeHoldersAccumulating` / `SuperLargeHoldersReducing` 2 個 | 對齊 4-level 完整 streak coverage |
 | Skip rules | `差異數調整(說明4)` 異常 row 不算 | 確認 |
 
 ### 3.4 foreign_holding_core
@@ -305,6 +312,23 @@
 
 ---
 
+## 8.5. Round 4 transition pattern fix(2026-05-10 落地)
+
+對齊 fear_greed / market_margin 既有 EnteredX/ExitedX pattern,把 stay-in-zone
+連日重複觸發改成 transition 只在進 zone / 出 zone 觸發一次。
+
+| Core | EventKind 改動 | 預期 facts 量級降 |
+|---|---|---|
+| valuation_core | 6 改 12(加 PerExtremeHigh/Low / PbrExtremeHigh/Low / YieldExtremeHigh / YieldHighThreshold 各 Entered+Exited) | ~70%(2.0M → ~600K) |
+| margin_core | 3 改 6(ShortRatioExtremeHigh/Low / MaintenanceLow Entered+Exited) | ~47%(1.3M → ~700K) |
+| bollinger_core | 4 改 8(UpperBandTouch / LowerBandTouch / AboveUpperBand / BelowLowerBand Entered+Exited) | ~83%(466K → ~80K) |
+| atr_core | **不改**(既有「new max/min」邏輯本身就是 transition,非 stay-in-zone) | n/a |
+
+設計:不引入 Zone enum(對齊 user 拍版「去耦合 + 減少抽象 + 重工 OK」),用
+獨立 bool `prev_*_in_zone` tracking。bouncy 不防衛(對齊 fear_greed 範本)。
+
+舊 facts 處理:user 拍版 TRUNCATE facts 全清 + run-all 重跑(10 分鐘內完成)。
+
 ## 9. PR-9b 工程進階(spec 之外,可平行)
 
 | 項目 | 估時 | 預期收益 |
@@ -353,6 +377,142 @@
 
 ---
 
-**最後更新**:2026-05-09(v1.29 PR-9a milestone 收尾後)
-**Rust workspace**:24 crate / 146 tests passed / 22 cores production verified
+## 13. 9 個阻塞點拍版決策紀錄(2026-05-10 user 拍板)
+
+對齊 production 1263 stocks × 22 cores × 4.4M facts state 後,9 個阻塞點的
+user 拍版決定 + Rust code reference 註解狀態:
+
+### 阻塞 1:`financial_statement_core` Silver builder origin_name 元值/% 覆蓋 bug
+
+**狀態**:🔴 **未動工,留下個 session**
+
+- **根因**:Silver builder `silver/builders/financial_statement.py:60-62` 用
+  `row.get("origin_name")` 當 dict key,但 Bronze 同 origin_name(中文「應付帳款」)
+  對映 2 個 type(`AccountsPayable` 元值 + `AccountsPayable_per` %),dict 後寫
+  覆蓋前寫 → 元值消失 → balance 全是 %
+- **影響**:ROE / ROA / RoeHigh / RoaHigh 4 個 EventKind 永久 0(Round 2 fix
+  `roe_pct = 0.0` 後)
+- **拍版修法**(對齊 user 「進階資料不應出現基礎資料複寫低級錯誤」原則):
+  改 Silver builder line 60-62 加 `_per` suffix:
+  ```python
+  item_key = row.get("origin_name") or row.get("type") or "unknown"
+  if (row.get("type") or "").endswith("_per"):
+      item_key = f"{item_key}_per"   # 加 _per 後綴避免覆蓋元值
+  grouped[key]["detail"][item_key] = row.get("value")
+  ```
+- **估時**:Silver builder ~10 行 + Rust core ROE/ROA 改元值 keys + `silver phase
+  7b --full-rebuild`(~33 秒)+ tw_cores 重跑 ~10 分鐘 = **~2 小時**
+
+### 阻塞 2:`shareholder_core` 4-level + STREAK_MIN_WEEKS + concentration_index
+
+**狀態**:✅ **2026-05-10 動工完成(commit 458a45a)**
+
+- **邊界**(user 拍版):small ≤ 50 張 / mid 50-400 張 / large 400-1000 張 / super_large > 1000 張
+- **STREAK_MIN_WEEKS**:8 週(Moskowitz, Ooi, Pedersen 2012 JFE;⚠️ 跨領域援引)
+- **concentration_index**:`(large.unit + super_large.unit) / total.unit`(採股數)
+- **新加 EventKind**:`SuperLargeHoldersAccumulating` / `SuperLargeHoldersReducing`
+
+### 阻塞 3:`neely_core` 22 條 R4-R7/F/Z/T/W deferred 規則
+
+**狀態**:🟡 **跳過(user 既有拍板「先跳過」)**,留 PR-3c
+
+- 22 條規則 deferred:`power_rating = Neutral, rules passed = 0, deferred = 22`
+- 等 user 寫 m3Spec/neely_core.md 完整版(數天)
+- 或 PR-3c 用 best-guess Frost-Prechter 通用規則 batch 補(我 ~1 天)
+
+### 阻塞 4:Round 4 EnteredX/ExitedX bouncy 防衛
+
+**狀態**:✅ **2026-05-10 拍板「不動」**
+
+- user 拍版「不防衛」對齊 fear_greed 範本
+- bollinger facts 從 466K → 457K(↓1.9%,bouncy 本質)
+- 接受 swing trader 介面真實看到每次進退 zone
+
+### 阻塞 5:100 個 threshold 校準路徑
+
+**狀態**:✅ **a+b 加 reference 註解完成 / c 留下個 session / d 接受不動**
+
+按分類 A/B/C/D 拍板:
+- **(a) 分類 A 業界/學術標準(~7 個 indicator const)** = **不動,加 reference 註解**
+  - Wilder ATR/RSI/ADX (1978) / Appel MACD (1979) / Bollinger 20/2.0 (2002) / 5y percentile
+- **(b) 分類 B 台灣特有(~15 個)** = **保留當前 best-guess,加 reference 註解**
+  - B-1 有 reference:證交所 145/130 維持率 / Buffett 15% ROE (1987) / Graham yield 5% (1949)
+  - B-2 無 reference:KD 9(Asian convention)/ short_to_margin 30/5 / margin_change 5% /
+    gross_margin_change 2% / debt_ratio 60% / day_trading streak 3
+- **(c) 分類 C streak/lookback(~8 個)** = **production data driven 統計留下個 session**
+  - 跑 1263 stocks × 5 年觸發率分布,user 拍版動態值
+- **(d) 分類 D environment(~7 個)** = **接受不動**
+  - Whaley VIX (2000) / CNN Fear & Greed / 央行匯率心理關卡
+
+### 阻塞 6:`Timeframe::Quarterly` variant
+
+**狀態**:✅ **2026-05-10 動工完成(commit 458a45a)**
+
+- `fact_schema::Timeframe` enum 加 Quarterly variant
+- `financial_statement_core` 從 Monthly approximation 改用 Quarterly
+- `neely_core::warmup_periods` Quarterly = 60
+- `ohlcv_loader::load_for_indicator` Quarterly 回 anyhow!error(財報專用)
+
+### 阻塞 7:`foreign_holding_core` foreign_limit_pct stored col
+
+**狀態**:✅ **2026-05-10 動工完成(commit 458a45a)** — user 拍板「(a) 嘗試看看」
+
+- Bronze `foreign_investor_share_tw.upper_limit_ratio` 已存在(無需新 Bronze source)
+- Silver builder 已 pack 進 detail JSONB
+- chip_loader SQL 改 `(detail->>'upper_limit_ratio')::float8 AS foreign_limit_pct`
+- 不需 alembic / 不需 Silver schema 改
+- `LimitNearAlert` EventKind 解封(若 Bronze 真有料)
+
+### 阻塞 8:`rsi_core` FailureSwing 4-step 邏輯
+
+**狀態**:✅ **2026-05-10 動工完成(commit 458a45a)**
+
+- 對齊 Wilder J. Welles (1978). "New Concepts in Technical Trading Systems"
+  §7 RSI Failure Swing
+- 4-step state machine(進 OB → 退 OB → 反彈 fail → 跌破前低 = Bearish FS)
+- Bullish FS 對稱(oversold zone)
+- 2 個 regression test 落地
+
+### 阻塞 9:`Diagonal` Leading vs Ending sub_kind
+
+**狀態**:🟡 **跳過(user 拍板「等 NEELY」)**,留 PR-3c 同 neely 22 條一起做
+
+---
+
+## 下個 session 動工清單(2026-05-10 收尾)
+
+| 優先 | 範圍 | 估時 |
+|---|---|---|
+| **P1** | 阻塞 1 Silver builder origin_name `_per` suffix fix + Rust ROE/ROA 改元值 + 7b full-rebuild + tw_cores 重跑 | ~2 小時 |
+| **P2** | 阻塞 5(c) production data driven 統計各 streak/lookback const 觸發率,user 拍版動態值 | ~半天 |
+| **P3** | 阻塞 3 / 9 PR-3c neely 22 條 + Diagonal sub_kind(等 user m3Spec/neely_core.md 或用 best-guess) | ~1-2 天 |
+| P4 | dev DB scale up(已確認 1263 是 production 上限,可不動)| 0(user 接受) |
+| P5 | m3Spec/ 寫定各 core threshold spec(對齊 §13 拍版紀錄)| user 數天 |
+
+---
+
+## 14. 22 cores const reference 註解狀態(2026-05-10 加)
+
+10 個 cores 加 `Reference(2026-05-10 加)` doc 註解(對齊阻塞 5 a+b 拍板):
+
+| Core | Reference doc 註解 | 主要 const + 出處 |
+|---|---|---|
+| `atr_core` | ✅ | period=14 Wilder (1978) Ch. 21 |
+| `rsi_core` | ✅ | period=14 / overbought=70 Wilder (1978) + Murphy (1999);FailureSwing Wilder 1978 §7 |
+| `macd_core` | ✅ | 12/26/9 Appel (1979) |
+| `bollinger_core` | ✅ | 20/2.0 Bollinger (2002) |
+| `adx_core` | ✅ | strong=25 / very_strong=50 Wilder (1978) |
+| `kd_core` | ✅ | period=9 Asian convention(非國際標準,Lane 1957 原版 14)|
+| `margin_core` | ✅ | MAINTENANCE 145 證交所 §39 / 其他經驗值 |
+| `us_market_core` | ✅ | VIX zones Whaley (2000) Journal of Portfolio Management |
+| `market_margin_core` | ✅ | maintenance 145/130 證交所 §39 |
+| `valuation_core` | ✅ | yield 5% Graham (1949) / 5y percentile 業界共識 |
+| `financial_statement_core` | ✅ | roe_high 15% Buffett (1987) / debt 60% 業界共識 |
+| `shareholder_core` | ✅ | 4-level + STREAK 8 + concentration unit-based(user 拍版) |
+
+---
+
+**最後更新**:2026-05-10(9 阻塞拍版 + reference 註解收尾後)
+**Rust workspace**:24 crate / 155 tests passed / 22 cores production verified
 **alembic head**:`w2x3y4z5a6b7`
+**Production state**:4.4M facts / 1263 stocks / 9.2 分鐘 wall time(PR-9b/c/d 並行)

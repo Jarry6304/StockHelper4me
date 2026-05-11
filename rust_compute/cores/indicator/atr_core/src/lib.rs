@@ -1,5 +1,11 @@
 // atr_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_volatility.md §四 r2
 // Params §4.2(period only)/ Output §4.4(atr + atr_pct)/ Fact §4.5(3 種)
+//
+// **Reference(2026-05-10 加)**:
+//   period=14:Wilder, J. Welles Jr. (1978). "New Concepts in Technical Trading
+//             Systems". Trend Research. Ch. 21 — 原作者選 14 對應 ~2 週 cycle
+//   atr_pct 公式 = ATR / close × 100:Wilder 原版「normalised volatility」
+//   1y lookback / 10d expansion 50%:無明確學術出處,業界共識 ~ Phase 2 校準
 
 use anyhow::Result;
 use chrono::NaiveDate;

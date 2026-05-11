@@ -1,5 +1,12 @@
 // kd_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §五 r2
 // Params §5.2(period 9 / k_smooth 3 / d_smooth 3)/ Output §5.4(僅 k/d)/ warmup §5.3
+//
+// **Reference(2026-05-10 加)**:
+//   period=9:**Asian markets convention / KDJ variant**(George Lane 1957 原版用 14;
+//             9 days 是 Asian / 台股慣例,對應 short-term day trader 設定)。
+//             ⚠️ 沒明確學術 cite,Phase 2 可考慮對齊國際標準 14
+//   k_smooth=3 / d_smooth=3:Lane (1957) 原版 slow stochastic 14/3/3 的 smooth 參數
+//   overbought=80 / oversold=20:KDJ 台股慣例(對比 RSI 70/30,KD 走較極端)
 
 use anyhow::Result;
 use chrono::NaiveDate;

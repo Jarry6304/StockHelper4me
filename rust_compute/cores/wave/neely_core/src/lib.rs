@@ -285,11 +285,12 @@ impl WaveCore for NeelyCore {
     }
 
     fn warmup_periods(&self, params: &Self::Params) -> usize {
-        // §16:Daily 500 / Weekly 250 / Monthly 120
+        // §16:Daily 500 / Weekly 250 / Monthly 120 / Quarterly 60(2026-05-10 加 Quarterly)
         match params.timeframe {
             Timeframe::Daily => 500,
             Timeframe::Weekly => 250,
             Timeframe::Monthly => 120,
+            Timeframe::Quarterly => 60,
         }
     }
 }

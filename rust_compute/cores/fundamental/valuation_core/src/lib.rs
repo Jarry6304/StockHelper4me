@@ -1,7 +1,20 @@
 // valuation_core(P2)— Fundamental Core(日頻)
 //
 // 對齊 m2Spec/oldm2Spec/fundamental_cores.md §四 valuation_core(spec r2)。
-// Params §4.3 / Output §4.5 / EventKind 8 個 / warmup §4.4 / PER N/A §4.7。
+// Params §4.3 / Output §4.5 / EventKind 14 個 / warmup §4.4 / PER N/A §4.7。
+//
+// **Reference(2026-05-10 加)**:
+//   history_lookback_years=5(1260 trading days):業界估值分析慣例 — Bloomberg PE band
+//                                                  / Reuters 5Y range,對應 2-3 個 business cycle
+//   percentile_high=80 / low=20:無學術明確 cite,業界共識區間估值 band
+//   yield_high_threshold=5.0%:Graham, Benjamin (1949). "The Intelligent Investor"
+//                              Ch. 14 stock-selection 標準 + 台股長期均殖利率 ~3-4%
+//
+// **2026-05-10 Round 4 fix**:6 個 stay-in-zone EventKind(連日重複觸發)改
+// 12 個 Entered/Exited transition pattern,對齊 fear_greed_core 範本。
+// compute() 加 6 個 bool prev tracking,connect 連日 stay-in-zone 不再產 fact。
+// 預期 facts 量級降 ~70%(stage 5 揭露 valuation 2M facts 多為連日重複)。
+// 對齊 user 拍版「去耦合 + 減少抽象 + 重工 OK」三原則(不引入 Zone enum)。
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -76,12 +89,20 @@ pub struct ValuationEvent {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum ValuationEventKind {
-    PerExtremeHigh,
-    PerExtremeLow,
-    PbrExtremeHigh,
-    PbrExtremeLow,
-    YieldExtremeHigh,
-    YieldHighThreshold,
+    // Round 4 transition pattern(2026-05-10):6 個 stay-in-zone → 12 個 Entered/Exited
+    EnteredPerExtremeHigh,
+    ExitedPerExtremeHigh,
+    EnteredPerExtremeLow,
+    ExitedPerExtremeLow,
+    EnteredPbrExtremeHigh,
+    ExitedPbrExtremeHigh,
+    EnteredPbrExtremeLow,
+    ExitedPbrExtremeLow,
+    EnteredYieldExtremeHigh,
+    ExitedYieldExtremeHigh,
+    EnteredYieldHighThreshold,
+    ExitedYieldHighThreshold,
+    // 既有 transition pattern(無需改動)
     PerNegative,
     PbrBelowBookValue,
 }
@@ -139,34 +160,79 @@ impl IndicatorCore for ValuationCore {
         let mut events = Vec::new();
         let mut prev_per: Option<f64> = None;
         let mut prev_pbr: Option<f64> = None;
+        // Round 4 transition tracking:6 個 bool prev_in_zone(對齊 fear_greed prev_zone pattern)
+        let mut prev_per_extreme_high: bool = false;
+        let mut prev_per_extreme_low: bool = false;
+        let mut prev_pbr_extreme_high: bool = false;
+        let mut prev_pbr_extreme_low: bool = false;
+        let mut prev_yield_extreme_high: bool = false;
+        let mut prev_yield_high_threshold: bool = false;
         for p in &series {
-            // PER percentile
-            if let (Some(per), Some(pct)) = (p.per, p.per_percentile_5y) {
-                if pct >= params.percentile_high {
-                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::PerExtremeHigh, value: per,
-                        metadata: json!({"per": per, "percentile_5y": pct}) });
-                } else if pct <= params.percentile_low {
-                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::PerExtremeLow, value: per,
+            // PER percentile zone(transition pattern)
+            let cur_per_extreme_high = matches!((p.per, p.per_percentile_5y),
+                (Some(_), Some(pct)) if pct >= params.percentile_high);
+            let cur_per_extreme_low = matches!((p.per, p.per_percentile_5y),
+                (Some(_), Some(pct)) if pct <= params.percentile_low);
+            if !prev_per_extreme_high && cur_per_extreme_high {
+                if let (Some(per), Some(pct)) = (p.per, p.per_percentile_5y) {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::EnteredPerExtremeHigh, value: per,
                         metadata: json!({"per": per, "percentile_5y": pct}) });
                 }
+            } else if prev_per_extreme_high && !cur_per_extreme_high {
+                if let Some(per) = p.per {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::ExitedPerExtremeHigh, value: per,
+                        metadata: json!({"per": per, "percentile_5y": p.per_percentile_5y}) });
+                }
             }
+            if !prev_per_extreme_low && cur_per_extreme_low {
+                if let (Some(per), Some(pct)) = (p.per, p.per_percentile_5y) {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::EnteredPerExtremeLow, value: per,
+                        metadata: json!({"per": per, "percentile_5y": pct}) });
+                }
+            } else if prev_per_extreme_low && !cur_per_extreme_low {
+                if let Some(per) = p.per {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::ExitedPerExtremeLow, value: per,
+                        metadata: json!({"per": per, "percentile_5y": p.per_percentile_5y}) });
+                }
+            }
+            prev_per_extreme_high = cur_per_extreme_high;
+            prev_per_extreme_low = cur_per_extreme_low;
             // PER turn negative(§4.7)— 由 prev 有值轉 None
             if prev_per.is_some() && p.per.is_none() {
                 events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::PerNegative, value: 0.0,
                     metadata: json!({}) });
             }
             prev_per = p.per;
-            // PBR percentile
-            if let (Some(pbr), Some(pct)) = (p.pbr, p.pbr_percentile_5y) {
-                if pct >= params.percentile_high {
-                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::PbrExtremeHigh, value: pbr,
-                        metadata: json!({"pbr": pbr, "percentile_5y": pct}) });
-                } else if pct <= params.percentile_low {
-                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::PbrExtremeLow, value: pbr,
+            // PBR percentile zone(transition pattern)
+            let cur_pbr_extreme_high = matches!((p.pbr, p.pbr_percentile_5y),
+                (Some(_), Some(pct)) if pct >= params.percentile_high);
+            let cur_pbr_extreme_low = matches!((p.pbr, p.pbr_percentile_5y),
+                (Some(_), Some(pct)) if pct <= params.percentile_low);
+            if !prev_pbr_extreme_high && cur_pbr_extreme_high {
+                if let (Some(pbr), Some(pct)) = (p.pbr, p.pbr_percentile_5y) {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::EnteredPbrExtremeHigh, value: pbr,
                         metadata: json!({"pbr": pbr, "percentile_5y": pct}) });
                 }
+            } else if prev_pbr_extreme_high && !cur_pbr_extreme_high {
+                if let Some(pbr) = p.pbr {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::ExitedPbrExtremeHigh, value: pbr,
+                        metadata: json!({"pbr": pbr, "percentile_5y": p.pbr_percentile_5y}) });
+                }
             }
-            // PbrBelowBookValue(PBR < 1.0,從 >=1 轉 <1)
+            if !prev_pbr_extreme_low && cur_pbr_extreme_low {
+                if let (Some(pbr), Some(pct)) = (p.pbr, p.pbr_percentile_5y) {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::EnteredPbrExtremeLow, value: pbr,
+                        metadata: json!({"pbr": pbr, "percentile_5y": pct}) });
+                }
+            } else if prev_pbr_extreme_low && !cur_pbr_extreme_low {
+                if let Some(pbr) = p.pbr {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::ExitedPbrExtremeLow, value: pbr,
+                        metadata: json!({"pbr": pbr, "percentile_5y": p.pbr_percentile_5y}) });
+                }
+            }
+            prev_pbr_extreme_high = cur_pbr_extreme_high;
+            prev_pbr_extreme_low = cur_pbr_extreme_low;
+            // PbrBelowBookValue(PBR < 1.0,從 >=1 轉 <1)— 既有 transition,不動
             if let Some(pbr) = p.pbr {
                 if pbr < 1.0 && prev_pbr.map_or(true, |pp| pp >= 1.0) {
                     events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::PbrBelowBookValue, value: pbr,
@@ -174,19 +240,36 @@ impl IndicatorCore for ValuationCore {
                 }
             }
             prev_pbr = p.pbr;
-            // Yield percentile + threshold
-            if let (Some(y), Some(pct)) = (p.dividend_yield, p.yield_percentile_5y) {
-                if pct >= params.percentile_high {
-                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::YieldExtremeHigh, value: y,
+            // Yield percentile zone(transition pattern)
+            let cur_yield_extreme_high = matches!((p.dividend_yield, p.yield_percentile_5y),
+                (Some(_), Some(pct)) if pct >= params.percentile_high);
+            if !prev_yield_extreme_high && cur_yield_extreme_high {
+                if let (Some(y), Some(pct)) = (p.dividend_yield, p.yield_percentile_5y) {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::EnteredYieldExtremeHigh, value: y,
                         metadata: json!({"yield": y, "percentile_5y": pct}) });
                 }
+            } else if prev_yield_extreme_high && !cur_yield_extreme_high {
+                if let Some(y) = p.dividend_yield {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::ExitedYieldExtremeHigh, value: y,
+                        metadata: json!({"yield": y, "percentile_5y": p.yield_percentile_5y}) });
+                }
             }
-            if let Some(y) = p.dividend_yield {
-                if y >= params.yield_high_threshold {
-                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::YieldHighThreshold, value: y,
+            prev_yield_extreme_high = cur_yield_extreme_high;
+            // Yield absolute threshold zone(transition pattern)
+            let cur_yield_high_threshold = matches!(p.dividend_yield,
+                Some(y) if y >= params.yield_high_threshold);
+            if !prev_yield_high_threshold && cur_yield_high_threshold {
+                if let Some(y) = p.dividend_yield {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::EnteredYieldHighThreshold, value: y,
+                        metadata: json!({"yield": y, "threshold": params.yield_high_threshold}) });
+                }
+            } else if prev_yield_high_threshold && !cur_yield_high_threshold {
+                if let Some(y) = p.dividend_yield {
+                    events.push(ValuationEvent { date: p.fact_date, kind: ValuationEventKind::ExitedYieldHighThreshold, value: y,
                         metadata: json!({"yield": y, "threshold": params.yield_high_threshold}) });
                 }
             }
+            prev_yield_high_threshold = cur_yield_high_threshold;
         }
 
         Ok(ValuationOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series, events })
@@ -244,17 +327,29 @@ mod tests {
         assert!(out.series[0].per_percentile_5y.is_none(), "樣本太少不算 percentile");
     }
 
+    /// Round 4 transition test:yield 從 < threshold 進 zone 觸發 EnteredYieldHighThreshold,
+    /// 連日在 zone 內不重複,離開 zone 觸發 ExitedYieldHighThreshold。
     #[test]
-    fn yield_high_threshold_emitted() {
+    fn yield_high_threshold_transition() {
         let series = ValuationDailySeries {
             stock_id: "2330".to_string(),
-            points: vec![ValuationDailyRaw {
-                date: NaiveDate::parse_from_str("2026-04-22", "%Y-%m-%d").unwrap(),
-                per: Some(10.0), pbr: Some(1.5), dividend_yield: Some(6.5), market_value_weight: None,
-            }],
+            points: vec![
+                ValuationDailyRaw { date: NaiveDate::parse_from_str("2026-04-21", "%Y-%m-%d").unwrap(),
+                    per: Some(10.0), pbr: Some(1.5), dividend_yield: Some(3.0), market_value_weight: None }, // < 5
+                ValuationDailyRaw { date: NaiveDate::parse_from_str("2026-04-22", "%Y-%m-%d").unwrap(),
+                    per: Some(10.0), pbr: Some(1.5), dividend_yield: Some(6.5), market_value_weight: None }, // entered
+                ValuationDailyRaw { date: NaiveDate::parse_from_str("2026-04-23", "%Y-%m-%d").unwrap(),
+                    per: Some(10.0), pbr: Some(1.5), dividend_yield: Some(7.0), market_value_weight: None }, // 仍在 zone, 不該重複
+                ValuationDailyRaw { date: NaiveDate::parse_from_str("2026-04-24", "%Y-%m-%d").unwrap(),
+                    per: Some(10.0), pbr: Some(1.5), dividend_yield: Some(4.0), market_value_weight: None }, // exited
+            ],
         };
         let out = ValuationCore::new().compute(&series, ValuationParams::default()).unwrap();
-        assert!(out.events.iter().any(|e| e.kind == ValuationEventKind::YieldHighThreshold));
+        // 進場 1 次 / 出場 1 次 / 連日 stay 不重複
+        let entered = out.events.iter().filter(|e| e.kind == ValuationEventKind::EnteredYieldHighThreshold).count();
+        let exited = out.events.iter().filter(|e| e.kind == ValuationEventKind::ExitedYieldHighThreshold).count();
+        assert_eq!(entered, 1, "EnteredYieldHighThreshold 應只觸發 1 次(transition,非 stay)");
+        assert_eq!(exited, 1, "ExitedYieldHighThreshold 應只觸發 1 次");
     }
 
     #[test]

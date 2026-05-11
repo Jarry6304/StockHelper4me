@@ -1,6 +1,12 @@
 // macd_core(P1)— Indicator Core
 // 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §三 macd_core(spec r2)
 // Output §3.4(僅 series)+ Fact §3.5(5 種)+ Divergence §3.6(嚴格規則式)
+//
+// **Reference(2026-05-10 加)**:
+//   fast=12 / slow=26 / signal=9:Appel, Gerald (1979).
+//                                  "The Moving Average Convergence Divergence Method"
+//                                  原作者設計,12/26 對應 2 月/4 月 EMA(原始月線分析)
+//   DIVERGENCE_MIN_BARS=20:無學術,業界經驗值「中期 divergence」 ~ 1 個交易月
 
 use anyhow::Result;
 use chrono::NaiveDate;

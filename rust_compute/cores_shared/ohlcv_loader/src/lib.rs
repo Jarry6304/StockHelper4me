@@ -161,6 +161,10 @@ pub async fn load_for_neely(
         Timeframe::Daily => load_daily(pool, stock_id, lookback).await,
         Timeframe::Weekly => load_weekly(pool, stock_id, lookback).await,
         Timeframe::Monthly => load_monthly(pool, stock_id, lookback).await,
+        Timeframe::Quarterly => Err(anyhow::anyhow!(
+            "ohlcv_loader: Timeframe::Quarterly 不適用 OHLCV(Quarterly 為 financial_statement \
+             季頻財報專用,沒對應 price_*_fwd 表)"
+        )),
     }
 }
 

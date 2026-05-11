@@ -299,18 +299,87 @@ dev DB 只有 30 distinct stocks(`SELECT COUNT(DISTINCT stock_id) FROM price_dai
 
 ### 3 個 known limitation 留 m3Spec/ 校準(stage 3 spot check 揭露)
 
-1. **`shareholder_core` + `financial_statement_core` events = 0**:best-guess threshold / detail JSONB key 命名(英文假設不對齊真實 Bronze 欄名),需 user 寫 m3Spec/{chip,fundamental}_cores.md 完整版校準
+1. **`shareholder_core` + `financial_statement_core` events = 0**:best-guess threshold / detail JSONB key 命名(英文假設不對齊真實 Bronze 欄名),需 user 寫 m3Spec/{chip,fundamental}_cores.md 完整版校準 — **2026-05-10 Round 1+2 fix 解決**(見下方)
 2. **`neely_core` 22 條 Stage 4 規則 deferred**:`Wave structure: ... rules passed = 0, deferred = 22`(對齊 v1.28 PR-3b R1-R3 完整 + R4-R7/F/Z/T/W 22 條 Deferred),等 user 寫 m3Spec/neely_core.md 完整版後 PR-3c 補
 3. **`0050` + `6547` snapshot_date = 1900-01-01 / forest_size = 0**:dev DB `price_daily_fwd` 沒這 2 stocks 的料(neely loader 載到空 series → compute() 仍 OK 但 forest 0,data_range fallback 1900-01-01 sentinel),不是 bug,user 補 backfill 即可
 
+### Round 1-4 + PR-9b/c/d 後續(2026-05-10 同 session 連續推進)
+
+接 v1.29 PR-9a 1263 stocks production run 收尾後,user 拍版往兩條路推:
+**(A) 量級降量 + 加速 production**(PR-9b/c/d + Round 4)+ **(B) 對齊真實
+schema 解 0-events 問題**(Round 1/2)。同 session 全推完。
+
+| Commit | 範圍 | wall time / facts |
+|---|---|---|
+| **e368fc8 Round 1** | financial_statement / shareholder detail JSONB key 改中文 + 17 levels iterate | 解 2 cores 永久 0 events(從 0 → 27880 financial / 106157 shareholder) |
+| **7eb9a96 Round 2** | financial_statement 全形括號 fallback chain + balance type 是 % common-size 處理(ROE/ROA 永久 0 避免 false positive) | 修 RoeHigh value=8478 億 false positive;GrossMarginRising/Falling/EpsTurn 等 5 EventKind 觸發 |
+| **615a8eb PR-9b** | tw_cores Stage B `for_each_concurrent` 並行(default 16);`max_connections` 對齊 | 1263 stocks:**3666s → 1388s(↓62%)** |
+| **d2e0594 PR-9c** | `write_facts` UNNEST array batch INSERT(取代 per-event loop;BATCH_SIZE=4000) | 1263 stocks:**1388s → 554s(↓60%)** |
+| **91804df Round 4** | valuation/margin/bollinger 3 cores stay-in-zone EventKind 改 EnteredX/ExitedX transition pattern(對齊 fear_greed 範本)| facts:**9M → 4.4M(↓51%)**;valuation 2.0M → 189K(↓91%);margin 1.3M → 605K(↓54%);bollinger 466K → 457K(bouncy 本質,僅 ↓2%) |
+| **ef855b8 PR-9d** | concurrency default 16 → 32 + `max_connections` 升 36 | wall time **不變**(PG IO 已是 hard ceiling;`per-core elapsed_s` 升但 contention 抵消) |
+
+User 拍版核心原則:**「去耦合 + 減少抽象 + 重工 OK」**(對齊 cores_overview §四 / §十四)。
+
+### Production verify milestone
+
+| Stage | 配置 | wall time | facts 量級 |
+|---|---|---|---|
+| Stage 5(初始)| 串列 concurrency=1 | 3666s = 61min | ~9M(stay-in-zone)|
+| PR-9b | concurrency=16 | 1388s = 23min | 同上 |
+| PR-9c batch INSERT | concurrency=16 | 554s = 9.2min | 同上 |
+| Round 4 transition | concurrency=16 | 535s = 8.9min | **4.4M(↓51%)**|
+| PR-9d concurrency 32 | concurrency=32 | 535s | 同上 |
+
+**起點 → 收尾比**:**~7× wall time 加速 + 51% facts 降量**
+
+### 9 個阻塞點拍版收尾(2026-05-10 同 session)
+
+對齊 production 1263 stocks × 22 cores × 4.4M facts state,user 拍版 9 個阻塞:
+
+| # | 阻塞 | 狀態 | commit |
+|---|---|---|---|
+| 1 | `financial_statement_core` Silver builder origin_name 元值/% 覆蓋 bug | 🔴 **留下個 session** | n/a(P1 動工項)|
+| 2 | `shareholder_core` 4-level (50/400/1000 張) + STREAK 8 + concentration unit-based | ✅ **完成** | 458a45a |
+| 3 | `neely_core` 22 條 R4-R7/F/Z/T/W deferred | 🟡 跳過(user 拍「先跳過」) | n/a |
+| 4 | Round 4 EnteredX/ExitedX bouncy 防衛 | ✅ **不動**(user 拍「不動」) | n/a |
+| 5 | 100 個 threshold 校準 | ✅ **a+b 加 reference 註解 / c 留下個 session / d 不動** | 本 commit |
+| 6 | `Timeframe::Quarterly` variant 加 | ✅ **完成** | 458a45a |
+| 7 | `foreign_holding_core` foreign_limit_pct 從 detail JSONB 取(無需 alembic)| ✅ **完成** | 458a45a |
+| 8 | `rsi_core` FailureSwing 4-step 邏輯(Wilder 1978 §7) | ✅ **完成** | 458a45a |
+| 9 | `Diagonal` Leading vs Ending sub_kind | 🟡 跳過(user 拍「等 NEELY」) | n/a |
+
+### 100 const reference 註解收尾(2026-05-10)
+
+10 cores 加 `Reference(2026-05-10 加)` doc 註解,標明每個 const 的學術 / 監管出處:
+
+| Core | 主要 reference |
+|---|---|
+| atr_core / rsi_core / adx_core | Wilder, J. Welles Jr. (1978). "New Concepts in Technical Trading Systems" Ch. 21 |
+| macd_core | Appel, Gerald (1979). "The Moving Average Convergence Divergence Method" |
+| bollinger_core | Bollinger, John (2002). "Bollinger on Bollinger Bands". McGraw-Hill |
+| kd_core | Lane (1957) 原版 14;period=9 為 Asian convention(無 explicit 學術) |
+| margin_core / market_margin_core | 證交所《有價證券借貸辦法》§39(維持率 145/130) |
+| us_market_core | Whaley, R. E. (2000). "The Investor Fear Gauge". *Journal of Portfolio Management* 26(3), 12-17(VIX zone) |
+| valuation_core | Graham, Benjamin (1949). "The Intelligent Investor" Ch. 14(yield 5%) |
+| financial_statement_core | Buffett (1987) Berkshire letter + Cunningham (1997) The Essays of Warren Buffett(ROE 15%) |
+| shareholder_core | Money 錢雜誌 50/400 + 凱基/集保 1000 張 + Moskowitz/Ooi/Pedersen (2012) JFE(streak 8) |
+
+純註解,**不改 const value**(對齊 user 「進階資料不應動 const 預設值,先標 source 後 production data driven 校準」原則)。
+
 ### 已知狀態(下次 session 起點)
 
-- alembic head:`w2x3y4z5a6b7`(user 已 alembic upgrade head 落地)
-- Rust workspace:24 crate,0 errors / **146 tests passed**(原 145 + margin null_row_skipped regression test 新加 1)
-- `tw_cores run-all` 全市場全核 dispatch + 三表寫入路徑全 production verified
-- 下個 session 建議:**PR-9b**(Workflow toml + 並行 + dirty queue),或
-  **m3Spec/** 寫定 + 各 core best-guess threshold 校準(尤其 shareholder /
-  financial_statement / neely R4-R7)
+- alembic head:`w2x3y4z5a6b7`(user 已落地)
+- Rust workspace:24 crate,0 errors / **155 tests passed**(對比 153 + shareholder synth + rsi bearish FS + rsi bullish FS - 1 = 155)
+- production state:**4.4M facts / 9.2 分鐘 wall time / 1263 stocks(production scale 上限,340 stocks 是 empty 已退市)**
+- 9 個阻塞:**4 動工完成 + 2 跳過(NEELY relate)+ 2 留下個 session(P1 阻塞 1 / P2 阻塞 5c)+ 1 完成 a+b**
+- m3Spec/ 仍待寫:詳見 `docs/m3_cores_spec_pending.md`(14 段 spec writing + 9 阻塞拍版紀錄)
+- 下個 session 動工清單(對齊 docs §13 + §14):
+  1. **P1 阻塞 1**:`financial_statement_core` Silver builder `_per` suffix 修法
+     + Rust ROE/ROA 改元值 keys + silver phase 7b full-rebuild + tw_cores 重跑(~2 小時)
+  2. **P2 阻塞 5(c)**:production data driven 統計各 streak/lookback const 觸發率
+     + user 拍版動態值(~半天)
+  3. **P3 阻塞 3 / 9**:neely 22 條 R4-R7 + Diagonal sub_kind(等 user m3Spec/neely_core.md
+     或 best-guess Frost-Prechter batch 補,~1-2 天)
 
 ---
 
