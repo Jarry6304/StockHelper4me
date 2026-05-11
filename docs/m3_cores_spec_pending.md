@@ -91,7 +91,7 @@
 ### 2.2 rsi_core
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
-| **FailureSwing** 四步邏輯 | **未實作 TODO**(framework `RsiEventKind::FailureSwing` 已存在) | spec §4.6 四步:RSI 進超買 → 退出 → 折返但未再進 → 跌破前低 |
+| **FailureSwing** 四步邏輯 | ✅ **已實作**(commit 458a45a):Wilder 1978 §7 四步完整實作 | — |
 | Bullish/BearishDivergence min bars | 20(對齊 macd) | spec 對齊? |
 
 ### 2.3 kd_core
@@ -156,7 +156,7 @@
 | `short_to_margin_ratio_high` | 30.0 | spec §4.3 |
 | `short_to_margin_ratio_low` | 5.0 | spec §4.3 |
 | `MAINTENANCE_LOW_THRESHOLD` | 145.0 const | spec §4.5 列 EventKind 但 §4.3 未列 Param,目前寫死 |
-| 「historical high」label | 未實作 | spec §4.6 範例 |
+| 「historical high」label | ✅ **已實作**(commit 3617d84):`EnteredShortRatioExtremeHigh` metadata 含 `historical_high: bool` | — |
 
 ### 3.3 shareholder_core(2026-05-10 Round 1 完成 — user 拍版)
 | 項目 | 拍版值 | 來源 |
@@ -171,8 +171,8 @@
 ### 3.4 foreign_holding_core
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
-| `LimitNearAlert` 邏輯 | 未實作(`foreign_limit_pct` stored col 目前 NULL placeholder) | spec §6.5 + Silver schema 補欄 |
-| `foreign_holding_ratio` threshold | 預設值待 user 寫定 | spec |
+| `LimitNearAlert` 邏輯 | ✅ **已實作**(commit 458a45a):從 `detail` JSONB 取 `foreign_limit_pct`,NULL 時 skip | — |
+| `foreign_holding_ratio` threshold | `MILESTONE_LOOKBACK=60`(寫死 const) | spec 校準? |
 
 ### 3.5 institutional_core
 | 項目 | 目前值 | 待 user 確認 |
@@ -199,15 +199,14 @@
 | `PerNegative` 邏輯 | 簡化(per < 0 觸發) | spec §4.7 完整邏輯待寫 |
 | `history_lookback_years` | 5(影響 warmup = years × 252) | spec |
 
-### 4.3 financial_statement_core(2026-05-10 修 round 2)
+### 4.3 financial_statement_core(2026-05-11 修 round 3)
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
 | detail JSONB key | ✅ **全形括號 `\u{FF08}` `\u{FF09}` + IFRS 中文 fallback chain** | 對齊 user 揭露 2330 真 detail key |
-| **balance type 是 % common-size**(2026-05-10 揭露) | balance 全部是 % 對總資產比(`資產總額`=100,`權益總額`=68.84 等);income/cashflow 維持元值 | 是否要 user 寫 spec / 改 Silver builder pack 元值 + % 雙 dict?或維持 % only? |
-| **ROE / ROA / TotalAssets / TotalLiabilities / TotalEquity 元值欄** | 全 = 0(skip cross-type 計算 income元 / balance%)| 等 user m3Spec/ 拍版 balance 元值 vs %;若拍 % only,RoeHigh / RoaHigh EventKind 永久不觸發,留作概念占位 |
-| `debt_ratio_pct` | 直接讀「負債總額」% value(不再除 total_assets) | 對齊 balance 是 % 的事實 |
-| Quarterly approximation | `Timeframe::Monthly`(enum 缺 Quarterly variant) | 是否需要加 Quarterly enum variant? |
-| 8 EventKind | RoeHigh / DebtRatioRising 等待 balance 元值版 | spec 校準 |
+| **Silver builder `_per` suffix fix**(2026-05-11) | ✅ `financial_statement.py:60-62` 加 `_per` suffix:balance 元值→`detail["資產總額"]`,% →`detail["資產總額_per"]` | — |
+| **ROE / ROA / balance 元值欄** | ✅ **已計算**(commit 本 session):`roe_pct = net_income / total_equity × 100`;`debt_ratio_pct = total_liabilities / total_assets × 100` | — |
+| `RoeHigh` EventKind | ✅ **觸發中**(`roe_pct >= 15%` 觸發;2330 歷年 ROE ~20-30% 應大量觸發) | threshold 校準見 §13 阻塞 5(c) |
+| Quarterly approximation | ✅ `Timeframe::Quarterly`(commit 458a45a 加 enum variant) | — |
 | Threshold 預設 | `gross_margin_change_threshold=2.0` / `roe_high_threshold=15.0` / `debt_ratio_high_threshold=60.0` / `fcf_negative_streak_quarters=4` | spec 校準 |
 
 ---

@@ -57,8 +57,11 @@ def _pack(bronze_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "detail":   {},
             }
 
-        # 用 origin_name(英文)作為 detail key,對齊 v2.0 aggregate_financial
+        # origin_name 作為 detail key。balance/balance_per 同 origin_name 但語意不同:
+        # balance type = 元值,balance_per type = % common-size。加 _per suffix 避免覆蓋。
         item_key = row.get("origin_name") or row.get("type") or "unknown"
+        if (row.get("type") or "").endswith("_per"):
+            item_key = f"{item_key}_per"
         grouped[key]["detail"][item_key] = row.get("value")
 
     return list(grouped.values())

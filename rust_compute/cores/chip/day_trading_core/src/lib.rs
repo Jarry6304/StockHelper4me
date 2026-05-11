@@ -209,8 +209,11 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
     let mut events = Vec::new();
 
     // RatioExtremeHigh / Low 單日事件
-    for p in series {
+    for (i, p) in series.iter().enumerate() {
         if p.day_trade_ratio >= params.ratio_high_threshold {
+            let historical_high = series[..i]
+                .iter()
+                .all(|prev| p.day_trade_ratio > prev.day_trade_ratio);
             events.push(DayTradingEvent {
                 date: p.date,
                 kind: DayTradingEventKind::RatioExtremeHigh,
@@ -218,6 +221,7 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
                 metadata: json!({
                     "ratio": p.day_trade_ratio,
                     "threshold": params.ratio_high_threshold,
+                    "historical_high": historical_high,
                 }),
             });
         } else if p.day_trade_ratio > 0.0 && p.day_trade_ratio <= params.ratio_low_threshold {
