@@ -1,5 +1,12 @@
 // adx_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §六 r2
 // Params §6.2(strong_trend / very_strong)/ Output §6.4(僅 adx/+DI/-DI)/ warmup §6.3 ×6
+//
+// **Reference(2026-05-10 加)**:
+//   strong_trend=25 / very_strong=50:Wilder, J. Welles Jr. (1978).
+//                                       "New Concepts in Technical Trading Systems".
+//                                       Ch. 21 — 25 趨勢成形 / 50 強趨勢 / 75+ 罕見極強
+//   ADX period 14:Wilder (1978) 原版
+
 
 use anyhow::Result;
 use chrono::NaiveDate;

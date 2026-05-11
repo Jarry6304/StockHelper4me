@@ -1,6 +1,14 @@
 // bollinger_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_volatility.md §三 r2
 // Params §3.2(period 20 / std_multiplier 2.0 / source PriceSource)/ Output §3.4(5 欄含 percent_b)
 //
+// **Reference(2026-05-10 加)**:
+//   period=20 / std_multiplier=2.0:Bollinger, John (2002).
+//                                    "Bollinger on Bollinger Bands". McGraw-Hill.
+//                                    原作者設計,20-day SMA ≈ 1 個交易月,2.0 std
+//                                    對應 ~95% 常態分布覆蓋
+//   SQUEEZE_STREAK_MIN=5:Bollinger (2002) §10 提「squeeze lasting weeks」,5 日 conservative
+//   WALK_BAND_NEAR_THRESHOLD=0.95 / 連 5 日:無學術,業界經驗值
+//
 // **2026-05-10 Round 4 fix**:4 個 stay-in-zone EventKind 改 8 個 Entered/Exited
 // transition pattern,降 stage 5 揭露 466K facts 連日重複(預期降 ~83%)。
 // compute() 加 4 個 bool prev tracking,連日 stay 不再產 fact。

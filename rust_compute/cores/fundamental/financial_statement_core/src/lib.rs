@@ -3,6 +3,19 @@
 // 對齊 m2Spec/oldm2Spec/fundamental_cores.md §五 financial_statement_core(spec r2)。
 // Params §5.3 / Output §5.5(18 欄)/ EventKind 8 個 / warmup §5.4。
 //
+// **Reference(2026-05-10 加)**:
+//   roe_high_threshold=15.0:**Buffett, Warren E. (1987) Berkshire shareholder letter
+//                              + Cunningham L. (1997) "The Essays of Warren Buffett"**
+//                              — 巴菲特標準「ROE 持續高於 15% = 高品質公司」
+//                              (Fortune 1987 研究:25/1000 公司 avg ROE > 20% +
+//                              最低不曾 < 15%)
+//   debt_ratio_high_threshold=60.0:**業界 IFRS 公司分析共識**(Damodaran A. NYU Stern
+//                                    "Investment Valuation" 提 70%+ 為「mathematical
+//                                    problem」,60% 保守警示;非 explicit cite)
+//   gross_margin_change_threshold=2.0:**IFRS 趨勢分析慣例**(相對變化 ~10% 視為顯著,
+//                                       2pp / 20pp typical gross margin = 10%)
+//   fcf_negative_streak_quarters=4:無學術 cite,業界「1 年連續為負 = distressed」共識
+//
 // 4 維 PK(market, stock_id, date, type),type ∈ {income, balance, cashflow}。
 // 載入器負責拉 raw row,本 core 把同 date 的三類 row 組裝成 FinancialPoint。
 //

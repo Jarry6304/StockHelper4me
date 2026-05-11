@@ -3,6 +3,13 @@
 // 對齊 m2Spec/oldm2Spec/fundamental_cores.md §四 valuation_core(spec r2)。
 // Params §4.3 / Output §4.5 / EventKind 14 個 / warmup §4.4 / PER N/A §4.7。
 //
+// **Reference(2026-05-10 加)**:
+//   history_lookback_years=5(1260 trading days):業界估值分析慣例 — Bloomberg PE band
+//                                                  / Reuters 5Y range,對應 2-3 個 business cycle
+//   percentile_high=80 / low=20:無學術明確 cite,業界共識區間估值 band
+//   yield_high_threshold=5.0%:Graham, Benjamin (1949). "The Intelligent Investor"
+//                              Ch. 14 stock-selection 標準 + 台股長期均殖利率 ~3-4%
+//
 // **2026-05-10 Round 4 fix**:6 個 stay-in-zone EventKind(連日重複觸發)改
 // 12 個 Entered/Exited transition pattern,對齊 fear_greed_core 範本。
 // compute() 加 6 個 bool prev tracking,connect 連日 stay-in-zone 不再產 fact。

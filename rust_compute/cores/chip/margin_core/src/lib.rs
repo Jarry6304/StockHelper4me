@@ -3,6 +3,13 @@
 // 對齊 m3Spec/chip_cores.md §四 margin_core(個股級融資融券)。
 // 命名注意:本 Core 個股級;市場整體融資維持率為獨立 Core market_margin_core(Environment)
 //
+// **Reference(2026-05-10 加)**:
+//   MAINTENANCE_LOW_THRESHOLD=145:**證交所《有價證券借貸辦法》§39** 追繳線 130%
+//                                  + 證券商實務預警 145%(金管會公告);監管文件依據
+//   margin_change_pct=5.0 / short_change_pct=10.0:無學術,集保中心統計
+//                                                   ~3-5% 為「顯著」業界共識
+//   short_to_margin_ratio_high=30 / low=5:無學術,業界經驗值「25-30% 偏高」
+//
 // **本 PR 範圍**:
 //   - MarginParams + 7 個 EventKind(完整 §4.5)
 //   - compute():逐筆組 series + day-over-day change_pct + short_to_margin_ratio

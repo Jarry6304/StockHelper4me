@@ -1,5 +1,12 @@
 // rsi_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §四 r2
 // Output §4.4(僅 series.value)+ Fact §4.5(5 種)+ Failure Swing §4.6
+//
+// **Reference(2026-05-10 加)**:
+//   period=14:Wilder (1978) Ch. 21 — 原版作者選 14 對應 ~2 週
+//   overbought=70 / oversold=30:Wilder (1978) 原版 + Murphy (1999)
+//                                 "Technical Analysis of the Financial Markets" Ch. 9
+//   Failure Swing:Wilder (1978) §7 RSI — 4 步 reversal 經典邏輯
+//   streak_min_days=3:無明確學術,業界經驗值「短期確認」標準
 
 use anyhow::Result;
 use chrono::NaiveDate;
