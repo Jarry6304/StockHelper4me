@@ -9,6 +9,11 @@
 //                              — 巴菲特標準「ROE 持續高於 15% = 高品質公司」
 //                              (Fortune 1987 研究:25/1000 公司 avg ROE > 20% +
 //                              最低不曾 < 15%)
+//   ROE/ROA 算法(2026-05-11 改 TTM):net_income 用過去 4 季加總(TTM),除以期末
+//                              equity / assets;對齊 Buffett「annual ROE」原 intent。
+//                              FinMind income 給的是純季度元值,直接除永遠不會觸發
+//                              15% 閾值(TSMC 2020-Q3 季 ROE=7.7%,年化 ~30%)。
+//                              不足 4 季時用 quarterly × 4 作 annualized fallback。
 //   debt_ratio_high_threshold=60.0:**業界 IFRS 公司分析共識**(Damodaran A. NYU Stern
 //                                    "Investment Valuation" 提 70%+ 為「mathematical
 //                                    problem」,60% 保守警示;非 explicit cite)
@@ -159,7 +164,7 @@ impl IndicatorCore for FinancialStatementCore {
             by_date.entry(raw.date).or_insert([None, None, None])[idx] = Some(&raw.detail);
         }
 
-        let series: Vec<FinancialPoint> = by_date.into_iter().map(|(date, slots)| {
+        let mut series: Vec<FinancialPoint> = by_date.into_iter().map(|(date, slots)| {
             let inc = slots[0]; let bal = slots[1]; let cf = slots[2];
             // 12 個直接從 detail JSONB 取的欄位,各用 fallback chain 對齊真實 IFRS 中文
             // origin_name + FinMind 半形/全形括號變體
@@ -213,6 +218,25 @@ impl IndicatorCore for FinancialStatementCore {
                 roe_pct, roa_pct,
             }
         }).collect();
+
+        // TTM (Trailing 12 Months) ROE/ROA — 2026-05-11 修法
+        // 對齊 Buffett (1987) annual ROE 15% 標準。FinMind income 給的是季元值,
+        // 直接除過 15% 閾值;改用過去 4 季 net_income 加總後再除 equity / assets。
+        // 不足 4 季(序列前 3 個點)用 quarterly × 4 年化作 fallback,避免早期資料永遠無 RoeHigh。
+        for i in 0..series.len() {
+            let ttm_net_income: i64 = if i >= 3 {
+                series[i-3..=i].iter().map(|p| p.net_income).sum()
+            } else {
+                series[i].net_income.saturating_mul(4)
+            };
+            let p = &mut series[i];
+            p.roe_pct = if p.total_equity > 0 {
+                ttm_net_income as f64 / p.total_equity as f64 * 100.0
+            } else { 0.0 };
+            p.roa_pct = if p.total_assets > 0 {
+                ttm_net_income as f64 / p.total_assets as f64 * 100.0
+            } else { 0.0 };
+        }
 
         // events
         let mut events = Vec::new();
@@ -496,8 +520,9 @@ mod tests {
         assert_eq!(p.total_equity, 3_442_000_000_i64);
         // debt_ratio = 1558M / 5000M × 100 = 31.16%
         assert!((p.debt_ratio_pct - 31.16).abs() < 0.01);
-        // ROE = 20M / 3442M × 100 ≈ 0.58%(遠低於 15% threshold,不觸發 RoeHigh)
-        let expected_roe = 20_000_000_f64 / 3_442_000_000_f64 * 100.0;
+        // TTM ROE = (20M × 4) / 3442M × 100 ≈ 2.32%(< 15% threshold,不觸發 RoeHigh)
+        // 單季資料走 quarterly × 4 年化 fallback(2026-05-11 TTM 修法)
+        let expected_roe = 20_000_000_f64 * 4.0 / 3_442_000_000_f64 * 100.0;
         assert!((p.roe_pct - expected_roe).abs() < 0.001);
         assert!(out.events.iter().all(|e| e.kind != FinancialEventKind::RoeHigh));
     }
@@ -532,11 +557,49 @@ mod tests {
         assert_eq!(p.free_cash_flow, 20_000_000);
         assert_eq!(p.total_assets, 100_000_000);
         assert_eq!(p.total_equity, 60_000_000);
-        // ROE = 20M / 60M × 100 = 33.33%  → > 15% threshold → RoeHigh fires
-        let expected_roe = 20_000_000_f64 / 60_000_000_f64 * 100.0;
-        let expected_roa = 20_000_000_f64 / 100_000_000_f64 * 100.0;
+        // TTM ROE = (20M × 4) / 60M × 100 = 133.33% → > 15% threshold → RoeHigh fires
+        // 單季資料走 quarterly × 4 年化 fallback(2026-05-11 TTM 修法)
+        let expected_roe = 20_000_000_f64 * 4.0 / 60_000_000_f64 * 100.0;
+        let expected_roa = 20_000_000_f64 * 4.0 / 100_000_000_f64 * 100.0;
         assert!((p.roe_pct - expected_roe).abs() < 0.01);
         assert!((p.roa_pct - expected_roa).abs() < 0.01);
         assert!(out.events.iter().any(|e| e.kind == FinancialEventKind::RoeHigh));
+    }
+
+    /// TTM ROE 4 季加總路徑(序列第 4 點起 i >= 3)— 對齊 Buffett annual ROE intent
+    #[test]
+    fn ttm_roe_uses_four_quarter_sum() {
+        // 4 季 net_income: 10M + 15M + 20M + 25M = 70M TTM
+        // equity 期末 = 500M → TTM ROE = 70/500 × 100 = 14%(< 15% 不觸發)
+        let mk = |d: &str, ni: i64, eq: i64, assets: i64| -> Vec<FinancialStatementRaw> {
+            vec![
+                FinancialStatementRaw { date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    r#type: "income".to_string(),
+                    detail: json!({"Revenue": 100_000_000, "GrossProfit": 50_000_000, "EPS": 1.0, "NetIncome": ni}) },
+                FinancialStatementRaw { date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    r#type: "balance".to_string(),
+                    detail: json!({"TotalAssets": assets, "TotalLiabilities": 100_000_000, "TotalEquity": eq}) },
+                FinancialStatementRaw { date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    r#type: "cashflow".to_string(),
+                    detail: json!({"OperatingCashFlow": 30_000_000, "InvestingCashFlow": -10_000_000}) },
+            ]
+        };
+        let mut points = vec![];
+        points.extend(mk("2025-03-31", 10_000_000, 500_000_000, 1_000_000_000));
+        points.extend(mk("2025-06-30", 15_000_000, 500_000_000, 1_000_000_000));
+        points.extend(mk("2025-09-30", 20_000_000, 500_000_000, 1_000_000_000));
+        points.extend(mk("2025-12-31", 25_000_000, 500_000_000, 1_000_000_000));
+        let series = FinancialStatementSeries { stock_id: "TEST".to_string(), points };
+        let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
+
+        // 第 4 個 quarter(2025-12-31, i=3)用 TTM 4 季加總
+        let p4 = &out.series[3];
+        let expected_ttm_roe = 70_000_000_f64 / 500_000_000_f64 * 100.0; // 14%
+        assert!((p4.roe_pct - expected_ttm_roe).abs() < 0.01,
+                "expected TTM ROE=14%, got {}", p4.roe_pct);
+        assert!(out.series.iter().all(|p| !p.roe_pct.is_nan()));
+        // 第 1 個 quarter(i=0)走 × 4 fallback:10M × 4 / 500M = 8%
+        let p1 = &out.series[0];
+        assert!((p1.roe_pct - 8.0).abs() < 0.01, "expected fallback ROE=8%, got {}", p1.roe_pct);
     }
 }
