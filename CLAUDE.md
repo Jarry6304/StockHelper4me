@@ -172,6 +172,91 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 
 ---
 
+## v1.30 — A1 Bronze financial_statement PK fix + P1/P2 收尾(2026-05-11)
+
+接 v1.29 PR-9a 落地後,本 session 連續推進「下個 session 動工清單」三項:
+P1 阻塞 1(Silver `_per` + ROE/ROA 元值)、P2 阻塞 5(c)(atr_core
+EXPANSION_LOOKBACK)、小缺漏 A/B(day_trading historical_high + docs 修)。
+過程中揭露 A1 Bronze PK 衝突,連帶修。
+
+### Commits(7 個,branch `claude/review-todo-items-t9bbt`)
+
+| Commit | 範圍 |
+|---|---|
+| `a372879` | P1 阻塞 1:Silver `_per` suffix + ROE/ROA 重啟;P2-minor:day_trading historical_high;docs §2.2/§3.2/§3.4 |
+| `23a39b7` | P2 阻塞 5(c) 分析 SQL(scripts/p2_eventkinds.sql)|
+| `a5a54b1` | P2:atr_core EXPANSION_LOOKBACK 10→14 對齊 Wilder period |
+| `b5d8ab5` | P1 follow-up:ROE/ROA TTM 4-quarter sum(Buffett 15% 是 annual,FinMind 給 quarterly)|
+| `2f0cbf9` + `a2a9df3` + `4484196` | A1:Bronze `financial_statement` PK 從 origin_name 改 type + 2 hotfix(動態 constraint name + legacy_v2 索引名衝突)|
+
+### A1 根因(本 session 揭露)
+
+P1 Silver `_per` fix 雖正確,但 user 跑全市場後揭露 2330 RoeHigh 仍只在
+2019-2020 觸發。Diagnostic:
+- Bronze `financial_statement` PK `(market, stock_id, date, event_type, origin_name)`
+- FinMind TaiwanStockBalanceSheet 同 origin_name(資產總額)回 2 row(`TotalAssets`
+  元值 + `TotalAssets_per` %)→ PK 衝突
+- 對 2330 / 2357 / 2836 三檔,`_per` 被最後寫入 → 元值消失
+- 其他 1074+ 檔元值原本就 survive(FinMind 多數情況元值寫在後)
+
+修法:新 PK 用 `type`(FinMind 英文科目代碼)取代 `origin_name`,兩者共存。
+alembic `x3y4z5a6b7c8`。詳見 `docs/m3_cores_spec_pending.md §15`。
+
+### 兩個 migration hotfix 揭露的 schema 細節
+
+1. **PR #R3 ALTER TABLE RENAME 不會 rename constraint**(a2a9df3):
+   - 既有部署 PK 仍叫 `financial_statement_tw_pkey`(原 PR #18.5 命名)
+   - alembic 改用 DO $$ ... `pg_constraint` 查 conrelid + contype='p' 動態取名
+
+2. **PR #R2 legacy_v2 表佔用 `financial_statement_pkey` 索引名**(4484196):
+   - 原 `financial_statement` table 被 rename 成 `financial_statement_legacy_v2`,
+     PK constraint/index 名仍是 `financial_statement_pkey`
+   - 新表 ADD CONSTRAINT 撞名失敗
+   - 修法:先 rename legacy 表 PK → `financial_statement_legacy_v2_pkey`(對齊
+     table name 慣例),釋出 `financial_statement_pkey` 給新表
+
+### 3 檔受影響股票全修
+
+| 股票 | 修前 RoeHigh facts | 修後 |
+|---|---|---|
+| 2330 TSMC | 6(僅 2019-2020)| **16+**(2019-2025,ROE 23-31%) |
+| 2357 華碩 | 0 | 7(2021-2025) |
+| 2836 高雄銀 | 0 | 0(金融業 ROE < 15%,符合預期) |
+
+### 本 session 順手收的維護
+
+- **ROE/ROA TTM 改 4-quarter sum**(b5d8ab5):FinMind 給 quarterly net_income,
+  Buffett 15% 是 annual ROE。公式 `series[i-3..=i].iter().sum() / equity * 100`,
+  前 3 季 fallback `× 4`。加 regression test `ttm_roe_uses_four_quarter_sum`
+- **atr_core EXPANSION_LOOKBACK 14**(a5a54b1):對齊 Wilder ATR period=14 語意
+- **day_trading_core historical_high**(a372879):metadata 加 `historical_high: bool`
+  (對齊 margin_core 3617d84 同款設計)
+- **docs/m3_cores_spec_pending.md**:§2.2 RSI FailureSwing / §3.2 margin historical
+  high / §3.4 foreign_holding LimitNearAlert 改 ✅ 已實作
+- **0 cargo warnings**(本 session 末段清理):neely_core classifier 4 個 unused
+  imports + chrono::NaiveDate + classify_5wave unused candidate(改 `_candidate`)
+  + tw_stock_compute `FwdDailyPrice.stock_id` field 加 `#[allow(dead_code)]`
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`
+- Rust workspace:24 crate / **158 tests passed**(從 155 +1 TTM test +2 RSI FS tests)
+  / **0 warnings**
+- A1 全市場套用:3 檔已修,1074+ 檔元值原本就 survive,無需大規模重抓
+- 剩餘 m3Spec writing / PR-3c neely R4-R7 / PR-9b Workflow toml 同 v1.29 收尾,
+  不變(詳見 `docs/m3_cores_spec_pending.md §11 / §13`)
+
+### 風險
+
+🟢 低:
+- A1 alembic migration 已 idempotent(DO $$ 動態查 PK name + legacy 表 rename)
+- 全部 commits user 本機 verify pass
+- Silver builder + Rust core 158 tests passed / 0 warnings
+- Production data 限縮到 3 檔影響,backfill 成本 < 1 分鐘
+- 後續若想全市場套用,SQL 一句找出 0 元值 stocks,流程同單股(見 §15 重新套用流程)
+
+---
+
 ## v1.29 — M3 PR-9a tw_cores 全市場全核 dispatch(2026-05-09)
 
 接 v1.28 spec-comply rewrite + CLAUDE.md 收緊「下次 session 待作事項」後,

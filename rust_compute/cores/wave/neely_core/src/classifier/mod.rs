@@ -20,13 +20,12 @@
 
 use crate::candidates::WaveCandidate;
 use crate::output::{
-    ComplexityLevel, DiagonalKind, FibZone, FlatKind, MonowaveDirection, NeelyPatternType,
-    PostBehavior, PowerRating, RuleId, Scenario, StructuralFacts, TriangleKind, Trigger,
-    WaveNode, ZigzagKind, CombinationKind,
+    ComplexityLevel, DiagonalKind, FibZone, NeelyPatternType,
+    PostBehavior, PowerRating, RuleId, Scenario, StructuralFacts, Trigger,
+    WaveNode, ZigzagKind,
 };
 use crate::monowave::ClassifiedMonowave;
 use crate::validator::ValidationReport;
-use chrono::NaiveDate;
 
 /// Stage 5 結果:Classifier 給 candidate 命名 pattern + 組裝成 Scenario(待 Stage 8 進 Forest)。
 ///
@@ -82,7 +81,7 @@ pub fn classify(
     })
 }
 
-fn classify_5wave(candidate: &WaveCandidate, report: &ValidationReport) -> NeelyPatternType {
+fn classify_5wave(_candidate: &WaveCandidate, report: &ValidationReport) -> NeelyPatternType {
     // R3(W4 不重疊 W1)是 Impulse vs Diagonal 的判別關鍵
     let r3_failed = report.failed.iter().any(|r| r.rule_id == RuleId::Core(3));
 
@@ -185,7 +184,10 @@ mod tests {
     use super::*;
     use crate::candidates::WaveCandidate;
     use crate::monowave::ProportionMetrics;
-    use crate::output::Monowave;
+    use crate::output::{
+        CombinationKind, FlatKind, Monowave, MonowaveDirection, TriangleKind,
+    };
+    use chrono::NaiveDate;
 
     fn cmw(start_p: f64, end_p: f64, dir: MonowaveDirection) -> ClassifiedMonowave {
         ClassifiedMonowave {

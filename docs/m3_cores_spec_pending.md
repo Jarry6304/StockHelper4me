@@ -146,7 +146,7 @@
 | `day_trade_volume` 公式 | best-guess `= day_trading_buy` | **spec §7.4 真正定義待 user 確認** |
 | `total_volume` 公式 | best-guess `= day_trade_volume × 100 / ratio` | 同上 |
 | `STREAK_MIN_DAYS` | 3 const | spec 對齊? |
-| 「historical high」label | 未實作(spec 範例「reached 32% on 2026-04-20」needs lookback) | spec 範例語義待 user 寫定 |
+| 「historical high」label | ✅ **已實作**(commit a372879):`RatioExtremeHigh` metadata 加 `historical_high: bool` | — |
 
 ### 3.2 margin_core(NULL skip 已修)
 | 項目 | 目前值 | 待 user 確認 |
@@ -307,7 +307,6 @@
 | shareholder detail JSONB key 對齊 | 半天 + Bronze schema 確認 | spec §6 + Bronze schema |
 | foreign_holding_derived.foreign_limit_pct 補欄 | 半天 + alembic migration | spec §6.5 |
 | margin_daily_derived.margin_maintenance 補欄 | 半天 + alembic migration | spec §4.5 |
-| historical high label(margin / day_trading) | 1 天 | spec range definition |
 
 ---
 
@@ -383,7 +382,7 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ### 阻塞 1:`financial_statement_core` Silver builder origin_name 元值/% 覆蓋 bug
 
-**狀態**:🔴 **未動工,留下個 session**
+**狀態**:✅ **2026-05-11 動工完成(commits a372879 / b5d8ab5 / 2f0cbf9 / a2a9df3 / 4484196)**
 
 - **根因**:Silver builder `silver/builders/financial_statement.py:60-62` 用
   `row.get("origin_name")` 當 dict key,但 Bronze 同 origin_name(中文「應付帳款」)
@@ -391,16 +390,18 @@ user 拍版決定 + Rust code reference 註解狀態:
   覆蓋前寫 → 元值消失 → balance 全是 %
 - **影響**:ROE / ROA / RoeHigh / RoaHigh 4 個 EventKind 永久 0(Round 2 fix
   `roe_pct = 0.0` 後)
-- **拍版修法**(對齊 user 「進階資料不應出現基礎資料複寫低級錯誤」原則):
-  改 Silver builder line 60-62 加 `_per` suffix:
-  ```python
-  item_key = row.get("origin_name") or row.get("type") or "unknown"
-  if (row.get("type") or "").endswith("_per"):
-      item_key = f"{item_key}_per"   # 加 _per 後綴避免覆蓋元值
-  grouped[key]["detail"][item_key] = row.get("value")
-  ```
-- **估時**:Silver builder ~10 行 + Rust core ROE/ROA 改元值 keys + `silver phase
-  7b --full-rebuild`(~33 秒)+ tw_cores 重跑 ~10 分鐘 = **~2 小時**
+
+**實際修法**:
+- Silver `_per` suffix(a372879):`item_key.endswith("_per")` 時加 `_per` 後綴
+- Rust ROE/ROA 重啟(a372879):讀元值 keys 算 `roe_pct = net_income / total_equity × 100`
+- ROE/ROA TTM 4-quarter sum(b5d8ab5):FinMind 給 quarterly net_income,Buffett 15%
+  是 annual,改 `series[i-3..=i].iter().sum() / equity × 100`,前 3 季 fallback `× 4`
+- **A1 連動**:Bronze `financial_statement` PK 從 origin_name 改 type(2f0cbf9 + 2 hotfix)。
+  舊 PK 同 origin_name 不同 type 衝突,`_per` 覆蓋元值;新 PK 兩者共存。詳見 §15。
+- alembic head:`w2x3y4z5a6b7` → `x3y4z5a6b7c8`
+- **3 檔受影響股票全修**:2330(6→16+ RoeHigh facts)/ 2357(0→7)/ 2836(0,金融業
+  ROE < 15% 符合預期)
+- 1074+ 其他股票元值原本就 survive(FinMind 多數情況元值寫在後),無需大規模重抓
 
 ### 阻塞 2:`shareholder_core` 4-level + STREAK_MIN_WEEKS + concentration_index
 
@@ -478,15 +479,65 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ---
 
-## 下個 session 動工清單(2026-05-10 收尾)
+## 下個 session 動工清單(2026-05-10 收尾;2026-05-11 update)
 
 | 優先 | 範圍 | 估時 |
 |---|---|---|
-| **P1** | 阻塞 1 Silver builder origin_name `_per` suffix fix + Rust ROE/ROA 改元值 + 7b full-rebuild + tw_cores 重跑 | ~2 小時 |
+| ~~**P1**~~ | ~~阻塞 1 Silver builder origin_name `_per` suffix fix + Rust ROE/ROA 改元值~~ | ✅ **2026-05-11 完成**(+ A1 Bronze PK fix 連帶修)|
 | **P2** | 阻塞 5(c) production data driven 統計各 streak/lookback const 觸發率,user 拍版動態值 | ~半天 |
 | **P3** | 阻塞 3 / 9 PR-3c neely 22 條 + Diagonal sub_kind(等 user m3Spec/neely_core.md 或用 best-guess) | ~1-2 天 |
 | P4 | dev DB scale up(已確認 1263 是 production 上限,可不動)| 0(user 接受) |
 | P5 | m3Spec/ 寫定各 core threshold spec(對齊 §13 拍版紀錄)| user 數天 |
+
+---
+
+## 15. A1 Bronze financial_statement PK fix(2026-05-11)
+
+### 根因
+舊 PK `(market, stock_id, date, event_type, origin_name)`。FinMind
+`TaiwanStockBalanceSheet` 同 origin_name(如「資產總額」)回兩筆:
+- `type='TotalAssets'`,元值 `2.6 兆`
+- `type='TotalAssets_per'`,% common-size `67.85`
+
+兩筆 PK 衝突,UPSERT 後者覆蓋前者。對 2330 等 3 檔股票,`_per` 被最後寫入 →
+元值消失 → ROE/ROA 無法算 → 阻塞 1 Silver `_per` fix 雖正確但 Bronze 本身缺
+元值,RoeHigh 在近期季報無法觸發。
+
+### 修法
+新 PK `(market, stock_id, date, event_type, type)`,以 FinMind 英文科目代碼
+作 discriminator,`TotalAssets` 與 `TotalAssets_per` 不再衝突。
+
+alembic `x3y4z5a6b7c8`,3 commit 收尾:
+
+| commit | 範圍 |
+|---|---|
+| `2f0cbf9` | 初版 migration(誤用固定 constraint name)|
+| `a2a9df3` | hotfix 1:動態查 PK constraint name(PR #R3 RENAME 不會 rename constraint,既有部署 PK 名仍是 `financial_statement_tw_pkey`)|
+| `4484196` | hotfix 2:legacy_v2 表佔用 `financial_statement_pkey` 索引名,先 rename 釋出(PR #R2 RENAME 同樣不會 rename constraint)|
+
+### 全市場受影響股票(僅 3 檔)
+- **2330 TSMC**:RoeHigh 從 6 facts(2019-2020)→ 16+ facts(2019-2025,ROE 23-31%)
+- **2357 華碩**:RoeHigh 0 → 7 facts(2021-2025)
+- **2836 高雄銀**:0 facts(金融業 ROE 通常 < 15% Buffett threshold,符合預期)
+
+剩餘 1074+ 檔股票元值原本就 survive(FinMind API 多數情況元值寫在後)。
+
+### 重新套用流程(若 user 想全市場套用)
+```sql
+-- 找出仍只有 _per 沒有元值的股票
+SELECT stock_id FROM financial_statement
+WHERE event_type='balance' AND date='2025-09-30'
+GROUP BY stock_id
+HAVING COUNT(CASE WHEN type NOT LIKE '%_per' THEN 1 END) = 0;
+```
+對應 stock_ids 跑:
+```bash
+psql -c "DELETE FROM financial_statement WHERE stock_id IN (...);
+         DELETE FROM api_sync_progress WHERE stock_id IN (...) AND api_name LIKE 'financial_%';"
+python src/main.py backfill --stocks ... --phases 5
+python src/main.py silver phase 7b --stocks ... --full-rebuild
+cargo run --release -p tw_cores -- run-all --stocks ... --write
+```
 
 ---
 
@@ -511,7 +562,8 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ---
 
-**最後更新**:2026-05-10(9 阻塞拍版 + reference 註解收尾後)
-**Rust workspace**:24 crate / 155 tests passed / 22 cores production verified
-**alembic head**:`w2x3y4z5a6b7`
-**Production state**:4.4M facts / 1263 stocks / 9.2 分鐘 wall time(PR-9b/c/d 並行)
+**最後更新**:2026-05-11(P1 阻塞 1 + A1 Bronze PK fix 收尾;0 cargo warnings)
+**Rust workspace**:24 crate / **158 tests passed** / 22 cores production verified
+**alembic head**:`x3y4z5a6b7c8`
+**Production state**:4.4M facts / 1263 stocks(本 session 後預估 RoeHigh facts ↑,
+待 user 全市場 silver phase 7b + tw_cores 重跑後重新計數)
