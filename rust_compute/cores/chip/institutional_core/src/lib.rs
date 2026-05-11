@@ -5,16 +5,16 @@
 // 定位(§3.1):法人買賣超(外資 / 投信 / 自營商)資料的事實萃取。
 // 上游 Silver(§3.2):institutional_daily_derived
 //
-// **本 PR 範圍**(極限推進,部分功能 TODO):
+// **本 PR 範圍**:
 //   - 完整 InstitutionalParams + InstitutionalOutput + 4 EventKind(對齊 §3.5)
 //   - compute():逐筆組 series + foreign_cumulative_5d/20d
 //   - detect_events:NetBuyStreak / NetSellStreak / DivergenceWithinInstitution 完整
-//   - LargeTransaction(z-score)：**TODO** P0 後對齊 spec §3.3 lookback_for_z 校準
+//   - LargeTransaction(z-score):3 institution 全收(foreign / trust / dealer),
+//     metadata.institution 區分(2026-05-11 加 trust/dealer)
 //   - produce_facts() 對齊 §3.7 範例
 //
 // TODO(後續討論):
 //   - z-score 計算用全市場 mean / std vs 個股 lookback_for_z(目前用個股 60 天)
-//   - LargeTransaction 是否分 institution(目前只對 foreign 偵測,trust/dealer 留 follow-up)
 //   - DivergenceWithinInstitution metadata 完整 institution 三方判斷(目前只看 foreign vs dealer)
 
 use anyhow::Result;
@@ -202,31 +202,11 @@ fn detect_events(
         &mut events,
     );
 
-    // LargeTransaction — z-score 對 foreign_net
-    if raw.len() > params.lookback_for_z {
-        for i in params.lookback_for_z..raw.len() {
-            let window: Vec<i64> = raw[i - params.lookback_for_z..i]
-                .iter()
-                .map(|p| p.foreign_net())
-                .collect();
-            let (mean, std) = mean_std(&window);
-            if std > 0.0 {
-                let z = (raw[i].foreign_net() as f64 - mean) / std;
-                if z.abs() >= params.large_transaction_z {
-                    events.push(InstitutionalEvent {
-                        date: raw[i].date,
-                        kind: InstitutionalEventKind::LargeTransaction,
-                        value: raw[i].foreign_net() as f64,
-                        metadata: json!({
-                            "institution": "foreign",
-                            "z_score": z,
-                            "lookback": params.lookback_for_z,
-                        }),
-                    });
-                }
-            }
-        }
-    }
+    // LargeTransaction — z-score 對 foreign / trust / dealer 三方(2026-05-11 擴)
+    // 用 helper 取代 3 段重複 block;對齊既有 streak_detect 預測閉包 pattern
+    detect_large_transaction(raw, params, &mut events, "foreign", |p| p.foreign_net());
+    detect_large_transaction(raw, params, &mut events, "trust", |p| p.trust_net());
+    detect_large_transaction(raw, params, &mut events, "dealer", |p| p.dealer_net());
 
     // DivergenceWithinInstitution — foreign vs dealer 反向
     for p in series {
@@ -304,6 +284,43 @@ fn emit_streak(
     });
 }
 
+/// LargeTransaction 偵測:對單一 institution net 算 z-score,超 threshold 推 event。
+/// 對齊 streak_detect 的 closure-getter pattern;institution 字串寫進 event metadata。
+fn detect_large_transaction(
+    raw: &[InstitutionalDailyRaw],
+    params: &InstitutionalParams,
+    events: &mut Vec<InstitutionalEvent>,
+    institution: &str,
+    getter: impl Fn(&InstitutionalDailyRaw) -> i64,
+) {
+    if raw.len() <= params.lookback_for_z {
+        return;
+    }
+    for i in params.lookback_for_z..raw.len() {
+        let window: Vec<i64> = raw[i - params.lookback_for_z..i]
+            .iter()
+            .map(&getter)
+            .collect();
+        let (mean, std) = mean_std(&window);
+        if std > 0.0 {
+            let cur = getter(&raw[i]) as f64;
+            let z = (cur - mean) / std;
+            if z.abs() >= params.large_transaction_z {
+                events.push(InstitutionalEvent {
+                    date: raw[i].date,
+                    kind: InstitutionalEventKind::LargeTransaction,
+                    value: cur,
+                    metadata: json!({
+                        "institution": institution,
+                        "z_score": z,
+                        "lookback": params.lookback_for_z,
+                    }),
+                });
+            }
+        }
+    }
+}
+
 fn mean_std(window: &[i64]) -> (f64, f64) {
     if window.is_empty() {
         return (0.0, 0.0);
@@ -321,6 +338,15 @@ fn mean_std(window: &[i64]) -> (f64, f64) {
     (mean, var.sqrt())
 }
 
+/// 把 metadata.institution 字串首字大寫,用於 produce_facts statement 開頭。
+fn capitalize_institution(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 fn event_to_fact(output: &InstitutionalOutput, event: &InstitutionalEvent) -> Fact {
     let statement = match event.kind {
         InstitutionalEventKind::NetBuyStreak => format!(
@@ -332,7 +358,8 @@ fn event_to_fact(output: &InstitutionalOutput, event: &InstitutionalEvent) -> Fa
             event.metadata["days"], event.date, event.value as i64
         ),
         InstitutionalEventKind::LargeTransaction => format!(
-            "Foreign single-day large transaction: {} lots on {}(z={:.2})",
+            "{} single-day large transaction: {} lots on {}(z={:.2})",
+            capitalize_institution(event.metadata["institution"].as_str().unwrap_or("?")),
             event.value as i64,
             event.date,
             event.metadata["z_score"].as_f64().unwrap_or(0.0)
@@ -407,6 +434,46 @@ mod tests {
             .filter(|e| e.kind == InstitutionalEventKind::DivergenceWithinInstitution)
             .collect();
         assert_eq!(div.len(), 1);
+    }
+
+    /// LargeTransaction(2026-05-11):trust / dealer 同樣偵測 z-score 異常,
+    /// metadata.institution 區分。baseline 用小變異(buy/sell 微擾,net 約 ±100),
+    /// 第 61 row 三方都爆量觸發 z >= 2.0。
+    #[test]
+    fn large_transaction_detects_trust_and_dealer() {
+        // 60 個 baseline:foreign/trust/dealer net 在 ±100 內微擾(std > 0)
+        let mut points: Vec<InstitutionalDailyRaw> = Vec::with_capacity(61);
+        for i in 0..60 {
+            // 交替正負 ±100,簡單造出非零 std
+            let sign: i64 = if i % 2 == 0 { 1 } else { -1 };
+            let buy = (500 + sign * 100) as i64;
+            let sell = 500_i64;
+            let mut p = raw("2026-01-01", buy, sell, buy, sell, buy, sell);
+            p.date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64);
+            points.push(p);
+        }
+        // 第 61 row(index=60):三方都爆量(net=+5000,遠超 baseline ±100 → z 巨大)
+        let mut spike = raw("2026-01-01", 5_500, 500, 5_500, 500, 5_500, 500);
+        spike.date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Duration::days(60);
+        points.push(spike);
+
+        let series = InstitutionalDailySeries {
+            stock_id: "2330".to_string(),
+            points,
+        };
+        let out = InstitutionalCore::new()
+            .compute(&series, InstitutionalParams::default())
+            .unwrap();
+        let by_inst: Vec<&str> = out
+            .events
+            .iter()
+            .filter(|e| e.kind == InstitutionalEventKind::LargeTransaction)
+            .map(|e| e.metadata["institution"].as_str().unwrap_or("?"))
+            .collect();
+        assert!(by_inst.contains(&"foreign"), "foreign LargeTransaction 應觸發,events: {:?}", by_inst);
+        assert!(by_inst.contains(&"trust"), "trust LargeTransaction 應觸發,events: {:?}", by_inst);
+        assert!(by_inst.contains(&"dealer"), "dealer LargeTransaction 應觸發,events: {:?}", by_inst);
     }
 
     #[test]

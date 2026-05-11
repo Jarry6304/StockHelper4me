@@ -8,10 +8,11 @@
 //   - LimitNearAlert / SignificantSingleDayChange threshold-based
 //   - HoldingMilestoneHigh / Low(N 期最高 / 最低,使用 series 內 lookback)
 //
-// TODO:
-//   - foreign_limit_pct 目前 NULL placeholder(Silver 沒 stored col),
-//     LimitNearAlert 在 limit 為 0 時不觸發 — 留 user 確認 Silver 是否要 expose
-//   - HoldingMilestoneHigh/Low 的 lookback 期數寫死 60 期(spec §5.6 範例「6-month high」)
+// foreign_limit_pct(2026-05-10 commit 458a45a 解):chip_loader 從 Silver
+// `foreign_holding_derived.detail->>'upper_limit_ratio'` 取;LimitNearAlert
+// 在 Bronze 有料時觸發,無料時 limit_pct=0 → 略過(line 147 防衛條件)。
+// MILESTONE_LOOKBACK=60 對齊 spec §5.6 範例「6-month high」(60 trading days ≈ 3 個月,
+// 但 spec 沒寫死,先用 60d 作 best-guess)。
 
 use anyhow::Result;
 use chip_loader::ForeignHoldingSeries;

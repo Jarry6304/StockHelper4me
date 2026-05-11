@@ -17,9 +17,11 @@
 //   - ShortRatioExtremeHigh / Low(threshold-based)
 //   - MaintenanceLow(只在 margin_maintenance 有值時觸發)
 //
+// historical_high 標籤(2026-05-11 加):EnteredShortRatioExtremeHigh event metadata
+// 帶 `historical_high: bool`,標記當下 short_to_margin_ratio 是否是 series 內歷史新高
+// (對齊 spec §4.6 範例「reached 32% on 2026-04-20(historical high)」)。
+//
 // TODO(後續討論):
-//   - "historical high" 標籤(spec §4.6 範例「reached 32% on 2026-04-20(historical high)」)
-//     需要 lookback 比較,目前 threshold-based 簡化處理
 //   - MaintenanceLow 閾值寫死 145(實務常見預警線)— 可外部化但 spec 沒列
 
 use anyhow::Result;
@@ -178,6 +180,9 @@ fn detect_events(series: &[MarginPoint], params: &MarginParams) -> Vec<MarginEve
     let mut prev_short_ratio_extreme_high: bool = false;
     let mut prev_short_ratio_extreme_low: bool = false;
     let mut prev_maintenance_low: bool = false;
+    // historical_high 追蹤(2026-05-11):series 內 short_to_margin_ratio 累計最高值,
+    // 用於 EnteredShortRatioExtremeHigh event metadata 的 historical_high 標籤
+    let mut max_short_ratio_so_far: f64 = 0.0;
     for p in series {
         // Day-over-day(既有,無需改)
         if p.margin_change_pct >= params.margin_change_pct_threshold {
@@ -214,12 +219,21 @@ fn detect_events(series: &[MarginPoint], params: &MarginParams) -> Vec<MarginEve
         let cur_short_ratio_extreme_high = p.short_to_margin_ratio >= params.short_to_margin_ratio_high;
         let cur_short_ratio_extreme_low = p.short_to_margin_ratio > 0.0
             && p.short_to_margin_ratio <= params.short_to_margin_ratio_low;
+        // historical_high 判斷在 max 更新前比較,確保新高觸發時 flag=true
+        let is_historical_high = p.short_to_margin_ratio > max_short_ratio_so_far;
+        if p.short_to_margin_ratio > max_short_ratio_so_far {
+            max_short_ratio_so_far = p.short_to_margin_ratio;
+        }
         if !prev_short_ratio_extreme_high && cur_short_ratio_extreme_high {
             events.push(MarginEvent {
                 date: p.date,
                 kind: MarginEventKind::EnteredShortRatioExtremeHigh,
                 value: p.short_to_margin_ratio,
-                metadata: json!({ "ratio": p.short_to_margin_ratio, "threshold": params.short_to_margin_ratio_high }),
+                metadata: json!({
+                    "ratio": p.short_to_margin_ratio,
+                    "threshold": params.short_to_margin_ratio_high,
+                    "historical_high": is_historical_high,
+                }),
             });
         } else if prev_short_ratio_extreme_high && !cur_short_ratio_extreme_high {
             events.push(MarginEvent {
@@ -280,7 +294,14 @@ fn event_to_fact(output: &MarginOutput, e: &MarginEvent) -> Fact {
         MarginEventKind::ShortSqueeze => format!("Short balance down {:.1}% on {}(short squeeze)", e.value.abs(), e.date),
         MarginEventKind::ShortBuildUp => format!("Short balance up {:.1}% on {}(short build-up)", e.value, e.date),
         // Round 4 transition statements
-        MarginEventKind::EnteredShortRatioExtremeHigh => format!("Short-to-margin ratio entered ExtremeHigh zone on {}: ratio={:.1}%", e.date, e.value),
+        MarginEventKind::EnteredShortRatioExtremeHigh => {
+            let suffix = if e.metadata["historical_high"].as_bool().unwrap_or(false) {
+                "(historical high)"
+            } else {
+                ""
+            };
+            format!("Short-to-margin ratio entered ExtremeHigh zone on {}: ratio={:.1}%{}", e.date, e.value, suffix)
+        }
         MarginEventKind::ExitedShortRatioExtremeHigh => format!("Short-to-margin ratio exited ExtremeHigh zone on {}: ratio={:.1}%", e.date, e.value),
         MarginEventKind::EnteredShortRatioExtremeLow => format!("Short-to-margin ratio entered ExtremeLow zone on {}: ratio={:.1}%", e.date, e.value),
         MarginEventKind::ExitedShortRatioExtremeLow => format!("Short-to-margin ratio exited ExtremeLow zone on {}: ratio={:.1}%", e.date, e.value),
@@ -362,6 +383,44 @@ mod tests {
         let exited = out.events.iter().filter(|e| e.kind == MarginEventKind::ExitedShortRatioExtremeHigh).count();
         assert_eq!(entered, 1, "EnteredShortRatioExtremeHigh 應只 1 次");
         assert_eq!(exited, 1, "ExitedShortRatioExtremeHigh 應只 1 次");
+    }
+
+    /// historical_high metadata flag(2026-05-11):EnteredShortRatioExtremeHigh 第 1 次觸發
+    /// 必為 historical_high=true(series 起始 max=0);後續若再進 ExtremeHigh 但 ratio 未超
+    /// 既有最高則 historical_high=false。
+    #[test]
+    fn historical_high_flag_in_entered_extreme_high() {
+        let series = MarginDailySeries {
+            stock_id: "2330".to_string(),
+            points: vec![
+                raw("2026-04-21", 10_000, 1_000),  // ratio=10%(normal)
+                raw("2026-04-22", 10_000, 5_000),  // ratio=50%(entered ExtremeHigh — historical_high=true)
+                raw("2026-04-23", 10_000, 1_500),  // ratio=15%(exited)
+                raw("2026-04-24", 10_000, 4_000),  // ratio=40%(entered again,但 < 50 → historical_high=false)
+            ],
+        };
+        let out = MarginCore::new().compute(&series, MarginParams::default()).unwrap();
+        let entered: Vec<&MarginEvent> = out
+            .events
+            .iter()
+            .filter(|e| e.kind == MarginEventKind::EnteredShortRatioExtremeHigh)
+            .collect();
+        assert_eq!(entered.len(), 2, "應觸發 2 次 EnteredShortRatioExtremeHigh");
+        assert_eq!(
+            entered[0].metadata["historical_high"].as_bool(),
+            Some(true),
+            "第 1 次進 zone 必為 historical_high=true(50% > max=0)"
+        );
+        assert_eq!(
+            entered[1].metadata["historical_high"].as_bool(),
+            Some(false),
+            "第 2 次 40% < 既有最高 50% → historical_high=false"
+        );
+        // statement 對 historical_high=true 應含 "(historical high)" 後綴
+        let stmt0 = event_to_fact(&out, entered[0]).statement;
+        assert!(stmt0.ends_with("(historical high)"), "statement: {}", stmt0);
+        let stmt1 = event_to_fact(&out, entered[1]).statement;
+        assert!(!stmt1.ends_with("(historical high)"), "statement: {}", stmt1);
     }
 
     /// Regression(2026-05-09 dev DB):假日 / Bronze 未收齊 row(margin_balance / short_balance NULL)
