@@ -430,18 +430,29 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ### 阻塞 5:100 個 threshold 校準路徑
 
-**狀態**:✅ **a+b 加 reference 註解完成 / c 留下個 session / d 接受不動**
+**狀態**:✅ **全部完成(a+b+c+d 四類 2026-05-12 收尾)**
 
 按分類 A/B/C/D 拍板:
-- **(a) 分類 A 業界/學術標準(~7 個 indicator const)** = **不動,加 reference 註解**
+- **(a) 分類 A 業界/學術標準(~7 個 indicator const)** = **不動,加 reference 註解** ✅
   - Wilder ATR/RSI/ADX (1978) / Appel MACD (1979) / Bollinger 20/2.0 (2002) / 5y percentile
-- **(b) 分類 B 台灣特有(~15 個)** = **保留當前 best-guess,加 reference 註解**
+- **(b) 分類 B 台灣特有(~15 個)** = **保留當前 best-guess,加 reference 註解** ✅
   - B-1 有 reference:證交所 145/130 維持率 / Buffett 15% ROE (1987) / Graham yield 5% (1949)
   - B-2 無 reference:KD 9(Asian convention)/ short_to_margin 30/5 / margin_change 5% /
     gross_margin_change 2% / debt_ratio 60% / day_trading streak 3
-- **(c) 分類 C streak/lookback(~8 個)** = **production data driven 統計留下個 session**
-  - 跑 1263 stocks × 5 年觸發率分布,user 拍版動態值
-- **(d) 分類 D environment(~7 個)** = **接受不動**
+- **(c) 分類 C streak/lookback(~8 個)** = ✅ **2026-05-12 production data driven 校準完成**
+  - C-1 `STREAK_MIN_DAYS=3` (RSI/KD/day_trading):保留不動(觸發率待 §2 SQL 驗)
+  - C-2 `ABOVE_MA_STREAK_MIN` (ma_core):固定 30 → scaling fn `(period*3/2).min(30).max(5)` ✅
+    (MA20 維持 ~30d 保持原行為;MA5/10 提高門檻避免噪音)
+  - C-3 `EXPANSION_LOOKBACK=14` (atr_core):2026-05-11 對齊 Wilder period=14 ✅
+  - C-4 `SQUEEZE_STREAK_MIN=5` (bollinger):保留(待 §2 SQL 確認)
+  - C-5 `STREAK_MIN_WEEKS=8` (shareholder):保留(MOP 2012 跨領域援引,足夠)
+  - C-6 `DIV_MIN_BARS=20` / Divergence 算法:→ **算法重寫(pivot-based) ✅ 2026-05-12**
+    (Murphy 1999 p.248 要求比較 swing points,非固定間距;詳見 §16)
+  - C-7 `MILESTONE_LOOKBACK=60` (foreign_holding):改雙時間窗口 60d(季)+252d(年) ✅
+    (George & Hwang 2004 JF 59(5) 52 週高點;新增 HoldingMilestoneHighAnnual/Low)
+  - C-8 `LOOKBACK_FOR_Z=60`/`LARGE_TRANSACTION_Z=2.0` (institutional):算法改 edge trigger ✅
+    (Brown & Warner 1985 事件研究基準;詳見 §16)
+- **(d) 分類 D environment(~7 個)** = **接受不動** ✅
   - Whaley VIX (2000) / CNN Fear & Greed / 央行匯率心理關卡
 
 ### 阻塞 6:`Timeframe::Quarterly` variant
@@ -479,12 +490,14 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ---
 
-## 下個 session 動工清單(2026-05-10 收尾;2026-05-11 update)
+## 下個 session 動工清單(2026-05-12 update)
 
 | 優先 | 範圍 | 估時 |
 |---|---|---|
-| ~~**P1**~~ | ~~阻塞 1 Silver builder origin_name `_per` suffix fix + Rust ROE/ROA 改元值~~ | ✅ **2026-05-11 完成**(+ A1 Bronze PK fix 連帶修)|
-| **P2** | 阻塞 5(c) production data driven 統計各 streak/lookback const 觸發率,user 拍版動態值 | ~半天 |
+| ~~**P1**~~ | ~~阻塞 1 Silver builder origin_name `_per` suffix fix + Rust ROE/ROA 改元值~~ | ✅ **2026-05-11 完成** |
+| ~~**P2-5c**~~ | ~~阻塞 5(c) C 類常數校準~~ | ✅ **2026-05-12 完成** |
+| ~~**P2-6**~~ | ~~4 個 🔴噪音 EventKind 根因修正(edge trigger + rolling z-score + pivot divergence)~~ | ✅ **2026-05-12 完成** |
+| **P-verify** | 跑 `p2_calibration_data.sql` 驗算修後觸發率(§2 每股每年觸發次數)| user 端 ~5 分鐘 |
 | **P3** | 阻塞 3 / 9 PR-3c neely 22 條 + Diagonal sub_kind(等 user m3Spec/neely_core.md 或用 best-guess) | ~1-2 天 |
 | P4 | dev DB scale up(已確認 1263 是 production 上限,可不動)| 0(user 接受) |
 | P5 | m3Spec/ 寫定各 core threshold spec(對齊 §13 拍版紀錄)| user 數天 |
@@ -562,8 +575,78 @@ cargo run --release -p tw_cores -- run-all --stocks ... --write
 
 ---
 
-**最後更新**:2026-05-11(P1 阻塞 1 + A1 Bronze PK fix 收尾;0 cargo warnings)
-**Rust workspace**:24 crate / **158 tests passed** / 22 cores production verified
-**alembic head**:`x3y4z5a6b7c8`
-**Production state**:4.4M facts / 1263 stocks(本 session 後預估 RoeHigh facts ↑,
-待 user 全市場 silver phase 7b + tw_cores 重跑後重新計數)
+## 16. P2 阻塞 6 + P5 Divergence 算法重寫(2026-05-12)
+
+### 根因分析(production data 1263 stocks 揭露)
+
+4 個 EventKind 觸發率遠超合理範圍(0.5–6 次/股/年):
+
+| EventKind | 修前觸發率 | 根因 |
+|---|---|---|
+| RSI/KD/MACD BullishDivergence + BearishDivergence | 20–33/yr 🔴 | 固定 20-bar 間距比較,每天條件成立都 fire |
+| institutional Foreign/Trust/Dealer LargeNetBuy/Sell | 91.83/yr 🔴 | Level trigger:每天 |z|≥2.0 都 fire,無狀態記憶 |
+| foreign_holding LimitNearAlert | 50.06/yr 🔴 | Level trigger:持續在 near-limit zone 每天 fire |
+| foreign_holding SignificantSingleDayChange | 34.87/yr 🔴 | 固定 0.5% 閾值不適應個股波動度 |
+
+### 修法(全部 2026-05-12 完成,2 個 commit)
+
+**Commit `2b1cbc7` — P2 阻塞 6 修法(institutional + foreign_holding)**
+
+1. **institutional_core** LargeNetBuy/LargeNetSell — edge trigger:
+   - 追蹤 `prev_z_abs`,僅在 `cur_z >= threshold && prev < threshold` 時 fire
+   - Reference:Brown & Warner (1985) JFE 14:3-31 — 事件是狀態「轉變」不是狀態持續
+   - 預期:91.83/yr → 6–12/yr
+
+2. **foreign_holding LimitNearAlert** — edge trigger:
+   - 加 `was_near_limit` boolean state,僅在進入 near-limit zone 當日 fire
+   - Reference:Sheingold (1978) level trigger vs edge trigger 信號處理
+   - 預期:50.06/yr → 2–6/yr
+
+3. **foreign_holding SignificantSingleDayChange** — rolling z-score:
+   - 將固定 0.5% (`change_threshold_pct`) 改為 `change_z_threshold=2.0` + `change_lookback=60d`
+   - Reference:Fama, Fisher, Jensen & Roll (1969) IER 10(1) — 「顯著」= 個股歷史 2σ
+   - 預期:34.87/yr → 10–15/yr
+
+`ForeignHoldingParams` breaking change:刪 `change_threshold_pct`,加 `change_z_threshold` / `change_lookback`。
+
+**Commit `8d3288a` — Pivot-based divergence 算法重寫(RSI/KD/MACD)**
+
+核心問題:`bar[i]` vs `bar[i-20]` 每天跑一次 → 趨勢中連續 20–30 天都滿足 → 每天 fire。
+
+Murphy (1999) p.248 / Wilder (1978) Ch.8 / Pring (1991) p.164 明確定義：
+背離必須比較兩個連續的 swing HIGH/LOW 樞軸點（price 創新高但 indicator 未到新高）。
+
+新 `detect_divergences()` 函式(三核心各自獨立 copy，對齊 §十四 零耦合原則):
+```
+PIVOT_N=3 (Lucas & LeBeau 1992 3-bar 確認)
+MIN_PIVOT_DIST=10 (Murphy「20-60 intervals」實務下界)
+is_swing_high: prices[pivot±k] 全嚴格 < prices[pivot] for k in 1..=PIVOT_N
+每個 (prev_pivot, current_pivot) pair 最多觸發一次
+confirm_date = pivot_idx + PIVOT_N (確認完成當天)
+ind.abs() < 1e-12 skip warmup zeros (RSI/MACD 前幾 bar 為 0.0)
+```
+
+預期:20–33/yr 🔴 → 2–6/yr 🟢
+
+### 驗證
+
+- 168 tests passed / 0 failed / 0 warnings
+- Production run: `tw_cores run-all --write` 1263 stocks, 539.8s, 0 errors
+  - kd_core: 370,404 facts / macd_core: 322,703 / rsi_core: 109,129
+  - institutional_core: 873,556 / foreign_holding_core: 433,695
+- **待 user 驗**:跑 `p2_calibration_data.sql §2` 確認 5 組 EventKind 觸發率降到 🟢
+
+### 已知未修項目(留 P5)
+
+- `ma_core::AboveMaStreak` — C-2 scaling fn `(period*3/2).min(30).max(5)` 已落地但行為
+  待 §3 SQL 確認(MA20 = 30d,應保持原 0.59/yr 水準)
+- Divergence `MIN_PIVOT_DIST=10` — 若 §2 顯示仍 > 10/yr 可提高到 15-20
+
+---
+
+**最後更新**:2026-05-12(P2 阻塞 5c + 阻塞 6 + P5 divergence 算法重寫 全部收尾)
+**Rust workspace**:24 crate / **168 tests passed** / 22 cores production verified
+**alembic head**:`x3y4z5a6b7c8`(不變,本 session 0 migration)
+**Production state(2026-05-12 全市場重跑後)**:
+  - facts 重寫:institutional + foreign_holding + kd + macd + rsi (5 cores)
+  - 總 facts 量級待 p2_calibration_data.sql 統計(修前 4.4M,修後 Divergence 降量預估 ↓15–40%)

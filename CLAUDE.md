@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.29，最新 2026-05-09）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.31，最新 2026-05-12）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,83 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.31 — P2 阻塞 5(c) 校準 + P2 阻塞 6 噪音修正 + P5 Divergence 算法重寫(2026-05-12)
+
+接 v1.30 P1/A1 收尾後,本 session 完成 3 項:
+1. **P2 阻塞 5(c)**:C 類常數 production data driven 校準 — ma_core scaling fn +
+   foreign_holding 雙時間窗口 + 文獻註解修正 + p2_calibration_data.sql
+2. **P2 阻塞 6**:4 個 🔴噪音 EventKind 根因修正 — institutional edge trigger +
+   foreign_holding edge trigger + rolling z-score
+3. **P5 Divergence 重寫**:RSI/KD/MACD 三核心 divergence 從固定 20-bar window
+   改為 pivot-based swing-point detection(Murphy 1999 p.248 學術定義)
+
+### Commits(6 個,branch `claude/review-todo-items-t9bbt`)
+
+| Commit | 範圍 |
+|---|---|
+| `252b790` | P2 阻塞 5(c):ma_core ABOVE_MA_STREAK_MIN scaling fn + foreign_holding 雙時間窗口 + 文獻註解修正 + p2_calibration_data.sql(新增) |
+| `576b7b2` | C-2 修正:ma_core scaling fn `period/8` → `period*3/2`(production data 校準) |
+| `e17d68c` | hotfix:p2_calibration_data.sql `years_span` 加 `::numeric` cast |
+| `61a809e` | p2_calibration_data.sql §3/§5 scaling fn hint 同步新公式 |
+| `2b1cbc7` | P2 阻塞 6:institutional edge trigger + foreign_holding edge trigger + rolling z-score(+4 regression test) |
+| `8d3288a` | fix(rsi/kd/macd):pivot-based divergence detection 算法重寫(+11 tests) |
+
+### P2 阻塞 5(c) — C 類常數校準決策
+
+| 常數 | 修前 | 修後 | 根據 |
+|---|---|---|---|
+| `ABOVE_MA_STREAK_MIN` (ma_core) | 固定 30 | `(period*3/2).min(30).max(5)` | production data:MA20 舊 30d = 0.59/yr 🟢,保持;MA5/10 比例縮放降噪 |
+| `EXPANSION_LOOKBACK` (atr_core) | 10 | 14(v1.30 已改) | Wilder ATR period=14 對齊 |
+| Divergence `DIV_MIN_BARS` | 20(固定間距算法) | 算法重寫(pivot-based) | 根因:算法錯,不是 threshold 問題 |
+| `MILESTONE_LOOKBACK` (foreign_holding) | 60d 單窗口 | 60d(季) + 252d(年)雙窗口 | George & Hwang (2004) JF 52 週高點;讓 user 對比後選擇 |
+| `LOOKBACK_FOR_Z=60` / `LARGE_TRANSACTION_Z=2.0` | level trigger | edge trigger(算法改) | Brown & Warner (1985) 事件研究:事件=狀態轉變 |
+| `STREAK_MIN_DAYS=3` (rsi/kd/day_trading) | 不動 | 不動(§2 SQL 驗後再決定) | — |
+| `SQUEEZE_STREAK_MIN=5` (bollinger) | 不動 | 不動(§2 SQL 驗後再決定) | — |
+| `STREAK_MIN_WEEKS=8` (shareholder) | 不動 | 不動(MOP 2012 跨領域,但量足夠) | — |
+
+### P2 阻塞 6 — 4 個 🔴噪音 EventKind 修法
+
+| EventKind | 修前 | 預期修後 | 修法分類 |
+|---|---|---|---|
+| RSI/KD/MACD Divergence | 20–33/yr 🔴 | 2–6/yr 🟢 | 算法重寫(pivot-based) |
+| institutional LargeNetBuy/Sell | 91.83/yr 🔴 | 6–12/yr 🟢 | edge trigger(`prev_z_abs` state) |
+| foreign_holding LimitNearAlert | 50.06/yr 🔴 | 2–6/yr 🟢 | edge trigger(`was_near_limit` state) |
+| foreign_holding SignificantSingleDayChange | 34.87/yr 🔴 | 10–15/yr 🟢 | rolling z-score(固定 0.5% → 個股 2σ) |
+
+### P5 Divergence 算法重寫
+
+新 `detect_divergences()` 函式在 rsi_core / kd_core / macd_core 各自獨立 copy
+(對齊 §十四 零耦合原則):
+
+```rust
+// PIVOT_N=3 (Lucas & LeBeau 1992), MIN_PIVOT_DIST=10 (Murphy「20-60 intervals」下界)
+// Bearish: 比較連續兩個 swing high — price 新高但 indicator 未創新高
+// Bullish: 比較連續兩個 swing low  — price 新低但 indicator 未創新低
+// confirm_date = pivot_idx + PIVOT_N (確認完成當天)
+// ind.abs() < 1e-12 skip warmup zeros
+```
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變,本 session 0 migration)
+- Rust workspace:24 crate / **168 tests passed** / 0 warnings
+- Production run(2026-05-12):1263 stocks / 539.8s / 0 errors
+  - 5 個修改 core 都已寫入 facts(kd 370K / macd 322K / rsi 109K / institutional 873K / foreign_holding 433K)
+- **待 user 驗**:跑 `psql $env:DATABASE_URL -f scripts/p2_calibration_data.sql > p2_after.txt`
+  確認 §2 每股每年觸發次數降到目標範圍(2–12/yr 視 EventKind)
+- 下個 session 主要任務:**P3 neely 22 條 R4-R7 + Diagonal sub_kind**(等 user m3Spec/neely_core.md)
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml
+- `ForeignHoldingParams` breaking change(刪 `change_threshold_pct`,加兩 field)—
+  預設值 `Default::default()` 不影響 existing code
+- Divergence pivot 實作:測試覆蓋「bearish fires once」/ 「bullish fires once」/ 「monotone = 0」
+- Rollback:2 個 commit `git revert` 即可
 
 ---
 
