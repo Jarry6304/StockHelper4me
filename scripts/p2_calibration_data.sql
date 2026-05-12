@@ -151,7 +151,7 @@ agg AS (
         COUNT(DISTINCT stock_id)    AS affected_stocks,
         MIN(fact_date)              AS earliest,
         MAX(fact_date)              AS latest,
-        (DATE_PART('year', MAX(fact_date)) - DATE_PART('year', MIN(fact_date)) + 1) AS years_span
+        (DATE_PART('year', MAX(fact_date)) - DATE_PART('year', MIN(fact_date)) + 1)::numeric AS years_span
     FROM classified
     GROUP BY source_core, event_kind
 )
