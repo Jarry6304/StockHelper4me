@@ -32,6 +32,14 @@ pub struct MacdParams {
 }
 impl Default for MacdParams { fn default() -> Self { Self { fast: 12, slow: 26, signal: 9, timeframe: Timeframe::Daily } } }
 
+/// HistogramZeroCross 最小間距 — 防止 histogram 在 0 附近快速來回產生噪音。
+/// Production data 校準(2026-05-12): HistogramZeroCross 15.15/yr 🟠。
+/// 5-bar = 1 週,排除同一週內的 back-and-forth。目標 ≤ 12/yr。
+const MIN_ZERO_CROSS_SPACING: usize = 5;
+
+/// GoldenCross / DeathCross 最小間距(與 kd_core 對齊, 7.5/yr 已🟢但加間距更穩健)。
+const MIN_MACD_CROSS_SPACING: usize = 10;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MacdOutput {
     pub stock_id: String,
@@ -89,22 +97,34 @@ impl IndicatorCore for MacdCore {
             histogram: macd_line[i] - signal_line[i],
         }).collect();
         let mut events = Vec::new();
-        // GoldenCross / DeathCross + HistogramZeroCross
+        // GoldenCross / DeathCross + HistogramZeroCross — with minimum spacing to suppress whipsaw
+        let mut last_golden_i: Option<usize> = None;
+        let mut last_death_i: Option<usize> = None;
+        let mut last_zero_cross_i: Option<usize> = None;
         for i in 1..series.len() {
             let prev_above = series[i - 1].macd_line > series[i - 1].signal_line;
             let cur_above = series[i].macd_line > series[i].signal_line;
             if !prev_above && cur_above {
-                events.push(MacdEvent { date: series[i].date, kind: MacdEventKind::GoldenCross, value: series[i].macd_line,
-                    metadata: json!({"event": "golden_cross", "macd": series[i].macd_line, "signal": series[i].signal_line}) });
+                if last_golden_i.map_or(true, |li| i - li >= MIN_MACD_CROSS_SPACING) {
+                    events.push(MacdEvent { date: series[i].date, kind: MacdEventKind::GoldenCross, value: series[i].macd_line,
+                        metadata: json!({"event": "golden_cross", "macd": series[i].macd_line, "signal": series[i].signal_line}) });
+                    last_golden_i = Some(i);
+                }
             } else if prev_above && !cur_above {
-                events.push(MacdEvent { date: series[i].date, kind: MacdEventKind::DeathCross, value: series[i].macd_line,
-                    metadata: json!({"event": "death_cross", "macd": series[i].macd_line, "signal": series[i].signal_line}) });
+                if last_death_i.map_or(true, |li| i - li >= MIN_MACD_CROSS_SPACING) {
+                    events.push(MacdEvent { date: series[i].date, kind: MacdEventKind::DeathCross, value: series[i].macd_line,
+                        metadata: json!({"event": "death_cross", "macd": series[i].macd_line, "signal": series[i].signal_line}) });
+                    last_death_i = Some(i);
+                }
             }
-            // Histogram zero cross
+            // Histogram zero cross — minimum spacing suppresses rapid oscillation around 0
             if series[i - 1].histogram.signum() != series[i].histogram.signum() && series[i].histogram != 0.0 {
-                let dir = if series[i].histogram > 0.0 { "positive" } else { "negative" };
-                events.push(MacdEvent { date: series[i].date, kind: MacdEventKind::HistogramZeroCross, value: series[i].histogram,
-                    metadata: json!({"event": "histogram_zero_cross", "direction": dir}) });
+                if last_zero_cross_i.map_or(true, |li| i - li >= MIN_ZERO_CROSS_SPACING) {
+                    let dir = if series[i].histogram > 0.0 { "positive" } else { "negative" };
+                    events.push(MacdEvent { date: series[i].date, kind: MacdEventKind::HistogramZeroCross, value: series[i].histogram,
+                        metadata: json!({"event": "histogram_zero_cross", "direction": dir}) });
+                    last_zero_cross_i = Some(i);
+                }
             }
         }
         // HistogramExpansion(連續 |histogram| 增大)
@@ -201,6 +221,12 @@ mod tests {
         assert_eq!(core.name(), "macd_core");
         assert_eq!(core.warmup_periods(&MacdParams::default()), 26 * 4);
     }
+    #[test]
+    fn macd_spacing_constants() {
+        assert_eq!(MIN_ZERO_CROSS_SPACING, 5);
+        assert_eq!(MIN_MACD_CROSS_SPACING, 10);
+    }
+
     #[test]
     fn macd_bearish_divergence_fires_once() {
         let n = 25usize;

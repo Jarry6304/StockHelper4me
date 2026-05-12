@@ -208,9 +208,15 @@ fn compute_momentum(points: &[chip_loader::DayTradingRaw], i: usize, lookback: u
 fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<DayTradingEvent> {
     let mut events = Vec::new();
 
-    // RatioExtremeHigh / Low 單日事件
+    // RatioExtremeHigh / Low — edge trigger: fire only on zone entry, not on every bar in zone.
+    // Brown & Warner (1985): 事件 = 狀態轉換(crossing into zone), 連續停留不算新事件。
+    let mut was_extreme_high = false;
+    let mut was_extreme_low = false;
     for (i, p) in series.iter().enumerate() {
-        if p.day_trade_ratio >= params.ratio_high_threshold {
+        let is_extreme_high = p.day_trade_ratio >= params.ratio_high_threshold;
+        let is_extreme_low = p.day_trade_ratio > 0.0 && p.day_trade_ratio <= params.ratio_low_threshold;
+
+        if is_extreme_high && !was_extreme_high {
             let historical_high = series[..i]
                 .iter()
                 .all(|prev| p.day_trade_ratio > prev.day_trade_ratio);
@@ -224,7 +230,7 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
                     "historical_high": historical_high,
                 }),
             });
-        } else if p.day_trade_ratio > 0.0 && p.day_trade_ratio <= params.ratio_low_threshold {
+        } else if is_extreme_low && !was_extreme_low {
             // ratio == 0 多半是缺資料 / 無交易,不算 extreme low
             events.push(DayTradingEvent {
                 date: p.date,
@@ -236,6 +242,8 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
                 }),
             });
         }
+        was_extreme_high = is_extreme_high;
+        was_extreme_low = is_extreme_low;
     }
 
     // RatioStreakHigh / Low(連續 N 天高 / 低)
@@ -390,7 +398,7 @@ mod tests {
 
     #[test]
     fn streak_high_emitted_after_3_days() {
-        // 5 連續高 ratio + 1 normal day → 應產 1 個 RatioStreakHigh(也產 5 個 RatioExtremeHigh)
+        // 5 連續高 ratio + 1 normal day → 1 個 RatioStreakHigh + 1 個 RatioExtremeHigh(edge entry)
         let series = make_series(&[
             ("2026-04-22", 35.0),
             ("2026-04-23", 36.0),
@@ -463,6 +471,26 @@ mod tests {
         let out = core.compute(&series, DayTradingParams::default()).unwrap();
         assert!(out.series.is_empty());
         assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn extreme_high_edge_trigger_fires_only_on_zone_entry() {
+        // 3 days in extreme zone → 1 event on entry; exit then re-enter → 2nd event
+        let series = make_series(&[
+            ("2026-04-22", 35.0), // entry → fires
+            ("2026-04-23", 36.0), // stays in zone → no fire
+            ("2026-04-24", 33.0), // stays in zone → no fire
+            ("2026-04-25", 20.0), // exits zone
+            ("2026-04-26", 32.0), // re-entry → fires again
+        ]);
+        let core = DayTradingCore::new();
+        let out = core.compute(&series, DayTradingParams::default()).unwrap();
+        let extremes: Vec<_> = out
+            .events
+            .iter()
+            .filter(|e| e.kind == DayTradingEventKind::RatioExtremeHigh)
+            .collect();
+        assert_eq!(extremes.len(), 2, "entry + re-entry = 2 fires, not 5");
     }
 
     #[test]

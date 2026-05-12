@@ -26,6 +26,11 @@ inventory::submit! {
 /// Connors (2008) ConnorsRSI 3-consecutive 提供間接實務支持。
 const STREAK_MIN_DAYS: usize = 3;
 
+/// GoldenCross / DeathCross 最小間距(防止短周期 KD 快速來回的 whipsaw 噪音)。
+/// Production data 校準(2026-05-12): GoldenCross 17/yr 🟠。
+/// 10-bar = 2 週,排除 < 2 週的反轉視為雜訊。目標 6–12/yr。
+const MIN_KD_CROSS_SPACING: usize = 10;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct KdParams {
     pub period: usize,    // 預設 9(台股 §5.6)
@@ -87,15 +92,23 @@ impl IndicatorCore for KdCore {
             prev_k = k; prev_d = d;
         }
         let mut events = Vec::new();
+        let mut last_golden_i: Option<usize> = None;
+        let mut last_death_i: Option<usize> = None;
         for i in 1..series.len() {
             let prev_above = series[i - 1].k > series[i - 1].d;
             let cur_above = series[i].k > series[i].d;
             if !prev_above && cur_above {
-                events.push(KdEvent { date: series[i].date, kind: KdEventKind::GoldenCross, value: series[i].k,
-                    metadata: json!({"event": "golden_cross", "k": series[i].k, "d": series[i].d}) });
+                if last_golden_i.map_or(true, |li| i - li >= MIN_KD_CROSS_SPACING) {
+                    events.push(KdEvent { date: series[i].date, kind: KdEventKind::GoldenCross, value: series[i].k,
+                        metadata: json!({"event": "golden_cross", "k": series[i].k, "d": series[i].d}) });
+                    last_golden_i = Some(i);
+                }
             } else if prev_above && !cur_above {
-                events.push(KdEvent { date: series[i].date, kind: KdEventKind::DeathCross, value: series[i].k,
-                    metadata: json!({"event": "death_cross", "k": series[i].k, "d": series[i].d}) });
+                if last_death_i.map_or(true, |li| i - li >= MIN_KD_CROSS_SPACING) {
+                    events.push(KdEvent { date: series[i].date, kind: KdEventKind::DeathCross, value: series[i].k,
+                        metadata: json!({"event": "death_cross", "k": series[i].k, "d": series[i].d}) });
+                    last_death_i = Some(i);
+                }
             }
         }
         // streaks
@@ -208,6 +221,11 @@ mod tests {
         let r = detect_divergences(&prices, &indicator, &dates);
         assert_eq!(r.iter().filter(|(_, b, ..)| *b).count(), 1);
     }
+    #[test]
+    fn kd_cross_spacing_constant_is_10() {
+        assert_eq!(MIN_KD_CROSS_SPACING, 10);
+    }
+
     #[test]
     fn kd_no_divergence_monotone() {
         let n = 50usize;

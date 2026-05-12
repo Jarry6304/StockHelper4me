@@ -65,6 +65,14 @@ SELECT
                 WHEN statement LIKE 'Day trade ratio below%'           THEN 'RatioStreakLow'
                 ELSE SPLIT_PART(statement, ' ', 1)
             END
+        WHEN source_core = 'institutional_core' THEN
+            CASE
+                WHEN statement LIKE '% net buy % consecutive%'        THEN 'NetBuyStreak'
+                WHEN statement LIKE '% net sell % consecutive%'       THEN 'NetSellStreak'
+                WHEN statement LIKE '% single-day large transaction%' THEN 'LargeTransaction'
+                WHEN statement LIKE '%diverge on%'                    THEN 'DivergenceWithinInstitution'
+                ELSE SPLIT_PART(statement, ' ', 1)
+            END
         ELSE SPLIT_PART(statement, ' ', 1)
     END                              AS event_kind,
     COUNT(*)                         AS event_count,
@@ -127,8 +135,19 @@ WITH classified AS (
                 END
             WHEN source_core = 'day_trading_core' THEN
                 CASE
-                    WHEN statement LIKE 'Day trade ratio above%'  THEN 'RatioStreakHigh'
-                    WHEN statement LIKE 'Day trade ratio below%'  THEN 'RatioStreakLow'
+                    WHEN statement LIKE 'Day trade ratio reached%'  THEN 'RatioExtremeHigh'
+                    WHEN statement LIKE 'Day trade ratio dropped%'  THEN 'RatioExtremeLow'
+                    WHEN statement LIKE 'Day trade ratio above%'    THEN 'RatioStreakHigh'
+                    WHEN statement LIKE 'Day trade ratio below%'    THEN 'RatioStreakLow'
+                    ELSE SPLIT_PART(statement, ' ', 1)
+                END
+            WHEN source_core = 'institutional_core' THEN
+                -- 按 EventKind 拆分(之前 SPLIT_PART 只回 investor 名, 把 4 個 EventKind 混在一起)
+                CASE
+                    WHEN statement LIKE '% net buy % consecutive%'        THEN 'NetBuyStreak'
+                    WHEN statement LIKE '% net sell % consecutive%'       THEN 'NetSellStreak'
+                    WHEN statement LIKE '% single-day large transaction%' THEN 'LargeTransaction'
+                    WHEN statement LIKE '%diverge on%'                    THEN 'DivergenceWithinInstitution'
                     ELSE SPLIT_PART(statement, ' ', 1)
                 END
             ELSE SPLIT_PART(statement, ' ', 1)
