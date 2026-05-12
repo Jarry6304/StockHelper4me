@@ -41,11 +41,15 @@ inventory::submit! {
 #[derive(Debug, Clone, Serialize)]
 pub struct InstitutionalParams {
     pub timeframe: Timeframe,
-    /// 連續買賣超的最小天數,預設 3
+    /// 連續買賣超的最小天數，預設 3（同 rsi/kd_core，實務慣例）
     pub streak_min_days: usize,
-    /// 大額異動 Z-score 閾值,預設 2.0
+    /// 大額異動 Z-score 閾值，預設 2.0
+    /// Reference(2026-05-12): Brown & Warner (1985) JFE 14:3-31 事件研究以 2σ 為異常門檻；
+    /// 統計標準 2σ = 95.44th percentile，通用於異常成交量偵測。
     pub large_transaction_z: f64,
-    /// 計算 Z-score 的回看窗口,預設 60
+    /// 計算 Z-score 的回看窗口，預設 60 天
+    /// Reference(2026-05-12): Brown & Warner (1985) 估計窗口 ~239 天；
+    /// Krivin et al. (2003) 指出 60 天為可接受下界（更適應台股短期結構變化）。
     pub lookback_for_z: usize,
 }
 

@@ -11,8 +11,9 @@
 // foreign_limit_pct(2026-05-10 commit 458a45a 解):chip_loader 從 Silver
 // `foreign_holding_derived.detail->>'upper_limit_ratio'` 取;LimitNearAlert
 // 在 Bronze 有料時觸發,無料時 limit_pct=0 → 略過(line 147 防衛條件)。
-// MILESTONE_LOOKBACK=60 對齊 spec §5.6 範例「6-month high」(60 trading days ≈ 3 個月,
-// 但 spec 沒寫死,先用 60d 作 best-guess)。
+// Reference(2026-05-12 校準): George & Hwang (2004) JF 59(5):2145-2176 — 52-week high
+// 動能指標以 252 交易日（年新高）為 lookback 標準。此處同時保留季新高（60d）與
+// 年新高（252d）兩種語意，各自對應一組 EventKind。
 
 use anyhow::Result;
 use chip_loader::ForeignHoldingSeries;
@@ -31,7 +32,8 @@ inventory::submit! {
     )
 }
 
-const MILESTONE_LOOKBACK: usize = 60;
+const MILESTONE_LOOKBACK_QUARTERLY: usize = 60;
+const MILESTONE_LOOKBACK_ANNUAL: usize = 252;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForeignHoldingParams {
@@ -77,8 +79,10 @@ pub struct ForeignHoldingEvent {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum ForeignHoldingEventKind {
-    HoldingMilestoneHigh,
-    HoldingMilestoneLow,
+    HoldingMilestoneHigh,        // 60d 季新高
+    HoldingMilestoneLow,         // 60d 季新低
+    HoldingMilestoneHighAnnual,  // 252d 年新高（George & Hwang 2004 標準）
+    HoldingMilestoneLowAnnual,   // 252d 年新低
     LimitNearAlert,
     SignificantSingleDayChange,
 }
@@ -157,9 +161,9 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
                 }),
             });
         }
-        // Milestone high / low(N 期 lookback)
-        if i >= MILESTONE_LOOKBACK {
-            let window = &series[i - MILESTONE_LOOKBACK..i];
+        // Milestone high / low — 季新高/低（60d）
+        if i >= MILESTONE_LOOKBACK_QUARTERLY {
+            let window = &series[i - MILESTONE_LOOKBACK_QUARTERLY..i];
             let max_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::NEG_INFINITY, f64::max);
             let min_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::INFINITY, f64::min);
             if p.foreign_holding_pct > max_prev {
@@ -167,14 +171,35 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
                     date: p.date,
                     kind: ForeignHoldingEventKind::HoldingMilestoneHigh,
                     value: p.foreign_holding_pct,
-                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK), "value": p.foreign_holding_pct }),
+                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_QUARTERLY), "value": p.foreign_holding_pct }),
                 });
             } else if p.foreign_holding_pct < min_prev {
                 events.push(ForeignHoldingEvent {
                     date: p.date,
                     kind: ForeignHoldingEventKind::HoldingMilestoneLow,
                     value: p.foreign_holding_pct,
-                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK), "value": p.foreign_holding_pct }),
+                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_QUARTERLY), "value": p.foreign_holding_pct }),
+                });
+            }
+        }
+        // Milestone high / low — 年新高/低（252d，George & Hwang 2004 標準）
+        if i >= MILESTONE_LOOKBACK_ANNUAL {
+            let window = &series[i - MILESTONE_LOOKBACK_ANNUAL..i];
+            let max_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::NEG_INFINITY, f64::max);
+            let min_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::INFINITY, f64::min);
+            if p.foreign_holding_pct > max_prev {
+                events.push(ForeignHoldingEvent {
+                    date: p.date,
+                    kind: ForeignHoldingEventKind::HoldingMilestoneHighAnnual,
+                    value: p.foreign_holding_pct,
+                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_ANNUAL), "value": p.foreign_holding_pct }),
+                });
+            } else if p.foreign_holding_pct < min_prev {
+                events.push(ForeignHoldingEvent {
+                    date: p.date,
+                    kind: ForeignHoldingEventKind::HoldingMilestoneLowAnnual,
+                    value: p.foreign_holding_pct,
+                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_ANNUAL), "value": p.foreign_holding_pct }),
                 });
             }
         }
@@ -185,10 +210,16 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
 fn event_to_fact(output: &ForeignHoldingOutput, e: &ForeignHoldingEvent) -> Fact {
     let statement = match e.kind {
         ForeignHoldingEventKind::HoldingMilestoneHigh => format!(
-            "Foreign holding {} high at {:.2}% on {}", e.metadata["lookback"], e.value, e.date
+            "Foreign holding 60d high at {:.2}% on {}", e.value, e.date
         ),
         ForeignHoldingEventKind::HoldingMilestoneLow => format!(
-            "Foreign holding {} low at {:.2}% on {}", e.metadata["lookback"], e.value, e.date
+            "Foreign holding 60d low at {:.2}% on {}", e.value, e.date
+        ),
+        ForeignHoldingEventKind::HoldingMilestoneHighAnnual => format!(
+            "Foreign holding 252d high at {:.2}% on {}", e.value, e.date
+        ),
+        ForeignHoldingEventKind::HoldingMilestoneLowAnnual => format!(
+            "Foreign holding 252d low at {:.2}% on {}", e.value, e.date
         ),
         ForeignHoldingEventKind::LimitNearAlert => format!(
             "Foreign holding reached {:.2}% on {}, near {:.2}% limit",

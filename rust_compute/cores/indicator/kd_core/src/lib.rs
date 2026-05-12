@@ -22,6 +22,8 @@ inventory::submit! {
     )
 }
 
+/// Reference(2026-05-12 校準): 同 rsi_core。Wilder (1978) 未指定連續天數；
+/// Connors (2008) ConnorsRSI 3-consecutive 提供間接實務支持。
 const STREAK_MIN_DAYS: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,6 +102,7 @@ impl IndicatorCore for KdCore {
         kd_streak(&series, STREAK_MIN_DAYS, |p| p.k >= params.overbought, KdEventKind::OverboughtStreak, &mut events);
         kd_streak(&series, STREAK_MIN_DAYS, |p| p.k <= params.oversold, KdEventKind::OversoldStreak, &mut events);
         // Divergence vs close
+        // Reference(2026-05-12 校準): Murphy (1999) 指出背離需「20 to 60 trading intervals」。
         const DIV_BARS: usize = 20;
         let closes: Vec<f64> = input.bars.iter().map(|b| b.close).collect();
         if series.len() > DIV_BARS {

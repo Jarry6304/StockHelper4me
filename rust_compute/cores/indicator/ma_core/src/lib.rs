@@ -23,7 +23,13 @@ inventory::submit! {
     )
 }
 
-const ABOVE_MA_STREAK_MIN: usize = 30;
+/// Reference(2026-05-12 校準): Brock, Lakonishok & LeBaron (1992) JF 47(5):1731-1764
+/// 使用單點 P_t ≥ m_t 加 1% band 過濾，無連續天數概念；Faber (2007) SSRN 962461
+/// 採月底收盤快照，同樣無 streak 設計。此處採期間比例縮放，下限 3 天：
+///   MA5/10/20 → 3天；MA60 → 8天；MA120 → 15天；MA240 → 30天
+fn above_ma_streak_min(period: usize) -> usize {
+    (period / 8).max(3)
+}
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum MaKind { Sma, Ema, Wma, Dema, Tema, Hma }
@@ -190,14 +196,14 @@ impl IndicatorCore for MaCore {
                         metadata: json!({"event": "ma_bearish_cross", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period}) });
                 }
                 if cur_above { streak += 1; } else {
-                    if streak >= ABOVE_MA_STREAK_MIN {
+                    if streak >= above_ma_streak_min(entry.spec.period) {
                         events.push(MaEvent { date: entry.series[i - 1].date, kind: MaEventKind::AboveMaStreak, value: streak as f64,
                             metadata: json!({"event": "above_ma_streak", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period, "days": streak}) });
                     }
                     streak = 0;
                 }
             }
-            if streak >= ABOVE_MA_STREAK_MIN {
+            if streak >= above_ma_streak_min(entry.spec.period) {
                 events.push(MaEvent { date: entry.series.last().unwrap().date, kind: MaEventKind::AboveMaStreak, value: streak as f64,
                     metadata: json!({"event": "above_ma_streak", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period, "days": streak}) });
             }

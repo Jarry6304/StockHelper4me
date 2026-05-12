@@ -22,6 +22,8 @@ inventory::submit! {
     )
 }
 
+/// Reference(2026-05-12 校準): Wilder (1978) 未指定連續天數；Connors (2008) ConnorsRSI
+/// 以 3 個連續極端值作為雜訊過濾，提供間接實務支持。3 天屬實務慣例。
 const STREAK_MIN_DAYS: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +101,8 @@ impl IndicatorCore for RsiCore {
         }
 
         // Divergence(同 macd 嚴格規則)
+        // Reference(2026-05-12 校準): Murphy (1999) Technical Analysis of the Financial Markets
+        // 指出背離需「20 to 60 trading intervals」，20 為有效下界（eSignal docs 二次確認）。
         const DIV_MIN_BARS: usize = 20;
         if series.len() > DIV_MIN_BARS {
             for i in DIV_MIN_BARS..series.len() {
