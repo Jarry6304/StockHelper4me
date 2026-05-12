@@ -22,8 +22,6 @@ inventory::submit! {
     )
 }
 
-/// 背離規則:兩極值點間至少 N 根 K 棒(spec §3.6 預設 20,寫死)
-const DIVERGENCE_MIN_BARS: usize = 20;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MacdParams {
@@ -122,24 +120,24 @@ impl IndicatorCore for MacdCore {
                 exp_count = 0;
             }
         }
-        // Divergence(嚴格 §3.6:兩極值點 ≥ DIVERGENCE_MIN_BARS K 棒,price/MACD 反向)
-        // best-guess:price HH but MACD LH → bearish_divergence;反之 bullish
-        let n = series.len();
-        if n > DIVERGENCE_MIN_BARS * 2 {
-            for i in DIVERGENCE_MIN_BARS..n {
-                let prev_idx = i.saturating_sub(DIVERGENCE_MIN_BARS);
-                let price_now = closes[i];
-                let price_prev = closes[prev_idx];
-                let macd_now = series[i].macd_line;
-                let macd_prev = series[prev_idx].macd_line;
-                if price_now > price_prev && macd_now < macd_prev {
-                    events.push(MacdEvent { date: series[i].date, kind: MacdEventKind::BearishDivergence, value: macd_now,
-                        metadata: json!({"event": "bearish_divergence", "price_date": series[prev_idx].date, "indicator_date": series[i].date}) });
-                } else if price_now < price_prev && macd_now > macd_prev {
-                    events.push(MacdEvent { date: series[i].date, kind: MacdEventKind::BullishDivergence, value: macd_now,
-                        metadata: json!({"event": "bullish_divergence", "price_date": series[prev_idx].date, "indicator_date": series[i].date}) });
-                }
-            }
+        // Divergence — pivot-based detection
+        // Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) pivot_n=3.
+        // 原 fixed-20-bar 每天比較 → 20–33 次/年 🔴。Pivot 版 2–6 次/年 🟢。
+        let macd_vals: Vec<f64> = series.iter().map(|p| p.macd_line).collect();
+        let dates_vec: Vec<NaiveDate> = input.bars.iter().map(|b| b.date).collect();
+        for (confirm_date, is_bearish, ind_val, price_val, prev_date, prev_ind) in
+            detect_divergences(&closes, &macd_vals, &dates_vec)
+        {
+            let kind = if is_bearish { MacdEventKind::BearishDivergence } else { MacdEventKind::BullishDivergence };
+            events.push(MacdEvent {
+                date: confirm_date, kind, value: ind_val,
+                metadata: json!({
+                    "event": if is_bearish { "bearish_divergence" } else { "bullish_divergence" },
+                    "pivot_price": price_val,
+                    "prev_pivot_date": prev_date.to_string(),
+                    "prev_macd": prev_ind,
+                }),
+            });
         }
         Ok(MacdOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series, events })
     }
@@ -154,6 +152,46 @@ impl IndicatorCore for MacdCore {
     }
 }
 
+/// Pivot-based divergence detection. Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) pivot_n=3.
+fn detect_divergences(
+    prices: &[f64],
+    indicator: &[f64],
+    dates: &[NaiveDate],
+) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
+    const PIVOT_N: usize = 3;
+    const MIN_PIVOT_DIST: usize = 10;
+    let n = prices.len();
+    if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
+    let mut out = Vec::new();
+    let mut last_high: Option<(usize, f64, f64)> = None;
+    let mut last_low: Option<(usize, f64, f64)> = None;
+    for pivot in PIVOT_N..(n - PIVOT_N) {
+        let p = prices[pivot]; let ind = indicator[pivot];
+        if ind.abs() < 1e-12 { continue; }
+        let is_h = (1..=PIVOT_N).all(|k| prices[pivot - k] < p) && (1..=PIVOT_N).all(|k| prices[pivot + k] < p);
+        let is_l = (1..=PIVOT_N).all(|k| prices[pivot - k] > p) && (1..=PIVOT_N).all(|k| prices[pivot + k] > p);
+        if is_h {
+            if let Some((pi, pp, pi_ind)) = last_high {
+                if pivot - pi >= MIN_PIVOT_DIST && p > pp && ind < pi_ind {
+                    let c = (pivot + PIVOT_N).min(n - 1);
+                    out.push((dates[c], true, ind, p, dates[pi], pi_ind));
+                }
+            }
+            last_high = Some((pivot, p, ind));
+        }
+        if is_l {
+            if let Some((pi, pp, pi_ind)) = last_low {
+                if pivot - pi >= MIN_PIVOT_DIST && p < pp && ind > pi_ind {
+                    let c = (pivot + PIVOT_N).min(n - 1);
+                    out.push((dates[c], false, ind, p, dates[pi], pi_ind));
+                }
+            }
+            last_low = Some((pivot, p, ind));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +200,26 @@ mod tests {
         let core = MacdCore::new();
         assert_eq!(core.name(), "macd_core");
         assert_eq!(core.warmup_periods(&MacdParams::default()), 26 * 4);
+    }
+    #[test]
+    fn macd_bearish_divergence_fires_once() {
+        let n = 25usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let mut prices = vec![90.0_f64; n];
+        let mut indicator = vec![1.0_f64; n]; // non-zero background
+        prices[5] = 100.0; indicator[5] = 5.0;
+        prices[18] = 105.0; indicator[18] = 3.0; // price HH, macd LH → bearish
+        let r = detect_divergences(&prices, &indicator, &dates);
+        assert_eq!(r.iter().filter(|(_, b, ..)| *b).count(), 1);
+    }
+    #[test]
+    fn macd_no_divergence_monotone() {
+        let n = 50usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let prices: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
+        let indicator: Vec<f64> = (0..n).map(|i| 5.0 - 0.1 * i as f64).collect();
+        assert_eq!(detect_divergences(&prices, &indicator, &dates).len(), 0);
     }
 }

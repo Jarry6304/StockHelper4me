@@ -101,21 +101,25 @@ impl IndicatorCore for KdCore {
         // streaks
         kd_streak(&series, STREAK_MIN_DAYS, |p| p.k >= params.overbought, KdEventKind::OverboughtStreak, &mut events);
         kd_streak(&series, STREAK_MIN_DAYS, |p| p.k <= params.oversold, KdEventKind::OversoldStreak, &mut events);
-        // Divergence vs close
-        // Reference(2026-05-12 校準): Murphy (1999) 指出背離需「20 to 60 trading intervals」。
-        const DIV_BARS: usize = 20;
+        // Divergence — pivot-based detection
+        // Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) pivot_n=3.
+        // 原 fixed-20-bar 每天比較 → 20–33 次/年 🔴。Pivot 版 2–6 次/年 🟢。
         let closes: Vec<f64> = input.bars.iter().map(|b| b.close).collect();
-        if series.len() > DIV_BARS {
-            for i in DIV_BARS..series.len() {
-                let pi = i - DIV_BARS;
-                if closes[i] > closes[pi] && series[i].k < series[pi].k {
-                    events.push(KdEvent { date: series[i].date, kind: KdEventKind::BearishDivergence, value: series[i].k,
-                        metadata: json!({"event": "bearish_divergence"}) });
-                } else if closes[i] < closes[pi] && series[i].k > series[pi].k {
-                    events.push(KdEvent { date: series[i].date, kind: KdEventKind::BullishDivergence, value: series[i].k,
-                        metadata: json!({"event": "bullish_divergence"}) });
-                }
-            }
+        let k_vals: Vec<f64> = series.iter().map(|p| p.k).collect();
+        let dates_vec: Vec<NaiveDate> = input.bars.iter().map(|b| b.date).collect();
+        for (confirm_date, is_bearish, ind_val, price_val, prev_date, prev_ind) in
+            detect_divergences(&closes, &k_vals, &dates_vec)
+        {
+            let kind = if is_bearish { KdEventKind::BearishDivergence } else { KdEventKind::BullishDivergence };
+            events.push(KdEvent {
+                date: confirm_date, kind, value: ind_val,
+                metadata: json!({
+                    "event": if is_bearish { "bearish_divergence" } else { "bullish_divergence" },
+                    "pivot_price": price_val,
+                    "prev_pivot_date": prev_date.to_string(),
+                    "prev_k": prev_ind,
+                }),
+            });
         }
         Ok(KdOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series, events })
     }
@@ -128,6 +132,46 @@ impl IndicatorCore for KdCore {
             metadata: e.metadata.clone(),
         }).collect()
     }
+}
+
+/// Pivot-based divergence detection. Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) pivot_n=3.
+fn detect_divergences(
+    prices: &[f64],
+    indicator: &[f64],
+    dates: &[NaiveDate],
+) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
+    const PIVOT_N: usize = 3;
+    const MIN_PIVOT_DIST: usize = 10;
+    let n = prices.len();
+    if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
+    let mut out = Vec::new();
+    let mut last_high: Option<(usize, f64, f64)> = None;
+    let mut last_low: Option<(usize, f64, f64)> = None;
+    for pivot in PIVOT_N..(n - PIVOT_N) {
+        let p = prices[pivot]; let ind = indicator[pivot];
+        if ind.abs() < 1e-12 { continue; }
+        let is_h = (1..=PIVOT_N).all(|k| prices[pivot - k] < p) && (1..=PIVOT_N).all(|k| prices[pivot + k] < p);
+        let is_l = (1..=PIVOT_N).all(|k| prices[pivot - k] > p) && (1..=PIVOT_N).all(|k| prices[pivot + k] > p);
+        if is_h {
+            if let Some((pi, pp, pi_ind)) = last_high {
+                if pivot - pi >= MIN_PIVOT_DIST && p > pp && ind < pi_ind {
+                    let c = (pivot + PIVOT_N).min(n - 1);
+                    out.push((dates[c], true, ind, p, dates[pi], pi_ind));
+                }
+            }
+            last_high = Some((pivot, p, ind));
+        }
+        if is_l {
+            if let Some((pi, pp, pi_ind)) = last_low {
+                if pivot - pi >= MIN_PIVOT_DIST && p < pp && ind > pi_ind {
+                    let c = (pivot + PIVOT_N).min(n - 1);
+                    out.push((dates[c], false, ind, p, dates[pi], pi_ind));
+                }
+            }
+            last_low = Some((pivot, p, ind));
+        }
+    }
+    out
 }
 
 fn kd_streak(series: &[KdPoint], min_days: usize, pred: impl Fn(&KdPoint) -> bool, kind: KdEventKind, out: &mut Vec<KdEvent>) {
@@ -151,5 +195,26 @@ mod tests {
         let core = KdCore::new();
         assert_eq!(core.name(), "kd_core");
         assert_eq!(core.warmup_periods(&KdParams::default()), 9 + 3 + 3 + 10);
+    }
+    #[test]
+    fn kd_bearish_divergence_fires_once() {
+        let n = 25usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let mut prices = vec![90.0_f64; n];
+        let mut indicator = vec![50.0_f64; n];
+        prices[5] = 100.0; indicator[5] = 80.0;
+        prices[18] = 105.0; indicator[18] = 75.0; // price HH, indicator LH
+        let r = detect_divergences(&prices, &indicator, &dates);
+        assert_eq!(r.iter().filter(|(_, b, ..)| *b).count(), 1);
+    }
+    #[test]
+    fn kd_no_divergence_monotone() {
+        let n = 50usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let prices: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
+        let indicator: Vec<f64> = (0..n).map(|i| 80.0 - 0.5 * i as f64).collect();
+        assert_eq!(detect_divergences(&prices, &indicator, &dates).len(), 0);
     }
 }
