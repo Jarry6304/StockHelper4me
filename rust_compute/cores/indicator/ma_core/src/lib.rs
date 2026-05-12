@@ -25,10 +25,13 @@ inventory::submit! {
 
 /// Reference(2026-05-12 校準): Brock, Lakonishok & LeBaron (1992) JF 47(5):1731-1764
 /// 使用單點 P_t ≥ m_t 加 1% band 過濾，無連續天數概念；Faber (2007) SSRN 962461
-/// 採月底收盤快照，同樣無 streak 設計。此處採期間比例縮放，下限 3 天：
-///   MA5/10/20 → 3天；MA60 → 8天；MA120 → 15天；MA240 → 30天
+/// 採月底收盤快照，同樣無 streak 設計。
+///
+/// Production data 校準(2026-05-12)：MA20/SMA 以舊 constant=30 跑出 0.59次/股/年(🟢合理)。
+/// 公式 `period * 3 / 2`，上限 30，下限 5，使 MA20 → 30（保持），MA5 → 7，MA10 → 15，
+/// MA60+ → 30（上限）。避免前版 period/8 對 MA20 給出 3 天（過於頻繁）的問題。
 fn above_ma_streak_min(period: usize) -> usize {
-    (period / 8).max(3)
+    (period * 3 / 2).min(30).max(5)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
