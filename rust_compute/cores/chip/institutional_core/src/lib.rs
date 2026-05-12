@@ -290,6 +290,11 @@ fn emit_streak(
 
 /// LargeTransaction 偵測:對單一 institution net 算 z-score,超 threshold 推 event。
 /// 對齊 streak_detect 的 closure-getter pattern;institution 字串寫進 event metadata。
+///
+/// **Edge trigger 設計**(2026-05-12 P2 阻塞 6 修):僅在 |z| 從 < threshold 跨入 >= threshold
+/// 當日 fire,避免機構連續建倉 / 出貨期間每天都 fire(原 level trigger 91.83/yr → 預期 6-12/yr)。
+/// Reference: Brown & Warner (1985) JFE 14(1):3-31 事件研究方法論 —「事件」是狀態變化,
+/// 不是狀態持續;Sheingold (1978) Analog-Digital Conversion Notes — edge trigger vs level trigger。
 fn detect_large_transaction(
     raw: &[InstitutionalDailyRaw],
     params: &InstitutionalParams,
@@ -300,28 +305,35 @@ fn detect_large_transaction(
     if raw.len() <= params.lookback_for_z {
         return;
     }
+    let mut prev_z_abs: f64 = 0.0;
     for i in params.lookback_for_z..raw.len() {
         let window: Vec<i64> = raw[i - params.lookback_for_z..i]
             .iter()
             .map(&getter)
             .collect();
         let (mean, std) = mean_std(&window);
-        if std > 0.0 {
+        let (cur_z, cur_z_abs) = if std > 0.0 {
             let cur = getter(&raw[i]) as f64;
             let z = (cur - mean) / std;
-            if z.abs() >= params.large_transaction_z {
-                events.push(InstitutionalEvent {
-                    date: raw[i].date,
-                    kind: InstitutionalEventKind::LargeTransaction,
-                    value: cur,
-                    metadata: json!({
-                        "institution": institution,
-                        "z_score": z,
-                        "lookback": params.lookback_for_z,
-                    }),
-                });
-            }
+            (z, z.abs())
+        } else {
+            (0.0, 0.0)
+        };
+        // Edge trigger: 只在跨閾值當日 fire(prev < threshold, cur >= threshold)
+        if cur_z_abs >= params.large_transaction_z && prev_z_abs < params.large_transaction_z {
+            let cur = getter(&raw[i]) as f64;
+            events.push(InstitutionalEvent {
+                date: raw[i].date,
+                kind: InstitutionalEventKind::LargeTransaction,
+                value: cur,
+                metadata: json!({
+                    "institution": institution,
+                    "z_score": cur_z,
+                    "lookback": params.lookback_for_z,
+                }),
+            });
         }
+        prev_z_abs = cur_z_abs;
     }
 }
 
@@ -478,6 +490,52 @@ mod tests {
         assert!(by_inst.contains(&"foreign"), "foreign LargeTransaction 應觸發,events: {:?}", by_inst);
         assert!(by_inst.contains(&"trust"), "trust LargeTransaction 應觸發,events: {:?}", by_inst);
         assert!(by_inst.contains(&"dealer"), "dealer LargeTransaction 應觸發,events: {:?}", by_inst);
+    }
+
+    /// Edge trigger regression(2026-05-12 P2 阻塞 6):機構連續 5 天爆量,
+    /// 只有第 1 天 fire(跨閾值),後續 4 天因 prev_z_abs 已 >= threshold 不 fire。
+    /// 對齊 Brown & Warner (1985) 事件研究 — 連續期間視為一個事件。
+    #[test]
+    fn large_transaction_edge_trigger_no_duplicate_fire() {
+        let mut points: Vec<InstitutionalDailyRaw> = Vec::with_capacity(65);
+        // 60 baseline:net ±100 微擾
+        for i in 0..60 {
+            let sign: i64 = if i % 2 == 0 { 1 } else { -1 };
+            let buy = (500 + sign * 100) as i64;
+            let sell = 500_i64;
+            let mut p = raw("2026-01-01", buy, sell, 0, 0, 0, 0);
+            p.date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64);
+            points.push(p);
+        }
+        // 第 61-65 row:連續 5 天爆量(net=+5000)
+        for i in 60..65 {
+            let mut p = raw("2026-01-01", 5_500, 500, 0, 0, 0, 0);
+            p.date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64);
+            points.push(p);
+        }
+        let series = InstitutionalDailySeries {
+            stock_id: "2330".to_string(),
+            points,
+        };
+        let out = InstitutionalCore::new()
+            .compute(&series, InstitutionalParams::default())
+            .unwrap();
+        let foreign_lt: Vec<_> = out
+            .events
+            .iter()
+            .filter(|e| {
+                e.kind == InstitutionalEventKind::LargeTransaction
+                    && e.metadata["institution"].as_str() == Some("foreign")
+            })
+            .collect();
+        assert_eq!(
+            foreign_lt.len(),
+            1,
+            "連續 5 天爆量應只 fire 1 次(edge trigger),實際 fire {} 次",
+            foreign_lt.len()
+        );
     }
 
     #[test]
