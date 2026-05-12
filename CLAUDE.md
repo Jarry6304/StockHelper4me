@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.31，最新 2026-05-12）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.32，最新 2026-05-12）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,48 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.32 — P2 收尾：5 個 🟠 噪音 EventKind 修正(2026-05-12 continuation)
+
+接 v1.31 divergence pivot rewrite + edge trigger 落地後，user 指示「P2處理光」。
+本 session 完成剩餘 5 個 🟠 noise EventKind 全部修正。
+
+### Commit(`a678383`，branch `claude/review-todo-items-t9bbt`)
+
+| Core | 修法 | 常數 |
+|---|---|---|
+| `day_trading_core` | RatioExtremeHigh/Low level trigger → edge trigger(進入 zone 才觸發) | — |
+| `kd_core` | GoldenCross/DeathCross 加最小間距 | `MIN_KD_CROSS_SPACING=10` |
+| `ma_core` | MaBullishCross/BearishCross + MaGoldenCross/DeathCross 加最小間距 | `MIN_MA_CROSS_SPACING=10` |
+| `macd_core` | HistogramZeroCross 加最小間距 | `MIN_ZERO_CROSS_SPACING=5` |
+| `macd_core` | GoldenCross/DeathCross 加最小間距（一致性） | `MIN_MACD_CROSS_SPACING=10` |
+| `p2_calibration_data.sql` | §1 + §2 institutional EventKind CASE + day_trading RatioExtremeHigh/Low 識別 | SQL only |
+
+### 預期修後觸發率
+
+| EventKind | 修前 | 預期修後 |
+|---|---|---|
+| day_trading RatioExtremeHigh/Low | ~31/yr 🔴 | ~2–5/yr 🟢（zone entry） |
+| KD GoldenCross/DeathCross | ~17/yr 🟠 | ~8–12/yr 🟢 |
+| MA BullishCross/BearishCross | ~11.5/yr 🟠 | ~6–9/yr 🟢 |
+| MACD HistogramZeroCross | ~15/yr 🟠 | ~8–12/yr 🟢 |
+| MACD GoldenCross/DeathCross | ~7.5/yr 🟢 | ~5–7/yr 🟢（防衛性間距） |
+
+### 已知狀態（下次 session 起點）
+
+- alembic head：`x3y4z5a6b7c8`（不變，本 session 0 migration）
+- Rust workspace：24 crate / **172 tests passed** / 0 warnings（從 168 → 172，+4 新測試）
+- 下個 session 主要任務：**P3 neely 22 條 R4-R7 + Diagonal sub_kind**（等 user m3Spec/neely_core.md）
+- 建議 user 跑：`tw_cores run-all --write` 重跑受影響 5 cores + `p2_calibration_data.sql` 驗證觸發率
+
+### 風險
+
+🟢 低：
+- 0 alembic / 0 Python / 0 collector.toml
+- 所有修改都是加常數 + 狀態追蹤，不改邏輯語意
+- Rollback：`git revert a678383` 即可
 
 ---
 
