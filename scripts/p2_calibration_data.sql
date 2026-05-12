@@ -181,7 +181,7 @@ ORDER BY source_core, avg_per_stock_per_year DESC NULLS LAST;
 -- ============================================================
 \echo ''
 \echo '=== §3 ma_core AboveMaStreak：按 MA period + kind 分析 ==='
-\echo '用於判斷 above_ma_streak_min(period) = max(3, period/8) 是否合適'
+\echo '用於判斷 above_ma_streak_min(period) = (period*3/2).min(30).max(5) 是否合適'
 \echo ''
 
 SELECT
@@ -192,8 +192,8 @@ SELECT
     ROUND(AVG((metadata->>'days')::numeric), 1)   AS avg_streak_days,
     MIN((metadata->>'days')::int)                 AS min_streak_days,
     MAX((metadata->>'days')::int)                 AS max_streak_days,
-    -- scaling fn 建議值
-    GREATEST(3, (metadata->>'period')::int / 8)   AS scaling_fn_min
+    -- scaling fn 建議值: (period * 3 / 2).min(30).max(5)
+    GREATEST(5, LEAST(30, (metadata->>'period')::int * 3 / 2))   AS scaling_fn_min
 FROM facts
 WHERE source_core = 'ma_core'
   AND statement LIKE '%AboveMaStreak%'
@@ -235,8 +235,8 @@ ORDER BY event_kind;
 \echo ''
 \echo '=== §5 C 類常數變更快速參考 ==='
 \echo 'C-1  STREAK_MIN_DAYS = 3       rsi/kd/day_trading   → 保留（無更好學術根據）'
-\echo 'C-2  ABOVE_MA_STREAK_MIN       ma_core              → 已改 scaling fn max(3, period/8)'
-\echo '     MA5/10/20→3d MA60→8d MA120→15d MA240→30d'
+\echo 'C-2  ABOVE_MA_STREAK_MIN       ma_core              → 已改 scaling fn (period*3/2).min(30).max(5)'
+\echo '     MA5→7d MA10→15d MA20→30d MA60+→30d (production data 校準保持 MA20=30)'
 \echo 'C-3  SQUEEZE_STREAK_MIN = 5    bollinger_core        → 保留（Bollinger level-based）'
 \echo 'C-4  STREAK_MIN_WEEKS = 8      shareholder_core      → 保留（待 §2 觸發率驗證）'
 \echo 'C-5  DIV_MIN_BARS = 20         macd/rsi/kd           → 保留（Murphy 20-60 下界）'
