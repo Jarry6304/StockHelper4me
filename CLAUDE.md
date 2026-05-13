@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.35，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.36，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,77 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.36 — neely PR-3c-1 wave-level 8 條規則落地(2026-05-13 後續)
+
+接 v1.35 PR-3c-pre 架構 migration 完成後動工 PR-3c-1。8 條 Ch5 wave-level
+規則中 7 條完整實作 + 1 條 Z4 維持 Deferred(待 Triangle context)。
+
+### 範圍
+
+| 規則 | RuleId | spec ref | 邏輯 |
+|---|---|---|---|
+| F1 | `Ch5FlatMinBRatio` | Ch5 p.5-34 | b/a ≥ 57.8%(=61.8%-4%)→ Pass Flat-consistent |
+| F2 | `Ch5FlatMinCRatio` | Ch5 p.5-34~36 | F1 Pass 且 c/b ≥ 34.2% → Pass;c 過短 → Fail |
+| Z1 | `Ch5ZigzagMaxBRetracement` | Ch5 p.5-41(v1.9 修正)| b/a ≤ 65.8%(=61.8%+4%)→ Pass Zigzag-consistent |
+| Z2 | `Ch11ZigzagWaveByWave{wave:C}` | Ch11 p.11-17 | Z1 Pass 且 c/a ≥ 34.2% → Pass(涵蓋 Truncated/Normal/Elongated)|
+| Z3 | `Ch4ZigzagDetour` | Ch4 p.4-15~20 | DETOUR Test:c overshoot > 2.5×a + b/a < 38.2% → 視為 Impulse-like → NotApplicable |
+| Z4 | `Ch5ZigzagCTriangleException` | Ch5 line 968 | **仍 Deferred** — 需 Triangle context,PR-3c-2 完成後 classifier 可重新評估 |
+| W1 | `Ch11ImpulseWaveByWave` | Ch11 p.11-4~18 | 5-wave magnitudes > 0 → Pass(sub_kind 細分 ext 判定留 PR-4b)|
+| W2 | `Ch12FibonacciInternal` | Ch12 | 3-wave c/a 或 5-wave W3/W1 / W5/W1 任一匹配 Fib 比率 ±4% → Pass |
+
+### 新增檔
+
+- `validator/helpers.rs`(78 行)— 共用 helper:`FIB_TOLERANCE_PCT=4.0` +
+  `NEELY_FIB_RATIOS_PCT=[38.2,61.8,100,161.8,261.8]` + `safe_pct` /
+  `matches_any_fib_ratio` 等
+
+### 設計選擇
+
+- 規則用 `NotApplicable` 表示「不是該規則的 pattern type」,**不阻塞** overall_pass
+  (對齊 spec §10.3)
+- 真正 `Fail` 只用於「結構違反到無法描述為任何 pattern」(目前只有 F2 / Z2 的「c 過短」會 Fail)
+- F2 先確認 F1 Pass-like 條件再 check;Z2 先確認 Z1 Pass-like 條件再 check
+  (避免 Zigzag/Flat 混合判定)
+- 容差寫死(§4.5 不可外部化):FLAT_B_MIN_PCT=57.8 / FLAT_C_MIN_PCT=34.2 /
+  ZIGZAG_B_MAX_PCT=65.8 / ZIGZAG_C_MIN_PCT=34.2 / DETOUR_OVERSHOOT_RATIO=2.5
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 179 → 213 tests passed / 0 failed / 0 warnings
+# 新增 34 個 unit test(helpers 6 / flat 6 / zigzag 12 / wave 7 + 3 既有 stub test 改實質測試)
+```
+
+### 留 PR-3c-2 / PR-4b 補
+
+- Z4 Triangle exception:PR-3c-2 完成 Triangle 規則後,classifier 可帶 Triangle
+  上下文重新呼叫 Z4
+- W1 sub_kind 分類(1st/3rd/5th/Non Ext):PR-4b classifier 用同 helper magnitude
+  比較決定 NeelyPatternType sub_kind
+- F1/F2 sub_kind 細分(7 個 FlatVariant):PR-4b classifier 決定
+- Z2 sub_kind 細分(3 個 ZigzagVariant):PR-4b classifier 決定
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml / 0 schema 改動(純 Rust)
+- production 既有 facts 不受影響(validator 只擴展 report,classifier 行為對齊
+  PR-3c-pre)
+- m2 收尾不阻塞
+- Rollback:單 commit `git revert` 即可
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變)
+- Rust workspace:24 crate / **213 tests passed** / 0 warnings
+- neely_core:v0.7.0 / Stage 1-10 partial / Stage 4 規則 R1-R3 + F1-F2 + Z1-Z3 + W1-W2 完整(15 條)+ R4-R7 + T1-T10 + Z4 仍 Deferred(15 條)
+- 下個 sub-PR:**PR-3c-2**(T1-T10 Triangle 9-16 變體,~2.5 天)
+  或 **PR-3c-3** R4-R7(平行 PR-3c-2)
+- 9 sub-PR sequence:PR-3c-pre ✅ → **PR-3c-1 ✅** → PR-3c-2 / PR-3c-3 → PR-4b → PR-5b → PR-6b-1~3
 
 ---
 

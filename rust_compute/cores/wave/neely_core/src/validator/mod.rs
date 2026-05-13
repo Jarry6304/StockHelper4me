@@ -32,6 +32,7 @@ use crate::output::{RuleId, RuleRejection};
 
 pub mod core_rules;
 pub mod flat_rules;
+pub mod helpers;
 pub mod triangle_rules;
 pub mod wave_rules;
 pub mod zigzag_rules;

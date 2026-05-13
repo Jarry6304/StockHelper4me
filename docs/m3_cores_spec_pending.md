@@ -644,8 +644,8 @@ ind.abs() < 1e-12 skip warmup zeros (RSI/MACD 前幾 bar 為 0.0)
 
 ---
 
-**最後更新**:2026-05-13(§17 PR-3c-pre RuleId chapter-based migration 落地)
-**Rust workspace**:24 crate / **179 tests passed**(178 + 1 terminal_impulse)/ 22 cores production verified
+**最後更新**:2026-05-13(§18 PR-3c-1 F/Z/W 8 條 wave-level 規則落地)
+**Rust workspace**:24 crate / **213 tests passed**(179 + 34 PR-3c-1)/ 22 cores production verified
 **alembic head**:`x3y4z5a6b7c8`(不變,本 session 0 migration)
 **Production state**(2026-05-12 全市場重跑後):
   - facts 重寫:institutional + foreign_holding + kd + macd + rsi (5 cores)
@@ -807,3 +807,74 @@ alembic migration。
 - 0 alembic / 0 collector.toml / 0 Python / 0 schema 改動(純 Rust)
 - m2 收尾不阻塞
 - production 既有 4.4M facts 不受影響
+
+---
+
+## §18. neely_core PR-3c-1 Wave-level 8 條規則落地(2026-05-13 後續)
+
+接 PR-3c-pre RuleId chapter-based migration 後動工 PR-3c-1。8 條 wave-level
+規則完整實作:F1-F2(Flat)+ Z1-Z3(Zigzag,Z4 仍 Deferred)+ W1-W2(通用 Impulse
++ Fibonacci)。
+
+### 新增檔
+
+- `validator/helpers.rs`(78 行)— 共用 helper:
+  - `FIB_TOLERANCE_PCT = 4.0`(§4.2 ±4% Fibonacci 容差)
+  - `NEELY_FIB_RATIOS_PCT = [38.2, 61.8, 100.0, 161.8, 261.8]`(spec 5 個標準比率)
+  - `magnitude(c)` / `safe_pct(num, denom)` / `within_tolerance` / `matches_any_fib_ratio`
+
+### 7 條落地規則對映 spec
+
+| 規則 | RuleId | spec ref | 邏輯 |
+|---|---|---|---|
+| F1 | `Ch5FlatMinBRatio` | Ch5 p.5-34 | b/a ≥ 57.8%(= 61.8% - 4%)→ Pass(Flat-consistent);否則 NotApplicable |
+| F2 | `Ch5FlatMinCRatio` | Ch5 p.5-34~36 | F1 Pass 且 c/b ≥ 34.2%(= 38.2% - 4%)→ Pass;c 過短 → Fail |
+| Z1 | `Ch5ZigzagMaxBRetracement` | Ch5 p.5-41(v1.9 修正)| b/a ≤ 65.8%(= 61.8% + 4%)→ Pass(Zigzag-consistent);否則 NotApplicable |
+| Z2 | `Ch11ZigzagWaveByWave{wave:C}` | Ch11 p.11-17 + Ch5 p.5-41~42 | Z1 Pass 且 c/a ≥ 34.2% → Pass(涵蓋 Truncated/Normal/Elongated 3 sub-type);c 過短 → Fail |
+| Z3 | `Ch4ZigzagDetour` | Ch4 p.4-15~20 | DETOUR Test:c overshoot > 2.5×a + b/a < 38.2% → NotApplicable(Impulse-like);否則 Pass |
+| Z4 | `Ch5ZigzagCTriangleException` | Ch5 line 968 | 仍 Deferred(需 Triangle context,PR-3c-2 完成後 classifier 可重新評估)|
+| W1 | `Ch11ImpulseWaveByWave{ext,wave}` | Ch11 p.11-4~18 | 5-wave actionable wave magnitude > 0 → Pass(W1/W3/W5 哪條最長分類由 classifier 在 PR-4b 用同 helper)|
+| W2 | `Ch12FibonacciInternal` | Ch12(精華版 Ch12)| 3-wave c/a 或 5-wave W3/W1, W5/W1 任一匹配 Fib 比率 ±4% → Pass;無匹配 → NotApplicable |
+
+### 設計選擇
+
+- 規則用 `NotApplicable` 表示「此 candidate 不是該規則的 pattern type」,**不阻塞**
+  `overall_pass`(對齊 spec §10.3 deferred 暫時通過 + NotApplicable 不阻塞原則)
+- 真正 `Fail` 只用於「結構違反(c 過短到無法描述為任何 pattern)」
+- 規則之間用「先 type filter,後 sub-rule check」pattern(例:F2 先確認 F1 Pass-like
+  條件,Z2 先確認 Z1 Pass-like 條件)
+- 容差全部寫死 const(§4.5 / §6.6 不可外部化):FIB_TOLERANCE_PCT = 4.0 /
+  FLAT_B_MIN_PCT = 57.8 / FLAT_C_MIN_PCT = 34.2 / ZIGZAG_B_MAX_PCT = 65.8 /
+  ZIGZAG_C_MIN_PCT = 34.2 / DETOUR_OVERSHOOT_RATIO = 2.5 / W1_EXTENSION_RATIO = 1.1
+
+### 留 PR-3c-2 / PR-4b 補
+
+- **Z4 Triangle exception**:需要 Triangle context;PR-3c-2 Triangle 規則落地後
+  classifier 可重新呼叫 Z4 with Triangle 上下文
+- **W1 sub_kind 分類**:目前 W1 只 Pass/NotApplicable,具體哪個 ext(1st/3rd/5th/Non)
+  由 classifier 在 PR-4b 用 helper magnitude 比較決定 NeelyPatternType sub_kind
+- **F1/F2 sub_kind 分類**:同上,7 個 FlatVariant variant 在 PR-4b classifier 決定
+- **Z2 sub_kind 分類**:Truncated/Normal/Elongated 3 個 ZigzagVariant variant 同上
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 179 → 213 passed / 0 failed / 0 warnings
+# 新增 34 個 unit test:
+#   helpers.rs:6 個(safe_pct / within_tolerance / matches_any_fib_ratio 邊界)
+#   flat_rules.rs:6 個(F1 in/out range / 5-wave N/A / F2 too short / F2 normal / F2 non-Flat)
+#   zigzag_rules.rs:12 個(Z1 small/boundary/big / Z2 normal/truncated/elongated/too short /
+#     Z3 normal/impulse-like / Z4 always deferred / 5-wave N/A)
+#   wave_rules.rs:7 個(W1 5wave/3wave/zero-mag / W2 3wave 100%/61.8%/no-match /
+#     5wave W3/W1=161.8% / no Fib + FIB_TOLERANCE_PCT)
+```
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml / 0 schema 改動
+- production 既有 facts 不受影響(neely scenario 數 ~ 1-2/stock,本變更只擴展
+  validator output,classifier 行為仍對齊 PR-3c-pre)
+- 既有 R1-R3 / W1-W2 行為對齊 spec 新閾值(W1 不會 Fail)
+- Rollback:單 commit `git revert` 即可
