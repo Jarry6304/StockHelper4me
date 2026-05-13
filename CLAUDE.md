@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.38，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.39，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,74 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.39 — neely Stage 3 Candidate Generator sub-wave 嵌套支援(2026-05-13 後續)
+
+接 v1.38 9 sub-PR sequence 收尾後動工 Stage 3 nested candidate 生成。原本
+flat-only Stage 3 升級至支援 nested patterns(W1/W3/W5 可含 5-wave sub-Impulse),
+完整對齊 Ch7 Compaction + Ch8 Complex Polywaves 需求。
+
+### 範圍
+
+| 改動 | 對應 spec |
+|---|---|
+| `WaveCandidate` 加 `wave_segment_lengths: Vec<usize>` field | Ch7 Compaction Reassessment |
+| `WaveCandidate::is_nested()` / `wave_sub_indices(i)` / `top_level_magnitude(i, classified)` 三 helper methods | 對外暴露 nested 結構 |
+| Generator 7 種 nesting patterns 滑窗: | Ch8 Complex Polywaves |
+| - flat `[1,1,1]` + flat `[1,1,1,1,1]`(既有) | r5 §7.x |
+| - nested `[1,1,5]`(Zigzag/Flat C-Ext)+ `[5,1,1]`(Flat A-Ext)| Ch11 |
+| - nested `[1,1,5,1,1]`(3rd Ext,最常見)+ `[5,1,1,1,1]`(1st Ext)+ `[1,1,1,1,5]`(5th Ext) | Ch11 wave-by-wave |
+| classifier `classify_impulse_extension` 改用 `top_level_magnitude`,nested candidate 也能正確識別 3rd Ext | Ch11 |
+| 候選 ID 升級含 segment pattern:`c5-1_1_5_1_1-mw0-mw8`(nested)vs `c5-1_1_1_1_1-mw0-mw4`(flat) | engineering |
+
+### 設計選擇
+
+- **NESTING_PATTERNS 順序**:flat → nested,cap 觸發時優先保留 flat patterns
+- **beam_width × 10 cap** 保護不變:7 nesting patterns × 滑窗數,30 mw 數十~百個
+  candidate 都在 cap 範圍內(預設 beam_width=50 → cap=500)
+- **Validator 不動**:現有規則用 monowave_indices 平面讀,nested candidate 也能跑
+  (產出可能近似;規則整合 nested 留 PR-3c-{F/Z}/{T}/{W} 規則細節校準)
+- **沒改 schema / Python**:純 Rust 加新 field,backward-compat 透過 batch sed 補
+  既有 test 點(15 個 site → 全部 `vec![1; <literal>]`)
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 286 → 297 tests passed / 0 failed / 0 warnings
+# 新增 11 個 unit test:
+#   generator:9(7 mw nested 3-wave / 9 mw nested 5-wave / sub_indices /
+#     ID format / is_nested / top_level_magnitude flat & nested)
+#   classifier:2(flat_5wave_candidate helper + nested [1,1,5,1,1] 3rd Ext detection)
+```
+
+### 留未來 PR
+
+- 規則層整合:R1-R7 / F1-F2 / Z1-Z3 / T4-T6 / W1-W2 改用 top_level_magnitude
+  讓 nested candidates 也能正確套用規則(目前 R1-R3 / Z1-Z3 仍 flat-mode,
+  讀 monowave_indices[i] 而非 top-level segment)
+- 更多 nesting patterns:Combination 嵌套(`[1,1,3]` 等)+ 多層嵌套(W3 內又有 nested)
+- exhaustive nested compaction:Three Rounds Round 2 可從 nested candidates 中挑
+  合法路徑(目前 pass-through)
+- P0 Gate 五檔(0050/2330/3363/6547/1312)production 校準
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml / 0 schema 改動
+- 0 cargo warnings
+- production 既有 facts 不受影響(欄位 backward-compat:flat candidate 在 7 個
+  pattern 中是第 1 個,既有 production candidates 都 fall under flat patterns)
+- Rollback:單 commit `git revert` 即可
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變)
+- Rust workspace:24 crate / **297 tests passed** / 0 warnings
+- neely_core:Stage 3 含 7 nesting patterns;Stage 5 classifier nested-aware(Impulse Extension)
+- **9 sub-PR sequence + Stage 3 nested support 全部完成**
 
 ---
 

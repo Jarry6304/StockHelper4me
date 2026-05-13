@@ -318,6 +318,7 @@ mod tests {
             monowave_indices: indices,
             wave_count,
             initial_direction: MonowaveDirection::Up,
+            wave_segment_lengths: vec![1; wave_count],
         }
     }
 
@@ -515,6 +516,7 @@ mod tests {
             monowave_indices: vec![0],
             wave_count: 1,
             initial_direction: MonowaveDirection::Up,
+            wave_segment_lengths: vec![1; 1],
         };
         assert!(matches!(rule_r4(&candidate, &classified), RuleResult::NotApplicable(_)));
         assert!(matches!(rule_r5(&candidate, &classified), RuleResult::NotApplicable(_)));

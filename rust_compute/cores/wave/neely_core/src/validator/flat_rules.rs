@@ -157,6 +157,7 @@ mod tests {
             monowave_indices: vec![0, 1, 2],
             wave_count: 3,
             initial_direction: MonowaveDirection::Up,
+            wave_segment_lengths: vec![1; 3],
         }
     }
 
@@ -194,6 +195,7 @@ mod tests {
             monowave_indices: vec![0, 1, 2, 3, 4],
             wave_count: 5,
             initial_direction: MonowaveDirection::Up,
+            wave_segment_lengths: vec![1; 5],
         };
         let classified = vec![cmw(100.0, 110.0); 5];
         let r = rule_f1(&candidate, &classified);

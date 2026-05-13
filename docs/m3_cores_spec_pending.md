@@ -644,9 +644,45 @@ ind.abs() < 1e-12 skip warmup zeros (RSI/MACD 前幾 bar 為 0.0)
 
 ---
 
-**最後更新**:2026-05-13(§20 PR-4b classifier sub_kind + PR-6b-1/2/3 Power Rating / Fibonacci / Missing / Emulation / Triggers + PR-5b Round 3 Pause 落地)
-**Rust workspace**:24 crate / **286 tests passed**(231 + 55 new)/ 22 cores production verified
+**最後更新**:2026-05-13(§21 Stage 3 Candidate Generator sub-wave 嵌套支援)
+**Rust workspace**:24 crate / **297 tests passed**(286 + 11 nested)/ 22 cores production verified
 **alembic head**:`x3y4z5a6b7c8`(不變,本 session 0 migration)
+
+---
+
+## §21. Stage 3 Candidate Generator sub-wave 嵌套支援(2026-05-13 後續)
+
+接 v1.38 9 sub-PR sequence 收尾後動工 Stage 3 nested candidate 生成,完整對齊
+Ch7 Compaction Reassessment + Ch8 Complex Polywaves 需求。
+
+### 範圍
+
+`WaveCandidate` 新增 `wave_segment_lengths: Vec<usize>` field,標示每個 top-level
+wave 含幾個 sub-monowave:
+- Flat 3-wave:`[1, 1, 1]`(3 mw)
+- Flat 5-wave:`[1, 1, 1, 1, 1]`(5 mw)
+- Nested 3-wave Zigzag C-Ext:`[1, 1, 5]`(7 mw)
+- Nested 3-wave Flat A-Ext:`[5, 1, 1]`(7 mw)
+- Nested 5-wave 3rd Ext:`[1, 1, 5, 1, 1]`(9 mw,最常見)
+- Nested 5-wave 1st Ext:`[5, 1, 1, 1, 1]`(9 mw)
+- Nested 5-wave 5th Ext:`[1, 1, 1, 1, 5]`(9 mw)
+
+3 個 helper methods:
+- `is_nested()` - 任一 wave 含 ≥ 2 sub-mw
+- `wave_sub_indices(i)` - 第 i 個 top-level wave 的 sub-mw indices
+- `top_level_magnitude(i, classified)` - 第 i 個 top-level wave 的 net 位移
+
+### Classifier 整合
+
+`classify_impulse_extension` 改用 `top_level_magnitude`,
+nested `[1,1,5,1,1]` candidate 也能正確識別為 3rd Ext。
+
+### 留未來 PR
+
+規則層整合:R1-R7 / F1-F2 / Z1-Z3 / T4-T6 / W1-W2 改用 `top_level_magnitude`
+(目前讀 `classified[mi[i]].metrics.magnitude` 是 flat-mode,nested 規則結果為近似)。
+
+更多 patterns + 多層嵌套(W3 內又含 nested)留下個 PR。
 **Production state**(2026-05-12 全市場重跑後):
   - facts 重寫:institutional + foreign_holding + kd + macd + rsi (5 cores)
   - 總 facts 量級待 p2_calibration_data.sql 統計(修前 4.4M,修後 Divergence 降量預估 ↓15–40%)

@@ -136,21 +136,23 @@ fn classify_5wave(
         // R3 pass = strict Impulse;sub_kind 留 PR-6b classifier(Ch11 wave-by-wave)
         // 注意:r5 spec NeelyPatternType::Impulse 是 unit variant,
         // ImpulseExtension 透過 Ch11ImpulseWaveByWave RuleId 表達(已在 validator)
-        let _ext = classify_impulse_extension(mi, classified);
+        let _ext = classify_impulse_extension(candidate, classified);
         NeelyPatternType::Impulse
     }
 }
 
 fn classify_impulse_extension(
-    mi: &[usize],
+    candidate: &WaveCandidate,
     classified: &[ClassifiedMonowave],
 ) -> ImpulseExtension {
-    if mi.len() < 5 {
+    // PR-Stage3-nested:用 top_level_magnitude 取代 flat-mode magnitude,
+    // 讓 nested candidate(W1 / W3 / W5 含多 sub-mw)分類正確
+    if candidate.wave_count != 5 || candidate.wave_segment_lengths.len() < 5 {
         return ImpulseExtension::NonExt;
     }
-    let w1 = classified[mi[0]].metrics.magnitude;
-    let w3 = classified[mi[2]].metrics.magnitude;
-    let w5 = classified[mi[4]].metrics.magnitude;
+    let w1 = candidate.top_level_magnitude(0, classified);
+    let w3 = candidate.top_level_magnitude(2, classified);
+    let w5 = candidate.top_level_magnitude(4, classified);
 
     if w1 <= 0.0 || w3 <= 0.0 {
         return ImpulseExtension::NonExt;
@@ -480,6 +482,7 @@ mod tests {
             monowave_indices: vec![0, 1, 2, 3, 4],
             wave_count: 5,
             initial_direction: MonowaveDirection::Up,
+            wave_segment_lengths: vec![1; 5],
         }
     }
 
@@ -489,6 +492,7 @@ mod tests {
             monowave_indices: vec![0, 1, 2],
             wave_count: 3,
             initial_direction: MonowaveDirection::Up,
+            wave_segment_lengths: vec![1; 3],
         }
     }
 
@@ -555,6 +559,16 @@ mod tests {
 
     // ---------- Impulse Extension classifier ----------
 
+    fn flat_5wave_candidate() -> WaveCandidate {
+        WaveCandidate {
+            id: "c5-flat".to_string(),
+            monowave_indices: vec![0, 1, 2, 3, 4],
+            wave_count: 5,
+            initial_direction: MonowaveDirection::Up,
+            wave_segment_lengths: vec![1, 1, 1, 1, 1],
+        }
+    }
+
     #[test]
     fn impulse_extension_third_ext() {
         // W1=10 W3=25 W5=12 → W3 > W1 × 1.1 + W3 最長 → 3rd Ext
@@ -565,8 +579,8 @@ mod tests {
             cmw(130.0, 122.0, MonowaveDirection::Down),
             cmw(122.0, 134.0, MonowaveDirection::Up),
         ];
-        let mi = &[0, 1, 2, 3, 4][..];
-        assert_eq!(classify_impulse_extension(mi, &classified), ImpulseExtension::ThirdExt);
+        let candidate = flat_5wave_candidate();
+        assert_eq!(classify_impulse_extension(&candidate, &classified), ImpulseExtension::ThirdExt);
     }
 
     #[test]
@@ -579,8 +593,8 @@ mod tests {
             cmw(116.0, 110.0, MonowaveDirection::Down),
             cmw(110.0, 135.0, MonowaveDirection::Up),
         ];
-        let mi = &[0, 1, 2, 3, 4][..];
-        assert_eq!(classify_impulse_extension(mi, &classified), ImpulseExtension::FifthExt);
+        let candidate = flat_5wave_candidate();
+        assert_eq!(classify_impulse_extension(&candidate, &classified), ImpulseExtension::FifthExt);
     }
 
     #[test]
@@ -593,8 +607,8 @@ mod tests {
             cmw(125.0, 120.0, MonowaveDirection::Down),
             cmw(120.0, 122.0, MonowaveDirection::Up),
         ];
-        let mi = &[0, 1, 2, 3, 4][..];
-        assert_eq!(classify_impulse_extension(mi, &classified), ImpulseExtension::FifthFailure);
+        let candidate = flat_5wave_candidate();
+        assert_eq!(classify_impulse_extension(&candidate, &classified), ImpulseExtension::FifthFailure);
     }
 
     #[test]
@@ -607,8 +621,43 @@ mod tests {
             cmw(116.0, 110.0, MonowaveDirection::Down),
             cmw(110.0, 120.0, MonowaveDirection::Up),
         ];
-        let mi = &[0, 1, 2, 3, 4][..];
-        assert_eq!(classify_impulse_extension(mi, &classified), ImpulseExtension::NonExt);
+        let candidate = flat_5wave_candidate();
+        assert_eq!(classify_impulse_extension(&candidate, &classified), ImpulseExtension::NonExt);
+    }
+
+    #[test]
+    fn impulse_extension_nested_w3_5wave_detected() {
+        // PR-Stage3-nested:nested [1,1,5,1,1] candidate
+        // W1 mw[0] 100→112(net 12)
+        // W2 mw[1] 112→107(net 5)
+        // W3 sub-mw[2..7] 累積 net 從 107→145(38 — W3 是延伸波 by far)
+        // W4 mw[7] 145→138(7)
+        // W5 mw[8] 138→152(14)
+        // → top_level_magnitudes: W1=12, W3=38, W5=14 → W3 最長(>1.1× max(W1,W5))→ 3rd Ext
+        let classified = vec![
+            cmw(100.0, 112.0, MonowaveDirection::Up),    // W1
+            cmw(112.0, 107.0, MonowaveDirection::Down),  // W2
+            // W3 sub-mw[2..7] = 5 alternating(Up/Down/Up/Down/Up),net Up
+            cmw(107.0, 120.0, MonowaveDirection::Up),
+            cmw(120.0, 115.0, MonowaveDirection::Down),
+            cmw(115.0, 135.0, MonowaveDirection::Up),
+            cmw(135.0, 128.0, MonowaveDirection::Down),
+            cmw(128.0, 145.0, MonowaveDirection::Up),
+            cmw(145.0, 138.0, MonowaveDirection::Down),  // W4
+            cmw(138.0, 152.0, MonowaveDirection::Up),    // W5
+        ];
+        let nested_candidate = WaveCandidate {
+            id: "c5-1_1_5_1_1-nested".to_string(),
+            monowave_indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8],
+            wave_count: 5,
+            initial_direction: MonowaveDirection::Up,
+            wave_segment_lengths: vec![1, 1, 5, 1, 1],
+        };
+        assert_eq!(
+            classify_impulse_extension(&nested_candidate, &classified),
+            ImpulseExtension::ThirdExt,
+            "nested [1,1,5,1,1] W3 應被偵測為 3rd Ext"
+        );
     }
 
     // ---------- 3-wave classifier ----------
