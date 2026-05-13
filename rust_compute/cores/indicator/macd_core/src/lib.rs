@@ -2,11 +2,12 @@
 // 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §三 macd_core(spec r2)
 // Output §3.4(僅 series)+ Fact §3.5(5 種)+ Divergence §3.6(嚴格規則式)
 //
-// **Reference(2026-05-10 加)**:
+// **Reference(2026-05-10 加 / 2026-05-13 校驗)**:
 //   fast=12 / slow=26 / signal=9:Appel, Gerald (1979).
 //                                  "The Moving Average Convergence Divergence Method"
 //                                  原作者設計,12/26 對應 2 月/4 月 EMA(原始月線分析)
-//   DIVERGENCE_MIN_BARS=20:無學術,業界經驗值「中期 divergence」 ~ 1 個交易月
+//   MIN_PIVOT_DIST=20:對齊 spec §3.6「兩極值點距離 ≥ N=20」+ Murphy (1999) p.248
+//                      建議 20-60 intervals 的下界(原 fixed-20-bar window 已 P5 替換為 pivot-based)
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -184,7 +185,8 @@ fn detect_divergences(
     dates: &[NaiveDate],
 ) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
     const PIVOT_N: usize = 3;
-    const MIN_PIVOT_DIST: usize = 10;
+    // 對齊 spec §3.6:「兩個價格極值點之間時間距離 ≥ N 根 K 棒(預設 N=20)」。
+    const MIN_PIVOT_DIST: usize = 20;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
     let mut out = Vec::new();
@@ -234,13 +236,14 @@ mod tests {
 
     #[test]
     fn macd_bearish_divergence_fires_once() {
-        let n = 25usize;
+        // pivots placed ≥ 20 bars apart to satisfy MIN_PIVOT_DIST (spec §3.6 N=20)
+        let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];
         let mut prices = vec![90.0_f64; n];
         let mut indicator = vec![1.0_f64; n]; // non-zero background
         prices[5] = 100.0; indicator[5] = 5.0;
-        prices[18] = 105.0; indicator[18] = 3.0; // price HH, macd LH → bearish
+        prices[28] = 105.0; indicator[28] = 3.0; // price HH, macd LH → bearish (distance 23)
         let r = detect_divergences(&prices, &indicator, &dates);
         assert_eq!(r.iter().filter(|(_, b, ..)| *b).count(), 1);
     }

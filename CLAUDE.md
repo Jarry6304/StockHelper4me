@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.32，最新 2026-05-12）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.33，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,76 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.33 — P2 修正項目補完 spec alignment + 出處註解(2026-05-13)
+
+接 v1.32 收尾 P2 後,user 指示「修正後的資料反寫回原本的 core 文件，並附上來源出處
+供反查證」+「完整再確認一次程式碼跟規格有無對齊，若正確則更新文件後推上主幹，
+若不正確則修正後更新文件推上主幹」。本 session 兩步走:
+
+**Step 1 — 出處註解(commit `3d49cc7`)**:7 個 P2 修正過的 core 文件補完整出處體系:
+- `Verification: scripts/p2_calibration_data.sql §X` 反查 SQL section
+- 修前→修後觸發率對照(91.83→6-12 / 50.06→2-6 / 34.87→10-15 / 17→8-12 等)
+- 學術文獻完整書名 + journal + page(Murphy 1999 / Lucas & LeBeau 1992 / Sheingold 1978 / Brown & Warner 1985 / Fama et al. 1969)
+- `day_trading_core` ratio 閾值加 `m3Spec/chip_cores.md §7.3` 引用
+
+**Step 2 — Spec alignment 校驗(commit 本 PR)**:逐 core 對 m3Spec/m2Spec audit,
+揭露 1 個 spec 偏離:
+
+| 偏離項 | spec 規定 | 原值 | 修正後 |
+|---|---|---|---|
+| rsi/kd/macd `MIN_PIVOT_DIST` | spec §3.6:「兩個價格極值點時間距離 ≥ N=20」 | 10(P5 重寫時誤用 Murphy 範圍下界) | **20** |
+
+P5 commit `8d3288a` divergence rewrite 時用了 `MIN_PIVOT_DIST=10` 並標註
+「Murphy 20-60 intervals 下界」,但實際 10 < Murphy 範圍下界(20)且偏離 spec
+§3.6 預設 20。本 PR 對齊。
+
+**對應測試更新**(rsi/kd/macd × bearish/bullish):
+- pivot 間距從 idx 5/18(距離 13)→ idx 5/28(距離 23)
+- 序列長度從 n=25 → n=35
+
+### Spec 校驗其他項全綠
+
+| Core | 校驗項 | 對齊 |
+|---|---|---|
+| `day_trading_core` | Params §7.3 / EventKind §7.5 / Fact §7.6 | ✅ 完全對齊 m3Spec/chip_cores.md |
+| `kd_core` | Params §5.2 / Output §5.4 / Fact §5.5 | ✅ 對齊 spec r2 |
+| `ma_core` | EventKind §7.6(ma_bullish/bearish/golden/death + above_ma_streak) | ✅ spec 未強制 cross_spacing,production-data-driven addition |
+| `macd_core` | Params §3.2 / 5 種 EventKind §3.5 / 背離 §3.6 | ✅(MIN_PIVOT_DIST 修後對齊) |
+| `rsi_core` | Params §4.2 / Output §4.4 / Fact §4.5 / FailureSwing §4.6 | ✅(MIN_PIVOT_DIST 修後對齊) |
+| `institutional_core` | edge trigger 非 spec 規定(production calibration,Brown & Warner 1985 學術依據) | ✅ spec 允許 |
+| `foreign_holding_core` | edge trigger + rolling z-score(Fama 1969 + Brown & Warner 1985) | ✅ spec 允許 |
+
+### Commit 預計(本 PR)
+
+| commit | 範圍 |
+|---|---|
+| `3d49cc7` | 7 cores 出處註解補完(Verification SQL + 學術文獻完整書名 + m3Spec ref) |
+| 本 PR | MIN_PIVOT_DIST 10→20 修正 + 3 cores 測試對應更新 + macd_core header 更新 |
+
+### Production 影響
+
+修前 pivot 版觸發率 2–6/yr 🟢;修後 MIN_PIVOT_DIST=20 預期更稀疏,落 1–4/yr 🟢
+(背離本質應為稀有訊號,Murphy 1999 p.248 原文「RSI 最重要 但也最少見」)。
+User 跑 `tw_cores run-all --write` + `p2_calibration_data.sql §2` 可驗 Divergence
+EventKind 觸發率變化。
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變,本 session 0 migration)
+- Rust workspace:24 crate / **172 tests passed** / 0 warnings
+- spec alignment 全綠;0 已知偏離
+- 下個 session:**P3 neely 22 條 R4-R7 + Diagonal sub_kind**(等 user m3Spec/neely_core.md)
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml
+- 純常數值改變 + 註解補完
+- 修正方向:更嚴格(更少 false positive),不會生新 false negative
+- Rollback:單 commit `git revert` 即可
 
 ---
 

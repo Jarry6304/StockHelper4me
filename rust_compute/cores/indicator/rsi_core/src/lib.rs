@@ -235,7 +235,9 @@ fn detect_divergences(
     dates: &[NaiveDate],
 ) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
     const PIVOT_N: usize = 3;        // Lucas & LeBeau: 3-bar swing confirmation
-    const MIN_PIVOT_DIST: usize = 10; // Murphy: "20 to 60 intervals"; 10 as practical lower bound
+    // 對齊 spec §3.6:「兩個價格極值點之間時間距離 ≥ N 根 K 棒(預設 N=20)」
+    // Murphy (1999) p.248 建議 20-60 intervals;此值對齊 spec 下限 + Murphy 範圍下界。
+    const MIN_PIVOT_DIST: usize = 20;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
     let mut out = Vec::new();
@@ -302,25 +304,26 @@ mod tests {
     #[test]
     fn bearish_divergence_pivot_fires_once() {
         // price makes higher swing high, indicator makes lower swing high → 1 bearish divergence
-        let n = 25usize;
+        // pivots placed ≥ 20 bars apart to satisfy MIN_PIVOT_DIST (spec §3.6 N=20)
+        let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];
         let mut prices = vec![90.0_f64; n];
         let mut indicator = vec![50.0_f64; n];
         prices[5] = 100.0; indicator[5] = 70.0;  // first swing high
-        prices[18] = 105.0; indicator[18] = 65.0; // price HH, indicator LH → bearish
+        prices[28] = 105.0; indicator[28] = 65.0; // price HH, indicator LH → bearish (distance 23)
         let r = detect_divergences(&prices, &indicator, &dates);
         assert_eq!(r.iter().filter(|(_, b, ..)| *b).count(), 1, "bearish divergence fires once");
     }
     #[test]
     fn bullish_divergence_pivot_fires_once() {
-        let n = 25usize;
+        let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];
         let mut prices = vec![100.0_f64; n];
         let mut indicator = vec![50.0_f64; n];
         prices[5] = 80.0; indicator[5] = 30.0;   // first swing low
-        prices[18] = 75.0; indicator[18] = 35.0;  // price LL, indicator HL → bullish
+        prices[28] = 75.0; indicator[28] = 35.0;  // price LL, indicator HL → bullish (distance 23)
         let r = detect_divergences(&prices, &indicator, &dates);
         assert_eq!(r.iter().filter(|(_, b, ..)| !b).count(), 1, "bullish divergence fires once");
     }

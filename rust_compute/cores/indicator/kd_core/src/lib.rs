@@ -156,7 +156,8 @@ fn detect_divergences(
     dates: &[NaiveDate],
 ) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
     const PIVOT_N: usize = 3;
-    const MIN_PIVOT_DIST: usize = 10;
+    // 對齊 spec(indicator_cores_momentum.md §3.6):兩極值點距離 ≥ N=20。
+    const MIN_PIVOT_DIST: usize = 20;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
     let mut out = Vec::new();
@@ -213,13 +214,14 @@ mod tests {
     }
     #[test]
     fn kd_bearish_divergence_fires_once() {
-        let n = 25usize;
+        // pivots placed ≥ 20 bars apart to satisfy MIN_PIVOT_DIST (spec §3.6 N=20)
+        let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];
         let mut prices = vec![90.0_f64; n];
         let mut indicator = vec![50.0_f64; n];
         prices[5] = 100.0; indicator[5] = 80.0;
-        prices[18] = 105.0; indicator[18] = 75.0; // price HH, indicator LH
+        prices[28] = 105.0; indicator[28] = 75.0; // price HH, indicator LH (distance 23)
         let r = detect_divergences(&prices, &indicator, &dates);
         assert_eq!(r.iter().filter(|(_, b, ..)| *b).count(), 1);
     }
