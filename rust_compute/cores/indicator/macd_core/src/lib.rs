@@ -6,8 +6,9 @@
 //   fast=12 / slow=26 / signal=9:Appel, Gerald (1979).
 //                                  "The Moving Average Convergence Divergence Method"
 //                                  原作者設計,12/26 對應 2 月/4 月 EMA(原始月線分析)
-//   MIN_PIVOT_DIST=20:對齊 spec §3.6「兩極值點距離 ≥ N=20」+ Murphy (1999) p.248
-//                      建議 20-60 intervals 的下界(原 fixed-20-bar window 已 P5 替換為 pivot-based)
+//   MIN_PIVOT_DIST=12:NEoWave 經驗值(2026-05-14 P0 Gate v4 校準後)。原 spec §3.6 預設 20
+//                      過於保守 → Divergence 0.27-0.33/yr 低於 Murphy 1-4/yr 下限 3× →
+//                      讓步至 12-bar 距離(spec §3.6「N」結構性條件 ≥ 2 × PIVOT_N = 6 仍滿足)
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -195,8 +196,14 @@ fn detect_divergences(
     dates: &[NaiveDate],
 ) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
     const PIVOT_N: usize = 3;
-    // 對齊 spec §3.6:「兩個價格極值點之間時間距離 ≥ N 根 K 棒(預設 N=20)」。
-    const MIN_PIVOT_DIST: usize = 20;
+    // **校準歷史**:
+    // - 2026-05-12 v1.32 P5 algorithm rewrite:fixed-20-bar window → pivot-based,MIN=10
+    // - 2026-05-13 v1.33:10 → 20 對齊 spec §3.6 預設值
+    // - 2026-05-14 P0 Gate v4 production 1264 stocks:Divergence 0.27-0.33/yr 低於
+    //   Murphy (1999) p.248 預期 1-4/yr 下限 3× → 升 20 → **12** 讓步至 Murphy 下限
+    //   預期 events_per_stock_per_year × 2.5 → ~0.7-0.8/yr,接近 Murphy 1/yr 下限。
+    //   12 ≥ 2× PIVOT_N(=6),仍符 spec §3.6 結構性要求(N=12 為 NEoWave 經驗值)。
+    const MIN_PIVOT_DIST: usize = 12;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
     let mut out = Vec::new();
@@ -246,7 +253,7 @@ mod tests {
 
     #[test]
     fn macd_bearish_divergence_fires_once() {
-        // pivots placed ≥ 20 bars apart to satisfy MIN_PIVOT_DIST (spec §3.6 N=20)
+        // pivots placed ≥ 20 bars apart, well above MIN_PIVOT_DIST=12 (P0 Gate v4 校準後)
         let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];

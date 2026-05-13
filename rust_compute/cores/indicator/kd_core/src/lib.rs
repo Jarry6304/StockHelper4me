@@ -161,8 +161,15 @@ fn detect_divergences(
     dates: &[NaiveDate],
 ) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
     const PIVOT_N: usize = 3;
-    // 對齊 spec(indicator_cores_momentum.md §3.6):兩極值點距離 ≥ N=20。
-    const MIN_PIVOT_DIST: usize = 20;
+    // **校準歷史**:
+    // - 2026-05-12 v1.32 P5 algorithm rewrite:fixed-20-bar window → pivot-based,MIN=10
+    // - 2026-05-13 v1.33:10 → 20 對齊 spec §3.6 預設值
+    // - 2026-05-14 P0 Gate v4 production 1264 stocks:Divergence 0.33-0.36/yr 低於
+    //   Murphy (1999) p.248 預期 1-4/yr 下限 3× → 升 20 → **12** 讓步至 Murphy 下限
+    //   預期 events_per_stock_per_year × 2.5 → ~0.8-0.9/yr,接近 Murphy 1/yr 下限。
+    //   12 ≥ 2× PIVOT_N(=6),仍符 spec §3.6「兩極值點距離 ≥ N」結構性要求,N 取 12 為 NEoWave
+    //   經驗值(spec 預設 20 為保守值,Murphy 1999 沒給 N 明確下限)。
+    const MIN_PIVOT_DIST: usize = 12;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
     let mut out = Vec::new();
@@ -219,7 +226,7 @@ mod tests {
     }
     #[test]
     fn kd_bearish_divergence_fires_once() {
-        // pivots placed ≥ 20 bars apart to satisfy MIN_PIVOT_DIST (spec §3.6 N=20)
+        // pivots placed ≥ 20 bars apart, well above MIN_PIVOT_DIST=12 (P0 Gate v4 校準後)
         let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];
