@@ -83,18 +83,22 @@ pub fn compact(scenarios: Vec<Scenario>, cfg: &NeelyEngineConfig) -> CompactionR
     }
 }
 
-/// PowerRating 排序(對齊 §9.1 enum):StrongBullish > Bullish > SlightBullish >
-/// Neutral > SlightBearish > Bearish > StrongBearish。BeamSearch 用「magnitude」
-/// 排序(|rating - Neutral|),保留兩端極值;同 magnitude 時保留 Bullish 側。
+/// PowerRating 排序(對齊 r5 §9.2 方向中性命名):
+///   StronglyFavorContinuation(+3) > ModeratelyFavorContinuation(+2) > SlightlyFavorContinuation(+1)
+///   > Neutral(0) > SlightlyAgainstContinuation(-1) > ModeratelyAgainstContinuation(-2)
+///   > StronglyAgainstContinuation(-3)
+///
+/// BeamSearch 用「magnitude」排序(|rating - Neutral|),保留兩端極值;
+/// 同 magnitude 時保留 FavorContinuation 側。
 pub(crate) fn power_rating_magnitude(p: PowerRating) -> i32 {
     match p {
-        PowerRating::StrongBullish => 3,
-        PowerRating::Bullish => 2,
-        PowerRating::SlightBullish => 1,
+        PowerRating::StronglyFavorContinuation => 3,
+        PowerRating::ModeratelyFavorContinuation => 2,
+        PowerRating::SlightlyFavorContinuation => 1,
         PowerRating::Neutral => 0,
-        PowerRating::SlightBearish => -1,
-        PowerRating::Bearish => -2,
-        PowerRating::StrongBearish => -3,
+        PowerRating::SlightlyAgainstContinuation => -1,
+        PowerRating::ModeratelyAgainstContinuation => -2,
+        PowerRating::StronglyAgainstContinuation => -3,
     }
 }
 
@@ -120,7 +124,7 @@ mod tests {
             complexity_level: ComplexityLevel::Simple,
             power_rating: rating,
             max_retracement: 0.0,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -135,7 +139,7 @@ mod tests {
     fn small_forest_passes_through_unchanged() {
         let cfg = NeelyEngineConfig::default(); // forest_max_size 1000
         let scenarios = vec![
-            make_scenario("a", PowerRating::Bullish),
+            make_scenario("a", PowerRating::ModeratelyFavorContinuation),
             make_scenario("b", PowerRating::Neutral),
         ];
         let result = compact(scenarios, &cfg);
@@ -153,9 +157,9 @@ mod tests {
         };
         let scenarios = vec![
             make_scenario("a", PowerRating::Neutral),
-            make_scenario("b", PowerRating::StrongBullish),
-            make_scenario("c", PowerRating::SlightBearish),
-            make_scenario("d", PowerRating::Bearish),
+            make_scenario("b", PowerRating::StronglyFavorContinuation),
+            make_scenario("c", PowerRating::SlightlyAgainstContinuation),
+            make_scenario("d", PowerRating::ModeratelyAgainstContinuation),
             make_scenario("e", PowerRating::Neutral),
         ];
         let result = compact(scenarios, &cfg);
@@ -172,8 +176,8 @@ mod tests {
             ..NeelyEngineConfig::default()
         };
         let scenarios = vec![
-            make_scenario("a", PowerRating::Bullish),
-            make_scenario("b", PowerRating::Bearish),
+            make_scenario("a", PowerRating::ModeratelyFavorContinuation),
+            make_scenario("b", PowerRating::ModeratelyAgainstContinuation),
         ];
         let result = compact(scenarios, &cfg);
         assert!(!result.overflow_triggered, "Unbounded 不應 trigger overflow");
@@ -182,8 +186,8 @@ mod tests {
 
     #[test]
     fn power_rating_magnitude_ordering() {
-        assert_eq!(power_rating_magnitude(PowerRating::StrongBullish), 3);
+        assert_eq!(power_rating_magnitude(PowerRating::StronglyFavorContinuation), 3);
         assert_eq!(power_rating_magnitude(PowerRating::Neutral), 0);
-        assert_eq!(power_rating_magnitude(PowerRating::StrongBearish), -3);
+        assert_eq!(power_rating_magnitude(PowerRating::StronglyAgainstContinuation), -3);
     }
 }

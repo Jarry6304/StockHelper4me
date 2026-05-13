@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.34，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.35，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,73 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.35 — neely PR-3c-pre RuleId chapter-based migration(2026-05-13 後續)
+
+接 v1.34 ma_core / revenue_core Reference 補完後,user 拍版 neely 走 **Path A
+(完整對齊 spec r5 ~3 週 / 9 sub-PR)+ RuleId Chapter-based 重寫 +
+TerminalImpulse 取代 Diagonal**。本 session 落地首個 sub-PR:**PR-3c-pre 純架構
+breaking change**,為後續 PR-3c-1~3 + PR-4b/5b/6b 打底。
+
+### 範圍
+
+| 變更 | 對應 spec r5 |
+|---|---|
+| RuleId enum chapter-based 重寫(~50 個 variant) | architecture.md §9.3 |
+| NeelyPatternType:Diagonal{Leading/Ending} → **TerminalImpulse** + RunningCorrection 獨立 variant | architecture.md §9.6(r5 修正)|
+| PowerRating:r2 Bullish/Bearish → **FavorContinuation/AgainstContinuation**(方向中性) | architecture.md §9.2 |
+| PostBehavior:r2 簡單 3 variant → **8 variant 結構化 enum**(FullRetracementRequired / MinRetracement / ReachesWaveZone / NextImpulseExceeds / NotFullyRetracedUnless / Unconstrained / HintsAtPattern / Composite) | architecture.md §9.2 |
+| StructuralFacts:7 → **8 子欄位**(加 extension_subdivision_pair + Alternation5Axes) | architecture.md §9.5 |
+| NeelyDiagnostics:加 **atr_dual_mode_diff** + peak_memory_mb 改 f64 + stage_elapsed_ms → stage_timings_ms | architecture.md §15.1 |
+| 新增 enum:ImpulseExtension / WaveNumber / EmulationKind / AlternationAxis / WaveAbc / TriangleWave / TriangleVariant / FlatVariant(r5 7 種 named)/ ZigzagVariant | architecture.md §9.3 line 1036-1044 |
+
+### 改動 11 個檔(0 alembic / 0 Python / 0 schema)
+
+`output.rs`(完整重寫)/ `validator/{core,flat,zigzag,triangle,wave}_rules.rs`
+(22 stub RuleId 對映 r5 chapter-based)/ `classifier/mod.rs`(TerminalImpulse +
+.cloned() 取代 .copied())/ `compaction/mod.rs`(PowerRating 方向中性)/
+`power_rating/{mod,table}.rs`(7 級命名)/ `triggers/mod.rs`(RuleId 新名)/
+`facts.rs`(produce_facts 序列化)/ `lib.rs`(stage_timings_ms 2 處)
+
+### RuleId 遷移對照(摘要,完整見 `docs/m3_cores_spec_pending.md §17`)
+
+- `Core(1-3)` → `Ch5Essential(1-3)`(R1-R3 已完整實作)
+- `Core(4-7)` → `Ch3PreConstructive { rule: N, condition: 'a', ... }`(R4-R7 Deferred)
+- `Flat(1-2)` → `Ch5FlatMin{B,C}Ratio`
+- `Zigzag(1-4)` → `Ch5ZigzagMaxBRetracement` / `Ch11ZigzagWaveByWave{wave:C}` / `Ch4ZigzagDetour` / `Ch5ZigzagCTriangleException`
+- `Triangle(1-10)` → 10 個 Ch5/Ch6/Ch11 variant(含 3 種 Contracting Limiting + 3 種 Expanding wave-e)
+- `Wave(1-2)` → `Ch11ImpulseWaveByWave{ext:ThirdExt,wave:Three}` + `Ch12FibonacciInternal`
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 178 → 179 tests passed / 0 failed / 0 warnings
+# (+1 terminal_impulse classifier test 取代 r2 diagonal test)
+```
+
+### 風險
+
+🟡 RuleId 是 **breaking change**,但 production neely facts 量級極小(~5 facts/
+stock × 1700 stocks ≈ 8500 rows),P0 Gate 後可全量重算,**不需 alembic
+migration**。
+
+🟢 其他:
+- 0 alembic / 0 collector.toml / 0 Python / 0 schema 改動(純 Rust)
+- m2 收尾不阻塞
+- production 既有 4.4M facts(其他 21 cores)不受影響
+- Rollback:單 commit `git revert` 即可
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變)
+- Rust workspace:24 crate / **179 tests passed** / 0 warnings
+- neely_core:v0.7.0 / Stage 1-10 partial 對齊 spec r5 架構層
+- **22 條規則仍全 Deferred**(用新 chapter-based RuleId,留 PR-3c-1~3 補)
+- 下個 sub-PR:**PR-3c-1**(F1-F2 + Z1-Z4 + W1-W2 共 8 條 Ch5 wave-level 規則,~3 天)
+- 9 sub-PR sequence:PR-3c-pre ✅ → PR-3c-1 / PR-3c-3(平行)→ PR-3c-2 → PR-4b → PR-5b / PR-6b-1~3 → 完成
 
 ---
 

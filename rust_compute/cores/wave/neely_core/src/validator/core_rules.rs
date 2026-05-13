@@ -47,7 +47,7 @@ pub fn run(
 //
 // 違反 → Fail(附 gap = retracement % - 100%);通過 → Pass
 fn rule_r1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
-    let rid = RuleId::Core(1);
+    let rid = RuleId::Ch5Essential(1);
     if candidate.monowave_indices.len() < 2 {
         return RuleResult::NotApplicable(rid);
     }
@@ -105,7 +105,7 @@ fn rule_r1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 // 適用:wave_count == 5
 // 邏輯:W3.magnitude >= min(W1.magnitude, W5.magnitude)
 fn rule_r2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
-    let rid = RuleId::Core(2);
+    let rid = RuleId::Ch5Essential(2);
     if candidate.wave_count != 5 || candidate.monowave_indices.len() < 5 {
         return RuleResult::NotApplicable(rid);
     }
@@ -146,7 +146,7 @@ fn rule_r2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 // 注意:Diagonal 允許 W4 與 W1 重疊(Neely §10),這裡先採 strict Impulse 版本,
 // 留 PR-4 Classifier + PR-4 Post-Validator 處理 Diagonal exception。
 fn rule_r3(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
-    let rid = RuleId::Core(3);
+    let rid = RuleId::Ch5Essential(3);
     if candidate.wave_count != 5 || candidate.monowave_indices.len() < 5 {
         return RuleResult::NotApplicable(rid);
     }
@@ -193,19 +193,19 @@ fn rule_r3(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 // ---------------------------------------------------------------------------
 
 fn rule_r4_stub() -> RuleResult {
-    RuleResult::Deferred(RuleId::Core(4))
+    RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 4, condition: 'a', category: None, sub_rule_index: None })
 }
 
 fn rule_r5_stub() -> RuleResult {
-    RuleResult::Deferred(RuleId::Core(5))
+    RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 5, condition: 'a', category: None, sub_rule_index: None })
 }
 
 fn rule_r6_stub() -> RuleResult {
-    RuleResult::Deferred(RuleId::Core(6))
+    RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 6, condition: 'a', category: None, sub_rule_index: None })
 }
 
 fn rule_r7_stub() -> RuleResult {
-    RuleResult::Deferred(RuleId::Core(7))
+    RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 7, condition: 'a', category: None, sub_rule_index: None })
 }
 
 #[cfg(test)]
@@ -268,7 +268,7 @@ mod tests {
         let result = rule_r1(&candidate, &classified);
         assert!(result.is_fail(), "W2 跨過 W1 起點應 R1 fail");
         if let RuleResult::Fail(rej) = result {
-            assert_eq!(rej.rule_id, RuleId::Core(1));
+            assert_eq!(rej.rule_id, RuleId::Ch5Essential(1));
             assert!(rej.gap > 0.0);
         }
     }
@@ -377,9 +377,9 @@ mod tests {
 
     #[test]
     fn r4_to_r7_currently_deferred() {
-        assert!(matches!(rule_r4_stub(), RuleResult::Deferred(RuleId::Core(4))));
-        assert!(matches!(rule_r5_stub(), RuleResult::Deferred(RuleId::Core(5))));
-        assert!(matches!(rule_r6_stub(), RuleResult::Deferred(RuleId::Core(6))));
-        assert!(matches!(rule_r7_stub(), RuleResult::Deferred(RuleId::Core(7))));
+        assert!(matches!(rule_r4_stub(), RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 4, condition: 'a', category: None, sub_rule_index: None })));
+        assert!(matches!(rule_r5_stub(), RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 5, condition: 'a', category: None, sub_rule_index: None })));
+        assert!(matches!(rule_r6_stub(), RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 6, condition: 'a', category: None, sub_rule_index: None })));
+        assert!(matches!(rule_r7_stub(), RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 7, condition: 'a', category: None, sub_rule_index: None })));
     }
 }

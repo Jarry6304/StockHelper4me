@@ -64,7 +64,7 @@ mod tests {
             complexity_level: ComplexityLevel::Simple,
             power_rating: rating,
             max_retracement: 0.0,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn under_k_pass_through() {
-        let scenarios = vec![make("a", PowerRating::Bullish)];
+        let scenarios = vec![make("a", PowerRating::ModeratelyFavorContinuation)];
         let kept = keep_top_k_by_power_rating(scenarios, 5);
         assert_eq!(kept.len(), 1);
     }
@@ -86,10 +86,10 @@ mod tests {
     fn keeps_extreme_ratings_first() {
         let scenarios = vec![
             make("neut", PowerRating::Neutral),
-            make("strong_bull", PowerRating::StrongBullish),
-            make("slight_bear", PowerRating::SlightBearish),
-            make("strong_bear", PowerRating::StrongBearish),
-            make("slight_bull", PowerRating::SlightBullish),
+            make("strong_bull", PowerRating::StronglyFavorContinuation),
+            make("slight_bear", PowerRating::SlightlyAgainstContinuation),
+            make("strong_bear", PowerRating::StronglyAgainstContinuation),
+            make("slight_bull", PowerRating::SlightlyFavorContinuation),
         ];
         let kept = keep_top_k_by_power_rating(scenarios, 2);
         assert_eq!(kept.len(), 2);
@@ -101,8 +101,8 @@ mod tests {
     #[test]
     fn equal_magnitude_prefers_bullish() {
         let scenarios = vec![
-            make("bear", PowerRating::Bearish),
-            make("bull", PowerRating::Bullish),
+            make("bear", PowerRating::ModeratelyAgainstContinuation),
+            make("bull", PowerRating::ModeratelyFavorContinuation),
         ];
         let kept = keep_top_k_by_power_rating(scenarios, 1);
         assert_eq!(kept.len(), 1);

@@ -270,7 +270,7 @@ impl WaveCore for NeelyCore {
                 compaction_paths: compaction_result.compaction_paths,
                 overflow_triggered: compaction_result.overflow_triggered,
                 compaction_timeout: compaction_result.timeout_triggered,
-                stage_elapsed_ms: stage_elapsed,
+                stage_timings_ms: stage_elapsed,
                 elapsed_ms,
                 ..Default::default()
             },
@@ -384,7 +384,7 @@ mod tests {
             "stage_10c_triggers",
         ] {
             assert!(
-                out.diagnostics.stage_elapsed_ms.contains_key(*stage_key),
+                out.diagnostics.stage_timings_ms.contains_key(*stage_key),
                 "stage timing key '{}' 應存在",
                 stage_key
             );

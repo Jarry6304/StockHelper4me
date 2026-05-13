@@ -1,23 +1,29 @@
-// wave_rules.rs — Validator W1-W2(通用波浪規則)
+// wave_rules.rs — Validator W1-W2(通用波浪規則,r5 §9.3)
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §十(規則組)。
+// 對齊 m3Spec/neely_rules.md Ch5 p.5-34~47 + Ch11 p.11-4~18 + Ch12 Fibonacci。
 //
-// **M3 PR-3b 階段**:W1-W2 全部 Deferred。具體規則(Channeling / Volume
-// alignment / Time relationship 等通用波浪約束)等 user 在 m3Spec/ 寫最新
-// neely_core spec 後 batch 補。
+// **PR-3c-pre 階段(2026-05-13)**:W1-W2 全部 Deferred。
+// PR-3c-1 動工:
+//   - W1 = Ch11ImpulseWaveByWave { ext: ThirdExt, wave: Three }:Impulse Extension
+//     6 情境(1st/3rd/5th Ext × Trending/Terminal),預設 3rd Ext Trending(最常見)
+//   - W2 = Ch12FibonacciInternal:Essential Construction Rules + Fibonacci 內部
+//     比例(wave-c Zigzag 常 = a;Triangle 常有 61.8% 比例)
 
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
 use crate::monowave::ClassifiedMonowave;
-use crate::output::RuleId;
+use crate::output::{ImpulseExtension, RuleId, WaveNumber};
 
 pub fn run(
     _candidate: &WaveCandidate,
     _classified: &[ClassifiedMonowave],
 ) -> Vec<RuleResult> {
     vec![
-        RuleResult::Deferred(RuleId::Wave(1)),
-        RuleResult::Deferred(RuleId::Wave(2)),
+        RuleResult::Deferred(RuleId::Ch11ImpulseWaveByWave {
+            ext: ImpulseExtension::ThirdExt,
+            wave: WaveNumber::Three,
+        }),
+        RuleResult::Deferred(RuleId::Ch12FibonacciInternal),
     ]
 }
 

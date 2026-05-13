@@ -1,28 +1,26 @@
 // classifier — Stage 5:Pattern Classifier
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 5 / §九 NeelyPatternType。
+// 對齊 m3Spec/neely_core_architecture.md r5 §9.6 + neely_rules.md Ch5/Ch11。
 //
 // 給通過 Validator 的 candidate 命名 pattern_type:
-//   Impulse / Diagonal / Zigzag / Flat / Triangle / Combination
+//   Impulse / TerminalImpulse / Zigzag / Flat / Triangle / Combination / RunningCorrection
 //
-// **M3 PR-4 階段**(先實踐以後再改):
-//   - wave_count == 5 + R3 pass → Impulse(strict)
-//   - wave_count == 5 + R3 fail → Diagonal { Leading }(寬鬆 — sub_kind 留 PR-4b 校準)
-//   - wave_count == 3 → Zigzag { Single }(預設 — Flat / Triangle / Combination 區分
-//     留 PR-4b 對齊 m3Spec/ neely 最新 spec 後校準)
+// **PR-3c-pre 階段(2026-05-13)**:
+//   - wave_count == 5 + Ch5Essential(3) pass → Impulse(strict)
+//   - wave_count == 5 + Ch5Essential(3) fail → TerminalImpulse(r5 §9.6 取代 r2 Diagonal)
+//   - wave_count == 3 → Zigzag { Normal }(預設;Flat / Triangle / Combination 區分留 PR-4b)
 //
-// 留後續 PR(對齊 §九):
-//   - Diagonal Leading vs Ending 區分(需要 W2/W4 的 sub-wave 結構)
-//   - Zigzag Single / Double / Triple
-//   - Flat Regular / Expanded / Running
-//   - Triangle Contracting / Expanding / Limiting
-//   - Combination DoubleThree / TripleThree
+// 留後續 PR(對齊 §9.6):
+//   - TerminalImpulse 完整 sub-wave 結構檢查(留 PR-4b)
+//   - Zigzag Normal / Elongated / Truncated 區分(留 PR-3c-1 by Z2 c-wave ratio)
+//   - Flat 7 變體(留 PR-3c-1 + PR-4b)
+//   - Triangle 9 變體(留 PR-3c-2)
+//   - Combination DoubleThree / TripleThree(留 PR-4b)
 
 use crate::candidates::WaveCandidate;
 use crate::output::{
-    ComplexityLevel, DiagonalKind, FibZone, NeelyPatternType,
-    PostBehavior, PowerRating, RuleId, Scenario, StructuralFacts, Trigger,
-    WaveNode, ZigzagKind,
+    ComplexityLevel, FibZone, NeelyPatternType, PostBehavior, PowerRating,
+    RuleId, Scenario, StructuralFacts, Trigger, WaveNode, ZigzagVariant,
 };
 use crate::monowave::ClassifiedMonowave;
 use crate::validator::ValidationReport;
@@ -63,35 +61,33 @@ pub fn classify(
         pattern_type,
         structure_label,
         complexity_level: classify_complexity(candidate),
-        power_rating: PowerRating::Neutral, // PR-6 Power Rating 查表後填
-        max_retracement: 0.0,               // PR-6 Power Rating 查表後填
-        post_pattern_behavior: PostBehavior::Indeterminate,
+        power_rating: PowerRating::Neutral,
+        max_retracement: 0.0,
+        post_pattern_behavior: PostBehavior::Unconstrained,
         passed_rules: report
             .passed
             .iter()
-            .copied()
+            .cloned()
             .chain(default_passed_rules(candidate, report))
             .collect(),
         deferred_rules: report.deferred.clone(),
         rules_passed_count: report.passed.len(),
         deferred_rules_count: report.deferred.len(),
-        invalidation_triggers: Vec::<Trigger>::new(), // PR-6 triggers 補
-        expected_fib_zones: Vec::<FibZone>::new(),    // PR-6 Fibonacci 補
-        structural_facts: StructuralFacts::default(),  // PR-6 補
+        invalidation_triggers: Vec::<Trigger>::new(),
+        expected_fib_zones: Vec::<FibZone>::new(),
+        structural_facts: StructuralFacts::default(),
     })
 }
 
 fn classify_5wave(_candidate: &WaveCandidate, report: &ValidationReport) -> NeelyPatternType {
-    // R3(W4 不重疊 W1)是 Impulse vs Diagonal 的判別關鍵
-    let r3_failed = report.failed.iter().any(|r| r.rule_id == RuleId::Core(3));
+    // R3(W4 不重疊 W1)是 Impulse vs TerminalImpulse 的判別關鍵
+    // r5 §9.6:Neely 派用 TerminalImpulse(取代 Prechter Diagonal Leading/Ending)
+    let r3_failed = report.failed.iter().any(|r| r.rule_id == RuleId::Ch5Essential(3));
 
     if r3_failed {
-        // W4 重疊 W1 → Diagonal
-        // Leading vs Ending 區分需 sub-wave 結構,本階段預設 Leading
-        // 留 PR-4b 校準
-        NeelyPatternType::Diagonal {
-            sub_kind: DiagonalKind::Leading,
-        }
+        // W4 重疊 W1 → TerminalImpulse(Neely 派術語)
+        // 1st/3rd/5th Ext / Non-Ext sub_kind 區分留 PR-4b 校準
+        NeelyPatternType::TerminalImpulse
     } else {
         // R3 通過 → strict Impulse
         NeelyPatternType::Impulse
@@ -99,16 +95,17 @@ fn classify_5wave(_candidate: &WaveCandidate, report: &ValidationReport) -> Neel
 }
 
 fn classify_3wave(_candidate: &WaveCandidate, _report: &ValidationReport) -> NeelyPatternType {
-    // 3-wave correction 預設 Zigzag { Single }
+    // 3-wave correction 預設 Zigzag { Normal }(典型 61.8-161.8% × a)
+    // Elongated / Truncated 區分留 PR-3c-1(by Z2 c-wave ratio)
     // Flat / Triangle / Combination 區分留 PR-4b
     // 注意:Triangle 嚴格定義是 5-wave (A-B-C-D-E),這裡 3-wave 不會是 Triangle
     NeelyPatternType::Zigzag {
-        sub_kind: ZigzagKind::Single,
+        sub_kind: ZigzagVariant::Normal,
     }
 }
 
 fn classify_complexity(candidate: &WaveCandidate) -> ComplexityLevel {
-    // 基本 Complexity Rule(對齊 m2Spec/oldm2Spec/neely_core.md §七 Stage 7):
+    // 基本 Complexity Rule(對齊 m3Spec/ Stage 7):
     //   3 wave → Simple
     //   5 wave → Intermediate
     //   5+ nested wave → Complex(留 PR-4b)
@@ -152,24 +149,25 @@ fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave])
 }
 
 /// 預設 passed rule list(report.passed 目前 PR-3b 沒填,本 helper 從 deferred / failed 反推)。
-/// PR-3c 補完 validator 後可移除。
+/// PR-3c-1 補完 validator 後可移除。
 fn default_passed_rules(
     candidate: &WaveCandidate,
     report: &ValidationReport,
 ) -> Vec<RuleId> {
     // R1-R3 對 wave_count >= 3 適用,若沒在 failed 也沒在 deferred,則視為 passed
+    // 對齊 r5 §9.3:RuleId::Ch5Essential(N) 取代 r2 RuleId::Core(N)
     let mut passed = Vec::new();
-    let r1 = RuleId::Core(1);
-    let r2 = RuleId::Core(2);
-    let r3 = RuleId::Core(3);
+    let r1 = RuleId::Ch5Essential(1);
+    let r2 = RuleId::Ch5Essential(2);
+    let r3 = RuleId::Ch5Essential(3);
 
-    let in_failed = |r: RuleId| report.failed.iter().any(|f| f.rule_id == r);
-    let in_deferred = |r: RuleId| report.deferred.contains(&r);
-    let in_n_a = |r: RuleId| report.not_applicable.contains(&r);
+    let in_failed = |r: &RuleId| report.failed.iter().any(|f| f.rule_id == *r);
+    let in_deferred = |r: &RuleId| report.deferred.contains(r);
+    let in_n_a = |r: &RuleId| report.not_applicable.contains(r);
 
     for r in &[r1, r2, r3] {
-        if !in_failed(*r) && !in_deferred(*r) && !in_n_a(*r) {
-            passed.push(*r);
+        if !in_failed(r) && !in_deferred(r) && !in_n_a(r) {
+            passed.push(r.clone());
         }
     }
 
@@ -185,7 +183,7 @@ mod tests {
     use crate::candidates::WaveCandidate;
     use crate::monowave::ProportionMetrics;
     use crate::output::{
-        CombinationKind, FlatKind, Monowave, MonowaveDirection, TriangleKind,
+        CombinationKind, FlatVariant, Monowave, MonowaveDirection, TriangleVariant,
     };
     use chrono::NaiveDate;
 
@@ -233,13 +231,14 @@ mod tests {
             passed: vec![],
             failed: vec![],
             deferred: vec![
-                RuleId::Core(4), RuleId::Core(5), RuleId::Core(6), RuleId::Core(7),
-                RuleId::Flat(1), RuleId::Flat(2),
-                RuleId::Zigzag(1), RuleId::Zigzag(2), RuleId::Zigzag(3), RuleId::Zigzag(4),
-                RuleId::Triangle(1), RuleId::Triangle(2), RuleId::Triangle(3),
-                RuleId::Triangle(4), RuleId::Triangle(5), RuleId::Triangle(6),
-                RuleId::Triangle(7), RuleId::Triangle(8), RuleId::Triangle(9), RuleId::Triangle(10),
-                RuleId::Wave(1), RuleId::Wave(2),
+                RuleId::Ch5Essential(4), RuleId::Ch5Essential(5),
+                RuleId::Ch5Essential(6), RuleId::Ch5Essential(7),
+                RuleId::Ch5FlatMinBRatio, RuleId::Ch5FlatMinCRatio,
+                RuleId::Ch5ZigzagMaxBRetracement, RuleId::Ch5ZigzagCTriangleException,
+                RuleId::Ch4ZigzagDetour,
+                RuleId::Ch5TriangleBRange, RuleId::Ch5TriangleLegContraction,
+                RuleId::Ch5TriangleLegEquality5Pct,
+                RuleId::Ch5OverlapTrending, RuleId::Ch5OverlapTerminal,
             ],
             not_applicable: vec![],
             overall_pass: true,
@@ -259,30 +258,28 @@ mod tests {
     }
 
     #[test]
-    fn five_wave_r3_fail_classified_as_diagonal() {
+    fn five_wave_r3_fail_classified_as_terminal_impulse() {
         let classified = make_5wave_impulse_classified();
         let candidate = make_candidate_5wave();
         let mut report = make_passing_report();
-        // 模擬 R3 fail
+        // 模擬 R3 fail(對齊 r5 §9.6:r2 Diagonal 改 TerminalImpulse)
         report.failed.push(crate::output::RuleRejection {
             candidate_id: "c5-mw0-mw4".to_string(),
-            rule_id: RuleId::Core(3),
+            rule_id: RuleId::Ch5Essential(3),
             expected: "test".to_string(),
             actual: "test".to_string(),
             gap: 0.0,
             neely_page: "test".to_string(),
         });
-        // overall_pass 仍 true(模擬 PR-4 Post-Validator 容許 Diagonal)
+        // overall_pass 仍 true(模擬 PR-4 Post-Validator 容許 TerminalImpulse)
         report.overall_pass = true;
-        let scenario = classify(&candidate, &report, &classified).expect("應產生 Diagonal Scenario");
-        assert!(matches!(
-            scenario.pattern_type,
-            NeelyPatternType::Diagonal { sub_kind: DiagonalKind::Leading }
-        ));
+        let scenario = classify(&candidate, &report, &classified)
+            .expect("應產生 TerminalImpulse Scenario");
+        assert!(matches!(scenario.pattern_type, NeelyPatternType::TerminalImpulse));
     }
 
     #[test]
-    fn three_wave_classified_as_zigzag_simple() {
+    fn three_wave_classified_as_zigzag_normal() {
         let classified = vec![
             cmw(100.0, 110.0, MonowaveDirection::Up),
             cmw(110.0, 100.0, MonowaveDirection::Down),
@@ -298,7 +295,7 @@ mod tests {
         let scenario = classify(&candidate, &report, &classified).expect("應產生 Scenario");
         assert!(matches!(
             scenario.pattern_type,
-            NeelyPatternType::Zigzag { sub_kind: ZigzagKind::Single }
+            NeelyPatternType::Zigzag { sub_kind: ZigzagVariant::Normal }
         ));
         assert!(matches!(scenario.complexity_level, ComplexityLevel::Simple));
     }
@@ -311,7 +308,7 @@ mod tests {
         report.overall_pass = false;
         report.failed.push(crate::output::RuleRejection {
             candidate_id: "c5-mw0-mw4".to_string(),
-            rule_id: RuleId::Core(1),
+            rule_id: RuleId::Ch5Essential(1),
             expected: "test".to_string(),
             actual: "test".to_string(),
             gap: 0.0,
@@ -320,12 +317,12 @@ mod tests {
         assert!(classify(&candidate, &report, &classified).is_none());
     }
 
-    // 觸發 enum exhaustive 檢查:確保 FlatKind / TriangleKind / CombinationKind
+    // 觸發 enum exhaustive 檢查:確保 FlatVariant / TriangleVariant / CombinationKind
     // 都有定義(編譯期檢查,不需 runtime test)
     #[allow(dead_code)]
     fn _enum_exhaustive_smoke() {
-        let _: FlatKind = FlatKind::Regular;
-        let _: TriangleKind = TriangleKind::Contracting;
+        let _: FlatVariant = FlatVariant::Common;
+        let _: TriangleVariant = TriangleVariant::HorizontalLimiting;
         let _: CombinationKind = CombinationKind::DoubleThree;
     }
 }

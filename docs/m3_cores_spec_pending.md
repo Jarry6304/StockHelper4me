@@ -644,8 +644,8 @@ ind.abs() < 1e-12 skip warmup zeros (RSI/MACD 前幾 bar 為 0.0)
 
 ---
 
-**最後更新**:2026-05-13(§16 valuation_core spec staleness 記錄 + ma/revenue Reference 補完)
-**Rust workspace**:24 crate / **178 tests passed**(168 + ma_core +6 precision +4 P5 = 178)/ 22 cores production verified
+**最後更新**:2026-05-13(§17 PR-3c-pre RuleId chapter-based migration 落地)
+**Rust workspace**:24 crate / **179 tests passed**(178 + 1 terminal_impulse)/ 22 cores production verified
 **alembic head**:`x3y4z5a6b7c8`(不變,本 session 0 migration)
 **Production state**(2026-05-12 全市場重跑後):
   - facts 重寫:institutional + foreign_holding + kd + macd + rsi (5 cores)
@@ -697,3 +697,113 @@ fear_greed_core 範本。production 驗證 facts 從 9M → 4.4M(↓51%),valuati
 - `revenue_core` lib.rs:加 Reference doc comments for 5 threshold defaults
   (Lakonishok/Shleifer 1994 + Moskowitz 2012 + Brown & Warner 1985 + 業界慣例出處)
 - 兩個 cores spec ↔ code **完全對齊**,無 staleness
+
+---
+
+## §17. neely_core PR-3c-pre 架構層 migration(2026-05-13 後續)
+
+接 v1.34 落地後 user 拍版 Path A(完整對齊 spec r5 ~3 週 / 9 sub-PR)。
+PR-3c-pre 是首個 sub-PR,純架構層 breaking change,為後續 PR-3c-1~3 + PR-4b/5b/6b
+打底。
+
+### 落地範圍(breaking change,~~178 → 179 tests)
+
+| 變更項 | 對應 spec |
+|---|---|
+| RuleId enum chapter-based 重寫 | architecture.md §9.3(line 928-1034)|
+| NeelyPatternType:Diagonal → TerminalImpulse + RunningCorrection | architecture.md §9.6 + r5 修正 |
+| PowerRating:Bullish/Bearish → FavorContinuation/AgainstContinuation | architecture.md §9.2(line 883-891)方向中性 |
+| PostBehavior:3 variant → 8 variant 結構化 enum | architecture.md §9.2 line 894-918 |
+| StructuralFacts:7 → 8 子欄位(加 extension_subdivision_pair + Alternation5Axes) | architecture.md §9.5 line 1081-1112 |
+| NeelyDiagnostics:加 atr_dual_mode_diff + peak_memory_mb 改 f64 + stage_elapsed_ms → stage_timings_ms | architecture.md §15.1 line 1413-1421 |
+| ImpulseExtension / WaveNumber / EmulationKind / AlternationAxis / WaveAbc / TriangleWave / TriangleVariant 等 enum 新增 | architecture.md §9.3 line 1036-1044 |
+
+### RuleId 遷移對照表(r2 → r5)
+
+| r2 simple | r5 chapter-based | 用途 |
+|---|---|---|
+| `RuleId::Core(1-3)` | `RuleId::Ch5Essential(1-3)` | R1/R2/R3 完整實作 |
+| `RuleId::Core(4-7)` | `RuleId::Ch3PreConstructive { rule: N, condition: 'a', ... }` | R4-R7 Deferred |
+| `RuleId::Flat(1)` | `RuleId::Ch5FlatMinBRatio` | F1 b-wave 回測比 |
+| `RuleId::Flat(2)` | `RuleId::Ch5FlatMinCRatio` | F2 c-wave 比例 |
+| `RuleId::Zigzag(1)` | `RuleId::Ch5ZigzagMaxBRetracement` | Z1 b ≤ 61.8%×a |
+| `RuleId::Zigzag(2)` | `RuleId::Ch11ZigzagWaveByWave { wave: C }` | Z2 c-wave 範圍 |
+| `RuleId::Zigzag(3)` | `RuleId::Ch4ZigzagDetour` | Z3 DETOUR Test |
+| `RuleId::Zigzag(4)` | `RuleId::Ch5ZigzagCTriangleException` | Z4 Triangle 例外 |
+| `RuleId::Triangle(1-3)` | `Ch11TriangleVariantRules { variant: Horizontal/Irregular/RunningLimiting, wave: C }` | Contracting Limiting 3 種 |
+| `RuleId::Triangle(4)` | `Ch5TriangleBRange` | Triangle b-wave 範圍 |
+| `RuleId::Triangle(5)` | `Ch5TriangleLegContraction` | 每段更短 |
+| `RuleId::Triangle(6)` | `Ch5TriangleLegEquality5Pct` | 等邊 5% 容差 |
+| `RuleId::Triangle(7-9)` | `Ch11TriangleVariantRules { variant: HorizontalExpanding/.../RunningExpanding, wave: E }` | Expanding 3 種 |
+| `RuleId::Triangle(10)` | `Ch6TriangleExpandingNonConfirmation` | Expanding Non-Confirmation |
+| `RuleId::Wave(1)` | `Ch11ImpulseWaveByWave { ext: ThirdExt, wave: Three }` | Impulse Extension 6 情境 |
+| `RuleId::Wave(2)` | `Ch12FibonacciInternal` | Essential + Fibonacci 內部比 |
+
+### PowerRating 遷移對照表
+
+| r2 簡稱 | r5 方向中性 | 數值對映 |
+|---|---|---|
+| StrongBullish | StronglyFavorContinuation | +3 |
+| Bullish | ModeratelyFavorContinuation | +2 |
+| SlightBullish | SlightlyFavorContinuation | +1 |
+| Neutral | Neutral | 0 |
+| SlightBearish | SlightlyAgainstContinuation | -1 |
+| Bearish | ModeratelyAgainstContinuation | -2 |
+| StrongBearish | StronglyAgainstContinuation | -3 |
+
+### NeelyPatternType 遷移
+
+| r2 | r5 |
+|---|---|
+| `Diagonal { sub_kind: Leading }` | `TerminalImpulse` |
+| `Diagonal { sub_kind: Ending }` | `TerminalImpulse` |
+| `Zigzag { sub_kind: ZigzagKind::Single }` | `Zigzag { sub_kind: ZigzagVariant::Normal }` |
+| `Flat { sub_kind: FlatKind::Regular }` | `Flat { sub_kind: FlatVariant::Common }` |
+| `Triangle { sub_kind: TriangleKind::Contracting }` | `Triangle { sub_kind: TriangleVariant::HorizontalLimiting }` |
+| (新增) | `RunningCorrection`(獨立 top-level variant) |
+
+### 改動檔(11 個)
+
+| 檔 | 改動類型 |
+|---|---|
+| `output.rs` | RuleId / NeelyPatternType / PowerRating / PostBehavior / StructuralFacts / NeelyDiagnostics 全部重寫 |
+| `validator/core_rules.rs` | RuleId::Core → Ch5Essential / Ch3PreConstructive |
+| `validator/flat_rules.rs` | RuleId::Flat → Ch5FlatMin{B,C}Ratio |
+| `validator/zigzag_rules.rs` | RuleId::Zigzag → 4 個 Ch4/Ch5/Ch11 variant |
+| `validator/triangle_rules.rs` | RuleId::Triangle → 7 個 Ch5/Ch6/Ch11 variant |
+| `validator/wave_rules.rs` | RuleId::Wave → Ch11ImpulseWaveByWave + Ch12FibonacciInternal |
+| `classifier/mod.rs` | TerminalImpulse 取代 Diagonal + .copied() → .cloned() |
+| `compaction/mod.rs` | PowerRating 方向中性語意 |
+| `power_rating/{mod,table}.rs` | PowerRating + TerminalImpulse 命名 |
+| `triggers/mod.rs` | RuleId 新名 + TerminalImpulse |
+| `facts.rs` | produce_facts 序列化新 enum + diagnostics 欄位名 |
+| `lib.rs` | stage_elapsed_ms → stage_timings_ms(2 處)|
+
+### 留 PR-3c-1 ~ PR-6b-3 補
+
+- 22 條 Deferred 規則的具體實作邏輯(目前全部 stub return Deferred)
+- Three Rounds Compaction 完整實作(目前 pass-through)
+- Power Rating 7 級完整 Ch10 查表(目前 best-guess 4 級)
+- Fibonacci 5 ratios + Internal/External per pattern(目前寫死 10 ratios)
+- Missing Wave + Emulation + Triggers 完整實作
+- StructuralFacts 8 子欄位 default → 真實計算
+- atr_dual_mode_diff P0 Gate 校準時填入
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 179 tests passed / 0 failed / 0 warnings
+# (178 → 179:+1 terminal_impulse classifier test)
+```
+
+### 風險
+
+🟡 RuleId 是 **breaking change**,但 production neely facts 量級極小
+(~5 facts/stock × 1700 stocks ≈ 8500 rows),P0 Gate 後可全量重算,不需
+alembic migration。
+
+🟢 其他:
+- 0 alembic / 0 collector.toml / 0 Python / 0 schema 改動(純 Rust)
+- m2 收尾不阻塞
+- production 既有 4.4M facts 不受影響

@@ -1,13 +1,12 @@
 // facts.rs — Fact 產出規則
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §十五。
-// 從 NeelyCoreOutput 萃取機械式 Fact(禁主觀詞彙,m2Spec/oldm2Spec/cores_overview §6.1.1)。
+// 對齊 m3Spec/neely_core_architecture.md §15 + cores_overview §6.1.1。
+// 從 NeelyCoreOutput 萃取機械式 Fact(禁主觀詞彙)。
 //
-// **M3 PR-6 階段**(先實踐以後再改)— produce_facts 基本實作:
-//   - 對每個 Scenario 產出 1 條結構性 Fact
-//     (statement 含 pattern_type + power_rating + 規則計數)
-//   - 對 forest_size / monowave_count 產 1 條 diagnostic Fact
-//   - Rejections 不產 Fact(屬 internal diagnostic,不是「事實」)
+// **PR-3c-pre 階段(2026-05-13)**:
+//   - r2 Diagonal/Bullish 命名改 TerminalImpulse/FavorContinuation(r5 §9.2/9.6)
+//   - r2 RuleId::Core(N) → RuleId::Ch5Essential(N)(r5 §9.3)
+//   - stage_elapsed_ms 改 stage_timings_ms / peak_memory_mb 改 f64
 
 use crate::output::{
     NeelyPatternType, NeelyCoreOutput, PowerRating, Scenario,
@@ -17,7 +16,7 @@ use serde_json::json;
 
 /// 從 NeelyCoreOutput 萃取機械式 Fact list。
 ///
-/// **M3 PR-6 階段**:每 Scenario 一條 + 1 條 forest summary。
+/// **PR-3c-pre 階段**:每 Scenario 一條 + 1 條 forest summary。
 pub fn produce(output: &NeelyCoreOutput) -> Vec<Fact> {
     let mut facts = Vec::new();
 
@@ -52,7 +51,7 @@ fn scenario_to_fact(output: &NeelyCoreOutput, scenario: &Scenario) -> Fact {
         timeframe: output.timeframe,
         source_core: "neely_core".to_string(),
         source_version: "0.7.0".to_string(),
-        params_hash: None, // PR-7 caller 應填入(neely_core compute() 不知道 Workflow params 全貌)
+        params_hash: None,
         statement,
         metadata: json!({
             "scenario_id": scenario.id,
@@ -101,7 +100,8 @@ fn forest_summary_fact(output: &NeelyCoreOutput) -> Fact {
 fn pattern_label(p: &NeelyPatternType) -> String {
     match p {
         NeelyPatternType::Impulse => "Impulse".to_string(),
-        NeelyPatternType::Diagonal { sub_kind } => format!("Diagonal({:?})", sub_kind),
+        NeelyPatternType::TerminalImpulse => "TerminalImpulse".to_string(),
+        NeelyPatternType::RunningCorrection => "RunningCorrection".to_string(),
         NeelyPatternType::Zigzag { sub_kind } => format!("Zigzag({:?})", sub_kind),
         NeelyPatternType::Flat { sub_kind } => format!("Flat({:?})", sub_kind),
         NeelyPatternType::Triangle { sub_kind } => format!("Triangle({:?})", sub_kind),
@@ -111,13 +111,13 @@ fn pattern_label(p: &NeelyPatternType) -> String {
 
 fn power_rating_label(p: PowerRating) -> &'static str {
     match p {
-        PowerRating::StrongBullish => "StrongBullish",
-        PowerRating::Bullish => "Bullish",
-        PowerRating::SlightBullish => "SlightBullish",
+        PowerRating::StronglyFavorContinuation => "StronglyFavorContinuation",
+        PowerRating::ModeratelyFavorContinuation => "ModeratelyFavorContinuation",
+        PowerRating::SlightlyFavorContinuation => "SlightlyFavorContinuation",
         PowerRating::Neutral => "Neutral",
-        PowerRating::SlightBearish => "SlightBearish",
-        PowerRating::Bearish => "Bearish",
-        PowerRating::StrongBearish => "StrongBearish",
+        PowerRating::SlightlyAgainstContinuation => "SlightlyAgainstContinuation",
+        PowerRating::ModeratelyAgainstContinuation => "ModeratelyAgainstContinuation",
+        PowerRating::StronglyAgainstContinuation => "StronglyAgainstContinuation",
     }
 }
 
@@ -143,11 +143,17 @@ mod tests {
                 pattern_type: NeelyPatternType::Impulse,
                 structure_label: "test".to_string(),
                 complexity_level: ComplexityLevel::Simple,
-                power_rating: PowerRating::Bullish,
+                power_rating: PowerRating::ModeratelyFavorContinuation,
                 max_retracement: 0.0,
-                post_pattern_behavior: PostBehavior::Indeterminate,
-                passed_rules: vec![RuleId::Core(1), RuleId::Core(2), RuleId::Core(3)],
-                deferred_rules: vec![RuleId::Core(4)],
+                post_pattern_behavior: PostBehavior::Unconstrained,
+                passed_rules: vec![
+                    RuleId::Ch5Essential(1),
+                    RuleId::Ch5Essential(2),
+                    RuleId::Ch5Essential(3),
+                ],
+                deferred_rules: vec![RuleId::Ch3PreConstructive {
+                    rule: 4, condition: 'a', category: None, sub_rule_index: None,
+                }],
                 rules_passed_count: 3,
                 deferred_rules_count: 1,
                 invalidation_triggers: Vec::new(),
@@ -175,9 +181,10 @@ mod tests {
                 compaction_paths: num_scenarios,
                 overflow_triggered: false,
                 compaction_timeout: false,
-                stage_elapsed_ms: HashMap::new(),
+                stage_timings_ms: HashMap::new(),
                 elapsed_ms: 0,
-                peak_memory_mb: 0,
+                peak_memory_mb: 0.0,
+                atr_dual_mode_diff: None,
             },
             rule_book_references: Vec::new(),
             insufficient_data: false,
@@ -197,7 +204,7 @@ mod tests {
         let facts = produce(&out);
         assert_eq!(facts.len(), 2);
         assert!(facts[0].statement.contains("Impulse"));
-        assert!(facts[0].statement.contains("Bullish"));
+        assert!(facts[0].statement.contains("ModeratelyFavorContinuation"));
         assert!(facts[1].statement.contains("forest"));
     }
 
@@ -208,7 +215,7 @@ mod tests {
         let scenario_fact = &facts[0];
         let meta = &scenario_fact.metadata;
         assert_eq!(meta["pattern_type"], "Impulse");
-        assert_eq!(meta["power_rating"], "Bullish");
+        assert_eq!(meta["power_rating"], "ModeratelyFavorContinuation");
         assert_eq!(meta["rules_passed_count"], 3);
     }
 
