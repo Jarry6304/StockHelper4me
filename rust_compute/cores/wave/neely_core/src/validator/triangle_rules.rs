@@ -14,7 +14,7 @@
 //   - T7-T9:Expanding × Horizontal/Irregular/Running 變體 wave-e(留 PR-4b)
 //   - T10 Ch6TriangleExpandingNonConfirmation:Expanding 失敗模式(留 PR-4b)
 
-use super::helpers::{magnitude, safe_pct};
+use super::helpers::safe_pct;
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
 use crate::monowave::ClassifiedMonowave;
@@ -74,12 +74,12 @@ pub fn run(
 // ---------------------------------------------------------------------------
 fn rule_t4(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5TriangleBRange;
-    if candidate.wave_count != 5 || candidate.monowave_indices.len() < 5 {
+    if candidate.wave_count != 5 || candidate.wave_segment_lengths.len() < 5 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let a_mag = magnitude(&classified[mi[0]]);
-    let b_mag = magnitude(&classified[mi[1]]);
+    // PR-Stage3-nested:用 top_level_magnitude
+    let a_mag = candidate.top_level_magnitude(0, classified);
+    let b_mag = candidate.top_level_magnitude(1, classified);
 
     let ratio_pct = match safe_pct(b_mag, a_mag) {
         Some(r) => r,
@@ -104,15 +104,15 @@ fn rule_t4(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 // ---------------------------------------------------------------------------
 fn rule_t5(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5TriangleLegContraction;
-    if candidate.wave_count != 5 || candidate.monowave_indices.len() < 5 {
+    if candidate.wave_count != 5 || candidate.wave_segment_lengths.len() < 5 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let a_mag = magnitude(&classified[mi[0]]);
-    let b_mag = magnitude(&classified[mi[1]]);
-    let c_mag = magnitude(&classified[mi[2]]);
-    let d_mag = magnitude(&classified[mi[3]]);
-    let e_mag = magnitude(&classified[mi[4]]);
+    // PR-Stage3-nested:用 top_level_magnitude
+    let a_mag = candidate.top_level_magnitude(0, classified);
+    let b_mag = candidate.top_level_magnitude(1, classified);
+    let c_mag = candidate.top_level_magnitude(2, classified);
+    let d_mag = candidate.top_level_magnitude(3, classified);
+    let e_mag = candidate.top_level_magnitude(4, classified);
 
     // T4 預檢:Triangle b 範圍
     let b_over_a = match safe_pct(b_mag, a_mag) {
@@ -161,14 +161,14 @@ fn rule_t5(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 // ---------------------------------------------------------------------------
 fn rule_t6(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5TriangleLegEquality5Pct;
-    if candidate.wave_count != 5 || candidate.monowave_indices.len() < 5 {
+    if candidate.wave_count != 5 || candidate.wave_segment_lengths.len() < 5 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let a_mag = magnitude(&classified[mi[0]]);
-    let b_mag = magnitude(&classified[mi[1]]);
-    let c_mag = magnitude(&classified[mi[2]]);
-    let d_mag = magnitude(&classified[mi[3]]);
+    // PR-Stage3-nested:用 top_level_magnitude
+    let a_mag = candidate.top_level_magnitude(0, classified);
+    let b_mag = candidate.top_level_magnitude(1, classified);
+    let c_mag = candidate.top_level_magnitude(2, classified);
+    let d_mag = candidate.top_level_magnitude(3, classified);
 
     // T4 預檢:Triangle b 範圍
     let b_over_a = match safe_pct(b_mag, a_mag) {

@@ -74,6 +74,51 @@ impl WaveCandidate {
         let last = &classified[*segment.last().unwrap()].monowave;
         (last.end_price - first.start_price).abs()
     }
+
+    /// 第 i 個 top-level wave 的 start price(該段第一個 sub-mw 的 start)
+    pub fn top_level_start_price(
+        &self,
+        wave_idx: usize,
+        classified: &[ClassifiedMonowave],
+    ) -> f64 {
+        let segment = self.wave_sub_indices(wave_idx);
+        if segment.is_empty() {
+            return 0.0;
+        }
+        classified[segment[0]].monowave.start_price
+    }
+
+    /// 第 i 個 top-level wave 的 end price(該段最後一個 sub-mw 的 end)
+    pub fn top_level_end_price(
+        &self,
+        wave_idx: usize,
+        classified: &[ClassifiedMonowave],
+    ) -> f64 {
+        let segment = self.wave_sub_indices(wave_idx);
+        if segment.is_empty() {
+            return 0.0;
+        }
+        classified[*segment.last().unwrap()].monowave.end_price
+    }
+
+    /// 第 i 個 top-level wave 的整體 direction(由 start→end 位移正負決定)。
+    /// Flat segment(=1):等同該 mw 的 direction。
+    /// Nested segment:由 5-wave net 位移決定。
+    pub fn top_level_direction(
+        &self,
+        wave_idx: usize,
+        classified: &[ClassifiedMonowave],
+    ) -> MonowaveDirection {
+        let start = self.top_level_start_price(wave_idx, classified);
+        let end = self.top_level_end_price(wave_idx, classified);
+        if end > start {
+            MonowaveDirection::Up
+        } else if end < start {
+            MonowaveDirection::Down
+        } else {
+            MonowaveDirection::Neutral
+        }
+    }
 }
 
 /// 單一視窗 candidate 數量上限保護倍數。

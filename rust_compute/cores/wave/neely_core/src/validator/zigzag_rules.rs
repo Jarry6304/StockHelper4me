@@ -12,7 +12,7 @@
 //   - Z3(Ch4ZigzagDetour):DETOUR Test — 避免誤判 Impulse Wave 1-2-3 為 Zigzag
 //   - Z4(Ch5ZigzagCTriangleException):Triangle 內 Zigzag c-wave 例外,需 Triangle context
 
-use super::helpers::{magnitude, safe_pct};
+use super::helpers::safe_pct;
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
 use crate::monowave::ClassifiedMonowave;
@@ -52,12 +52,12 @@ pub fn run(
 // ---------------------------------------------------------------------------
 fn rule_z1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5ZigzagMaxBRetracement;
-    if candidate.wave_count != 3 || candidate.monowave_indices.len() < 3 {
+    if candidate.wave_count != 3 || candidate.wave_segment_lengths.len() < 3 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let a_mag = magnitude(&classified[mi[0]]);
-    let b_mag = magnitude(&classified[mi[1]]);
+    // PR-Stage3-nested:用 top_level_magnitude
+    let a_mag = candidate.top_level_magnitude(0, classified);
+    let b_mag = candidate.top_level_magnitude(1, classified);
 
     let ratio_pct = match safe_pct(b_mag, a_mag) {
         Some(r) => r,
@@ -82,13 +82,12 @@ fn rule_z1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 // ---------------------------------------------------------------------------
 fn rule_z2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch11ZigzagWaveByWave { wave: WaveAbc::C };
-    if candidate.wave_count != 3 || candidate.monowave_indices.len() < 3 {
+    if candidate.wave_count != 3 || candidate.wave_segment_lengths.len() < 3 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let a_mag = magnitude(&classified[mi[0]]);
-    let b_mag = magnitude(&classified[mi[1]]);
-    let c_mag = magnitude(&classified[mi[2]]);
+    let a_mag = candidate.top_level_magnitude(0, classified);
+    let b_mag = candidate.top_level_magnitude(1, classified);
+    let c_mag = candidate.top_level_magnitude(2, classified);
 
     // 先確認是 Zigzag 候選(b 須 ≤ 65.8% × a)
     let b_over_a = match safe_pct(b_mag, a_mag) {
@@ -132,23 +131,21 @@ fn rule_z2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 // ---------------------------------------------------------------------------
 fn rule_z3(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch4ZigzagDetour;
-    if candidate.wave_count != 3 || candidate.monowave_indices.len() < 3 {
+    if candidate.wave_count != 3 || candidate.wave_segment_lengths.len() < 3 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let a = &classified[mi[0]].monowave;
-    let c = &classified[mi[2]].monowave;
-    let a_mag = magnitude(&classified[mi[0]]);
-    let b_mag = magnitude(&classified[mi[1]]);
+    // PR-Stage3-nested:用 top_level endpoints + magnitude
+    let a_start = candidate.top_level_start_price(0, classified);
+    let c_end = candidate.top_level_end_price(2, classified);
+    let a_mag = candidate.top_level_magnitude(0, classified);
+    let b_mag = candidate.top_level_magnitude(1, classified);
 
     if a_mag <= 0.0 {
         return RuleResult::NotApplicable(rid);
     }
 
-    // 計算 c 終點相對 a 起點的「越過 a 終點」距離
-    // a 是 Up:c 終點越過 a 終點越遠 → 越像 Impulse W3
-    // a 是 Down:同理(對稱)
-    let overshoot_distance = (c.end_price - a.start_price).abs();
+    // 計算 c 終點相對 a 起點的「越過 a 終點」距離(absolute displacement)
+    let overshoot_distance = (c_end - a_start).abs();
     let overshoot_ratio = overshoot_distance / a_mag;
 
     let b_over_a = safe_pct(b_mag, a_mag).unwrap_or(100.0);

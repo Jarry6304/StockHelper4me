@@ -35,31 +35,28 @@ pub fn run(
 }
 
 // ---------------------------------------------------------------------------
-// R1:W2 不可完全回測 W1
+// R1:W2 不可完全回測 W1(nested-aware,PR-Stage3-nested 整合)
 // ---------------------------------------------------------------------------
 //
 // 適用:wave_count >= 3
-// 邏輯:
-//   - W1 起點 = monowaves[mi[0]].start_price
-//   - W2 終點 = monowaves[mi[1]].end_price
-//   - W1 是 Up:W2 終點價格不可低於 W1 起點(W2.end >= W1.start)
-//   - W1 是 Down:W2 終點價格不可高於 W1 起點(W2.end <= W1.start)
+// 邏輯(用 top_level 端點):
+//   - W1 起點 = top_level_start_price(0)
+//   - W2 終點 = top_level_end_price(1)
+//   - W1 整體 direction Up:W2 終點價格不可低於 W1 起點(W2.end >= W1.start)
+//   - W1 整體 direction Down:W2 終點價格不可高於 W1 起點(W2.end <= W1.start)
 //
 // 違反 → Fail(附 gap = retracement % - 100%);通過 → Pass
 fn rule_r1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5Essential(1);
-    if candidate.monowave_indices.len() < 2 {
+    if candidate.wave_count < 2 || candidate.wave_segment_lengths.len() < 2 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let w1 = &classified[mi[0]].monowave;
-    let w2 = &classified[mi[1]].monowave;
 
-    let w1_start = w1.start_price;
-    let w1_end = w1.end_price;
-    let w2_end = w2.end_price;
+    let w1_start = candidate.top_level_start_price(0, classified);
+    let w1_end = candidate.top_level_end_price(0, classified);
+    let w2_end = candidate.top_level_end_price(1, classified);
+    let direction = candidate.top_level_direction(0, classified);
 
-    let direction = w1.direction;
     let violated = match direction {
         MonowaveDirection::Up => w2_end < w1_start,
         MonowaveDirection::Down => w2_end > w1_start,
@@ -67,7 +64,6 @@ fn rule_r1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
     };
 
     if violated {
-        // gap = W2 end 距 W1 start 反向跨過的 % 距離(以 W1 magnitude 為基準)
         let w1_magnitude = (w1_end - w1_start).abs();
         let overshoot = match direction {
             MonowaveDirection::Up => w1_start - w2_end,
@@ -91,7 +87,7 @@ fn rule_r1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
                 w2_end, w1_start, direction
             ),
             gap: gap_pct,
-            neely_page: "R1 — Elliott Wave 通用規則(具體 Neely 書頁待 m3Spec/ 校準)".to_string(),
+            neely_page: "Ch5 Essential R1 — W2 不可完全回測 W1".to_string(),
         })
     } else {
         RuleResult::Pass
@@ -99,20 +95,19 @@ fn rule_r1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 }
 
 // ---------------------------------------------------------------------------
-// R2:W3 不可是 W1/W3/W5 中最短
+// R2:W3 不可是 W1/W3/W5 中最短(nested-aware)
 // ---------------------------------------------------------------------------
 //
 // 適用:wave_count == 5
-// 邏輯:W3.magnitude >= min(W1.magnitude, W5.magnitude)
+// 邏輯:W3.top_level_magnitude >= min(W1, W5)
 fn rule_r2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5Essential(2);
-    if candidate.wave_count != 5 || candidate.monowave_indices.len() < 5 {
+    if candidate.wave_count != 5 || candidate.wave_segment_lengths.len() < 5 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let w1_mag = (classified[mi[0]].monowave.end_price - classified[mi[0]].monowave.start_price).abs();
-    let w3_mag = (classified[mi[2]].monowave.end_price - classified[mi[2]].monowave.start_price).abs();
-    let w5_mag = (classified[mi[4]].monowave.end_price - classified[mi[4]].monowave.start_price).abs();
+    let w1_mag = candidate.top_level_magnitude(0, classified);
+    let w3_mag = candidate.top_level_magnitude(2, classified);
+    let w5_mag = candidate.top_level_magnitude(4, classified);
     let min_w1_w5 = w1_mag.min(w5_mag);
 
     if w3_mag < min_w1_w5 {
@@ -125,7 +120,7 @@ fn rule_r2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
                 w3_mag, w1_mag, w5_mag
             ),
             gap: (min_w1_w5 - w3_mag) / min_w1_w5.max(1e-9) * 100.0,
-            neely_page: "R2 — Elliott Wave 通用規則(具體 Neely 書頁待 m3Spec/ 校準)".to_string(),
+            neely_page: "Ch5 Essential R2 — W3 不可是 actionable wave 中最短".to_string(),
         })
     } else {
         RuleResult::Pass
@@ -133,43 +128,43 @@ fn rule_r2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 }
 
 // ---------------------------------------------------------------------------
-// R3:W4 不可重疊 W1 區間
+// R3:W4 不可重疊 W1 區間(nested-aware)
 // ---------------------------------------------------------------------------
 //
 // 適用:wave_count == 5
 // 邏輯:
-//   - W1 區間:[W1.start, W1.end](方向定義 high/low)
-//   - W4 終點:monowaves[mi[3]].end_price
-//   - 上漲 5-wave:W4 終點 ≥ W1 終點(W4 low not below W1 high)
-//   - 下跌 5-wave:W4 終點 ≤ W1 終點(W4 high not above W1 low)
+//   - W1 區間:[W1.top_level_start, W1.top_level_end]
+//   - W4 終點:top_level_end_price(3)
+//   - Up:W4 終點 ≥ W1 終點
+//   - Down:W4 終點 ≤ W1 終點
 //
-// 注意:Diagonal 允許 W4 與 W1 重疊(Neely §10),這裡先採 strict Impulse 版本,
-// 留 PR-4 Classifier + PR-4 Post-Validator 處理 Diagonal exception。
+// 注意:Terminal Impulse 容許 W4-W1 overlap(Neely r5 §9.6),classifier 用 R3 fail
+// → TerminalImpulse 判定。
 fn rule_r3(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5Essential(3);
-    if candidate.wave_count != 5 || candidate.monowave_indices.len() < 5 {
+    if candidate.wave_count != 5 || candidate.wave_segment_lengths.len() < 5 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let w1 = &classified[mi[0]].monowave;
-    let w4 = &classified[mi[3]].monowave;
+    let w1_start = candidate.top_level_start_price(0, classified);
+    let w1_end = candidate.top_level_end_price(0, classified);
+    let w4_end = candidate.top_level_end_price(3, classified);
+    let direction = candidate.top_level_direction(0, classified);
 
-    let direction = w1.direction;
     let (violated, expected_relation) = match direction {
-        MonowaveDirection::Up => {
-            // 上漲:W4 endpoint(low of correction)應 >= W1.end(top of W1)
-            (w4.end_price < w1.end_price, format!("W4 終點 {:.2} 須 ≥ W1 終點 {:.2}", w4.end_price, w1.end_price))
-        }
-        MonowaveDirection::Down => {
-            // 下跌:W4 endpoint(high of correction)應 <= W1.end(bottom of W1)
-            (w4.end_price > w1.end_price, format!("W4 終點 {:.2} 須 ≤ W1 終點 {:.2}", w4.end_price, w1.end_price))
-        }
+        MonowaveDirection::Up => (
+            w4_end < w1_end,
+            format!("W4 終點 {:.2} 須 ≥ W1 終點 {:.2}", w4_end, w1_end),
+        ),
+        MonowaveDirection::Down => (
+            w4_end > w1_end,
+            format!("W4 終點 {:.2} 須 ≤ W1 終點 {:.2}", w4_end, w1_end),
+        ),
         MonowaveDirection::Neutral => return RuleResult::NotApplicable(rid),
     };
 
     if violated {
-        let w1_magnitude = (w1.end_price - w1.start_price).abs();
-        let overlap = (w4.end_price - w1.end_price).abs();
+        let w1_magnitude = (w1_end - w1_start).abs();
+        let overlap = (w4_end - w1_end).abs();
         let gap_pct = if w1_magnitude > 0.0 {
             overlap / w1_magnitude * 100.0
         } else {
@@ -179,9 +174,9 @@ fn rule_r3(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
             candidate_id: candidate.id.clone(),
             rule_id: rid,
             expected: expected_relation,
-            actual: format!("W4 終點 {:.2} 重疊 W1 區間(direction={:?})", w4.end_price, direction),
+            actual: format!("W4 終點 {:.2} 重疊 W1 區間(direction={:?})", w4_end, direction),
             gap: gap_pct,
-            neely_page: "R3 — Elliott Wave 通用規則(具體 Neely 書頁待 m3Spec/ 校準)".to_string(),
+            neely_page: "Ch5 Essential R3 — W4 不可重疊 W1(Terminal Impulse 容許)".to_string(),
         })
     } else {
         RuleResult::Pass

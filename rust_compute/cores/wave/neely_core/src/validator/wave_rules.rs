@@ -10,7 +10,7 @@
 //   - W2(Ch12FibonacciInternal):Essential Construction + Fibonacci 內部比例
 //     (wave-c Zigzag 常 = a;Triangle 常有 61.8%;Impulse W5/W1 常 = 100/161.8%)
 
-use super::helpers::{magnitude, matches_any_fib_ratio, safe_pct};
+use super::helpers::{matches_any_fib_ratio, safe_pct};
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
 use crate::monowave::ClassifiedMonowave;
@@ -48,13 +48,13 @@ fn rule_w1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
         ext: ImpulseExtension::ThirdExt,
         wave: WaveNumber::Three,
     };
-    if candidate.wave_count != 5 || candidate.monowave_indices.len() < 5 {
+    if candidate.wave_count != 5 || candidate.wave_segment_lengths.len() < 5 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let w1 = magnitude(&classified[mi[0]]);
-    let w3 = magnitude(&classified[mi[2]]);
-    let w5 = magnitude(&classified[mi[4]]);
+    // PR-Stage3-nested:用 top_level_magnitude
+    let w1 = candidate.top_level_magnitude(0, classified);
+    let w3 = candidate.top_level_magnitude(2, classified);
+    let w5 = candidate.top_level_magnitude(4, classified);
 
     // W1 規則:任一 actionable wave magnitude > 0 即 Pass(基礎 sanity)
     if w1 <= 0.0 || w3 <= 0.0 || w5 <= 0.0 {
@@ -81,19 +81,19 @@ fn rule_w1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 fn rule_w2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch12FibonacciInternal;
 
-    if candidate.monowave_indices.is_empty() {
+    if candidate.monowave_indices.is_empty() || candidate.wave_segment_lengths.is_empty() {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
 
     match candidate.wave_count {
         3 => {
             // 3-wave Zigzag/Flat:檢查 c/a Fib relationship
-            if mi.len() < 3 {
+            if candidate.wave_segment_lengths.len() < 3 {
                 return RuleResult::NotApplicable(rid);
             }
-            let a_mag = magnitude(&classified[mi[0]]);
-            let c_mag = magnitude(&classified[mi[2]]);
+            // PR-Stage3-nested:用 top_level_magnitude
+            let a_mag = candidate.top_level_magnitude(0, classified);
+            let c_mag = candidate.top_level_magnitude(2, classified);
             let c_over_a = match safe_pct(c_mag, a_mag) {
                 Some(r) => r,
                 None => return RuleResult::NotApplicable(rid),
@@ -101,18 +101,17 @@ fn rule_w2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
             if matches_any_fib_ratio(c_over_a) {
                 RuleResult::Pass
             } else {
-                // 無 Fib 對齊,但結構可能仍合法
                 RuleResult::NotApplicable(rid)
             }
         }
         5 => {
             // 5-wave Impulse:檢查 W5/W1 或 W3/W1 任一 Fib relationship
-            if mi.len() < 5 {
+            if candidate.wave_segment_lengths.len() < 5 {
                 return RuleResult::NotApplicable(rid);
             }
-            let w1 = magnitude(&classified[mi[0]]);
-            let w3 = magnitude(&classified[mi[2]]);
-            let w5 = magnitude(&classified[mi[4]]);
+            let w1 = candidate.top_level_magnitude(0, classified);
+            let w3 = candidate.top_level_magnitude(2, classified);
+            let w5 = candidate.top_level_magnitude(4, classified);
 
             let w5_over_w1 = safe_pct(w5, w1);
             let w3_over_w1 = safe_pct(w3, w1);

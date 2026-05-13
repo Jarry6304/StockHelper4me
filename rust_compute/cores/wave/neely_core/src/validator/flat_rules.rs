@@ -14,7 +14,7 @@
 //   - 真正 Fail 只用於「結構違反(無法描述為任何 pattern type)」
 //   - 對齊 spec §10.3 deferred 暫時通過 + NotApplicable 不阻塞原則
 
-use super::helpers::{magnitude, safe_pct};
+use super::helpers::safe_pct;
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
 use crate::monowave::ClassifiedMonowave;
@@ -52,12 +52,12 @@ pub fn run(
 // ---------------------------------------------------------------------------
 fn rule_f1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5FlatMinBRatio;
-    if candidate.wave_count != 3 || candidate.monowave_indices.len() < 3 {
+    if candidate.wave_count != 3 || candidate.wave_segment_lengths.len() < 3 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let a_mag = magnitude(&classified[mi[0]]);
-    let b_mag = magnitude(&classified[mi[1]]);
+    // PR-Stage3-nested:用 top_level_magnitude(nested 3-wave 也適用)
+    let a_mag = candidate.top_level_magnitude(0, classified);
+    let b_mag = candidate.top_level_magnitude(1, classified);
 
     let ratio_pct = match safe_pct(b_mag, a_mag) {
         Some(r) => r,
@@ -65,10 +65,8 @@ fn rule_f1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
     };
 
     if ratio_pct >= FLAT_B_MIN_PCT {
-        // Flat-consistent(含 Running Correction 上限)
         RuleResult::Pass
     } else {
-        // b 太小,非 Flat(可能 Zigzag)
         RuleResult::NotApplicable(rid)
     }
 }
@@ -84,13 +82,13 @@ fn rule_f1(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 // ---------------------------------------------------------------------------
 fn rule_f2(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
     let rid = RuleId::Ch5FlatMinCRatio;
-    if candidate.wave_count != 3 || candidate.monowave_indices.len() < 3 {
+    if candidate.wave_count != 3 || candidate.wave_segment_lengths.len() < 3 {
         return RuleResult::NotApplicable(rid);
     }
-    let mi = &candidate.monowave_indices;
-    let a_mag = magnitude(&classified[mi[0]]);
-    let b_mag = magnitude(&classified[mi[1]]);
-    let c_mag = magnitude(&classified[mi[2]]);
+    // PR-Stage3-nested:用 top_level_magnitude
+    let a_mag = candidate.top_level_magnitude(0, classified);
+    let b_mag = candidate.top_level_magnitude(1, classified);
+    let c_mag = candidate.top_level_magnitude(2, classified);
 
     // 先確認是 Flat 候選(b 須充分大)
     let b_over_a = match safe_pct(b_mag, a_mag) {

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.39，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.40，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,68 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.40 — neely validator 規則層 nested-aware 整合(2026-05-13 後續)
+
+接 v1.39 Stage 3 nested candidate generator + classifier nested-aware 收尾後,
+完整將剩餘 8 條規則(R1-R3 + F1-F2 + Z1-Z3 + T4-T6 + W1-W2)從 flat-mode
+讀 `classified[mi[i]].metrics.magnitude` 改用 `candidate.top_level_magnitude(i, classified)`。
+
+### 範圍
+
+| 檔 | 規則 | 改動 |
+|---|---|---|
+| `validator/core_rules.rs` | R1/R2/R3 | top_level_start_price / top_level_end_price / top_level_magnitude;direction 用 `top_level_direction(0)`(取代 W1 mw direction)|
+| `validator/flat_rules.rs` | F1/F2 | top_level_magnitude(0/1/2)取代 `magnitude(classified[mi[i]])`;import 砍 `magnitude` helper |
+| `validator/zigzag_rules.rs` | Z1/Z2/Z3 | 同上;Z3 DETOUR Test 改用 top_level_start_price/end_price 取 a 起點 / c 終點 |
+| `validator/triangle_rules.rs` | T4/T5/T6 | 同上,5 個 top-level wave magnitude 全部換 |
+| `validator/wave_rules.rs` | W1/W2 | 同上 |
+
+### 新增 helpers(WaveCandidate impl)
+
+延伸 v1.39 加的 `top_level_magnitude`:
+- `top_level_start_price(wave_idx, classified)` — 該段第一個 sub-mw 的 start
+- `top_level_end_price(wave_idx, classified)` — 該段最後一個 sub-mw 的 end
+- `top_level_direction(wave_idx, classified)` — 由 start→end 位移決定 Up/Down/Neutral
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 297 tests passed / 0 failed / 0 warnings(數量不變,refactor 保持 flat 行為)
+```
+
+Flat candidate 行為 100% backward-compat:
+- `top_level_magnitude(i)` 對 segment_length=1 等同 `classified[mi[i]].metrics.magnitude`
+- `top_level_start_price(i)` / `top_level_end_price(i)` 對 flat segment 等同 mw 的 start/end
+- 既有 R1/R2/R3 / F1/F2 / Z1-Z3 / T4-T6 / W1-W2 全部 ~30 個 unit test 不需改動
+
+Nested candidate 行為由 `compute()` pipeline 自動處理:Stage 3 產 nested →
+Stage 4 規則用 top-level 端點正確判定 → Stage 5 classifier nested-aware 分類
+
+### 留未來 PR
+
+- 多層嵌套(W3 內又含 nested);Combination patterns(`[1,1,3]` 等)
+- exhaustive nested compaction(Three Rounds Round 2)
+- P0 Gate 五檔(0050/2330/3363/6547/1312)production 校準
+
+### 風險 🟢 低
+
+- 0 alembic / 0 Python / 0 collector.toml / 0 schema 改動
+- 0 cargo warnings
+- production 既有 facts 不受影響(flat candidate 行為完全 backward-compat)
+- Rollback:單 commit `git revert` 即可
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變)
+- Rust workspace:24 crate / **297 tests passed** / 0 warnings
+- neely_core:Stage 3 nested + Stage 4 規則全部 nested-aware + Stage 5 classifier nested-aware
+- 全 pipeline 完整對齊 spec r5 Ch7/Ch8 nested wave 支援
+- 下個 session 建議:**P0 Gate 五檔校準**(production 跑 0050/2330/3363/6547/1312,
+  寫進 `docs/benchmarks/`)+ user 寫定 spec staleness(valuation §4.5)
 
 ---
 
