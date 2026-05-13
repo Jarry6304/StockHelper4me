@@ -146,6 +146,7 @@ mod tests {
                 atr_relative: 10.0,
                 slope_vs_45deg: 2.0,
             },
+            structure_label_candidates: Vec::new(),
         }
     }
 

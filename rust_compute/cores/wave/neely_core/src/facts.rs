@@ -51,7 +51,7 @@ fn scenario_to_fact(output: &NeelyCoreOutput, scenario: &Scenario) -> Fact {
         fact_date: output.data_range.end,
         timeframe: output.timeframe,
         source_core: "neely_core".to_string(),
-        source_version: "0.7.0".to_string(),
+        source_version: "0.20.0".to_string(),
         params_hash: None, // PR-7 caller 應填入(neely_core compute() 不知道 Workflow params 全貌)
         statement,
         metadata: json!({
@@ -82,7 +82,7 @@ fn forest_summary_fact(output: &NeelyCoreOutput) -> Fact {
         fact_date: output.data_range.end,
         timeframe: output.timeframe,
         source_core: "neely_core".to_string(),
-        source_version: "0.7.0".to_string(),
+        source_version: "0.20.0".to_string(),
         params_hash: None,
         statement,
         metadata: json!({
@@ -141,18 +141,27 @@ mod tests {
                     children: Vec::new(),
                 },
                 pattern_type: NeelyPatternType::Impulse,
+                initial_direction: MonowaveDirection::Up,
+            compacted_base_label: StructureLabel::Five,
                 structure_label: "test".to_string(),
                 complexity_level: ComplexityLevel::Simple,
                 power_rating: PowerRating::Bullish,
                 max_retracement: 0.0,
                 post_pattern_behavior: PostBehavior::Indeterminate,
-                passed_rules: vec![RuleId::Core(1), RuleId::Core(2), RuleId::Core(3)],
-                deferred_rules: vec![RuleId::Core(4)],
+                passed_rules: vec![
+                    RuleId::Ch5_Essential(1),
+                    RuleId::Ch5_Essential(2),
+                    RuleId::Ch5_Essential(3),
+                ],
+                deferred_rules: vec![RuleId::Ch5_Flat_Min_BRatio],
                 rules_passed_count: 3,
                 deferred_rules_count: 1,
                 invalidation_triggers: Vec::new(),
                 expected_fib_zones: Vec::new(),
                 structural_facts: StructuralFacts::default(),
+            advisory_findings: Vec::new(),
+            in_triangle_context: false,
+            awaiting_l_label: false,
             })
             .collect();
 
@@ -181,6 +190,21 @@ mod tests {
             },
             rule_book_references: Vec::new(),
             insufficient_data: false,
+            compaction_timeout: false,
+            pattern_bounds: Vec::new(),
+            detour_annotations: Vec::new(),
+            round3_pause: None,
+            missing_wave_suspects: Vec::new(),
+            emulation_suspects: Vec::new(),
+            reverse_logic_observation: None,
+            degree_ceiling: DegreeCeiling {
+                max_reachable_degree: Degree::SubMicro,
+                reason: "test".to_string(),
+            },
+            cross_timeframe_hints: CrossTimeframeHints {
+                timeframe: Timeframe::Daily,
+                monowave_summaries: Vec::new(),
+            },
         }
     }
 

@@ -1,58 +1,30 @@
 // power_rating — Stage 10a:Power Rating 查表
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 10 / §十三。
-// 子模組:
-//   - table.rs — Neely 書裡的 power rating 表(寫死,不可外部化 §6.6)
+// 對齊 m3Spec/neely_rules.md §Pattern Implications & Power Ratings(2004-2022 行)
+//       + m3Spec/neely_core_architecture.md §9.4 / §11
 //
-// 設計原則:
-//   - PowerRating enum 取代 v1.1 i8(§9.4 防無效值)
-//   - 截斷哲學:Neely 規則邊界外的 case 截斷不外推(§十三 power_rating 截斷哲學論證)
-//
-// **M3 PR-6 階段**(先實踐以後再改):
-//   - rate_scenario():對 Scenario 套 best-guess Power Rating(基於 pattern_type +
-//     initial direction)
-//   - Neely 書頁完整查表留 PR-6b
+// **Phase 5 PR**(r5 alignment):
+//   - rate_scenario() 改用 Scenario.initial_direction(Phase 5 PR 新增 field),
+//     不再用 structure_label 字串 parsing(原 best-guess 方案)
+//   - 完整 r5 Power Rating 表已在 table.rs 落地(spec 2006-2014 行 7 級)
+//   - in_triangle 例外:Phase 5 預設 false,留 P6/P8 Compaction 補 nested context
 
-use crate::output::{NeelyPatternType, PowerRating, Scenario};
+use crate::output::{PowerRating, Scenario};
 
 pub mod table;
 
 /// 對 Scenario 套 Power Rating(查表)。
 ///
-/// **M3 PR-6 階段** best-guess 邏輯:
-///   - Impulse 上漲(initial Up)→ Bullish
-///   - Impulse 下跌(initial Down)→ Bearish
-///   - Diagonal → SlightBullish / SlightBearish(終結 / 開啟 trend 但 power 較弱)
-///   - Zigzag / Flat / Triangle / Combination → Neutral(correction 不指向 trend)
-///
-/// 注意:本實作為 best-guess,留 PR-6b 對齊 Neely 書頁完整查表。
+/// Phase 8 邏輯(更新):
+///   - 由 scenario.pattern_type + scenario.initial_direction 查 table::lookup_power_rating
+///   - **in_triangle 來自 scenario.in_triangle_context**(Stage 8 Three Rounds nested context 後填)
+///   - 對齊 spec §Ch10 2021 行:三角內任一規則例外 → power = 0
 pub fn rate_scenario(scenario: &Scenario) -> PowerRating {
-    use crate::output::MonowaveDirection;
-    let initial_dir = scenario
-        .wave_tree
-        .children
-        .first()
-        .map(|_| {
-            // wave_tree 的 children[0] 是 W1,但 WaveNode 沒帶 direction;
-            // 改從 wave_tree.start vs wave_tree.children[0].end 推
-            // 簡化版:從 structure_label 含 "Up" 或從 wave_tree label 推
-            if scenario.structure_label.contains("Up") {
-                MonowaveDirection::Up
-            } else if scenario.structure_label.contains("Down") {
-                MonowaveDirection::Down
-            } else {
-                MonowaveDirection::Neutral
-            }
-        })
-        .unwrap_or(MonowaveDirection::Neutral);
-
-    match (&scenario.pattern_type, initial_dir) {
-        (NeelyPatternType::Impulse, MonowaveDirection::Up) => PowerRating::Bullish,
-        (NeelyPatternType::Impulse, MonowaveDirection::Down) => PowerRating::Bearish,
-        (NeelyPatternType::Diagonal { .. }, MonowaveDirection::Up) => PowerRating::SlightBullish,
-        (NeelyPatternType::Diagonal { .. }, MonowaveDirection::Down) => PowerRating::SlightBearish,
-        _ => PowerRating::Neutral,
-    }
+    table::lookup_power_rating(
+        &scenario.pattern_type,
+        scenario.initial_direction,
+        scenario.in_triangle_context,
+    )
 }
 
 /// 對 Forest 套 Power Rating,直接更新每 Scenario 的 power_rating 欄位。
@@ -68,7 +40,10 @@ mod tests {
     use crate::output::*;
     use chrono::NaiveDate;
 
-    fn make_scenario(pattern: NeelyPatternType, label: &str) -> Scenario {
+    fn make_scenario(
+        pattern: NeelyPatternType,
+        direction: MonowaveDirection,
+    ) -> Scenario {
         let date = NaiveDate::parse_from_str("2026-01-01", "%Y-%m-%d").unwrap();
         Scenario {
             id: "test".to_string(),
@@ -84,7 +59,9 @@ mod tests {
                 }],
             },
             pattern_type: pattern,
-            structure_label: label.to_string(),
+            initial_direction: direction,
+            compacted_base_label: StructureLabel::Five,
+            structure_label: "test".to_string(),
             complexity_level: ComplexityLevel::Simple,
             power_rating: PowerRating::Neutral,
             max_retracement: 0.0,
@@ -96,51 +73,76 @@ mod tests {
             invalidation_triggers: Vec::new(),
             expected_fib_zones: Vec::new(),
             structural_facts: StructuralFacts::default(),
+            advisory_findings: Vec::new(),
+            in_triangle_context: false,
+            awaiting_l_label: false,
         }
     }
 
     #[test]
-    fn impulse_up_rates_bullish() {
-        let s = make_scenario(NeelyPatternType::Impulse, "Impulse 5-wave Up");
-        assert!(matches!(rate_scenario(&s), PowerRating::Bullish));
+    fn impulse_up_rates_strong_bullish() {
+        let s = make_scenario(NeelyPatternType::Impulse, MonowaveDirection::Up);
+        assert!(matches!(rate_scenario(&s), PowerRating::StrongBullish));
     }
 
     #[test]
-    fn impulse_down_rates_bearish() {
-        let s = make_scenario(NeelyPatternType::Impulse, "Impulse 5-wave Down");
-        assert!(matches!(rate_scenario(&s), PowerRating::Bearish));
+    fn impulse_down_rates_strong_bearish() {
+        let s = make_scenario(NeelyPatternType::Impulse, MonowaveDirection::Down);
+        assert!(matches!(rate_scenario(&s), PowerRating::StrongBearish));
     }
 
     #[test]
-    fn zigzag_rates_neutral() {
+    fn zigzag_single_up_rates_neutral() {
         let s = make_scenario(
             NeelyPatternType::Zigzag {
                 sub_kind: ZigzagKind::Single,
             },
-            "Zigzag Up",
+            MonowaveDirection::Up,
         );
         assert!(matches!(rate_scenario(&s), PowerRating::Neutral));
     }
 
     #[test]
-    fn diagonal_up_rates_slight_bullish() {
+    fn zigzag_double_up_rates_bullish() {
+        let s = make_scenario(
+            NeelyPatternType::Zigzag {
+                sub_kind: ZigzagKind::Double,
+            },
+            MonowaveDirection::Up,
+        );
+        assert!(matches!(rate_scenario(&s), PowerRating::Bullish));
+    }
+
+    #[test]
+    fn diagonal_leading_up_slight_bullish() {
         let s = make_scenario(
             NeelyPatternType::Diagonal {
                 sub_kind: DiagonalKind::Leading,
             },
-            "Diagonal 5-wave Up",
+            MonowaveDirection::Up,
         );
         assert!(matches!(rate_scenario(&s), PowerRating::SlightBullish));
     }
 
     #[test]
-    fn apply_to_forest_mutates() {
+    fn diagonal_ending_up_slight_bearish() {
+        let s = make_scenario(
+            NeelyPatternType::Diagonal {
+                sub_kind: DiagonalKind::Ending,
+            },
+            MonowaveDirection::Up,
+        );
+        assert!(matches!(rate_scenario(&s), PowerRating::SlightBearish));
+    }
+
+    #[test]
+    fn apply_to_forest_mutates_all_scenarios() {
         let mut forest = vec![
-            make_scenario(NeelyPatternType::Impulse, "Up"),
-            make_scenario(NeelyPatternType::Impulse, "Down"),
+            make_scenario(NeelyPatternType::Impulse, MonowaveDirection::Up),
+            make_scenario(NeelyPatternType::Impulse, MonowaveDirection::Down),
         ];
         apply_to_forest(&mut forest);
-        assert!(matches!(forest[0].power_rating, PowerRating::Bullish));
-        assert!(matches!(forest[1].power_rating, PowerRating::Bearish));
+        assert!(matches!(forest[0].power_rating, PowerRating::StrongBullish));
+        assert!(matches!(forest[1].power_rating, PowerRating::StrongBearish));
     }
 }

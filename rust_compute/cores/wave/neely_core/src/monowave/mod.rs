@@ -12,7 +12,7 @@
 //   - proportion.rs:Rule of Proportion(magnitude / 45° metrics)
 
 use crate::config::NeelyEngineConfig;
-use crate::output::{Monowave, OhlcvBar};
+use crate::output::{Monowave, OhlcvBar, StructureLabelCandidate};
 
 pub mod neutrality;
 pub mod proportion;
@@ -31,6 +31,9 @@ pub struct ClassifiedMonowave {
     pub atr_at_start: f64,
     /// Rule of Proportion 算出的 metrics(magnitude / 45° slope 等)
     pub metrics: ProportionMetrics,
+    /// Ch3 Pre-Constructive Logic 標出的 Structure Label 候選清單(Stage 0)。
+    /// Stage 2 結束時為空,Stage 0 跑完後填入 ~1-6 個候選。
+    pub structure_label_candidates: Vec<StructureLabelCandidate>,
 }
 
 /// Stage 1+2 統合 entry。
@@ -78,6 +81,7 @@ pub fn classify_monowaves(
                 monowave: classified_mw,
                 atr_at_start,
                 metrics,
+                structure_label_candidates: Vec::new(),
             }
         })
         .collect()
