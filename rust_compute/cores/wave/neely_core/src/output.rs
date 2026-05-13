@@ -90,6 +90,14 @@ pub struct NeelyCoreOutput {
     /// Phase 10 新增:Stage 10.5 Reverse Logic 觀察(spec §Expansion of Possibilities)。
     /// 同一資料序列存在多套合法計數時觸發 — 市場處於某更大形態的中段。
     pub reverse_logic_observation: Option<ReverseLogicObservation>,
+
+    /// Phase 12 新增:Stage 11 Degree Ceiling 推導(architecture §8.5 / §13.3)。
+    /// 依資料量自動推導本次分析能達到的最高 Degree。
+    pub degree_ceiling: DegreeCeiling,
+
+    /// Phase 12 新增:Stage 12 cross_timeframe_hints(architecture §8.6 / §3.4)。
+    /// 各 monowave 的 Structure Label + 價格區間摘要,供 Aggregation Layer 跨 Timeframe 比對。
+    pub cross_timeframe_hints: CrossTimeframeHints,
 }
 
 /// Three Rounds Round 3 暫停資訊(neely_core_architecture.md §8.4)。
@@ -192,6 +200,78 @@ pub struct ReverseLogicObservation {
     /// 建議過濾掉的「形態即將完成」scenario id 列表
     /// (spec 2602 行「自動剔除『形態即將完成』的選項」操作意涵)
     pub suggested_filter_ids: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 12:Degree Ceiling(architecture §8.5 / §13.3)
+// 對齊 m3Spec/neely_core_architecture.md §13.3 Degree ceiling 推導表
+// ---------------------------------------------------------------------------
+
+/// Neely 11 級 Degree 體系(architecture §8.5)。
+///
+/// 對齊精華版 Ch7 11 級體系,由小至大列序。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum Degree {
+    SubMicro,
+    Micro,
+    SubMinuette,
+    Minuette,
+    Minute,
+    Minor,
+    Intermediate,
+    Primary,
+    Cycle,
+    Supercycle,
+    GrandSupercycle,
+}
+
+/// Stage 11 Degree Ceiling — 依資料量推導本次分析能達到的最高 Degree。
+///
+/// 對齊 architecture §8.5 + §13.3:
+///   - < 1 年 → SubMinuette
+///   - 1-3 年 → Minuette / Minute
+///   - 3-10 年 → Minor / Intermediate
+///   - 10-30 年 → Primary
+///   - > 30 年 → Cycle / Supercycle
+///
+/// **為何重要**(spec §8.5):台股大部分個股上市 5-15 年,根本到不了 Cycle 級別。
+/// Aggregation 層可據此自動降低顯示的 Degree 標籤,避免「短歷史股票被標為 Supercycle」誤導。
+#[derive(Debug, Clone, Serialize)]
+pub struct DegreeCeiling {
+    /// 本次分析依資料量可達到的最高 Degree
+    pub max_reachable_degree: Degree,
+    /// 推導原因說明(例:"data spans 8 years, daily timeframe reaches Minor at best")
+    pub reason: String,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 12:CrossTimeframeHints(architecture §8.6 / §3.4)
+// ---------------------------------------------------------------------------
+
+/// Stage 12 cross_timeframe_hints — 各 monowave 摘要,供 Aggregation Layer 跨 Timeframe 比對。
+///
+/// 對齊 architecture §8.6:Neely Core 本來就有完整 monowave 資訊,直接輸出比 Aggregation
+/// 重新解析 `structural_snapshots` 高效。
+#[derive(Debug, Clone, Serialize)]
+pub struct CrossTimeframeHints {
+    /// 本次分析的 Timeframe
+    pub timeframe: Timeframe,
+    /// 各 monowave 的摘要
+    pub monowave_summaries: Vec<MonowaveSummary>,
+}
+
+/// 單一 monowave 的跨 Timeframe 摘要(architecture §8.6)。
+#[derive(Debug, Clone, Serialize)]
+pub struct MonowaveSummary {
+    /// 對應 classified_monowaves 的 index
+    pub monowave_index: usize,
+    /// 起訖日期
+    pub date_range: (NaiveDate, NaiveDate),
+    /// Structure Label 候選清單(從 P2 Pre-Constructive 標的 candidates)
+    /// 例:[":L5", ":F3"]
+    pub structure_label_candidates: Vec<String>,
+    /// 起訖價格區間(start_price, end_price)
+    pub price_range: (f64, f64),
 }
 
 // ---------------------------------------------------------------------------

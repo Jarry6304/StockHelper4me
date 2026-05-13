@@ -57,6 +57,7 @@ pub mod classifier;
 pub mod compaction;
 pub mod complexity;
 pub mod config;
+pub mod cross_timeframe;
 pub mod degree;
 pub mod emulation;
 pub mod facts;
@@ -80,10 +81,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.18.0",
+        "0.19.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints)",
     )
 }
 
@@ -141,8 +142,13 @@ impl WaveCore for NeelyCore {
         // 計數時市場處於某更大形態中段,輸出 ReverseLogicObservation 含 suggested_filter_ids
         // (in_triangle_context / Triangle Limiting / Combination Double* 為中段候選不過濾,
         // Impulse / Diagonal / Triangle Contracting/Expanding / Combination Triple* 為完成候選))。
+        // 0.18.0 → 0.19.0(Phase 12 PR:Stage 11 Degree Ceiling 依資料時間跨度推導本次分析能達到
+        // 的最高 Degree(11 級體系 SubMicro..GrandSupercycle)+ Stage 12 cross_timeframe_hints
+        // 為每 monowave 產 MonowaveSummary(structure_label_candidates / date_range / price_range)
+        // 供 Aggregation Layer 跨 Timeframe 比對。NeelyCoreOutput 加 degree_ceiling +
+        // cross_timeframe_hints 兩個非選用欄)。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.18.0"
+        "0.19.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -335,6 +341,24 @@ impl WaveCore for NeelyCore {
             stage_10_5_start.elapsed().as_millis() as u64,
         );
 
+        // ── Stage 11:Degree Ceiling 推導(Phase 12 — architecture §8.5 / §13.3)
+        //    依資料時間跨度自動推導本次分析能達到的最高 Degree
+        let stage_11_start = Instant::now();
+        let degree_ceiling = degree::compute_ceiling(&input.bars, input.timeframe);
+        stage_elapsed.insert(
+            "stage_11_degree_ceiling".to_string(),
+            stage_11_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 12:cross_timeframe_hints 計算(Phase 12 — architecture §8.6 / §3.4)
+        //    為每個 classified_monowave 產出摘要,供 Aggregation Layer 跨 Timeframe 比對
+        let stage_12_start = Instant::now();
+        let cross_timeframe_hints = cross_timeframe::compute_hints(&classified, input.timeframe);
+        stage_elapsed.insert(
+            "stage_12_cross_timeframe".to_string(),
+            stage_12_start.elapsed().as_millis() as u64,
+        );
+
         let forest_size = forest.len();
         let elapsed_ms = total_start.elapsed().as_millis() as u64;
         let warmup = self.warmup_periods(&params);
@@ -378,6 +402,8 @@ impl WaveCore for NeelyCore {
             missing_wave_suspects,
             emulation_suspects,
             reverse_logic_observation,
+            degree_ceiling,
+            cross_timeframe_hints,
         })
     }
 
@@ -431,7 +457,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.18.0");
+        assert_eq!(core.version(), "0.19.0");
     }
 
     // -------------------------------------------------------------
@@ -489,6 +515,8 @@ mod tests {
             "stage_10b_fibonacci",
             "stage_10c_triggers",
             "stage_10_5_reverse_logic",
+            "stage_11_degree_ceiling",
+            "stage_12_cross_timeframe",
         ] {
             assert!(
                 out.diagnostics.stage_elapsed_ms.contains_key(*stage_key),
