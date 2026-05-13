@@ -135,6 +135,14 @@ pub struct Scenario {
     pub pattern_type: NeelyPatternType,
     /// candidate 起始 monowave direction(Phase 5 PR 新增,供 Power Rating 判 Bullish/Bearish 符號)
     pub initial_direction: MonowaveDirection,
+    /// Phase 6 新增:Ch7 Compaction Reassessment 後的 base structure label。
+    ///
+    /// 對齊 m3Spec/neely_rules.md §Compaction 表(1803-1811 行):
+    ///   - Trending Impulse / Terminal Impulse → `:5`
+    ///   - Zigzag / Flat / Triangle / 含 x-wave 形態 → `:3`
+    ///
+    /// 供更高級的 Compaction Round 1 重新評估該 scenario 在更大序列裡的角色。
+    pub compacted_base_label: StructureLabel,
     /// 例:"5-3-5 Zigzag in W4 of larger Impulse"
     pub structure_label: String,
     pub complexity_level: ComplexityLevel,
@@ -442,6 +450,25 @@ pub enum AlternationAxis {
     Severity,
     Intricacy,
     Construction,
+}
+
+/// Ch7 Compaction Reassessment 對應的 base label。
+/// 對齊 m3Spec/neely_rules.md §Compaction 表(1803-1811 行)。
+pub fn compaction_base_label(pattern: &NeelyPatternType) -> StructureLabel {
+    match pattern {
+        // Trending Impulse → :5
+        NeelyPatternType::Impulse => StructureLabel::Five,
+        // Terminal Impulse(Diagonal)→ :5
+        NeelyPatternType::Diagonal { .. } => StructureLabel::Five,
+        // Zigzag(5-3-5)→ :3
+        NeelyPatternType::Zigzag { .. } => StructureLabel::Three,
+        // Flat(3-3-5)→ :3
+        NeelyPatternType::Flat { .. } => StructureLabel::Three,
+        // Triangle(3-3-3-3-3)→ :3
+        NeelyPatternType::Triangle { .. } => StructureLabel::Three,
+        // 含 x-wave 的任何形態 → :3
+        NeelyPatternType::Combination { .. } => StructureLabel::Three,
+    }
 }
 
 // ---------------------------------------------------------------------------

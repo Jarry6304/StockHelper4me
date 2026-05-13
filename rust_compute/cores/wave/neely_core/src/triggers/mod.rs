@@ -95,6 +95,7 @@ mod tests {
             },
             pattern_type: pattern,
             initial_direction: MonowaveDirection::Up,
+            compacted_base_label: StructureLabel::Five,
             structure_label: "test".to_string(),
             complexity_level: ComplexityLevel::Simple,
             power_rating: PowerRating::Neutral,

@@ -28,7 +28,7 @@
 
 use crate::candidates::WaveCandidate;
 use crate::output::{
-    ComplexityLevel, DiagonalKind, FibZone, NeelyPatternType,
+    compaction_base_label, ComplexityLevel, DiagonalKind, FibZone, NeelyPatternType,
     PostBehavior, PowerRating, RuleId, Scenario, StructuralFacts, StructureLabel,
     Trigger, WaveNode, ZigzagKind,
 };
@@ -72,11 +72,14 @@ pub fn classify(
 
     let wave_tree = build_wave_tree(candidate, classified);
 
+    let compacted_base = compaction_base_label(&pattern_type);
+
     Some(Scenario {
         id: candidate.id.clone(),
         wave_tree,
         pattern_type,
         initial_direction,
+        compacted_base_label: compacted_base,
         structure_label,
         complexity_level: classify_complexity(candidate),
         power_rating: PowerRating::Neutral, // Stage 10a Power Rating 查表後填

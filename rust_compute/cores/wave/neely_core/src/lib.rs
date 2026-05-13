@@ -77,10 +77,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.12.0",
+        "0.13.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 Pre-Constructive Logic + Pattern Isolation + DETOUR + Ch5 變體 + Ch10 Power Rating 完整 r5 表 + Diagonal Leading/Ending heuristic)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + DETOUR + Ch5 變體 + Ch6 兩階段確認 + Ch7 Compaction Reassessment + Ch10 Power Rating)",
     )
 }
 
@@ -119,8 +119,10 @@ impl WaveCore for NeelyCore {
         // 9 條變體規則完整實作,取代 Phase 1 Deferred stubs)。
         // 0.11.0 → 0.12.0(Phase 5 PR:Ch10 Power Rating 完整 r5 表 (±3..±3 7 級) +
         // Scenario.initial_direction 欄位 + Diagonal Leading/Ending heuristic 用相鄰 label context)。
+        // 0.12.0 → 0.13.0(Phase 6 PR:Ch6 Post-Constructive 兩階段確認完整實作 +
+        // Ch7 Compaction Reassessment base label (Scenario.compacted_base_label 新欄位))。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.12.0"
+        "0.13.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -211,9 +213,10 @@ impl WaveCore for NeelyCore {
             stage_5_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 6:Post-Constructive Validator(M3 PR-4 skeleton)
+        // ── Stage 6:Post-Constructive Validator(Phase 6 PR — Ch6 兩階段確認)
+        //    對齊 m3Spec/neely_rules.md §Ch6(1763-1797 行)
         let stage_6_start = Instant::now();
-        scenarios.retain(|s| post_validator::post_validate(s).pattern_complete);
+        scenarios.retain(|s| post_validator::post_validate(s, &classified).pattern_complete);
         stage_elapsed.insert(
             "stage_6_post_validator".to_string(),
             stage_6_start.elapsed().as_millis() as u64,
@@ -369,7 +372,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.12.0");
+        assert_eq!(core.version(), "0.13.0");
     }
 
     // -------------------------------------------------------------
