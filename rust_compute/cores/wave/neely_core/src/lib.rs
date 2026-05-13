@@ -79,7 +79,7 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.16.0",
+        "0.17.0",
         core_registry::CoreKind::Wave,
         "P0",
         "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation)",
@@ -132,8 +132,12 @@ impl WaveCore for NeelyCore {
         // 0.15.0 → 0.16.0(Phase 9 PR:Stage 9a Missing Wave 完整偵測 (從 P2 MissingWaveBundle 萃取
         // + MissingWavePosition 分類) + Stage 9b Ch12 Emulation 完整偵測 (4 種 EmulationKind) +
         // CombinationKind enum 擴 11 variants 對齊 Ch8 Table A/B)。
+        // 0.16.0 → 0.17.0(Phase 10 PR:Stage 10b Fibonacci Internal/External 分離投影 (取代
+        // compute_expected_fib_zones 回空 vec 的 placeholder) + Stage 10c Triggers 接 monowave price
+        // (W1.start_price for Ch5_Essential(3) / W2.end_price for Ch5_Overlap_Trending) +
+        // Impulse Up/Down 對稱 PriceBreakBelow/Above 方向)。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.16.0"
+        "0.17.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -289,6 +293,9 @@ impl WaveCore for NeelyCore {
             stage_9b_start.elapsed().as_millis() as u64,
         );
 
+        // 提前構建 monowave_series — Stage 10b/10c 需要從中反查 W1/W2 prices
+        let monowave_series: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
+
         // ── Stage 10a:Power Rating 查表(M3 PR-6)
         let stage_10a_start = Instant::now();
         power_rating::apply_to_forest(&mut forest);
@@ -297,23 +304,22 @@ impl WaveCore for NeelyCore {
             stage_10a_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 10b:Fibonacci 投影(M3 PR-6 skeleton — projection 留 PR-6b 接 monowave price)
+        // ── Stage 10b:Fibonacci 投影(Phase 10 — Internal + External 從 monowave price 投影)
         let stage_10b_start = Instant::now();
-        fibonacci::apply_to_forest(&mut forest);
+        fibonacci::apply_to_forest(&mut forest, &monowave_series);
         stage_elapsed.insert(
             "stage_10b_fibonacci".to_string(),
             stage_10b_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 10c:Invalidation Triggers 生成(M3 PR-6 best-guess)
+        // ── Stage 10c:Invalidation Triggers 生成(Phase 10 — 從 monowave price 填實際 W1/W2 break level)
         let stage_10c_start = Instant::now();
-        triggers::apply_to_forest(&mut forest);
+        triggers::apply_to_forest(&mut forest, &monowave_series);
         stage_elapsed.insert(
             "stage_10c_triggers".to_string(),
             stage_10c_start.elapsed().as_millis() as u64,
         );
 
-        let monowave_series: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
         let forest_size = forest.len();
         let elapsed_ms = total_start.elapsed().as_millis() as u64;
         let warmup = self.warmup_periods(&params);
@@ -409,7 +415,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.16.0");
+        assert_eq!(core.version(), "0.17.0");
     }
 
     // -------------------------------------------------------------

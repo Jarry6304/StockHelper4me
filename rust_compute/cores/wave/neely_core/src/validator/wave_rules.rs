@@ -249,7 +249,7 @@ mod tests {
     ) -> (Vec<ClassifiedMonowave>, WaveCandidate) {
         let classified = mags
             .iter()
-            .zip(labels.into_iter())
+            .zip(labels)
             .map(|(&m, l)| cmw_with_labels(m, l))
             .collect();
         let candidate = WaveCandidate {
