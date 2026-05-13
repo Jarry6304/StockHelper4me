@@ -1,6 +1,7 @@
 // us_market_core(P2)— Environment Core
-// 對齊 m2Spec/oldm2Spec/environment_cores.md §四 r2
-// Params §4.4 / Output §4.6(spy/vix 同點 + VixZone)/ stock_id 保留字 _global_
+// 對齊 m3Spec/environment_cores.md §四 r3
+// Params §4.4 / Output §4.6(spy/vix 同點 + VixZone)/ stock_id 保留字 _index_us_market_
+// metadata.subseries: "spy"|"vix"(SPY/VIX 屬同源衍生,共用保留字以 subseries 區分)
 //
 // **Reference(2026-05-10 加)**:
 //   VIX low=15 / high=25 / extreme=35:**Whaley, Robert E. (2000).
@@ -26,7 +27,7 @@ inventory::submit! {
     )
 }
 
-const RESERVED_STOCK_ID: &str = "_global_";
+const RESERVED_STOCK_ID: &str = "_index_us_market_";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UsMarketParams {
@@ -133,29 +134,29 @@ impl IndicatorCore for UsMarketCore {
             let ca = macd_line[i] > macd_signal[i];
             if !pa && ca {
                 events.push(UsMarketEvent { date: cur.date, kind: UsMarketEventKind::SpyMacdGoldenCross, value: macd_line[i],
-                    metadata: json!({"index": "spy"}) });
+                    metadata: json!({"subseries": "spy", "event": "macd_golden_cross"}) });
             } else if pa && !ca {
                 events.push(UsMarketEvent { date: cur.date, kind: UsMarketEventKind::SpyMacdDeathCross, value: macd_line[i],
-                    metadata: json!({"index": "spy"}) });
+                    metadata: json!({"subseries": "spy", "event": "macd_death_cross"}) });
             }
             // VIX spike(單日 +20% 以上)
             if cur.vix_change_pct >= 20.0 {
                 events.push(UsMarketEvent { date: cur.date, kind: UsMarketEventKind::VixSpike, value: cur.vix_close,
-                    metadata: json!({"vix": cur.vix_close, "change": cur.vix_change_pct}) });
+                    metadata: json!({"subseries": "vix", "value": cur.vix_close, "change_pct": cur.vix_change_pct}) });
             }
             // VIX zone entry
             if prev.vix_close < params.vix_high_threshold && cur.vix_close >= params.vix_high_threshold {
                 events.push(UsMarketEvent { date: cur.date, kind: UsMarketEventKind::VixHighZoneEntry, value: cur.vix_close,
-                    metadata: json!({"vix": cur.vix_close, "threshold": params.vix_high_threshold}) });
+                    metadata: json!({"subseries": "vix", "value": cur.vix_close, "threshold": params.vix_high_threshold}) });
             }
             if prev.vix_close > params.vix_low_threshold && cur.vix_close <= params.vix_low_threshold {
                 events.push(UsMarketEvent { date: cur.date, kind: UsMarketEventKind::VixLowZoneEntry, value: cur.vix_close,
-                    metadata: json!({"vix": cur.vix_close, "threshold": params.vix_low_threshold}) });
+                    metadata: json!({"subseries": "vix", "value": cur.vix_close, "threshold": params.vix_low_threshold}) });
             }
             // SPY overnight large move
             if cur.spy_change_pct.abs() >= params.overnight_change_threshold {
                 events.push(UsMarketEvent { date: cur.date, kind: UsMarketEventKind::SpyOvernightLargeMove, value: cur.spy_change_pct,
-                    metadata: json!({"change": cur.spy_change_pct, "us_date": cur.date}) });
+                    metadata: json!({"subseries": "spy", "change_pct": cur.spy_change_pct, "us_date": cur.date}) });
             }
         }
         Ok(UsMarketOutput { stock_id: RESERVED_STOCK_ID.to_string(), timeframe: Timeframe::Daily, series, events })
@@ -185,6 +186,6 @@ mod tests {
             vix: MarketIndexUsSeries { stock_id: "^VIX".to_string(), points: vec![] },
         };
         let out = core.compute(&input, UsMarketParams::default()).unwrap();
-        assert_eq!(out.stock_id, "_global_");
+        assert_eq!(out.stock_id, "_index_us_market_");
     }
 }

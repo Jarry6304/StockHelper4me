@@ -1,6 +1,13 @@
-// obv_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_volume.md §三 r2
+// obv_core(P1)— 對齊 m3Spec/indicator_cores_volume.md §三 r2
 // Params §3.2(anchor_date / ma_period)/ Output §3.4(obv + obv_ma + anchor_date)/
 // Fact §3.5(divergence + ma_cross + obv_extreme_high)
+//
+// **Reference**:
+//   Granville, Joseph (1963). "New Key to Stock Market Profits" — OBV 原始定義
+//   Murphy, John (1999). "Technical Analysis of the Financial Markets" p.248
+//     — divergence 兩個極值點時間距離應 ≥ 20 bars(spec §3.6 同款慣例)
+//   Lucas & LeBeau (1992). "Computer Analysis of the Futures Market"
+//     — pivot_n=3 swing pivot 確認
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -11,12 +18,11 @@ use serde_json::json;
 
 inventory::submit! {
     core_registry::CoreRegistration::new(
-        "obv_core", "0.1.0", core_registry::CoreKind::Indicator, "P1",
-        "OBV Core(累積式量能 + divergence + obv_ma cross)",
+        "obv_core", "0.2.0", core_registry::CoreKind::Indicator, "P1",
+        "OBV Core(累積式量能 + pivot-based divergence + obv_ma cross)",
     )
 }
 
-const DIV_LOOKBACK: usize = 20;
 const EXTREME_LOOKBACK: usize = 126; // 6m ≈ 126 trading days
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,7 +63,7 @@ impl IndicatorCore for ObvCore {
     type Params = ObvParams;
     type Output = ObvOutput;
     fn name(&self) -> &'static str { "obv_core" }
-    fn version(&self) -> &'static str { "0.1.0" }
+    fn version(&self) -> &'static str { "0.2.0" }
     /// §3.3:有 ma_period 時 `p + 10`,無則 0
     fn warmup_periods(&self, params: &Self::Params) -> usize {
         match params.ma_period { Some(p) => p + 10, None => 0 }
@@ -99,19 +105,27 @@ impl IndicatorCore for ObvCore {
             }
         }
         let mut events = Vec::new();
-        // Divergence vs price(close)
+        // Divergence vs price(close)— pivot-based detection
+        // 對齊 v1.31 rsi/kd/macd P5 算法重寫:固定 20-bar window 算法在趨勢中每日重複觸發,
+        // 改用 swing pivot 偵測讓 divergence 回歸稀有訊號本質(Murphy 1999 p.248)
         let closes: Vec<f64> = input.bars[anchor_idx..].iter().map(|b| b.close).collect();
-        if series.len() > DIV_LOOKBACK {
-            for i in DIV_LOOKBACK..series.len() {
-                let pi = i - DIV_LOOKBACK;
-                if closes[i] > closes[pi] && series[i].obv < series[pi].obv {
-                    events.push(ObvEvent { date: series[i].date, kind: ObvEventKind::BearishDivergence, value: series[i].obv,
-                        metadata: json!({"event": "bearish_divergence", "price_date": input.bars[anchor_idx + pi].date, "obv_date": series[i].date}) });
-                } else if closes[i] < closes[pi] && series[i].obv > series[pi].obv {
-                    events.push(ObvEvent { date: series[i].date, kind: ObvEventKind::BullishDivergence, value: series[i].obv,
-                        metadata: json!({"event": "bullish_divergence", "price_date": input.bars[anchor_idx + pi].date, "obv_date": series[i].date}) });
-                }
-            }
+        let obv_values: Vec<f64> = series.iter().map(|p| p.obv).collect();
+        let dates_vec: Vec<NaiveDate> = series.iter().map(|p| p.date).collect();
+        for (confirm_date, is_bearish, obv_at_pivot, price_at_pivot, prev_date, prev_obv) in
+            detect_divergences(&closes, &obv_values, &dates_vec)
+        {
+            let kind = if is_bearish { ObvEventKind::BearishDivergence } else { ObvEventKind::BullishDivergence };
+            let label = if is_bearish { "bearish_divergence" } else { "bullish_divergence" };
+            events.push(ObvEvent {
+                date: confirm_date, kind, value: obv_at_pivot,
+                metadata: json!({
+                    "event": label,
+                    "pivot_price": price_at_pivot,
+                    "pivot_obv": obv_at_pivot,
+                    "prev_pivot_date": prev_date.to_string(),
+                    "prev_pivot_obv": prev_obv,
+                }),
+            });
         }
         // OBV vs OBV_MA cross
         if params.ma_period.is_some() {
@@ -150,11 +164,56 @@ impl IndicatorCore for ObvCore {
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
         output.events.iter().map(|e| Fact {
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
-            source_core: "obv_core".to_string(), source_version: "0.1.0".to_string(),
+            source_core: "obv_core".to_string(), source_version: "0.2.0".to_string(),
             params_hash: None, statement: format!("OBV {:?} on {}: obv={:.0}", e.kind, e.date, e.value),
             metadata: e.metadata.clone(),
         }).collect()
     }
+}
+
+/// Pivot-based divergence detection(對齊 v1.31 rsi/kd/macd P5 算法重寫)。
+/// Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) pivot_n=3 swing confirmation.
+/// Returns (confirm_date, is_bearish, obv_at_pivot, price_at_pivot, prev_pivot_date, prev_obv)。
+fn detect_divergences(
+    prices: &[f64],
+    indicator: &[f64],
+    dates: &[NaiveDate],
+) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
+    const PIVOT_N: usize = 3;        // Lucas & LeBeau: 3-bar swing confirmation
+    // 對齊 spec §3.6:「兩個價格極值點之間時間距離 ≥ N 根 K 棒(預設 N=20)」
+    // Murphy (1999) p.248 建議 20-60 intervals;此值對齊 spec 下限。
+    const MIN_PIVOT_DIST: usize = 20;
+    let n = prices.len();
+    if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
+    let mut out = Vec::new();
+    let mut last_high: Option<(usize, f64, f64)> = None;
+    let mut last_low: Option<(usize, f64, f64)> = None;
+    for pivot in PIVOT_N..(n - PIVOT_N) {
+        let p = prices[pivot]; let ind = indicator[pivot];
+        // OBV 累積值不會像 RSI 有 warmup 0,但 anchor_idx 之前的累積基準值會是 0;
+        // skip 0 indicator 對 OBV 來說只在最開頭(anchor 當日 obv=0)有效。
+        let is_h = (1..=PIVOT_N).all(|k| prices[pivot - k] < p) && (1..=PIVOT_N).all(|k| prices[pivot + k] < p);
+        let is_l = (1..=PIVOT_N).all(|k| prices[pivot - k] > p) && (1..=PIVOT_N).all(|k| prices[pivot + k] > p);
+        if is_h {
+            if let Some((pi, pp, pi_ind)) = last_high {
+                if pivot - pi >= MIN_PIVOT_DIST && p > pp && ind < pi_ind {
+                    let c = (pivot + PIVOT_N).min(n - 1);
+                    out.push((dates[c], true, ind, p, dates[pi], pi_ind));
+                }
+            }
+            last_high = Some((pivot, p, ind));
+        }
+        if is_l {
+            if let Some((pi, pp, pi_ind)) = last_low {
+                if pivot - pi >= MIN_PIVOT_DIST && p < pp && ind > pi_ind {
+                    let c = (pivot + PIVOT_N).min(n - 1);
+                    out.push((dates[c], false, ind, p, dates[pi], pi_ind));
+                }
+            }
+            last_low = Some((pivot, p, ind));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -170,5 +229,46 @@ mod tests {
     fn warmup_no_ma() {
         let params = ObvParams { timeframe: Timeframe::Daily, anchor_date: None, ma_period: None };
         assert_eq!(ObvCore::new().warmup_periods(&params), 0);
+    }
+
+    /// 對齊 v1.31 rsi/kd/macd 同款 regression — pivot-based divergence fires once
+    #[test]
+    fn bearish_divergence_pivot_fires_once() {
+        // price 新高,OBV 反而比上次低 → bearish divergence
+        // 兩 pivot 間距 ≥ 20(MIN_PIVOT_DIST)
+        let n = 35usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let mut prices = vec![90.0_f64; n];
+        let mut obv = vec![5_000_000.0_f64; n];
+        prices[5] = 100.0; obv[5] = 7_000_000.0;     // first swing high
+        prices[28] = 105.0; obv[28] = 6_500_000.0;   // price HH, OBV LH → bearish (dist=23)
+        let r = detect_divergences(&prices, &obv, &dates);
+        assert_eq!(r.iter().filter(|(_, b, ..)| *b).count(), 1, "bearish divergence fires once");
+    }
+
+    #[test]
+    fn bullish_divergence_pivot_fires_once() {
+        let n = 35usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let mut prices = vec![100.0_f64; n];
+        let mut obv = vec![5_000_000.0_f64; n];
+        prices[5] = 80.0;  obv[5] = 3_000_000.0;     // first swing low
+        prices[28] = 75.0; obv[28] = 3_500_000.0;    // price LL, OBV HL → bullish (dist=23)
+        let r = detect_divergences(&prices, &obv, &dates);
+        assert_eq!(r.iter().filter(|(_, b, ..)| !b).count(), 1, "bullish divergence fires once");
+    }
+
+    #[test]
+    fn no_divergence_in_monotone_trend() {
+        // 修前 fixed-window 算法在 monotone 趨勢中每日重複觸發,本版回歸 0
+        let n = 50usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let prices: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
+        let obv: Vec<f64> = (0..n).map(|i| 10_000_000.0 - (i as f64) * 10_000.0).collect();
+        let r = detect_divergences(&prices, &obv, &dates);
+        assert_eq!(r.len(), 0, "monotone trend: no pivots → 0 divergences");
     }
 }

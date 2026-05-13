@@ -340,7 +340,7 @@ async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunS
         }
         Err(e) => summary.push(loader_err_summary(
             "us_market_core",
-            "_global_",
+            "_index_us_market_",
             "load_us_market_combined",
             &e,
         )),
@@ -1063,7 +1063,8 @@ fn parse_timeframe(s: &str) -> Result<Timeframe> {
 }
 
 /// 從 Output JSON 抽 (stock_id, value_date, timeframe_str)。
-/// 處理 ma_core series_by_spec 例外:fallback 從 series_by_spec[0].series 拿最後 date。
+/// 處理 ma_core series_by_spec / taiex_core series_by_index 例外:
+/// fallback 從巢狀 series 結構拿最後 date。
 fn extract_indicator_meta(output_json: &serde_json::Value) -> (String, NaiveDate, String) {
     let stock_id = output_json
         .get("stock_id")
@@ -1076,24 +1077,31 @@ fn extract_indicator_meta(output_json: &serde_json::Value) -> (String, NaiveDate
         .unwrap_or("daily")
         .to_string();
 
+    fn nested_last_date(output_json: &serde_json::Value, key: &str) -> Option<String> {
+        output_json
+            .get(key)
+            .and_then(|v| v.as_array())
+            .and_then(|outer| outer.iter().rev().find_map(|first| {
+                // 取最後一個 entry,但若該 series 為空則往前找
+                first.get("series")
+                    .and_then(|s| s.as_array())
+                    .and_then(|arr| arr.last())
+                    .and_then(|p| p.get("date"))
+                    .and_then(|d| d.as_str())
+                    .map(String::from)
+            }))
+    }
+
     let last_date_str = output_json
         .get("series")
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.last())
         .and_then(|p| p.get("date"))
         .and_then(|d| d.as_str())
-        .or_else(|| {
-            // ma_core 例外
-            output_json
-                .get("series_by_spec")
-                .and_then(|v| v.as_array())
-                .and_then(|outer| outer.first())
-                .and_then(|first| first.get("series"))
-                .and_then(|s| s.as_array())
-                .and_then(|arr| arr.last())
-                .and_then(|p| p.get("date"))
-                .and_then(|d| d.as_str())
-        });
+        .map(String::from)
+        .or_else(|| nested_last_date(output_json, "series_by_spec"))    // ma_core
+        .or_else(|| nested_last_date(output_json, "series_by_index"));  // taiex_core
+    let last_date_str = last_date_str.as_deref();
 
     let last_date = last_date_str
         .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
