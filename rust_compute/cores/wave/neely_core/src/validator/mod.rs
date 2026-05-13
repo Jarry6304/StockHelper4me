@@ -69,20 +69,25 @@ pub struct ValidationReport {
     pub failed: Vec<RuleRejection>,
     pub deferred: Vec<RuleId>,
     pub not_applicable: Vec<RuleId>,
-    /// 整體判定:任一非 Overlap_* Fail → false;
-    /// Ch5_Overlap_Trending 或 Ch5_Overlap_Terminal 單獨 fail 是預期行為(兩規則互斥),不視為整體 fail
+    /// 整體判定:
+    /// - 任一 Ch5_Essential(R1-R7)Fail → false(必要 5-wave 建構規則違反)
+    /// - 兩條 Ch5_Overlap_* 同時 Fail → false(結構錯亂)
+    /// - Flat/Zigzag/Triangle/Equality/Alternation 變體規則 Fail 是「資訊性」,
+    ///   不直接 block overall_pass(該類 fail 表「不是此 pattern」,由 Stage 5 Classifier 用)
     pub overall_pass: bool,
 }
 
 /// 對單一 candidate 跑完整 18 條規則,回傳彙整報告。
 ///
-/// 邏輯:
+/// 邏輯(Phase 4 r5 修訂):
 ///   1. 跑 Ch5_Essential R1-R7 + Ch5_Overlap_Trending + Ch5_Overlap_Terminal(9 條,core_rules)
-///   2. 跑 Ch5_Flat_* / Ch5_Zigzag_* / Ch5_Triangle_*(Deferred)
-///   3. 跑 Ch5_Equality / Ch5_Alternation(Deferred)
-///   4. **Overlap_Trending / Overlap_Terminal 互斥**:其中之一 fail 是正常(對應 Impulse 或 Diagonal),
-///      只有兩條同時 fail 才表示結構錯亂 → overall_pass = false
-///   5. 其他非 Overlap 規則任一 Fail → overall_pass = false
+///   2. 跑 Ch5_Flat_* / Ch5_Zigzag_* / Ch5_Triangle_*(7 條,Phase 4 完整實作)
+///   3. 跑 Ch5_Equality / Ch5_Alternation(2 條,Phase 4 完整實作)
+///   4. **overall_pass 判定**:
+///      - 任一 Ch5_Essential Fail → false
+///      - 兩條 Overlap 同時 Fail → false(結構錯亂)
+///      - 變體規則(Flat/Zigzag/Triangle/Equality/Alternation)Fail 不 block
+///        (此類 fail 對非該 pattern candidate 是正常,Stage 5 Classifier 用此資訊判 pattern type)
 pub fn validate_candidate(
     candidate: &WaveCandidate,
     classified: &[ClassifiedMonowave],
@@ -100,7 +105,7 @@ pub fn validate_candidate(
     results.extend(triangle_rules::run(candidate, classified));
     results.extend(wave_rules::run(candidate, classified));
 
-    let mut non_overlap_fail = false;
+    let mut essential_fail = false;
     let mut overlap_trending_failed = false;
     let mut overlap_terminal_failed = false;
 
@@ -108,13 +113,14 @@ pub fn validate_candidate(
         match result {
             RuleResult::Pass => {
                 // 規則 pass 暫不記入 passed(目前 passed 留給 classifier default_passed_rules 反推)
-                // P4+ 補完整 Pass 紀錄
             }
             RuleResult::Fail(rej) => {
                 match rej.rule_id {
+                    RuleId::Ch5_Essential(_) => essential_fail = true,
                     RuleId::Ch5_Overlap_Trending => overlap_trending_failed = true,
                     RuleId::Ch5_Overlap_Terminal => overlap_terminal_failed = true,
-                    _ => non_overlap_fail = true,
+                    // 變體規則 Fail 不 block(資訊性 — Stage 5 Classifier 用)
+                    _ => {}
                 }
                 report.failed.push(rej);
             }
@@ -127,9 +133,8 @@ pub fn validate_candidate(
         }
     }
 
-    // 兩條 overlap 規則同時 fail → 結構錯亂(architecture §7.1 Stage 4 失敗模型)
     let both_overlaps_failed = overlap_trending_failed && overlap_terminal_failed;
-    report.overall_pass = !(non_overlap_fail || both_overlaps_failed);
+    report.overall_pass = !(essential_fail || both_overlaps_failed);
     report
 }
 
@@ -210,15 +215,22 @@ mod tests {
         let report = validate_candidate(&candidate, &classified);
         assert!(
             report.overall_pass,
-            "well-formed 5-wave Up impulse 應 overall_pass = true(只 Overlap_Terminal fail,正常),failed = {:?}",
+            "well-formed 5-wave Up impulse 應 overall_pass = true(Essential R1-R7 + Trending Overlap 全 pass),failed = {:?}",
             report.failed
         );
-        // failed 應只含 Overlap_Terminal(Trending 假設下 Terminal 必 fail)
-        assert_eq!(report.failed.len(), 1, "clean impulse 應只 1 條 fail(Overlap_Terminal)");
-        assert!(matches!(
-            report.failed[0].rule_id,
-            RuleId::Ch5_Overlap_Terminal
-        ));
+        // failed 含 Overlap_Terminal(Trending 假設下 Terminal 必 fail)+ 變體規則對 Impulse 的 fail
+        // 這些變體 fail 屬「資訊性」(spec 1419-1421 行 + Phase 4 dispatcher 設計),
+        // 不 block overall_pass。Stage 5 Classifier 用變體 fail 模式判 pattern type。
+        assert!(
+            report.failed.iter().any(|r| matches!(r.rule_id, RuleId::Ch5_Overlap_Terminal)),
+            "Trending Impulse 應對 Overlap_Terminal fail"
+        );
+        // 確認沒有 Essential 規則 fail(Essential fail 才會 block overall_pass)
+        assert!(
+            !report.failed.iter().any(|r| matches!(r.rule_id, RuleId::Ch5_Essential(_))),
+            "clean Impulse 不該有 Essential fail,實際 failed = {:?}",
+            report.failed
+        );
     }
 
     #[test]

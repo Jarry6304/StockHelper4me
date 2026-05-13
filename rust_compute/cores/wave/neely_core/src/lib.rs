@@ -77,10 +77,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.10.0",
+        "0.11.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 Pre-Constructive Logic + Pattern Isolation + DETOUR + Ch5 Essential R1-R7 + Overlap)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 Pre-Constructive Logic + Pattern Isolation + DETOUR + Ch5 Essential R1-R7 + Overlap + Flat/Zigzag/Triangle/Equality/Alternation 變體規則)",
     )
 }
 
@@ -115,8 +115,10 @@ impl WaveCore for NeelyCore {
         // 全 200+ branches if-else cascade,StructureLabel candidates 落地)。
         // 0.9.0 → 0.10.0(Phase 3 PR:Stage 3.5 Pattern Isolation 6-step procedure
         // + Zigzag DETOUR Test 落地,NeelyCoreOutput 加 pattern_bounds + detour_annotations)。
+        // 0.10.0 → 0.11.0(Phase 4 PR:Stage 4 Ch5 Flat/Zigzag/Triangle/Equality/Alternation
+        // 9 條變體規則完整實作,取代 Phase 1 Deferred stubs)。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.10.0"
+        "0.11.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -365,7 +367,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.10.0");
+        assert_eq!(core.version(), "0.11.0");
     }
 
     // -------------------------------------------------------------
