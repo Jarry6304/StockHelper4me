@@ -293,8 +293,9 @@ fn emit_streak(
 ///
 /// **Edge trigger 設計**(2026-05-12 P2 阻塞 6 修):僅在 |z| 從 < threshold 跨入 >= threshold
 /// 當日 fire,避免機構連續建倉 / 出貨期間每天都 fire(原 level trigger 91.83/yr → 預期 6-12/yr)。
+/// Verification: scripts/p2_calibration_data.sql §2 (institutional_core / LargeTransaction)。
 /// Reference: Brown & Warner (1985) JFE 14(1):3-31 事件研究方法論 —「事件」是狀態變化,
-/// 不是狀態持續;Sheingold (1978) Analog-Digital Conversion Notes — edge trigger vs level trigger。
+/// 不是狀態持續;Sheingold (1978) "Analog-Digital Conversion Notes" — edge trigger vs level trigger。
 fn detect_large_transaction(
     raw: &[InstitutionalDailyRaw],
     params: &InstitutionalParams,

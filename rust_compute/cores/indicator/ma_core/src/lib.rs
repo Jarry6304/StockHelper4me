@@ -35,8 +35,9 @@ fn above_ma_streak_min(period: usize) -> usize {
 }
 
 /// MaBullishCross / MaBearishCross / MaGoldenCross / MaDeathCross 最小間距。
-/// Production data 校準(2026-05-12): BullishCross ~11.5/yr 🟠。
-/// 10-bar = 2 週,過濾短暫 whipsaw 噪音。目標 6–10/yr。
+/// Production data 校準(2026-05-12): BullishCross ~11.5/yr 🟠 → 目標 6–9/yr 🟢。
+/// Verification: scripts/p2_calibration_data.sql §2 (ma_core / BullishCross|GoldenCross)。
+/// 10-bar = 2 週;適用全部 6 種 MA(SMA/EMA/WMA/DEMA/TEMA/HMA)同一閾值。
 const MIN_MA_CROSS_SPACING: usize = 10;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

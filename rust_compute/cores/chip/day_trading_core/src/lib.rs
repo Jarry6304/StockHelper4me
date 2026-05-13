@@ -40,8 +40,10 @@ inventory::submit! {
 pub struct DayTradingParams {
     pub timeframe: Timeframe,
     /// 當沖比率高閾值(%),預設 30.0
+    /// Reference: m3Spec/chip_cores.md §7.3 Params 表(台股日均當沖比 ~5-20%;30% 為顯著偏高)
     pub ratio_high_threshold: f64,
     /// 當沖比率低閾值(%),預設 5.0
+    /// Reference: m3Spec/chip_cores.md §7.3 Params 表(≤5% 表示市場對當沖缺乏興趣)
     pub ratio_low_threshold: f64,
     /// 當沖力道回看,預設 5
     pub momentum_lookback: usize,
@@ -209,7 +211,10 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
     let mut events = Vec::new();
 
     // RatioExtremeHigh / Low — edge trigger: fire only on zone entry, not on every bar in zone.
-    // Brown & Warner (1985): 事件 = 狀態轉換(crossing into zone), 連續停留不算新事件。
+    // Production data 校準(2026-05-12): level trigger 版 ~31/yr 🔴。edge trigger 後預期 2–5/yr 🟢。
+    // Verification: scripts/p2_calibration_data.sql §2 (day_trading_core / RatioExtremeHigh|Low)。
+    // Reference: Sheingold (1978) "Analog-Digital Conversion Notes" — edge trigger vs level trigger；
+    //            Brown & Warner (1985) JFE 14(1):3-31 — 事件 = 狀態轉換,連續停留不構成新事件。
     let mut was_extreme_high = false;
     let mut was_extreme_low = false;
     for (i, p) in series.iter().enumerate() {

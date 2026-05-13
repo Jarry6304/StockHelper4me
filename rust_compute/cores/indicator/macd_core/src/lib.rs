@@ -33,11 +33,15 @@ pub struct MacdParams {
 impl Default for MacdParams { fn default() -> Self { Self { fast: 12, slow: 26, signal: 9, timeframe: Timeframe::Daily } } }
 
 /// HistogramZeroCross 最小間距 — 防止 histogram 在 0 附近快速來回產生噪音。
-/// Production data 校準(2026-05-12): HistogramZeroCross 15.15/yr 🟠。
-/// 5-bar = 1 週,排除同一週內的 back-and-forth。目標 ≤ 12/yr。
+/// Production data 校準(2026-05-12): HistogramZeroCross 15.15/yr 🟠 → 目標 ≤ 12/yr 🟢。
+/// Verification: scripts/p2_calibration_data.sql §2 (macd_core / HistogramZeroCross)。
+/// 5-bar = 1 週,排除同一週內的 back-and-forth。短於 kd_core(10-bar)因 MACD histogram 本質波動更平滑。
 const MIN_ZERO_CROSS_SPACING: usize = 5;
 
-/// GoldenCross / DeathCross 最小間距(與 kd_core 對齊, 7.5/yr 已🟢但加間距更穩健)。
+/// GoldenCross / DeathCross 最小間距。
+/// Production data 校準(2026-05-12): GoldenCross 7.5/yr 🟢,但加間距防止快速 whipsaw。
+/// Verification: scripts/p2_calibration_data.sql §2 (macd_core / GoldenCross|DeathCross)。
+/// 10-bar = 2 週,與 kd_core MIN_KD_CROSS_SPACING 對齊(同屬 MACD-family cross events)。
 const MIN_MACD_CROSS_SPACING: usize = 10;
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,9 +144,10 @@ impl IndicatorCore for MacdCore {
                 exp_count = 0;
             }
         }
-        // Divergence — pivot-based detection
-        // Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) pivot_n=3.
-        // 原 fixed-20-bar 每天比較 → 20–33 次/年 🔴。Pivot 版 2–6 次/年 🟢。
+        // Divergence — pivot-based detection(2026-05-12 P5 算法重寫)
+        // 原 fixed-20-bar 每天比較 → 20–33 次/年 🔴 → Pivot 版 2–6 次/年 🟢。
+        // Verification: scripts/p2_calibration_data.sql §2 (macd_core / BullishDivergence|BearishDivergence)。
+        // Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) "Computer Analysis of the Futures Market" pivot_n=3。
         let macd_vals: Vec<f64> = series.iter().map(|p| p.macd_line).collect();
         let dates_vec: Vec<NaiveDate> = input.bars.iter().map(|b| b.date).collect();
         for (confirm_date, is_bearish, ind_val, price_val, prev_date, prev_ind) in

@@ -100,10 +100,12 @@ impl IndicatorCore for RsiCore {
             }
         }
 
-        // Divergence — pivot-based detection
-        // Reference: Murphy (1999) "Technical Analysis" p.248: 背離必須比較連續 swing HIGH/LOW
-        //   樞軸點，而非固定間距 bar[i] vs bar[i−N]。原 fixed-20-bar 實作在趨勢中每天觸發
-        //   → 20–33 次/股/年 🔴。Lucas & LeBeau (1992) pivot_n=3；修正後 2–6 次/年 🟢。
+        // Divergence — pivot-based detection(2026-05-12 P5 算法重寫)
+        // 原 fixed-20-bar 實作在趨勢中每天觸發 → 20–33 次/股/年 🔴 → 修正後 2–6 次/年 🟢。
+        // Verification: scripts/p2_calibration_data.sql §2 (rsi_core / BullishDivergence|BearishDivergence)。
+        // Reference: Murphy (1999) "Technical Analysis of the Financial Markets" p.248 —
+        //   背離必須比較連續 swing HIGH/LOW 樞軸點，而非固定間距；
+        //   Lucas & LeBeau (1992) "Computer Analysis of the Futures Market" — pivot_n=3 局部極值判斷。
         let dates_vec: Vec<NaiveDate> = input.bars.iter().map(|b| b.date).collect();
         for (confirm_date, is_bearish, ind_val, price_val, prev_date, prev_ind) in
             detect_divergences(&closes, &rsi, &dates_vec)

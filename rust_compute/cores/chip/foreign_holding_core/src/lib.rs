@@ -157,8 +157,10 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
     for (i, p) in series.iter().enumerate() {
         // SignificantSingleDayChange — rolling z-score(2026-05-12 P2 阻塞 6 修)
         // 原固定 0.5% 閾值不適應個股波動度(大型股 0.5%/day 是常態)→ 34.87/yr 噪音。
-        // 改用個股 60-day rolling mean+std,|z| >= 2.0 才 fire。
-        // Reference: Brown & Warner (1985) JFE 14:3-31 / Fama et al. (1969) IER 10(1):1-21。
+        // 改用個股 60-day rolling mean+std,|z| >= 2.0 才 fire。目標 10–15/yr 🟢。
+        // Verification: scripts/p2_calibration_data.sql §2 (foreign_holding_core / SignificantSingleDayChange)。
+        // Reference: Fama, Fisher, Jensen & Roll (1969) IER 10(1):1-21 — 顯著事件 = 個股歷史 2σ 標準；
+        //            Brown & Warner (1985) JFE 14:3-31 — rolling estimation window 方法論。
         if i >= params.change_lookback {
             let window: Vec<f64> = series[i - params.change_lookback..i]
                 .iter()
@@ -184,7 +186,8 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
         // LimitNearAlert — edge trigger(2026-05-12 P2 阻塞 6 修)
         // 原 level trigger 每天 remaining <= 5% 都 fire(50.06/yr 噪音)→ 改為僅在
         // 「進入 near-limit zone」當日 fire。一年進出 zone 約 2-6 次,匹配真實訊號頻率。
-        // Reference: Sheingold (1978) Analog-Digital Conversion Notes — edge vs level trigger。
+        // Verification: scripts/p2_calibration_data.sql §2 (foreign_holding_core / LimitNearAlert)。
+        // Reference: Sheingold (1978) "Analog-Digital Conversion Notes" — edge trigger vs level trigger。
         let is_near_limit = p.foreign_limit_pct > 0.0
             && p.remaining_pct > 0.0
             && p.remaining_pct <= params.limit_alert_remaining;

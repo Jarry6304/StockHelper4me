@@ -27,8 +27,9 @@ inventory::submit! {
 const STREAK_MIN_DAYS: usize = 3;
 
 /// GoldenCross / DeathCross 最小間距(防止短周期 KD 快速來回的 whipsaw 噪音)。
-/// Production data 校準(2026-05-12): GoldenCross 17/yr 🟠。
-/// 10-bar = 2 週,排除 < 2 週的反轉視為雜訊。目標 6–12/yr。
+/// Production data 校準(2026-05-12): GoldenCross 17/yr 🟠 → 目標 8–12/yr 🟢。
+/// Verification: scripts/p2_calibration_data.sql §2 (kd_core / GoldenCross|DeathCross)。
+/// 10-bar = 2 週,排除 < 2 週的反轉視為雜訊。KD period=9 × MIN_SPACING=10 ≈ 1.1 個完整周期。
 const MIN_KD_CROSS_SPACING: usize = 10;
 
 #[derive(Debug, Clone, Serialize)]
@@ -114,9 +115,10 @@ impl IndicatorCore for KdCore {
         // streaks
         kd_streak(&series, STREAK_MIN_DAYS, |p| p.k >= params.overbought, KdEventKind::OverboughtStreak, &mut events);
         kd_streak(&series, STREAK_MIN_DAYS, |p| p.k <= params.oversold, KdEventKind::OversoldStreak, &mut events);
-        // Divergence — pivot-based detection
-        // Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) pivot_n=3.
-        // 原 fixed-20-bar 每天比較 → 20–33 次/年 🔴。Pivot 版 2–6 次/年 🟢。
+        // Divergence — pivot-based detection(2026-05-12 P5 算法重寫)
+        // 原 fixed-20-bar 每天比較 → 20–33 次/年 🔴 → Pivot 版 2–6 次/年 🟢。
+        // Verification: scripts/p2_calibration_data.sql §2 (kd_core / BullishDivergence|BearishDivergence)。
+        // Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) "Computer Analysis of the Futures Market" pivot_n=3。
         let closes: Vec<f64> = input.bars.iter().map(|b| b.close).collect();
         let k_vals: Vec<f64> = series.iter().map(|p| p.k).collect();
         let dates_vec: Vec<NaiveDate> = input.bars.iter().map(|b| b.date).collect();
