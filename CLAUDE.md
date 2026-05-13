@@ -229,8 +229,17 @@ Stage 4 規則用 top-level 端點正確判定 → Stage 5 classifier nested-awa
 - Rust workspace:24 crate / **297 tests passed** / 0 warnings
 - neely_core:Stage 3 nested + Stage 4 規則全部 nested-aware + Stage 5 classifier nested-aware
 - 全 pipeline 完整對齊 spec r5 Ch7/Ch8 nested wave 支援
-- 下個 session 建議:**P0 Gate 五檔校準**(production 跑 0050/2330/3363/6547/1312,
-  寫進 `docs/benchmarks/`)+ user 寫定 spec staleness(valuation §4.5)
+- **⚠️ session 結尾 user 要求嚴格審計揭露 v1.40 實質完成度 ~60%**,
+  詳見 `docs/m3_cores_spec_pending.md §21`:
+  - 🔴 重大 spec 偏離 6 項(overlap_pattern 誤用 / awaiting_l_label 永遠 false /
+    StructuralFacts 7/8 子欄位空殼 / R4-R7 Structure Label 系統未做 /
+    Impulse sub_kind 丟棄 / Compaction 仍 pass-through)
+  - 🟡 8 條規則永久 Deferred(Z4 / T1-T3 / T7-T9 / T10)
+  - 🟢 silent gap:DegreeCeiling / CrossTimeframeHints / Channeling / Volume / Time / Stage 6 Post-Validator
+- 下個 session **必先拍版 3 個 path 之一**:
+  1. 完整 spec-comply(~另 1-2 週)補完 🔴 + 🟡
+  2. 接受 60% 進 P0 Gate 五檔校準(明確文件化未實作項)
+  3. 重新設計 schema(NeelyCoreOutput 加真實欄位)後再進 P0
 
 ---
 
