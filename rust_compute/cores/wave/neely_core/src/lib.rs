@@ -68,6 +68,7 @@ pub mod pattern_isolation;
 pub mod post_validator;
 pub mod power_rating;
 pub mod pre_constructive;
+pub mod reverse_logic;
 pub mod three_rounds;
 pub mod triggers;
 pub mod validator;
@@ -79,10 +80,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.17.0",
+        "0.18.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic)",
     )
 }
 
@@ -136,8 +137,12 @@ impl WaveCore for NeelyCore {
         // compute_expected_fib_zones 回空 vec 的 placeholder) + Stage 10c Triggers 接 monowave price
         // (W1.start_price for Ch5_Essential(3) / W2.end_price for Ch5_Overlap_Trending) +
         // Impulse Up/Down 對稱 PriceBreakBelow/Above 方向)。
+        // 0.17.0 → 0.18.0(Phase 11 PR:Stage 10.5 Reverse Logic Rule (Neely Extension) — 多套合法
+        // 計數時市場處於某更大形態中段,輸出 ReverseLogicObservation 含 suggested_filter_ids
+        // (in_triangle_context / Triangle Limiting / Combination Double* 為中段候選不過濾,
+        // Impulse / Diagonal / Triangle Contracting/Expanding / Combination Triple* 為完成候選))。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.17.0"
+        "0.18.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -320,6 +325,16 @@ impl WaveCore for NeelyCore {
             stage_10c_start.elapsed().as_millis() as u64,
         );
 
+        // ── Stage 10.5:Reverse Logic 觀察(Phase 11 — Neely Extension)
+        //    對齊 m3Spec/neely_rules.md §Expansion of Possibilities(2598-2608 行)
+        //    多套合法計數 → 市場處於更大形態中段
+        let stage_10_5_start = Instant::now();
+        let reverse_logic_observation = reverse_logic::observe(&forest);
+        stage_elapsed.insert(
+            "stage_10_5_reverse_logic".to_string(),
+            stage_10_5_start.elapsed().as_millis() as u64,
+        );
+
         let forest_size = forest.len();
         let elapsed_ms = total_start.elapsed().as_millis() as u64;
         let warmup = self.warmup_periods(&params);
@@ -362,6 +377,7 @@ impl WaveCore for NeelyCore {
             round3_pause,
             missing_wave_suspects,
             emulation_suspects,
+            reverse_logic_observation,
         })
     }
 
@@ -415,7 +431,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.17.0");
+        assert_eq!(core.version(), "0.18.0");
     }
 
     // -------------------------------------------------------------
@@ -472,6 +488,7 @@ mod tests {
             "stage_10a_power_rating",
             "stage_10b_fibonacci",
             "stage_10c_triggers",
+            "stage_10_5_reverse_logic",
         ] {
             assert!(
                 out.diagnostics.stage_elapsed_ms.contains_key(*stage_key),

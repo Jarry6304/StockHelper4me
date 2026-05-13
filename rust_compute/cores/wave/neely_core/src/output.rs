@@ -86,6 +86,10 @@ pub struct NeelyCoreOutput {
 
     /// Phase 9 新增:Stage 9b Emulation 偵測結果(spec Ch12 Emulation)。
     pub emulation_suspects: Vec<EmulationSuspect>,
+
+    /// Phase 10 新增:Stage 10.5 Reverse Logic 觀察(spec §Expansion of Possibilities)。
+    /// 同一資料序列存在多套合法計數時觸發 — 市場處於某更大形態的中段。
+    pub reverse_logic_observation: Option<ReverseLogicObservation>,
 }
 
 /// Three Rounds Round 3 暫停資訊(neely_core_architecture.md §8.4)。
@@ -159,6 +163,35 @@ pub struct EmulationSuspect {
     pub kind: EmulationKind,
     /// 機械式陳述(對齊 cores_overview §6.1.1 禁主觀詞彙)
     pub message: String,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10:Stage 10.5 Reverse Logic 觀察
+// 對齊 m3Spec/neely_rules.md §Expansion of Possibilities — Reverse Logic Rule
+//       (2598-2608 行 — Neely Extension)
+// ---------------------------------------------------------------------------
+
+/// Reverse Logic Observation — 多套合法計數場景的觀察輸出。
+///
+/// 對齊 spec 2599 行核心定理:
+///   「同一資料序列存在多個完美合法的計數時,市場必定處於某個修正/衝動形態的中央
+///   (b 的 b、3 的 3、或 Non-Standard 複雜修正的 x)。可能性越多,越靠近中央。」
+///
+/// 操作意涵(spec 2601-2604 行):
+///   - 觀察到多套合理計數 → 自動剔除「形態即將完成」的選項,只保留「市場處於中段」的解讀
+///   - 若尚未進場 → 等到可能性收斂為一再進場
+///   - 若已持倉獲利 → 多套計數出現不代表頂底,而是還有路要走
+#[derive(Debug, Clone, Serialize)]
+pub struct ReverseLogicObservation {
+    /// 同一資料上有效 scenario 的數量(forest.len())
+    pub scenario_count: usize,
+    /// 是否觸發 Reverse Logic 操作意涵(scenario_count >= 閾值)
+    pub triggered: bool,
+    /// 機械式陳述(對齊 cores_overview §6.1.1 禁主觀詞彙)
+    pub message: String,
+    /// 建議過濾掉的「形態即將完成」scenario id 列表
+    /// (spec 2602 行「自動剔除『形態即將完成』的選項」操作意涵)
+    pub suggested_filter_ids: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
