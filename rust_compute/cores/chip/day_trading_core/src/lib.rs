@@ -40,8 +40,10 @@ inventory::submit! {
 pub struct DayTradingParams {
     pub timeframe: Timeframe,
     /// 當沖比率高閾值(%),預設 30.0
+    /// Reference: m3Spec/chip_cores.md §7.3 Params 表(台股日均當沖比 ~5-20%;30% 為顯著偏高)
     pub ratio_high_threshold: f64,
     /// 當沖比率低閾值(%),預設 5.0
+    /// Reference: m3Spec/chip_cores.md §7.3 Params 表(≤5% 表示市場對當沖缺乏興趣)
     pub ratio_low_threshold: f64,
     /// 當沖力道回看,預設 5
     pub momentum_lookback: usize,
@@ -208,9 +210,21 @@ fn compute_momentum(points: &[chip_loader::DayTradingRaw], i: usize, lookback: u
 fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<DayTradingEvent> {
     let mut events = Vec::new();
 
-    // RatioExtremeHigh / Low 單日事件
-    for p in series {
-        if p.day_trade_ratio >= params.ratio_high_threshold {
+    // RatioExtremeHigh / Low — edge trigger: fire only on zone entry, not on every bar in zone.
+    // Production data 校準(2026-05-12): level trigger 版 ~31/yr 🔴。edge trigger 後預期 2–5/yr 🟢。
+    // Verification: scripts/p2_calibration_data.sql §2 (day_trading_core / RatioExtremeHigh|Low)。
+    // Reference: Sheingold (1978) "Analog-Digital Conversion Notes" — edge trigger vs level trigger；
+    //            Brown & Warner (1985) JFE 14(1):3-31 — 事件 = 狀態轉換,連續停留不構成新事件。
+    let mut was_extreme_high = false;
+    let mut was_extreme_low = false;
+    for (i, p) in series.iter().enumerate() {
+        let is_extreme_high = p.day_trade_ratio >= params.ratio_high_threshold;
+        let is_extreme_low = p.day_trade_ratio > 0.0 && p.day_trade_ratio <= params.ratio_low_threshold;
+
+        if is_extreme_high && !was_extreme_high {
+            let historical_high = series[..i]
+                .iter()
+                .all(|prev| p.day_trade_ratio > prev.day_trade_ratio);
             events.push(DayTradingEvent {
                 date: p.date,
                 kind: DayTradingEventKind::RatioExtremeHigh,
@@ -218,9 +232,10 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
                 metadata: json!({
                     "ratio": p.day_trade_ratio,
                     "threshold": params.ratio_high_threshold,
+                    "historical_high": historical_high,
                 }),
             });
-        } else if p.day_trade_ratio > 0.0 && p.day_trade_ratio <= params.ratio_low_threshold {
+        } else if is_extreme_low && !was_extreme_low {
             // ratio == 0 多半是缺資料 / 無交易,不算 extreme low
             events.push(DayTradingEvent {
                 date: p.date,
@@ -232,6 +247,8 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
                 }),
             });
         }
+        was_extreme_high = is_extreme_high;
+        was_extreme_low = is_extreme_low;
     }
 
     // RatioStreakHigh / Low(連續 N 天高 / 低)
@@ -386,7 +403,7 @@ mod tests {
 
     #[test]
     fn streak_high_emitted_after_3_days() {
-        // 5 連續高 ratio + 1 normal day → 應產 1 個 RatioStreakHigh(也產 5 個 RatioExtremeHigh)
+        // 5 連續高 ratio + 1 normal day → 1 個 RatioStreakHigh + 1 個 RatioExtremeHigh(edge entry)
         let series = make_series(&[
             ("2026-04-22", 35.0),
             ("2026-04-23", 36.0),
@@ -459,6 +476,26 @@ mod tests {
         let out = core.compute(&series, DayTradingParams::default()).unwrap();
         assert!(out.series.is_empty());
         assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn extreme_high_edge_trigger_fires_only_on_zone_entry() {
+        // 3 days in extreme zone → 1 event on entry; exit then re-enter → 2nd event
+        let series = make_series(&[
+            ("2026-04-22", 35.0), // entry → fires
+            ("2026-04-23", 36.0), // stays in zone → no fire
+            ("2026-04-24", 33.0), // stays in zone → no fire
+            ("2026-04-25", 20.0), // exits zone
+            ("2026-04-26", 32.0), // re-entry → fires again
+        ]);
+        let core = DayTradingCore::new();
+        let out = core.compute(&series, DayTradingParams::default()).unwrap();
+        let extremes: Vec<_> = out
+            .events
+            .iter()
+            .filter(|e| e.kind == DayTradingEventKind::RatioExtremeHigh)
+            .collect();
+        assert_eq!(extremes.len(), 2, "entry + re-entry = 2 fires, not 5");
     }
 
     #[test]

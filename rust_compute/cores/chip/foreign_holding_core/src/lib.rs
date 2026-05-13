@@ -8,10 +8,12 @@
 //   - LimitNearAlert / SignificantSingleDayChange threshold-based
 //   - HoldingMilestoneHigh / Low(N 期最高 / 最低,使用 series 內 lookback)
 //
-// TODO:
-//   - foreign_limit_pct 目前 NULL placeholder(Silver 沒 stored col),
-//     LimitNearAlert 在 limit 為 0 時不觸發 — 留 user 確認 Silver 是否要 expose
-//   - HoldingMilestoneHigh/Low 的 lookback 期數寫死 60 期(spec §5.6 範例「6-month high」)
+// foreign_limit_pct(2026-05-10 commit 458a45a 解):chip_loader 從 Silver
+// `foreign_holding_derived.detail->>'upper_limit_ratio'` 取;LimitNearAlert
+// 在 Bronze 有料時觸發,無料時 limit_pct=0 → 略過(line 147 防衛條件)。
+// Reference(2026-05-12 校準): George & Hwang (2004) JF 59(5):2145-2176 — 52-week high
+// 動能指標以 252 交易日（年新高）為 lookback 標準。此處同時保留季新高（60d）與
+// 年新高（252d）兩種語意，各自對應一組 EventKind。
 
 use anyhow::Result;
 use chip_loader::ForeignHoldingSeries;
@@ -30,12 +32,19 @@ inventory::submit! {
     )
 }
 
-const MILESTONE_LOOKBACK: usize = 60;
+const MILESTONE_LOOKBACK_QUARTERLY: usize = 60;
+const MILESTONE_LOOKBACK_ANNUAL: usize = 252;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForeignHoldingParams {
     pub timeframe: Timeframe,
-    pub change_threshold_pct: f64,
+    /// SignificantSingleDayChange 的 rolling z-score 閾值,預設 2.0
+    /// Reference(2026-05-12 P2 阻塞 6): Fama, Fisher, Jensen & Roll (1969) IER 10(1):1-21
+    /// 現代事件研究方法論 —「顯著」= 超過個股歷史波動度 2σ,而非跨股票固定百分比閾值。
+    pub change_z_threshold: f64,
+    /// rolling z-score 的回看窗口,預設 60 天
+    pub change_lookback: usize,
+    /// LimitNearAlert 剩餘空間 threshold(%),預設 5.0
     pub limit_alert_remaining: f64,
 }
 
@@ -43,7 +52,8 @@ impl Default for ForeignHoldingParams {
     fn default() -> Self {
         Self {
             timeframe: Timeframe::Daily,
-            change_threshold_pct: 0.5,
+            change_z_threshold: 2.0,
+            change_lookback: 60,
             limit_alert_remaining: 5.0,
         }
     }
@@ -76,8 +86,10 @@ pub struct ForeignHoldingEvent {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum ForeignHoldingEventKind {
-    HoldingMilestoneHigh,
-    HoldingMilestoneLow,
+    HoldingMilestoneHigh,        // 60d 季新高
+    HoldingMilestoneLow,         // 60d 季新低
+    HoldingMilestoneHighAnnual,  // 252d 年新高（George & Hwang 2004 標準）
+    HoldingMilestoneLowAnnual,   // 252d 年新低
     LimitNearAlert,
     SignificantSingleDayChange,
 }
@@ -128,23 +140,58 @@ impl IndicatorCore for ForeignHoldingCore {
         output.events.iter().map(|e| event_to_fact(output, e)).collect()
     }
 
-    fn warmup_periods(&self, _: &Self::Params) -> usize { 20 }
+    fn warmup_periods(&self, params: &Self::Params) -> usize { params.change_lookback.max(20) }
+}
+
+fn mean_std_f64(values: &[f64]) -> (f64, f64) {
+    if values.is_empty() { return (0.0, 0.0); }
+    let n = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    let var = values.iter().map(|&x| { let d = x - mean; d * d }).sum::<f64>() / n;
+    (mean, var.sqrt())
 }
 
 fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) -> Vec<ForeignHoldingEvent> {
     let mut events = Vec::new();
+    let mut was_near_limit = false;
     for (i, p) in series.iter().enumerate() {
-        // SignificantSingleDayChange
-        if p.change_pct.abs() >= params.change_threshold_pct {
-            events.push(ForeignHoldingEvent {
-                date: p.date,
-                kind: ForeignHoldingEventKind::SignificantSingleDayChange,
-                value: p.change_pct,
-                metadata: json!({ "change": p.change_pct, "lookback": "1d" }),
-            });
+        // SignificantSingleDayChange — rolling z-score(2026-05-12 P2 阻塞 6 修)
+        // 原固定 0.5% 閾值不適應個股波動度(大型股 0.5%/day 是常態)→ 34.87/yr 噪音。
+        // 改用個股 60-day rolling mean+std,|z| >= 2.0 才 fire。目標 10–15/yr 🟢。
+        // Verification: scripts/p2_calibration_data.sql §2 (foreign_holding_core / SignificantSingleDayChange)。
+        // Reference: Fama, Fisher, Jensen & Roll (1969) IER 10(1):1-21 — 顯著事件 = 個股歷史 2σ 標準；
+        //            Brown & Warner (1985) JFE 14:3-31 — rolling estimation window 方法論。
+        if i >= params.change_lookback {
+            let window: Vec<f64> = series[i - params.change_lookback..i]
+                .iter()
+                .map(|q| q.change_pct)
+                .collect();
+            let (mean, std) = mean_std_f64(&window);
+            if std > 0.0 {
+                let z = (p.change_pct - mean) / std;
+                if z.abs() >= params.change_z_threshold {
+                    events.push(ForeignHoldingEvent {
+                        date: p.date,
+                        kind: ForeignHoldingEventKind::SignificantSingleDayChange,
+                        value: p.change_pct,
+                        metadata: json!({
+                            "change": p.change_pct,
+                            "z_score": z,
+                            "lookback": params.change_lookback,
+                        }),
+                    });
+                }
+            }
         }
-        // LimitNearAlert(只在 limit > 0 時觸發,避免 placeholder 0 誤觸)
-        if p.foreign_limit_pct > 0.0 && p.remaining_pct > 0.0 && p.remaining_pct <= params.limit_alert_remaining {
+        // LimitNearAlert — edge trigger(2026-05-12 P2 阻塞 6 修)
+        // 原 level trigger 每天 remaining <= 5% 都 fire(50.06/yr 噪音)→ 改為僅在
+        // 「進入 near-limit zone」當日 fire。一年進出 zone 約 2-6 次,匹配真實訊號頻率。
+        // Verification: scripts/p2_calibration_data.sql §2 (foreign_holding_core / LimitNearAlert)。
+        // Reference: Sheingold (1978) "Analog-Digital Conversion Notes" — edge trigger vs level trigger。
+        let is_near_limit = p.foreign_limit_pct > 0.0
+            && p.remaining_pct > 0.0
+            && p.remaining_pct <= params.limit_alert_remaining;
+        if is_near_limit && !was_near_limit {
             events.push(ForeignHoldingEvent {
                 date: p.date,
                 kind: ForeignHoldingEventKind::LimitNearAlert,
@@ -153,12 +200,14 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
                     "holding": p.foreign_holding_pct,
                     "limit": p.foreign_limit_pct,
                     "remaining": p.remaining_pct,
+                    "transition": "entering",
                 }),
             });
         }
-        // Milestone high / low(N 期 lookback)
-        if i >= MILESTONE_LOOKBACK {
-            let window = &series[i - MILESTONE_LOOKBACK..i];
+        was_near_limit = is_near_limit;
+        // Milestone high / low — 季新高/低（60d）
+        if i >= MILESTONE_LOOKBACK_QUARTERLY {
+            let window = &series[i - MILESTONE_LOOKBACK_QUARTERLY..i];
             let max_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::NEG_INFINITY, f64::max);
             let min_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::INFINITY, f64::min);
             if p.foreign_holding_pct > max_prev {
@@ -166,14 +215,35 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
                     date: p.date,
                     kind: ForeignHoldingEventKind::HoldingMilestoneHigh,
                     value: p.foreign_holding_pct,
-                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK), "value": p.foreign_holding_pct }),
+                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_QUARTERLY), "value": p.foreign_holding_pct }),
                 });
             } else if p.foreign_holding_pct < min_prev {
                 events.push(ForeignHoldingEvent {
                     date: p.date,
                     kind: ForeignHoldingEventKind::HoldingMilestoneLow,
                     value: p.foreign_holding_pct,
-                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK), "value": p.foreign_holding_pct }),
+                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_QUARTERLY), "value": p.foreign_holding_pct }),
+                });
+            }
+        }
+        // Milestone high / low — 年新高/低（252d，George & Hwang 2004 標準）
+        if i >= MILESTONE_LOOKBACK_ANNUAL {
+            let window = &series[i - MILESTONE_LOOKBACK_ANNUAL..i];
+            let max_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::NEG_INFINITY, f64::max);
+            let min_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::INFINITY, f64::min);
+            if p.foreign_holding_pct > max_prev {
+                events.push(ForeignHoldingEvent {
+                    date: p.date,
+                    kind: ForeignHoldingEventKind::HoldingMilestoneHighAnnual,
+                    value: p.foreign_holding_pct,
+                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_ANNUAL), "value": p.foreign_holding_pct }),
+                });
+            } else if p.foreign_holding_pct < min_prev {
+                events.push(ForeignHoldingEvent {
+                    date: p.date,
+                    kind: ForeignHoldingEventKind::HoldingMilestoneLowAnnual,
+                    value: p.foreign_holding_pct,
+                    metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_ANNUAL), "value": p.foreign_holding_pct }),
                 });
             }
         }
@@ -184,10 +254,16 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
 fn event_to_fact(output: &ForeignHoldingOutput, e: &ForeignHoldingEvent) -> Fact {
     let statement = match e.kind {
         ForeignHoldingEventKind::HoldingMilestoneHigh => format!(
-            "Foreign holding {} high at {:.2}% on {}", e.metadata["lookback"], e.value, e.date
+            "Foreign holding 60d high at {:.2}% on {}", e.value, e.date
         ),
         ForeignHoldingEventKind::HoldingMilestoneLow => format!(
-            "Foreign holding {} low at {:.2}% on {}", e.metadata["lookback"], e.value, e.date
+            "Foreign holding 60d low at {:.2}% on {}", e.value, e.date
+        ),
+        ForeignHoldingEventKind::HoldingMilestoneHighAnnual => format!(
+            "Foreign holding 252d high at {:.2}% on {}", e.value, e.date
+        ),
+        ForeignHoldingEventKind::HoldingMilestoneLowAnnual => format!(
+            "Foreign holding 252d low at {:.2}% on {}", e.value, e.date
         ),
         ForeignHoldingEventKind::LimitNearAlert => format!(
             "Foreign holding reached {:.2}% on {}, near {:.2}% limit",
@@ -228,15 +304,106 @@ mod tests {
         }
     }
 
+    fn raw_with_limit(d: &str, ratio: f64, limit: f64) -> ForeignHoldingRaw {
+        ForeignHoldingRaw {
+            date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+            foreign_holding_shares: Some(1_000_000),
+            foreign_holding_ratio: Some(ratio),
+            foreign_limit_pct: Some(limit),
+        }
+    }
+
+    /// SignificantSingleDayChange rolling z-score(2026-05-12 P2 阻塞 6):
+    /// 60 baseline 日變化 ±0.05%(std 約 0.05),第 61 天變化 +1.0% → z ≈ 20 → fire。
     #[test]
-    fn significant_change_triggered() {
-        let series = ForeignHoldingSeries {
-            stock_id: "2330".to_string(),
-            points: vec![raw("2026-04-21", 65.0), raw("2026-04-22", 65.8)],
-        };
-        let core = ForeignHoldingCore::new();
-        let out = core.compute(&series, ForeignHoldingParams::default()).unwrap();
-        assert!(out.events.iter().any(|e| e.kind == ForeignHoldingEventKind::SignificantSingleDayChange));
+    fn significant_change_rolling_z_triggers_on_spike() {
+        let mut points = Vec::with_capacity(62);
+        let mut ratio = 50.0;
+        for i in 0..61 {
+            let delta = if i % 2 == 0 { 0.05 } else { -0.05 };
+            ratio += delta;
+            let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64);
+            let mut r = raw("2026-01-01", ratio);
+            r.date = date;
+            points.push(r);
+        }
+        // spike +1.0%
+        ratio += 1.0;
+        let spike_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+            + chrono::Duration::days(61);
+        let mut r = raw("2026-01-01", ratio);
+        r.date = spike_date;
+        points.push(r);
+
+        let series = ForeignHoldingSeries { stock_id: "2330".to_string(), points };
+        let out = ForeignHoldingCore::new()
+            .compute(&series, ForeignHoldingParams::default())
+            .unwrap();
+        let sig: Vec<_> = out.events.iter()
+            .filter(|e| e.kind == ForeignHoldingEventKind::SignificantSingleDayChange)
+            .collect();
+        assert!(!sig.is_empty(), "spike 應觸發 SignificantSingleDayChange");
+        assert_eq!(sig.last().unwrap().date, spike_date);
+    }
+
+    /// rolling z-score 不在常態日變化內觸發(舊版固定 0.5% 會誤觸大型股日常波動)。
+    #[test]
+    fn significant_change_no_false_positive_on_normal_volatility() {
+        // 100 天日變化 ±0.3%(大型股常態),不該觸發
+        let mut points = Vec::with_capacity(100);
+        let mut ratio = 70.0;
+        for i in 0..100 {
+            let delta = if i % 2 == 0 { 0.3 } else { -0.3 };
+            ratio += delta;
+            let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64);
+            let mut r = raw("2026-01-01", ratio);
+            r.date = date;
+            points.push(r);
+        }
+        let series = ForeignHoldingSeries { stock_id: "2330".to_string(), points };
+        let out = ForeignHoldingCore::new()
+            .compute(&series, ForeignHoldingParams::default())
+            .unwrap();
+        let sig: Vec<_> = out.events.iter()
+            .filter(|e| e.kind == ForeignHoldingEventKind::SignificantSingleDayChange)
+            .collect();
+        assert!(sig.is_empty(),
+            "日變化 0.3% 是個股常態(z ≈ 0)不該觸發,實際 fire {} 次", sig.len());
+    }
+
+    /// LimitNearAlert edge trigger(2026-05-12 P2 阻塞 6):連續 30 天在 near-limit
+    /// zone 只 fire 1 次(進入當日),不再每天 fire。
+    #[test]
+    fn limit_near_alert_edge_trigger_no_duplicate_fire() {
+        let mut points = Vec::with_capacity(40);
+        // 前 10 天 holding 60%(離 limit 75% 還很遠,is_near=false)
+        for i in 0..10 {
+            let mut r = raw_with_limit("2026-01-01", 60.0, 75.0);
+            r.date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64);
+            points.push(r);
+        }
+        // 後 30 天 holding 72%(remaining=3% <= 5%,is_near=true,持續 30 天)
+        for i in 10..40 {
+            let mut r = raw_with_limit("2026-01-01", 72.0, 75.0);
+            r.date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+                + chrono::Duration::days(i as i64);
+            points.push(r);
+        }
+        let series = ForeignHoldingSeries { stock_id: "2330".to_string(), points };
+        let out = ForeignHoldingCore::new()
+            .compute(&series, ForeignHoldingParams::default())
+            .unwrap();
+        let alerts: Vec<_> = out.events.iter()
+            .filter(|e| e.kind == ForeignHoldingEventKind::LimitNearAlert)
+            .collect();
+        assert_eq!(alerts.len(), 1,
+            "edge trigger 連續 30 天 near-limit 應只 fire 1 次,實際 {} 次", alerts.len());
+        assert_eq!(alerts[0].date,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Duration::days(10),
+            "fire date 應為進入 near-limit zone 當日");
     }
 
     #[test]

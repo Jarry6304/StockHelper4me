@@ -54,6 +54,7 @@ struct AdjEvent {
 /// is_adjusted / adjustment_factor。給 Wave Cores 反推 raw 用。
 #[derive(Debug, Clone)]
 struct FwdDailyPrice {
+    #[allow(dead_code)]
     stock_id: String,
     date: NaiveDate,
     open: f64, high: f64, low: f64, close: f64,

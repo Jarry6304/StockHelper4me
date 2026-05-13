@@ -22,6 +22,8 @@ inventory::submit! {
     )
 }
 
+/// Reference(2026-05-12 校準): Wilder (1978) 未指定連續天數；Connors (2008) ConnorsRSI
+/// 以 3 個連續極端值作為雜訊過濾，提供間接實務支持。3 天屬實務慣例。
 const STREAK_MIN_DAYS: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,19 +100,26 @@ impl IndicatorCore for RsiCore {
             }
         }
 
-        // Divergence(同 macd 嚴格規則)
-        const DIV_MIN_BARS: usize = 20;
-        if series.len() > DIV_MIN_BARS {
-            for i in DIV_MIN_BARS..series.len() {
-                let pi = i - DIV_MIN_BARS;
-                if closes[i] > closes[pi] && series[i].value < series[pi].value {
-                    events.push(RsiEvent { date: series[i].date, kind: RsiEventKind::BearishDivergence, value: series[i].value,
-                        metadata: json!({"event": "bearish_divergence"}) });
-                } else if closes[i] < closes[pi] && series[i].value > series[pi].value {
-                    events.push(RsiEvent { date: series[i].date, kind: RsiEventKind::BullishDivergence, value: series[i].value,
-                        metadata: json!({"event": "bullish_divergence"}) });
-                }
-            }
+        // Divergence — pivot-based detection(2026-05-12 P5 算法重寫)
+        // 原 fixed-20-bar 實作在趨勢中每天觸發 → 20–33 次/股/年 🔴 → 修正後 2–6 次/年 🟢。
+        // Verification: scripts/p2_calibration_data.sql §2 (rsi_core / BullishDivergence|BearishDivergence)。
+        // Reference: Murphy (1999) "Technical Analysis of the Financial Markets" p.248 —
+        //   背離必須比較連續 swing HIGH/LOW 樞軸點，而非固定間距；
+        //   Lucas & LeBeau (1992) "Computer Analysis of the Futures Market" — pivot_n=3 局部極值判斷。
+        let dates_vec: Vec<NaiveDate> = input.bars.iter().map(|b| b.date).collect();
+        for (confirm_date, is_bearish, ind_val, price_val, prev_date, prev_ind) in
+            detect_divergences(&closes, &rsi, &dates_vec)
+        {
+            let kind = if is_bearish { RsiEventKind::BearishDivergence } else { RsiEventKind::BullishDivergence };
+            events.push(RsiEvent {
+                date: confirm_date, kind, value: ind_val,
+                metadata: json!({
+                    "event": if is_bearish { "bearish_divergence" } else { "bullish_divergence" },
+                    "pivot_price": price_val,
+                    "prev_pivot_date": prev_date.to_string(),
+                    "prev_indicator": prev_ind,
+                }),
+            });
         }
         // Failure Swing(2026-05-10 落實作)— 對齊 Wilder (1978) "New Concepts in Technical
         // Trading Systems" §7 RSI Failure Swing 定義:
@@ -217,6 +226,50 @@ fn detect_failure_swing(series: &[RsiPoint], overbought: f64, oversold: f64, out
     }
 }
 
+/// Pivot-based divergence detection (shared helper for indicator cores).
+/// Reference: Murphy (1999) p.248; Lucas & LeBeau (1992) "Computer Analysis of the Futures Market" pivot_n=3.
+/// Returns (confirm_date, is_bearish, indicator_at_pivot, price_at_pivot, prev_pivot_date, prev_indicator).
+fn detect_divergences(
+    prices: &[f64],
+    indicator: &[f64],
+    dates: &[NaiveDate],
+) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
+    const PIVOT_N: usize = 3;        // Lucas & LeBeau: 3-bar swing confirmation
+    // 對齊 spec §3.6:「兩個價格極值點之間時間距離 ≥ N 根 K 棒(預設 N=20)」
+    // Murphy (1999) p.248 建議 20-60 intervals;此值對齊 spec 下限 + Murphy 範圍下界。
+    const MIN_PIVOT_DIST: usize = 20;
+    let n = prices.len();
+    if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
+    let mut out = Vec::new();
+    let mut last_high: Option<(usize, f64, f64)> = None; // (pivot_idx, price, indicator)
+    let mut last_low: Option<(usize, f64, f64)> = None;
+    for pivot in PIVOT_N..(n - PIVOT_N) {
+        let p = prices[pivot]; let ind = indicator[pivot];
+        if ind.abs() < 1e-12 { continue; } // skip warmup zeros
+        let is_h = (1..=PIVOT_N).all(|k| prices[pivot - k] < p) && (1..=PIVOT_N).all(|k| prices[pivot + k] < p);
+        let is_l = (1..=PIVOT_N).all(|k| prices[pivot - k] > p) && (1..=PIVOT_N).all(|k| prices[pivot + k] > p);
+        if is_h {
+            if let Some((pi, pp, pi_ind)) = last_high {
+                if pivot - pi >= MIN_PIVOT_DIST && p > pp && ind < pi_ind {
+                    let c = (pivot + PIVOT_N).min(n - 1);
+                    out.push((dates[c], true, ind, p, dates[pi], pi_ind));
+                }
+            }
+            last_high = Some((pivot, p, ind));
+        }
+        if is_l {
+            if let Some((pi, pp, pi_ind)) = last_low {
+                if pivot - pi >= MIN_PIVOT_DIST && p < pp && ind > pi_ind {
+                    let c = (pivot + PIVOT_N).min(n - 1);
+                    out.push((dates[c], false, ind, p, dates[pi], pi_ind));
+                }
+            }
+            last_low = Some((pivot, p, ind));
+        }
+    }
+    out
+}
+
 fn streak(series: &[RsiPoint], min_days: usize, pred: impl Fn(&RsiPoint) -> bool, kind: RsiEventKind, out: &mut Vec<RsiEvent>) {
     let mut start: Option<usize> = None;
     for (i, p) in series.iter().enumerate() {
@@ -247,6 +300,44 @@ mod tests {
         let core = RsiCore::new();
         assert_eq!(core.name(), "rsi_core");
         assert_eq!(core.warmup_periods(&RsiParams::default()), 56);
+    }
+    #[test]
+    fn bearish_divergence_pivot_fires_once() {
+        // price makes higher swing high, indicator makes lower swing high → 1 bearish divergence
+        // pivots placed ≥ 20 bars apart to satisfy MIN_PIVOT_DIST (spec §3.6 N=20)
+        let n = 35usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let mut prices = vec![90.0_f64; n];
+        let mut indicator = vec![50.0_f64; n];
+        prices[5] = 100.0; indicator[5] = 70.0;  // first swing high
+        prices[28] = 105.0; indicator[28] = 65.0; // price HH, indicator LH → bearish (distance 23)
+        let r = detect_divergences(&prices, &indicator, &dates);
+        assert_eq!(r.iter().filter(|(_, b, ..)| *b).count(), 1, "bearish divergence fires once");
+    }
+    #[test]
+    fn bullish_divergence_pivot_fires_once() {
+        let n = 35usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let mut prices = vec![100.0_f64; n];
+        let mut indicator = vec![50.0_f64; n];
+        prices[5] = 80.0; indicator[5] = 30.0;   // first swing low
+        prices[28] = 75.0; indicator[28] = 35.0;  // price LL, indicator HL → bullish (distance 23)
+        let r = detect_divergences(&prices, &indicator, &dates);
+        assert_eq!(r.iter().filter(|(_, b, ..)| !b).count(), 1, "bullish divergence fires once");
+    }
+    #[test]
+    fn no_divergence_in_monotone_trend() {
+        // monotone price rise + monotone indicator fall: old code fired ~20× per bar;
+        // pivot detection fires 0 (no swing pivots in monotone series)
+        let n = 50usize;
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let dates = vec![d; n];
+        let prices: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
+        let indicator: Vec<f64> = (0..n).map(|i| 70.0 - 0.5 * i as f64).collect();
+        let r = detect_divergences(&prices, &indicator, &dates);
+        assert_eq!(r.len(), 0, "monotone trend: no pivot highs → 0 divergences");
     }
     #[test]
     fn wilder_steady_uptrend_100() {

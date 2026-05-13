@@ -9,6 +9,11 @@
 //                              — 巴菲特標準「ROE 持續高於 15% = 高品質公司」
 //                              (Fortune 1987 研究:25/1000 公司 avg ROE > 20% +
 //                              最低不曾 < 15%)
+//   ROE/ROA 算法(2026-05-11 改 TTM):net_income 用過去 4 季加總(TTM),除以期末
+//                              equity / assets;對齊 Buffett「annual ROE」原 intent。
+//                              FinMind income 給的是純季度元值,直接除永遠不會觸發
+//                              15% 閾值(TSMC 2020-Q3 季 ROE=7.7%,年化 ~30%)。
+//                              不足 4 季時用 quarterly × 4 作 annualized fallback。
 //   debt_ratio_high_threshold=60.0:**業界 IFRS 公司分析共識**(Damodaran A. NYU Stern
 //                                    "Investment Valuation" 提 70%+ 為「mathematical
 //                                    problem」,60% 保守警示;非 explicit cite)
@@ -19,13 +24,13 @@
 // 4 維 PK(market, stock_id, date, type),type ∈ {income, balance, cashflow}。
 // 載入器負責拉 raw row,本 core 把同 date 的三類 row 組裝成 FinancialPoint。
 //
-// **detail JSONB key**:對齊 Silver `financial_statement_derived.detail`(2026-05-10
-// fix):
-//   Bronze `financial_statement.origin_name` 是中文(IFRS 會計科目),Silver builder
-//   `financial_statement.py:60-62` 直接 pack origin_name → value,故 detail JSONB
-//   key 是中文(「營業收入合計」/「本期淨利(淨損)」等)。
-//   FinMind 不同年代用不同括號(半形 vs 全形)+ 同概念多命名變體,故 12 個欄位
-//   各列 fallback chain via `jget_first_i64/f64`。
+// **detail JSONB key**:對齊 Silver `financial_statement_derived.detail`(2026-05-11
+// Silver builder _per suffix fix):
+//   Bronze `financial_statement.origin_name` 是中文(IFRS 會計科目)。
+//   Silver builder 修法後:type=balance → detail["資產總額"]=元值,
+//   type=balance_per → detail["資產總額_per"]=%(balance_per 在 by_date 走 `_ => continue`)。
+//   故 balance slot 讀到元值;ROE/ROA 可正常計算。
+//   FinMind 不同年代用不同括號(半形 vs 全形)+ 同概念多命名變體,fallback chain 各列兩者。
 // **shareholder/financial_statement spec 校準清單**見 docs/m3_cores_spec_pending.md §3.3 / §4.3
 
 use anyhow::Result;
@@ -159,7 +164,7 @@ impl IndicatorCore for FinancialStatementCore {
             by_date.entry(raw.date).or_insert([None, None, None])[idx] = Some(&raw.detail);
         }
 
-        let series: Vec<FinancialPoint> = by_date.into_iter().map(|(date, slots)| {
+        let mut series: Vec<FinancialPoint> = by_date.into_iter().map(|(date, slots)| {
             let inc = slots[0]; let bal = slots[1]; let cf = slots[2];
             // 12 個直接從 detail JSONB 取的欄位,各用 fallback chain 對齊真實 IFRS 中文
             // origin_name + FinMind 半形/全形括號變體
@@ -171,28 +176,33 @@ impl IndicatorCore for FinancialStatementCore {
             let net_income = jget_first_i64(inc, NET_INCOME_KEYS);
             let net_margin_pct = if revenue > 0 { net_income as f64 / revenue as f64 * 100.0 } else { 0.0 };
             let eps = jget_first_f64(inc, EPS_KEYS);
-            // balance 是 common-size %(2026-05-10 user 揭露)。
-            // total_* 都是 % 對總資產(total_assets ≡ 100.0)。直接讀 _f64,不轉 i64。
-            // i64 路徑保留以防 user m3Spec/ 拍版改 Silver builder 改成元值。
-            let total_assets_pct = jget_first_f64(bal, TOTAL_ASSETS_KEYS);
-            let total_liabilities_pct = jget_first_f64(bal, TOTAL_LIABILITIES_KEYS);
-            let total_equity_pct = jget_first_f64(bal, TOTAL_EQUITY_KEYS);
-            // 資產 / 負債 / 權益元值無法從 balance % 推回(只在 user 改 Silver 才有)
-            let total_assets: i64 = 0;
-            let total_liabilities: i64 = 0;
-            let total_equity: i64 = 0;
-            // debt_ratio 直接讀 % 自身(「負債總額」% 已是 debt/assets ratio)
-            let debt_ratio_pct = total_liabilities_pct;
+            // balance 元值(2026-05-11 Silver builder _per suffix fix 後):
+            // Silver builder pack:type="balance" → detail["資產總額"]=元值,
+            //                     type="balance_per" → detail["資產總額_per"]=%。
+            // by_date 只映射 type="balance"(index 1),balance_per 走 `_ => continue`。
+            // 故 jget_first_i64(bal, TOTAL_ASSETS_KEYS) 讀到的是元值(NTD)。
+            let total_assets = jget_first_i64(bal, TOTAL_ASSETS_KEYS);
+            let total_liabilities = jget_first_i64(bal, TOTAL_LIABILITIES_KEYS);
+            let total_equity = jget_first_i64(bal, TOTAL_EQUITY_KEYS);
+            let debt_ratio_pct = if total_assets > 0 {
+                total_liabilities as f64 / total_assets as f64 * 100.0
+            } else {
+                0.0
+            };
             let operating_cash_flow = jget_first_i64(cf, OPERATING_CASH_FLOW_KEYS);
             let investing_cash_flow = jget_first_i64(cf, INVESTING_CASH_FLOW_KEYS);
             let financing_cash_flow = jget_first_i64(cf, FINANCING_CASH_FLOW_KEYS);
             let free_cash_flow = operating_cash_flow + investing_cash_flow; // FCF = OCF + ICF(經典定義)
-            // ROE / ROA 跨 type 算(income 元 / balance %)會炸成 1e11+ false positive,
-            // 設 0 skip RoeHigh / 留 EventKind 等 user m3Spec/ 拍版 balance 元值版本
-            let roe_pct = 0.0;
-            let roa_pct = 0.0;
-            // 防止 unused warning(總資產 / 負債 / 權益元值欄位本 PR 設 0,等 user 拍版)
-            let _ = (total_assets_pct, total_equity_pct);
+            let roe_pct = if total_equity > 0 {
+                net_income as f64 / total_equity as f64 * 100.0
+            } else {
+                0.0
+            };
+            let roa_pct = if total_assets > 0 {
+                net_income as f64 / total_assets as f64 * 100.0
+            } else {
+                0.0
+            };
             let report_date = inc.and_then(|v| v.get("report_date"))
                 .and_then(|v| v.as_str())
                 .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
@@ -208,6 +218,25 @@ impl IndicatorCore for FinancialStatementCore {
                 roe_pct, roa_pct,
             }
         }).collect();
+
+        // TTM (Trailing 12 Months) ROE/ROA — 2026-05-11 修法
+        // 對齊 Buffett (1987) annual ROE 15% 標準。FinMind income 給的是季元值,
+        // 直接除過 15% 閾值;改用過去 4 季 net_income 加總後再除 equity / assets。
+        // 不足 4 季(序列前 3 個點)用 quarterly × 4 年化作 fallback,避免早期資料永遠無 RoeHigh。
+        for i in 0..series.len() {
+            let ttm_net_income: i64 = if i >= 3 {
+                series[i-3..=i].iter().map(|p| p.net_income).sum()
+            } else {
+                series[i].net_income.saturating_mul(4)
+            };
+            let p = &mut series[i];
+            p.roe_pct = if p.total_equity > 0 {
+                ttm_net_income as f64 / p.total_equity as f64 * 100.0
+            } else { 0.0 };
+            p.roa_pct = if p.total_assets > 0 {
+                ttm_net_income as f64 / p.total_assets as f64 * 100.0
+            } else { 0.0 };
+        }
 
         // events
         let mut events = Vec::new();
@@ -319,16 +348,16 @@ fn jget_first_f64(detail: Option<&serde_json::Value>, keys: &[&str]) -> f64 {
 // 真實 origin_name 中文)
 //
 // 來源:Bronze `financial_statement.origin_name` 直接 pack(原 IFRS 中文會計科目);
-// FinMind 元值 row 跟 _per(%) row 都用同 origin_name,Silver builder dict 後寫覆蓋
-// 前寫 → balance 實際全變 %(common-size analysis,2026-05-10 user 揭露)。
+// FinMind 元值 row 與 _per(%) row 都用同 origin_name;Silver builder _per suffix
+// fix(2026-05-11)後:detail["資產總額"] = 元值(type=balance),
+// detail["資產總額_per"] = %(type=balance_per)。
+// by_date 只映射 type="balance"(index 1),balance_per 走 `_ => continue` → 不進入。
+// 故 balance slot 讀到的是元值;ROE/ROA 可從 income元 / balance元 計算。
 //
 // 中文括號 user query 揭露用「（）」全形(Unicode U+FF08 / U+FF09),不是半形「()」
 // (U+0028 / U+0029)。FinMind 不同年代可能混用,fallback chain 兩個都列防衛。
 //
-// **balance 是 %**(common-size,not 元值)→ ROE / ROA 不能跨 type 算(income 元 /
-// balance %),設 0 skip RoeHigh / RoaHigh 觸發。debt_ratio_pct 直接讀「負債總額」
-// % value(不再除 total_assets)。等 user m3Spec/ 拍版 balance 元值 vs %。
-// 詳見 docs/m3_cores_spec_pending.md §4.3。
+// **balance 元值**(2026-05-11 Silver builder fix 後)。詳見 docs/m3_cores_spec_pending.md §4.3。
 //
 // **回退測試**:既有 mock 用英文 PascalCase key,fallback chain 末位放英文末位
 // 維持 backward compat。新增 mock 全形中文 key 的 unit test 直驗 production data path。
@@ -362,7 +391,7 @@ const EPS_KEYS: &[&str] = &[
     "基本每股盈餘", "每股盈餘", "基本每股盈餘(元)",
     "EPS",
 ];
-// Balance keys 是 % common-size(不是元值;2026-05-10 user 揭露)
+// Balance keys(元值;Silver builder _per suffix fix 後 2026-05-11)
 const TOTAL_ASSETS_KEYS: &[&str] = &[
     "資產總額", "資產總計",
     "TotalAssets",
@@ -452,11 +481,11 @@ mod tests {
                 FinancialStatementRaw {
                     date: NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap(),
                     r#type: "balance".to_string(),
-                    // balance 全是 % 對總資產比(common-size analysis)
+                    // balance 元值(Silver builder _per suffix fix 後 2026-05-11)
                     detail: json!({
-                        "資產總額":   100.0_f64,
-                        "負債總額":    31.16_f64,
-                        "權益總額":    68.84_f64,
+                        "資產總額":   5_000_000_000_i64,
+                        "負債總額":   1_558_000_000_i64,
+                        "權益總額":   3_442_000_000_i64,
                     }),
                 },
                 FinancialStatementRaw {
@@ -485,21 +514,22 @@ mod tests {
         assert_eq!(p.free_cash_flow, 20_000_000); // 30M + (-10M)
         // margin pct(income 元值內計算)
         assert!((p.gross_margin_pct - 50.0).abs() < 1e-6);
-        // balance 是 %:debt_ratio 直接 = 「負債總額」% value(31.16),不再除 total_assets
-        assert!((p.debt_ratio_pct - 31.16).abs() < 1e-6);
-        // ROE / ROA 跨 type 不算(balance 是 %),設 0 避免 false positive
-        assert_eq!(p.roe_pct, 0.0);
-        assert_eq!(p.roa_pct, 0.0);
-        // 元值 i64 欄位本 PR 設 0(等 user m3Spec/ 拍版 balance 元值版)
-        assert_eq!(p.total_assets, 0);
-        assert_eq!(p.total_liabilities, 0);
-        assert_eq!(p.total_equity, 0);
+        // balance 元值(Silver builder _per suffix fix 後 2026-05-11)
+        assert_eq!(p.total_assets, 5_000_000_000_i64);
+        assert_eq!(p.total_liabilities, 1_558_000_000_i64);
+        assert_eq!(p.total_equity, 3_442_000_000_i64);
+        // debt_ratio = 1558M / 5000M × 100 = 31.16%
+        assert!((p.debt_ratio_pct - 31.16).abs() < 0.01);
+        // TTM ROE = (20M × 4) / 3442M × 100 ≈ 2.32%(< 15% threshold,不觸發 RoeHigh)
+        // 單季資料走 quarterly × 4 年化 fallback(2026-05-11 TTM 修法)
+        let expected_roe = 20_000_000_f64 * 4.0 / 3_442_000_000_f64 * 100.0;
+        assert!((p.roe_pct - expected_roe).abs() < 0.001);
+        assert!(out.events.iter().all(|e| e.kind != FinancialEventKind::RoeHigh));
     }
 
-    /// Regression:既有 mock 用 balance 元值跑(舊 spec 假設),確認 fallback chain
-    /// 末位英文 key 仍 work — 但 ROE / ROA 邏輯改了,無條件 = 0(不依賴 total_equity)
+    /// 確認英文 key fallback chain work + ROE/ROA 從元值正確計算(net_income=20M,equity=60M → ROE=33%)
     #[test]
-    fn assembles_three_types_into_one_point_no_roe_false_positive() {
+    fn assembles_three_types_into_one_point_roe_computed_from_elements() {
         let series = FinancialStatementSeries {
             stock_id: "2330".to_string(),
             points: vec![
@@ -525,10 +555,51 @@ mod tests {
         let p = &out.series[0];
         assert_eq!(p.eps, 5.5);
         assert_eq!(p.free_cash_flow, 20_000_000);
-        // ROE / ROA 永遠 0(skip cross-type 計算)
-        assert_eq!(p.roe_pct, 0.0);
-        assert_eq!(p.roa_pct, 0.0);
-        // RoeHigh / RoaHigh 不該觸發
-        assert!(out.events.iter().all(|e| e.kind != FinancialEventKind::RoeHigh));
+        assert_eq!(p.total_assets, 100_000_000);
+        assert_eq!(p.total_equity, 60_000_000);
+        // TTM ROE = (20M × 4) / 60M × 100 = 133.33% → > 15% threshold → RoeHigh fires
+        // 單季資料走 quarterly × 4 年化 fallback(2026-05-11 TTM 修法)
+        let expected_roe = 20_000_000_f64 * 4.0 / 60_000_000_f64 * 100.0;
+        let expected_roa = 20_000_000_f64 * 4.0 / 100_000_000_f64 * 100.0;
+        assert!((p.roe_pct - expected_roe).abs() < 0.01);
+        assert!((p.roa_pct - expected_roa).abs() < 0.01);
+        assert!(out.events.iter().any(|e| e.kind == FinancialEventKind::RoeHigh));
+    }
+
+    /// TTM ROE 4 季加總路徑(序列第 4 點起 i >= 3)— 對齊 Buffett annual ROE intent
+    #[test]
+    fn ttm_roe_uses_four_quarter_sum() {
+        // 4 季 net_income: 10M + 15M + 20M + 25M = 70M TTM
+        // equity 期末 = 500M → TTM ROE = 70/500 × 100 = 14%(< 15% 不觸發)
+        let mk = |d: &str, ni: i64, eq: i64, assets: i64| -> Vec<FinancialStatementRaw> {
+            vec![
+                FinancialStatementRaw { date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    r#type: "income".to_string(),
+                    detail: json!({"Revenue": 100_000_000, "GrossProfit": 50_000_000, "EPS": 1.0, "NetIncome": ni}) },
+                FinancialStatementRaw { date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    r#type: "balance".to_string(),
+                    detail: json!({"TotalAssets": assets, "TotalLiabilities": 100_000_000, "TotalEquity": eq}) },
+                FinancialStatementRaw { date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    r#type: "cashflow".to_string(),
+                    detail: json!({"OperatingCashFlow": 30_000_000, "InvestingCashFlow": -10_000_000}) },
+            ]
+        };
+        let mut points = vec![];
+        points.extend(mk("2025-03-31", 10_000_000, 500_000_000, 1_000_000_000));
+        points.extend(mk("2025-06-30", 15_000_000, 500_000_000, 1_000_000_000));
+        points.extend(mk("2025-09-30", 20_000_000, 500_000_000, 1_000_000_000));
+        points.extend(mk("2025-12-31", 25_000_000, 500_000_000, 1_000_000_000));
+        let series = FinancialStatementSeries { stock_id: "TEST".to_string(), points };
+        let out = FinancialStatementCore::new().compute(&series, FinancialStatementParams::default()).unwrap();
+
+        // 第 4 個 quarter(2025-12-31, i=3)用 TTM 4 季加總
+        let p4 = &out.series[3];
+        let expected_ttm_roe = 70_000_000_f64 / 500_000_000_f64 * 100.0; // 14%
+        assert!((p4.roe_pct - expected_ttm_roe).abs() < 0.01,
+                "expected TTM ROE=14%, got {}", p4.roe_pct);
+        assert!(out.series.iter().all(|p| !p.roe_pct.is_nan()));
+        // 第 1 個 quarter(i=0)走 × 4 fallback:10M × 4 / 500M = 8%
+        let p1 = &out.series[0];
+        assert!((p1.roe_pct - 8.0).abs() < 0.01, "expected fallback ROE=8%, got {}", p1.roe_pct);
     }
 }

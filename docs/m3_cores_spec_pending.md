@@ -91,7 +91,7 @@
 ### 2.2 rsi_core
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
-| **FailureSwing** 四步邏輯 | **未實作 TODO**(framework `RsiEventKind::FailureSwing` 已存在) | spec §4.6 四步:RSI 進超買 → 退出 → 折返但未再進 → 跌破前低 |
+| **FailureSwing** 四步邏輯 | ✅ **已實作**(commit 458a45a):Wilder 1978 §7 四步完整實作 | — |
 | Bullish/BearishDivergence min bars | 20(對齊 macd) | spec 對齊? |
 
 ### 2.3 kd_core
@@ -146,7 +146,7 @@
 | `day_trade_volume` 公式 | best-guess `= day_trading_buy` | **spec §7.4 真正定義待 user 確認** |
 | `total_volume` 公式 | best-guess `= day_trade_volume × 100 / ratio` | 同上 |
 | `STREAK_MIN_DAYS` | 3 const | spec 對齊? |
-| 「historical high」label | 未實作(spec 範例「reached 32% on 2026-04-20」needs lookback) | spec 範例語義待 user 寫定 |
+| 「historical high」label | ✅ **已實作**(commit a372879):`RatioExtremeHigh` metadata 加 `historical_high: bool` | — |
 
 ### 3.2 margin_core(NULL skip 已修)
 | 項目 | 目前值 | 待 user 確認 |
@@ -156,7 +156,7 @@
 | `short_to_margin_ratio_high` | 30.0 | spec §4.3 |
 | `short_to_margin_ratio_low` | 5.0 | spec §4.3 |
 | `MAINTENANCE_LOW_THRESHOLD` | 145.0 const | spec §4.5 列 EventKind 但 §4.3 未列 Param,目前寫死 |
-| 「historical high」label | 未實作 | spec §4.6 範例 |
+| 「historical high」label | ✅ **已實作**(commit 3617d84):`EnteredShortRatioExtremeHigh` metadata 含 `historical_high: bool` | — |
 
 ### 3.3 shareholder_core(2026-05-10 Round 1 完成 — user 拍版)
 | 項目 | 拍版值 | 來源 |
@@ -171,8 +171,8 @@
 ### 3.4 foreign_holding_core
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
-| `LimitNearAlert` 邏輯 | 未實作(`foreign_limit_pct` stored col 目前 NULL placeholder) | spec §6.5 + Silver schema 補欄 |
-| `foreign_holding_ratio` threshold | 預設值待 user 寫定 | spec |
+| `LimitNearAlert` 邏輯 | ✅ **已實作**(commit 458a45a):從 `detail` JSONB 取 `foreign_limit_pct`,NULL 時 skip | — |
+| `foreign_holding_ratio` threshold | `MILESTONE_LOOKBACK=60`(寫死 const) | spec 校準? |
 
 ### 3.5 institutional_core
 | 項目 | 目前值 | 待 user 確認 |
@@ -199,15 +199,14 @@
 | `PerNegative` 邏輯 | 簡化(per < 0 觸發) | spec §4.7 完整邏輯待寫 |
 | `history_lookback_years` | 5(影響 warmup = years × 252) | spec |
 
-### 4.3 financial_statement_core(2026-05-10 修 round 2)
+### 4.3 financial_statement_core(2026-05-11 修 round 3)
 | 項目 | 目前值 | 待 user 確認 |
 |---|---|---|
 | detail JSONB key | ✅ **全形括號 `\u{FF08}` `\u{FF09}` + IFRS 中文 fallback chain** | 對齊 user 揭露 2330 真 detail key |
-| **balance type 是 % common-size**(2026-05-10 揭露) | balance 全部是 % 對總資產比(`資產總額`=100,`權益總額`=68.84 等);income/cashflow 維持元值 | 是否要 user 寫 spec / 改 Silver builder pack 元值 + % 雙 dict?或維持 % only? |
-| **ROE / ROA / TotalAssets / TotalLiabilities / TotalEquity 元值欄** | 全 = 0(skip cross-type 計算 income元 / balance%)| 等 user m3Spec/ 拍版 balance 元值 vs %;若拍 % only,RoeHigh / RoaHigh EventKind 永久不觸發,留作概念占位 |
-| `debt_ratio_pct` | 直接讀「負債總額」% value(不再除 total_assets) | 對齊 balance 是 % 的事實 |
-| Quarterly approximation | `Timeframe::Monthly`(enum 缺 Quarterly variant) | 是否需要加 Quarterly enum variant? |
-| 8 EventKind | RoeHigh / DebtRatioRising 等待 balance 元值版 | spec 校準 |
+| **Silver builder `_per` suffix fix**(2026-05-11) | ✅ `financial_statement.py:60-62` 加 `_per` suffix:balance 元值→`detail["資產總額"]`,% →`detail["資產總額_per"]` | — |
+| **ROE / ROA / balance 元值欄** | ✅ **已計算**(commit 本 session):`roe_pct = net_income / total_equity × 100`;`debt_ratio_pct = total_liabilities / total_assets × 100` | — |
+| `RoeHigh` EventKind | ✅ **觸發中**(`roe_pct >= 15%` 觸發;2330 歷年 ROE ~20-30% 應大量觸發) | threshold 校準見 §13 阻塞 5(c) |
+| Quarterly approximation | ✅ `Timeframe::Quarterly`(commit 458a45a 加 enum variant) | — |
 | Threshold 預設 | `gross_margin_change_threshold=2.0` / `roe_high_threshold=15.0` / `debt_ratio_high_threshold=60.0` / `fcf_negative_streak_quarters=4` | spec 校準 |
 
 ---
@@ -308,7 +307,6 @@
 | shareholder detail JSONB key 對齊 | 半天 + Bronze schema 確認 | spec §6 + Bronze schema |
 | foreign_holding_derived.foreign_limit_pct 補欄 | 半天 + alembic migration | spec §6.5 |
 | margin_daily_derived.margin_maintenance 補欄 | 半天 + alembic migration | spec §4.5 |
-| historical high label(margin / day_trading) | 1 天 | spec range definition |
 
 ---
 
@@ -384,7 +382,7 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ### 阻塞 1:`financial_statement_core` Silver builder origin_name 元值/% 覆蓋 bug
 
-**狀態**:🔴 **未動工,留下個 session**
+**狀態**:✅ **2026-05-11 動工完成(commits a372879 / b5d8ab5 / 2f0cbf9 / a2a9df3 / 4484196)**
 
 - **根因**:Silver builder `silver/builders/financial_statement.py:60-62` 用
   `row.get("origin_name")` 當 dict key,但 Bronze 同 origin_name(中文「應付帳款」)
@@ -392,16 +390,18 @@ user 拍版決定 + Rust code reference 註解狀態:
   覆蓋前寫 → 元值消失 → balance 全是 %
 - **影響**:ROE / ROA / RoeHigh / RoaHigh 4 個 EventKind 永久 0(Round 2 fix
   `roe_pct = 0.0` 後)
-- **拍版修法**(對齊 user 「進階資料不應出現基礎資料複寫低級錯誤」原則):
-  改 Silver builder line 60-62 加 `_per` suffix:
-  ```python
-  item_key = row.get("origin_name") or row.get("type") or "unknown"
-  if (row.get("type") or "").endswith("_per"):
-      item_key = f"{item_key}_per"   # 加 _per 後綴避免覆蓋元值
-  grouped[key]["detail"][item_key] = row.get("value")
-  ```
-- **估時**:Silver builder ~10 行 + Rust core ROE/ROA 改元值 keys + `silver phase
-  7b --full-rebuild`(~33 秒)+ tw_cores 重跑 ~10 分鐘 = **~2 小時**
+
+**實際修法**:
+- Silver `_per` suffix(a372879):`item_key.endswith("_per")` 時加 `_per` 後綴
+- Rust ROE/ROA 重啟(a372879):讀元值 keys 算 `roe_pct = net_income / total_equity × 100`
+- ROE/ROA TTM 4-quarter sum(b5d8ab5):FinMind 給 quarterly net_income,Buffett 15%
+  是 annual,改 `series[i-3..=i].iter().sum() / equity × 100`,前 3 季 fallback `× 4`
+- **A1 連動**:Bronze `financial_statement` PK 從 origin_name 改 type(2f0cbf9 + 2 hotfix)。
+  舊 PK 同 origin_name 不同 type 衝突,`_per` 覆蓋元值;新 PK 兩者共存。詳見 §15。
+- alembic head:`w2x3y4z5a6b7` → `x3y4z5a6b7c8`
+- **3 檔受影響股票全修**:2330(6→16+ RoeHigh facts)/ 2357(0→7)/ 2836(0,金融業
+  ROE < 15% 符合預期)
+- 1074+ 其他股票元值原本就 survive(FinMind 多數情況元值寫在後),無需大規模重抓
 
 ### 阻塞 2:`shareholder_core` 4-level + STREAK_MIN_WEEKS + concentration_index
 
@@ -430,18 +430,29 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ### 阻塞 5:100 個 threshold 校準路徑
 
-**狀態**:✅ **a+b 加 reference 註解完成 / c 留下個 session / d 接受不動**
+**狀態**:✅ **全部完成(a+b+c+d 四類 2026-05-12 收尾)**
 
 按分類 A/B/C/D 拍板:
-- **(a) 分類 A 業界/學術標準(~7 個 indicator const)** = **不動,加 reference 註解**
+- **(a) 分類 A 業界/學術標準(~7 個 indicator const)** = **不動,加 reference 註解** ✅
   - Wilder ATR/RSI/ADX (1978) / Appel MACD (1979) / Bollinger 20/2.0 (2002) / 5y percentile
-- **(b) 分類 B 台灣特有(~15 個)** = **保留當前 best-guess,加 reference 註解**
+- **(b) 分類 B 台灣特有(~15 個)** = **保留當前 best-guess,加 reference 註解** ✅
   - B-1 有 reference:證交所 145/130 維持率 / Buffett 15% ROE (1987) / Graham yield 5% (1949)
   - B-2 無 reference:KD 9(Asian convention)/ short_to_margin 30/5 / margin_change 5% /
     gross_margin_change 2% / debt_ratio 60% / day_trading streak 3
-- **(c) 分類 C streak/lookback(~8 個)** = **production data driven 統計留下個 session**
-  - 跑 1263 stocks × 5 年觸發率分布,user 拍版動態值
-- **(d) 分類 D environment(~7 個)** = **接受不動**
+- **(c) 分類 C streak/lookback(~8 個)** = ✅ **2026-05-12 production data driven 校準完成**
+  - C-1 `STREAK_MIN_DAYS=3` (RSI/KD/day_trading):保留不動(觸發率待 §2 SQL 驗)
+  - C-2 `ABOVE_MA_STREAK_MIN` (ma_core):固定 30 → scaling fn `(period*3/2).min(30).max(5)` ✅
+    (MA20 維持 ~30d 保持原行為;MA5/10 提高門檻避免噪音)
+  - C-3 `EXPANSION_LOOKBACK=14` (atr_core):2026-05-11 對齊 Wilder period=14 ✅
+  - C-4 `SQUEEZE_STREAK_MIN=5` (bollinger):保留(待 §2 SQL 確認)
+  - C-5 `STREAK_MIN_WEEKS=8` (shareholder):保留(MOP 2012 跨領域援引,足夠)
+  - C-6 `DIV_MIN_BARS=20` / Divergence 算法:→ **算法重寫(pivot-based) ✅ 2026-05-12**
+    (Murphy 1999 p.248 要求比較 swing points,非固定間距;詳見 §16)
+  - C-7 `MILESTONE_LOOKBACK=60` (foreign_holding):改雙時間窗口 60d(季)+252d(年) ✅
+    (George & Hwang 2004 JF 59(5) 52 週高點;新增 HoldingMilestoneHighAnnual/Low)
+  - C-8 `LOOKBACK_FOR_Z=60`/`LARGE_TRANSACTION_Z=2.0` (institutional):算法改 edge trigger ✅
+    (Brown & Warner 1985 事件研究基準;詳見 §16)
+- **(d) 分類 D environment(~7 個)** = **接受不動** ✅
   - Whaley VIX (2000) / CNN Fear & Greed / 央行匯率心理關卡
 
 ### 阻塞 6:`Timeframe::Quarterly` variant
@@ -479,15 +490,67 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ---
 
-## 下個 session 動工清單(2026-05-10 收尾)
+## 下個 session 動工清單(2026-05-12 update)
 
 | 優先 | 範圍 | 估時 |
 |---|---|---|
-| **P1** | 阻塞 1 Silver builder origin_name `_per` suffix fix + Rust ROE/ROA 改元值 + 7b full-rebuild + tw_cores 重跑 | ~2 小時 |
-| **P2** | 阻塞 5(c) production data driven 統計各 streak/lookback const 觸發率,user 拍版動態值 | ~半天 |
+| ~~**P1**~~ | ~~阻塞 1 Silver builder origin_name `_per` suffix fix + Rust ROE/ROA 改元值~~ | ✅ **2026-05-11 完成** |
+| ~~**P2-5c**~~ | ~~阻塞 5(c) C 類常數校準~~ | ✅ **2026-05-12 完成** |
+| ~~**P2-6**~~ | ~~4 個 🔴噪音 EventKind 根因修正(edge trigger + rolling z-score + pivot divergence)~~ | ✅ **2026-05-12 完成** |
+| **P-verify** | 跑 `p2_calibration_data.sql` 驗算修後觸發率(§2 每股每年觸發次數)| user 端 ~5 分鐘 |
 | **P3** | 阻塞 3 / 9 PR-3c neely 22 條 + Diagonal sub_kind(等 user m3Spec/neely_core.md 或用 best-guess) | ~1-2 天 |
 | P4 | dev DB scale up(已確認 1263 是 production 上限,可不動)| 0(user 接受) |
 | P5 | m3Spec/ 寫定各 core threshold spec(對齊 §13 拍版紀錄)| user 數天 |
+
+---
+
+## 15. A1 Bronze financial_statement PK fix(2026-05-11)
+
+### 根因
+舊 PK `(market, stock_id, date, event_type, origin_name)`。FinMind
+`TaiwanStockBalanceSheet` 同 origin_name(如「資產總額」)回兩筆:
+- `type='TotalAssets'`,元值 `2.6 兆`
+- `type='TotalAssets_per'`,% common-size `67.85`
+
+兩筆 PK 衝突,UPSERT 後者覆蓋前者。對 2330 等 3 檔股票,`_per` 被最後寫入 →
+元值消失 → ROE/ROA 無法算 → 阻塞 1 Silver `_per` fix 雖正確但 Bronze 本身缺
+元值,RoeHigh 在近期季報無法觸發。
+
+### 修法
+新 PK `(market, stock_id, date, event_type, type)`,以 FinMind 英文科目代碼
+作 discriminator,`TotalAssets` 與 `TotalAssets_per` 不再衝突。
+
+alembic `x3y4z5a6b7c8`,3 commit 收尾:
+
+| commit | 範圍 |
+|---|---|
+| `2f0cbf9` | 初版 migration(誤用固定 constraint name)|
+| `a2a9df3` | hotfix 1:動態查 PK constraint name(PR #R3 RENAME 不會 rename constraint,既有部署 PK 名仍是 `financial_statement_tw_pkey`)|
+| `4484196` | hotfix 2:legacy_v2 表佔用 `financial_statement_pkey` 索引名,先 rename 釋出(PR #R2 RENAME 同樣不會 rename constraint)|
+
+### 全市場受影響股票(僅 3 檔)
+- **2330 TSMC**:RoeHigh 從 6 facts(2019-2020)→ 16+ facts(2019-2025,ROE 23-31%)
+- **2357 華碩**:RoeHigh 0 → 7 facts(2021-2025)
+- **2836 高雄銀**:0 facts(金融業 ROE 通常 < 15% Buffett threshold,符合預期)
+
+剩餘 1074+ 檔股票元值原本就 survive(FinMind API 多數情況元值寫在後)。
+
+### 重新套用流程(若 user 想全市場套用)
+```sql
+-- 找出仍只有 _per 沒有元值的股票
+SELECT stock_id FROM financial_statement
+WHERE event_type='balance' AND date='2025-09-30'
+GROUP BY stock_id
+HAVING COUNT(CASE WHEN type NOT LIKE '%_per' THEN 1 END) = 0;
+```
+對應 stock_ids 跑:
+```bash
+psql -c "DELETE FROM financial_statement WHERE stock_id IN (...);
+         DELETE FROM api_sync_progress WHERE stock_id IN (...) AND api_name LIKE 'financial_%';"
+python src/main.py backfill --stocks ... --phases 5
+python src/main.py silver phase 7b --stocks ... --full-rebuild
+cargo run --release -p tw_cores -- run-all --stocks ... --write
+```
 
 ---
 
@@ -512,7 +575,78 @@ user 拍版決定 + Rust code reference 註解狀態:
 
 ---
 
-**最後更新**:2026-05-10(9 阻塞拍版 + reference 註解收尾後)
-**Rust workspace**:24 crate / 155 tests passed / 22 cores production verified
-**alembic head**:`w2x3y4z5a6b7`
-**Production state**:4.4M facts / 1263 stocks / 9.2 分鐘 wall time(PR-9b/c/d 並行)
+## 16. P2 阻塞 6 + P5 Divergence 算法重寫(2026-05-12)
+
+### 根因分析(production data 1263 stocks 揭露)
+
+4 個 EventKind 觸發率遠超合理範圍(0.5–6 次/股/年):
+
+| EventKind | 修前觸發率 | 根因 |
+|---|---|---|
+| RSI/KD/MACD BullishDivergence + BearishDivergence | 20–33/yr 🔴 | 固定 20-bar 間距比較,每天條件成立都 fire |
+| institutional Foreign/Trust/Dealer LargeNetBuy/Sell | 91.83/yr 🔴 | Level trigger:每天 |z|≥2.0 都 fire,無狀態記憶 |
+| foreign_holding LimitNearAlert | 50.06/yr 🔴 | Level trigger:持續在 near-limit zone 每天 fire |
+| foreign_holding SignificantSingleDayChange | 34.87/yr 🔴 | 固定 0.5% 閾值不適應個股波動度 |
+
+### 修法(全部 2026-05-12 完成,2 個 commit)
+
+**Commit `2b1cbc7` — P2 阻塞 6 修法(institutional + foreign_holding)**
+
+1. **institutional_core** LargeNetBuy/LargeNetSell — edge trigger:
+   - 追蹤 `prev_z_abs`,僅在 `cur_z >= threshold && prev < threshold` 時 fire
+   - Reference:Brown & Warner (1985) JFE 14:3-31 — 事件是狀態「轉變」不是狀態持續
+   - 預期:91.83/yr → 6–12/yr
+
+2. **foreign_holding LimitNearAlert** — edge trigger:
+   - 加 `was_near_limit` boolean state,僅在進入 near-limit zone 當日 fire
+   - Reference:Sheingold (1978) level trigger vs edge trigger 信號處理
+   - 預期:50.06/yr → 2–6/yr
+
+3. **foreign_holding SignificantSingleDayChange** — rolling z-score:
+   - 將固定 0.5% (`change_threshold_pct`) 改為 `change_z_threshold=2.0` + `change_lookback=60d`
+   - Reference:Fama, Fisher, Jensen & Roll (1969) IER 10(1) — 「顯著」= 個股歷史 2σ
+   - 預期:34.87/yr → 10–15/yr
+
+`ForeignHoldingParams` breaking change:刪 `change_threshold_pct`,加 `change_z_threshold` / `change_lookback`。
+
+**Commit `8d3288a` — Pivot-based divergence 算法重寫(RSI/KD/MACD)**
+
+核心問題:`bar[i]` vs `bar[i-20]` 每天跑一次 → 趨勢中連續 20–30 天都滿足 → 每天 fire。
+
+Murphy (1999) p.248 / Wilder (1978) Ch.8 / Pring (1991) p.164 明確定義：
+背離必須比較兩個連續的 swing HIGH/LOW 樞軸點（price 創新高但 indicator 未到新高）。
+
+新 `detect_divergences()` 函式(三核心各自獨立 copy，對齊 §十四 零耦合原則):
+```
+PIVOT_N=3 (Lucas & LeBeau 1992 3-bar 確認)
+MIN_PIVOT_DIST=10 (Murphy「20-60 intervals」實務下界)
+is_swing_high: prices[pivot±k] 全嚴格 < prices[pivot] for k in 1..=PIVOT_N
+每個 (prev_pivot, current_pivot) pair 最多觸發一次
+confirm_date = pivot_idx + PIVOT_N (確認完成當天)
+ind.abs() < 1e-12 skip warmup zeros (RSI/MACD 前幾 bar 為 0.0)
+```
+
+預期:20–33/yr 🔴 → 2–6/yr 🟢
+
+### 驗證
+
+- 168 tests passed / 0 failed / 0 warnings
+- Production run: `tw_cores run-all --write` 1263 stocks, 539.8s, 0 errors
+  - kd_core: 370,404 facts / macd_core: 322,703 / rsi_core: 109,129
+  - institutional_core: 873,556 / foreign_holding_core: 433,695
+- **待 user 驗**:跑 `p2_calibration_data.sql §2` 確認 5 組 EventKind 觸發率降到 🟢
+
+### 已知未修項目(留 P5)
+
+- `ma_core::AboveMaStreak` — C-2 scaling fn `(period*3/2).min(30).max(5)` 已落地但行為
+  待 §3 SQL 確認(MA20 = 30d,應保持原 0.59/yr 水準)
+- Divergence `MIN_PIVOT_DIST=10` — 若 §2 顯示仍 > 10/yr 可提高到 15-20
+
+---
+
+**最後更新**:2026-05-12(P2 阻塞 5c + 阻塞 6 + P5 divergence 算法重寫 全部收尾)
+**Rust workspace**:24 crate / **168 tests passed** / 22 cores production verified
+**alembic head**:`x3y4z5a6b7c8`(不變,本 session 0 migration)
+**Production state(2026-05-12 全市場重跑後)**:
+  - facts 重寫:institutional + foreign_holding + kd + macd + rsi (5 cores)
+  - 總 facts 量級待 p2_calibration_data.sql 統計(修前 4.4M,修後 Divergence 降量預估 ↓15–40%)

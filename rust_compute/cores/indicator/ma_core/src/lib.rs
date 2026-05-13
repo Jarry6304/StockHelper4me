@@ -23,7 +23,22 @@ inventory::submit! {
     )
 }
 
-const ABOVE_MA_STREAK_MIN: usize = 30;
+/// Reference(2026-05-12 校準): Brock, Lakonishok & LeBaron (1992) JF 47(5):1731-1764
+/// 使用單點 P_t ≥ m_t 加 1% band 過濾，無連續天數概念；Faber (2007) SSRN 962461
+/// 採月底收盤快照，同樣無 streak 設計。
+///
+/// Production data 校準(2026-05-12)：MA20/SMA 以舊 constant=30 跑出 0.59次/股/年(🟢合理)。
+/// 公式 `period * 3 / 2`，上限 30，下限 5，使 MA20 → 30（保持），MA5 → 7，MA10 → 15，
+/// MA60+ → 30（上限）。避免前版 period/8 對 MA20 給出 3 天（過於頻繁）的問題。
+fn above_ma_streak_min(period: usize) -> usize {
+    (period * 3 / 2).min(30).max(5)
+}
+
+/// MaBullishCross / MaBearishCross / MaGoldenCross / MaDeathCross 最小間距。
+/// Production data 校準(2026-05-12): BullishCross ~11.5/yr 🟠 → 目標 6–9/yr 🟢。
+/// Verification: scripts/p2_calibration_data.sql §2 (ma_core / BullishCross|GoldenCross)。
+/// 10-bar = 2 週;適用全部 6 種 MA(SMA/EMA/WMA/DEMA/TEMA/HMA)同一閾值。
+const MIN_MA_CROSS_SPACING: usize = 10;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum MaKind { Sma, Ema, Wma, Dema, Tema, Hma }
@@ -179,25 +194,33 @@ impl IndicatorCore for MaCore {
         // Price cross MA + AboveMaStreak
         for entry in &series_by_spec {
             let mut streak: usize = 0;
+            let mut last_bullish_i: Option<usize> = None;
+            let mut last_bearish_i: Option<usize> = None;
             for i in 1..entry.series.len() {
                 let prev_above = closes_for_streak[i - 1] > entry.series[i - 1].value;
                 let cur_above = closes_for_streak[i] > entry.series[i].value;
                 if !prev_above && cur_above {
-                    events.push(MaEvent { date: entry.series[i].date, kind: MaEventKind::MaBullishCross, value: entry.series[i].value,
-                        metadata: json!({"event": "ma_bullish_cross", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period}) });
+                    if last_bullish_i.map_or(true, |li| i - li >= MIN_MA_CROSS_SPACING) {
+                        events.push(MaEvent { date: entry.series[i].date, kind: MaEventKind::MaBullishCross, value: entry.series[i].value,
+                            metadata: json!({"event": "ma_bullish_cross", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period}) });
+                        last_bullish_i = Some(i);
+                    }
                 } else if prev_above && !cur_above {
-                    events.push(MaEvent { date: entry.series[i].date, kind: MaEventKind::MaBearishCross, value: entry.series[i].value,
-                        metadata: json!({"event": "ma_bearish_cross", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period}) });
+                    if last_bearish_i.map_or(true, |li| i - li >= MIN_MA_CROSS_SPACING) {
+                        events.push(MaEvent { date: entry.series[i].date, kind: MaEventKind::MaBearishCross, value: entry.series[i].value,
+                            metadata: json!({"event": "ma_bearish_cross", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period}) });
+                        last_bearish_i = Some(i);
+                    }
                 }
                 if cur_above { streak += 1; } else {
-                    if streak >= ABOVE_MA_STREAK_MIN {
+                    if streak >= above_ma_streak_min(entry.spec.period) {
                         events.push(MaEvent { date: entry.series[i - 1].date, kind: MaEventKind::AboveMaStreak, value: streak as f64,
                             metadata: json!({"event": "above_ma_streak", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period, "days": streak}) });
                     }
                     streak = 0;
                 }
             }
-            if streak >= ABOVE_MA_STREAK_MIN {
+            if streak >= above_ma_streak_min(entry.spec.period) {
                 events.push(MaEvent { date: entry.series.last().unwrap().date, kind: MaEventKind::AboveMaStreak, value: streak as f64,
                     metadata: json!({"event": "above_ma_streak", "ma_kind": format!("{:?}", entry.spec.kind), "period": entry.spec.period, "days": streak}) });
             }
@@ -227,19 +250,27 @@ impl IndicatorCore for MaCore {
         for (si, li) in pairs {
             let s = &series_by_spec[si]; let l = &series_by_spec[li];
             let n = s.series.len().min(l.series.len());
+            let mut last_golden_i: Option<usize> = None;
+            let mut last_death_i: Option<usize> = None;
             for i in 1..n {
                 let prev_above = s.series[i - 1].value > l.series[i - 1].value;
                 let cur_above = s.series[i].value > l.series[i].value;
                 if !prev_above && cur_above {
-                    events.push(MaEvent { date: s.series[i].date, kind: MaEventKind::MaGoldenCross, value: s.series[i].value,
-                        metadata: json!({"event": "ma_golden_cross",
-                            "short": {"kind": format!("{:?}", s.spec.kind), "period": s.spec.period},
-                            "long": {"kind": format!("{:?}", l.spec.kind), "period": l.spec.period}}) });
+                    if last_golden_i.map_or(true, |li| i - li >= MIN_MA_CROSS_SPACING) {
+                        events.push(MaEvent { date: s.series[i].date, kind: MaEventKind::MaGoldenCross, value: s.series[i].value,
+                            metadata: json!({"event": "ma_golden_cross",
+                                "short": {"kind": format!("{:?}", s.spec.kind), "period": s.spec.period},
+                                "long": {"kind": format!("{:?}", l.spec.kind), "period": l.spec.period}}) });
+                        last_golden_i = Some(i);
+                    }
                 } else if prev_above && !cur_above {
-                    events.push(MaEvent { date: s.series[i].date, kind: MaEventKind::MaDeathCross, value: s.series[i].value,
-                        metadata: json!({"event": "ma_death_cross",
-                            "short": {"kind": format!("{:?}", s.spec.kind), "period": s.spec.period},
-                            "long": {"kind": format!("{:?}", l.spec.kind), "period": l.spec.period}}) });
+                    if last_death_i.map_or(true, |li| i - li >= MIN_MA_CROSS_SPACING) {
+                        events.push(MaEvent { date: s.series[i].date, kind: MaEventKind::MaDeathCross, value: s.series[i].value,
+                            metadata: json!({"event": "ma_death_cross",
+                                "short": {"kind": format!("{:?}", s.spec.kind), "period": s.spec.period},
+                                "long": {"kind": format!("{:?}", l.spec.kind), "period": l.spec.period}}) });
+                        last_death_i = Some(i);
+                    }
                 }
             }
         }
@@ -266,6 +297,11 @@ mod tests {
         assert_eq!(core.name(), "ma_core");
         assert_eq!(core.warmup_periods(&MaParams::default()), 25); // 20 + 5
     }
+    #[test]
+    fn ma_cross_spacing_constant_is_10() {
+        assert_eq!(MIN_MA_CROSS_SPACING, 10);
+    }
+
     #[test]
     fn series_by_spec_count_matches_specs() {
         let params = MaParams {

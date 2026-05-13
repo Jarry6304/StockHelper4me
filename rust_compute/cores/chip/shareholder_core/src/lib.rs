@@ -10,10 +10,7 @@
 //   來源:Money 錢雜誌 50/400 散戶/中實/大戶 + 凱基/集保中心 1000 張大戶
 //   concentration_index = (large.unit + super_large.unit) / total.unit
 //   來源:業務「籌碼集中度」標準定義,採 unit (股數) 非 percent (人數)
-//   STREAK_MIN_WEEKS = 8 週
-//   來源:Moskowitz, Ooi, Pedersen (2012) "Time Series Momentum" JFE
-//   ⚠️ 限制聲明:實證對象為「價格報酬 momentum」,非「持股集中度 streak」,
-//      跨領域援引,需 Phase 2 用 tw_stock 歷史資料回測驗證
+//   STREAK_MIN_WEEKS = 8 週（實務值，缺直接學術根據，見 STREAK_MIN_WEEKS const 說明）
 //
 // detail JSONB key:對齊 Silver `holding_shares_per_derived.detail` 真結構:
 //   17 levels:1-999 / 1,000-5,000 / 5,001-10,000 / ... / more than 1,000,001 /
@@ -58,9 +55,12 @@ impl Default for ShareholderParams {
     }
 }
 
-/// 連續 streak 最小週數(2026-05-10 user 拍板)
-/// 來源:Moskowitz, Ooi, Pedersen (2012) "Time Series Momentum" JFE,8-12 month look-back
-/// ⚠️ 跨領域援引(原為價格報酬 momentum,非持股集中度 streak),需 Phase 2 回測驗證
+/// 連續 streak 最小週數
+/// Reference(2026-05-12 校準): Moskowitz, Ooi & Pedersen (2012) JFE 104(2):228-250
+/// 原文 lookback = 12 個月（≈52週）、holding = 1 個月，為「價格報酬動能」研究。
+/// ⚠️ 跨領域援引：TSMOM 的 12 個月 lookback 是針對收益率序列，非持股集中度，
+/// 自相關結構不同。此處 8 週（≈2 個月）屬實務經驗值，缺乏直接學術根據，
+/// 需 production data 回測驗證（p2_calibration_data.sql C-4 觸發率）。
 const STREAK_MIN_WEEKS: usize = 8;
 
 #[derive(Debug, Clone, Serialize)]

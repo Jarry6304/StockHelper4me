@@ -5,7 +5,7 @@
 //   period=14:Wilder, J. Welles Jr. (1978). "New Concepts in Technical Trading
 //             Systems". Trend Research. Ch. 21 — 原作者選 14 對應 ~2 週 cycle
 //   atr_pct 公式 = ATR / close × 100:Wilder 原版「normalised volatility」
-//   1y lookback / 10d expansion 50%:無明確學術出處,業界共識 ~ Phase 2 校準
+//   1y lookback / 14d expansion 50%:無明確學術出處,14d 對齊 Wilder ATR period=14 語意一致
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -23,8 +23,8 @@ inventory::submit! {
 
 /// 1 年 lookback 給 volatility extreme high/low(對齊 §4.5 Fact lookback "1y")
 const LOOKBACK_1Y: usize = 252;
-/// volatility expansion lookback days(spec §4.5 範例「10 天 +50%」)
-const EXPANSION_LOOKBACK: usize = 10;
+/// volatility expansion lookback days — 對齊 Wilder ATR period=14(2026-05-11 由 10 改 14)
+const EXPANSION_LOOKBACK: usize = 14;
 const EXPANSION_THRESHOLD: f64 = 0.5; // 50%
 
 #[derive(Debug, Clone, Serialize)]
