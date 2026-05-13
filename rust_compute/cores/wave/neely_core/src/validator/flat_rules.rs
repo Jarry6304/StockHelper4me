@@ -1,10 +1,9 @@
-// flat_rules.rs — Validator F1-F2(Flat 子規則)
+// flat_rules.rs — Validator Ch5 Flat 子規則(Ch5_Flat_Min_BRatio / Ch5_Flat_Min_CRatio)
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §十(規則組)。
+// 對齊 m3Spec/neely_core_architecture.md §9.3 + m3Spec/neely_rules.md §Flats(3-3-5)。
 //
-// **M3 PR-3b 階段**:F1-F2 全部 Deferred。具體 Flat 規則(Regular / Expanded /
-// Running 子型號的識別 + B-wave / C-wave 比例約束)等 user 在 m3Spec/ 寫最新
-// neely_core spec 後 batch 補。
+// **Phase 1 PR**:2 條規則 framework 落地,**body Deferred**。
+// 具體門檻 + B-wave / C-wave 比例約束邏輯留 P4(Stage 4 Flat/Zigzag/Triangle 變體 PR)。
 
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
@@ -16,8 +15,8 @@ pub fn run(
     _classified: &[ClassifiedMonowave],
 ) -> Vec<RuleResult> {
     vec![
-        RuleResult::Deferred(RuleId::Flat(1)),
-        RuleResult::Deferred(RuleId::Flat(2)),
+        RuleResult::Deferred(RuleId::Ch5_Flat_Min_BRatio),
+        RuleResult::Deferred(RuleId::Ch5_Flat_Min_CRatio),
     ]
 }
 
@@ -38,6 +37,13 @@ mod tests {
         assert_eq!(results.len(), 2);
         for r in &results {
             assert!(r.is_deferred());
+        }
+        // 確認 RuleId 編碼對齊 r5 §9.3
+        if let RuleResult::Deferred(rid) = &results[0] {
+            assert!(matches!(rid, RuleId::Ch5_Flat_Min_BRatio));
+        }
+        if let RuleResult::Deferred(rid) = &results[1] {
+            assert!(matches!(rid, RuleId::Ch5_Flat_Min_CRatio));
         }
     }
 }

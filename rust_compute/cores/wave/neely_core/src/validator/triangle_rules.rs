@@ -1,10 +1,16 @@
-// triangle_rules.rs — Validator T1-T10(Triangle 子規則)
+// triangle_rules.rs — Validator Ch5 Triangle 子規則
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §十(規則組)。
+// 對齊 m3Spec/neely_core_architecture.md §9.3 + m3Spec/neely_rules.md §Triangles(3-3-3-3-3)。
 //
-// **M3 PR-3b 階段**:T1-T10 全部 Deferred。具體 Triangle 規則(Contracting /
-// Expanding / Limiting 子型號 + 5-3-3-3-3 sub-wave 結構 + 收斂 / 擴散約束)
-// 等 user 在 m3Spec/ 寫最新 neely_core spec 後 batch 補。
+// **Phase 1 PR**:3 條規則 framework 落地(從 r4 自編號 T1-T10 對映 r5 §9.3 3 條),
+// **body Deferred**。具體門檻 + 5-leg sub-wave 結構 + Contracting/Expanding/Limiting
+// 子型號識別邏輯留 P4。
+//
+// **r4 → r5 對映**:
+//   - T1-T2(自編)→ Ch5_Triangle_BRange(b 的價格範圍約束)
+//   - T3-T5(自編)→ Ch5_Triangle_LegContraction(leg 收斂/擴張)
+//   - T6-T8(自編)→ Ch5_Triangle_LegEquality_5Pct(三條同度數腿 ±5% 等價)
+//   - T9-T10(自編)→ 無 Ch5 對應(歸 Ch11_Triangle_Variant_Rules 留後續 PR)
 
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
@@ -15,7 +21,11 @@ pub fn run(
     _candidate: &WaveCandidate,
     _classified: &[ClassifiedMonowave],
 ) -> Vec<RuleResult> {
-    (1u8..=10).map(|n| RuleResult::Deferred(RuleId::Triangle(n))).collect()
+    vec![
+        RuleResult::Deferred(RuleId::Ch5_Triangle_BRange),
+        RuleResult::Deferred(RuleId::Ch5_Triangle_LegContraction),
+        RuleResult::Deferred(RuleId::Ch5_Triangle_LegEquality_5Pct),
+    ]
 }
 
 #[cfg(test)]
@@ -32,9 +42,15 @@ mod tests {
             initial_direction: MonowaveDirection::Up,
         };
         let results = run(&candidate, &[]);
-        assert_eq!(results.len(), 10);
+        assert_eq!(results.len(), 3);
         for r in &results {
             assert!(r.is_deferred());
+        }
+        if let RuleResult::Deferred(rid) = &results[0] {
+            assert!(matches!(rid, RuleId::Ch5_Triangle_BRange));
+        }
+        if let RuleResult::Deferred(rid) = &results[2] {
+            assert!(matches!(rid, RuleId::Ch5_Triangle_LegEquality_5Pct));
         }
     }
 }

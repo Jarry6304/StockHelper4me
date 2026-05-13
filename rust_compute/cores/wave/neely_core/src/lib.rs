@@ -1,41 +1,46 @@
 // neely_core(P0)— Wave Core
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md r2(2026-05-06)。
+// 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
+//       + m3Spec/cores_overview.md r4
 //
-// 已實作(M3 PR-6 為止 — Stage 1-10 Pipeline 走通):
-//   - struct / enum 合約定義(§五 §六 §八 §九 — Input / Params / Output / Scenario Forest)
-//   - WaveCore trait 實作 + warmup_periods(§16:Daily 500 / Weekly 250 / Monthly 120)
-//   - **Stage 1**:Monowave Detection(Pure Close + Wilder ATR-filtered reversal)
-//   - **Stage 2**:Rule of Neutrality + Rule of Proportion 標註
+// 已實作(Phase 1 PR — r5 spec alignment baseline):
+//   - struct / enum 合約定義(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
+//   - WaveCore trait 實作 + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
+//   - **RuleId 章節編碼**(architecture §9.3)— 取代 r4 自編號;Phase 1 範圍宣告 Ch5_* + Engineering_*
+//   - **Stage 1**:Monowave Detection — **Hybrid OHLC ((H+L)/2 mid_price)** + Wilder ATR-filtered reversal
+//   - **Stage 2**:Rule of Neutrality(個股 ATR / TAIEX %)+ Rule of Proportion metrics
 //   - **Stage 3**:Bottom-up Candidate Generator(滑窗 wave_count ∈ {3,5} + alternation filter + beam_width cap)
-//   - **Stage 4**:Validator framework + R1/R2/R3 完整實作(R4-R7 + F/Z/T/W 22 條 Deferred)
-//   - **Stage 5**:Classifier 基本邏輯(5wave + R3 → Impulse/Diagonal;3wave → Zigzag Single)
-//   - **Stage 6**:Post-Constructive Validator skeleton(預設 pattern_complete = true)
+//   - **Stage 4**:Validator framework + Ch5 Essential R1-R7 完整 + Ch5_Overlap_Trending + Ch5_Overlap_Terminal
+//                  完整;Ch5_Flat/Zigzag/Triangle/Equality/Alternation 9 條 Deferred(留 P4-P7)
+//   - **Stage 5**:Classifier(5wave + Overlap_Trending pass / Overlap_Terminal fail → Impulse;
+//                  Trending fail / Terminal pass → Diagonal { Leading/Ending heuristic };3wave → Zigzag Single)
+//   - **Stage 6**:Post-Constructive Validator skeleton(預設 pattern_complete = true,留 P6)
 //   - **Stage 7**:Complexity Rule 篩選(差距 ≤ 1 級為 anchor)
 //   - **Stage 8**:Compaction 簡化版 pass-through + Forest 上限保護(BeamSearchFallback by power_rating)
-//   - **Stage 9a**:Missing Wave 偵測 skeleton(預設 false)
-//   - **Stage 9b**:Emulation 辨識 skeleton(預設 false)
-//   - **Stage 10a**:Power Rating 查表(Impulse Up→Bullish / Down→Bearish 等 best-guess)
-//   - **Stage 10b**:Fibonacci 投影 framework + ratios.rs 寫死 NEELY_FIB_RATIOS(10 個比率)+
-//     project_from_w1() helper(完整接 monowave price 留 PR-6b)
-//   - **Stage 10c**:Invalidation Triggers 生成(Impulse R1/R3 derived;Diagonal R1 derived;
-//     對齊 §9.4 OnTriggerAction:WeakenScenario 取代 ReduceProbability)
-//   - **produce_facts()**:每 Scenario 1 條結構性 Fact + 1 條 forest summary Fact
-//     (對齊 §6.1.1 機械式陳述,禁主觀詞彙)
-//   - compute() 回 完整 NeelyCoreOutput:scenario_forest 含 power_rating / triggers /
-//     fib_zones,diagnostics 含 13 個 stage 耗時 + 各種 flags
+//   - **Stage 9a**:Missing Wave 偵測 skeleton(預設 false,留 P9)
+//   - **Stage 9b**:Emulation 辨識 skeleton(預設 false,留 P9)
+//   - **Stage 10a**:Power Rating 查表(Impulse Up→Bullish / Down→Bearish 等 best-guess;留 P10 完整查表)
+//   - **Stage 10b**:Fibonacci 投影 framework + ratios.rs 寫死 NEELY_FIB_RATIOS
+//   - **Stage 10c**:Invalidation Triggers(Impulse Ch5_Essential(3) + Ch5_Overlap_Trending derived;
+//                  Diagonal Ch5_Essential(3) derived)
+//   - **produce_facts()**:每 Scenario 1 條結構性 Fact + 1 條 forest summary
 //
-// 留後續 PR:
-//   - Stage 4-7 完整規則細節(留 PR-3c / PR-4b,需 user 在 m3Spec/ 寫最新 neely_core spec 後 batch 補)
-//   - Stage 8 進階:exhaustive 窮舉合法 compression paths(留 PR-5b)
-//   - Stage 9-10 完整:Missing Wave / Emulation / Fibonacci 接 monowave price /
-//     Power Rating 完整查表(留 PR-6b)
-//   - PG 連接:`shared/ohlcv_loader/` + `tw_cores` binary 接 PG + alembic 落地三表(留 PR-7)
-//   - inventory 註冊機制(`CoreRegistration`)+ Workflow toml(留 PR-8)
-//   - P0 Gate 五檔股票實測 + 校準(留 PR-Gate)
+// 留後續 PR(完整 r5 spec roadmap 詳見 plan file 多 PR roadmap):
+//   - **P2**:Stage 0 Pre-Constructive Logic(~200 branch if-else,Ch3 Rule 1-7 × Cond × Cat)
+//   - **P3**:Stage 3.5 Pattern Isolation + Zigzag DETOUR Test
+//   - **P4**:Stage 4 Flat/Zigzag/Triangle 變體規則完整實作
+//   - **P5**:Stage 5 Ch8 Complex Polywaves + Ch10 Power Ratings
+//   - **P6**:Stage 6/7 Ch6 Post-Constructive + Ch7 Compaction Three Rounds
+//   - **P7**:Stage 7.5 Channeling + Ch9 Advanced Rules
+//   - **P8**:Stage 8 Compaction Three Rounds 遞迴改造
+//   - **P9**:Stage 9 Missing Wave + Emulation 完整
+//   - **P10**:Stage 10 完整 + Ch12 Fibonacci Internal/External + Waterfall
+//   - **P11**:Stage 10.5 Reverse Logic
+//   - **P12**:Stage 11/12 Degree Ceiling + cross_timeframe_hints
+//   - **P13**:P0 Gate 六檔實測 + 校準
 //
-// 不外部化 Neely 規則常數(§4.4 / §6.6):Fibonacci 比率、±4% 容差、Power Rating
-// 查表全部寫死,不可從 toml 設定。
+// 不外部化 Neely 規則常數(architecture §4.5 / §6.6):Fibonacci 比率、±4%/±5%/±10% 三檔容差、
+// Power Rating 查表全部寫死,不可從 toml 設定。
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -70,10 +75,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.7.0",
+        "0.8.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Stage 1-10 Pipeline + Scenario Forest)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch5 Essential R1-R7 + Overlap;r5 spec alignment baseline)",
     )
 }
 
@@ -101,10 +106,11 @@ impl WaveCore for NeelyCore {
     }
 
     fn version(&self) -> &'static str {
-        // 隨 spec / 演算法版本變動。M3 PR-6 partial(Stage 1-10 落地,Power Rating /
-        // Fibonacci / Triggers 基本實作 + facts.rs produce_facts)階段 0.7.0,
-        // 等 P0 Gate 五檔實測通過再 bump 到 1.0.0(spec §17.1 範例為 "1.0.0")。
-        "0.7.0"
+        // 隨 spec / 演算法版本變動。
+        // 0.7.0 → 0.8.0(Phase 1 PR r5 spec alignment baseline:Hybrid OHLC +
+        // RuleId 章節編碼重寫 + Ch5 Essential R1-R7 + Overlap_Trending/Terminal 完整)。
+        // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
+        "0.8.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -329,7 +335,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.7.0");
+        assert_eq!(core.version(), "0.8.0");
     }
 
     // -------------------------------------------------------------

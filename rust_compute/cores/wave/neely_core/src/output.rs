@@ -1,12 +1,16 @@
 // NeelyCoreOutput + Scenario Forest + Diagnostics
-// 對齊 m2Spec/oldm2Spec/neely_core.md §五 §八 §九 §十(2026-05-06 r2)
+// 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
 //
 // 設計原則:
-//   - **Forest 不選 primary**(§9.3):`scenario_forest: Vec<Scenario>`,
+//   - **Forest 不選 primary**(architecture §8.2 / §9.x):`scenario_forest: Vec<Scenario>`,
 //     順序不反映優先級,Aggregation Layer 可依 power_rating 提供 UI 篩選
-//   - **不引入機率語意**(§9.4):移除 v1.1 `confidence` / `composite_score` 欄位
-//   - **Trigger 不寫 ReduceProbability**(§9.4):改 `WeakenScenario`
-//   - **PowerRating enum**(§9.4):取代 v1.1 `i8`,避免 99 等無效值
+//   - **不引入機率語意**(architecture §2.1):移除 v1.1 `confidence` / `composite_score` 欄位
+//   - **Trigger 不寫 ReduceProbability**(architecture §9.4):改 `WeakenScenario`
+//   - **PowerRating enum**(architecture §9.4):取代 v1.1 `i8`
+//   - **RuleId 用 Neely 章節編碼**(architecture §9.3):取代 r4 自編號 Core/Flat/Zigzag/Triangle/Wave(u8)
+//     — Phase 1 PR 只宣告 Phase 1 用得到的 variants(Ch5_Essential / Ch5_Overlap_* /
+//     Ch5_Flat_* / Ch5_Zigzag_* / Ch5_Triangle_* / Ch5_Equality / Ch5_Alternation /
+//     Engineering_*),Ch3 / Ch4 / Ch6-Ch12 / Ch11 規則 留後續 PR 補
 
 use chrono::NaiveDate;
 use fact_schema::Timeframe;
@@ -341,20 +345,91 @@ pub struct FibZone {
 }
 
 // ---------------------------------------------------------------------------
-// RuleId(§十)
+// RuleId(architecture §9.3 — Neely 章節編碼)
 // ---------------------------------------------------------------------------
 
-/// Validator 規則 ID。R / F / Z / T / W 五組,具體規則內容於 validator/ 子模組。
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+/// Validator 規則 ID,採 Neely 章節編碼(architecture §9.3)。
+///
+/// 設計目的:RuleId 本身即為書頁追溯,免維護自編號對應表(對齊 architecture §9.3 設計優點)。
+///
+/// **Phase 1 PR 範圍**:只宣告 Phase 1 用得到的 variants。完整 ~60 variants 對應
+/// `m3Spec/neely_core_architecture.md §9.3`,留後續 PR 各 stage 動工時補:
+///   - Stage 0(Ch3 Pre-Constructive Logic)→ P2
+///   - Stage 3.5(Pattern Isolation / Zigzag DETOUR)→ P3
+///   - Stage 5(Ch8 Complex Polywaves)→ P5
+///   - Stage 6 / 7(Ch6 Post-Constructive / Ch7 Compaction)→ P6
+///   - Stage 7.5(Ch9 Advanced / Channeling)→ P7
+///   - Stage 8(Ch4 Three Rounds 遞迴)→ P8
+///   - Stage 10 / 10.5(Ch10 Power / Ch12 Reverse Logic)→ P10 / P11
+///
+/// **設計約束**:
+/// - 不 derive `Copy`(預留 Ch9_Exception_Aspect2 { triggered_new_rule: String } 等含 String 的 variant)
+/// - 維持 PartialEq + Eq 供 `.contains(&rid)` / `==` 比對
+/// - Hash 不需要(無 HashMap/HashSet 用 RuleId 當 key)
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[allow(non_camel_case_types)] // r5 章節編碼採 `Ch5_Essential` 風格(architecture §9.3)
 pub enum RuleId {
-    /// 通用核心規則 R1-R7
-    Core(u8),
-    /// Flat 子規則 F1-F2
-    Flat(u8),
-    /// Zigzag 子規則 Z1-Z4
-    Zigzag(u8),
-    /// Triangle 子規則 T1-T10
-    Triangle(u8),
-    /// Wave 通用規則 W1-W2
-    Wave(u8),
+    // === Ch5 Central Considerations(Essential Construction Rules + Channeling + 變體規則)===
+    /// Ch5 Essential Construction Rules R1-R7(neely_rules.md §Impulsion 1291-1300 行)
+    /// - R1 必須有 5 個相鄰段
+    /// - R2 其中 3 段方向相同
+    /// - R3 W2 逆向不得完全回測 W1
+    /// - R4 W3 須長於 W2
+    /// - R5 W4 逆向不得完全回測 W3
+    /// - R6 W5 ≥ 38.2% × W4(短於則稱 5th-Wave Failure)
+    /// - R7 W3 絕不可為 W1/W3/W5 中最短
+    Ch5_Essential(u8),
+
+    /// Ch5 Overlap Rule — Trending Impulse:W4 不可進入 W2 區
+    /// neely_rules.md 1326-1329 行
+    Ch5_Overlap_Trending,
+
+    /// Ch5 Overlap Rule — Terminal Impulse:W4 必須部分侵入 W2 區
+    /// neely_rules.md 1326-1329 行
+    Ch5_Overlap_Terminal,
+
+    /// Ch5 Rule of Equality:1/3/5 中「非延伸的兩個」傾向等價或 Fib 關係
+    /// neely_rules.md §Rule of Equality
+    Ch5_Equality,
+
+    /// Ch5 Rule of Alternation:同級 W2/W4(或 a/b/c 等)在 axis 之一須不同
+    /// neely_rules.md §Rule of Alternation
+    Ch5_Alternation { axis: AlternationAxis },
+
+    /// Ch5 Flat 子規則:b ≥ 38.2% × a(neely_rules.md §Flats)
+    Ch5_Flat_Min_BRatio,
+    /// Ch5 Flat 子規則:c ≥ 38.2% × b(neely_rules.md §Flats)
+    Ch5_Flat_Min_CRatio,
+
+    /// Ch5 Zigzag 子規則:b ≤ 61.8% × a(neely_rules.md §Zigzags)
+    Ch5_Zigzag_Max_BRetracement,
+    /// Ch5 Zigzag 子規則:c-wave Triangle 例外(neely_rules.md §Zigzags)
+    Ch5_Zigzag_C_TriangleException,
+
+    /// Ch5 Triangle 子規則:b 的價格範圍約束(neely_rules.md §Triangles)
+    Ch5_Triangle_BRange,
+    /// Ch5 Triangle 子規則:leg 收斂(Contracting)/ 擴張(Expanding)約束
+    Ch5_Triangle_LegContraction,
+    /// Ch5 Triangle 子規則:三條同度數腿價格相等性 ±5%(neely_rules.md §Triangles)
+    Ch5_Triangle_LegEquality_5Pct,
+
+    // === 工程護欄(非 Neely 規則,獨立列出 — architecture §9.3 末段)===
+    /// 資料量不足(< warmup_periods)→ Stage 1 階段失敗
+    Engineering_InsufficientData,
+    /// Forest 爆量 → Stage 8 BeamSearchFallback
+    Engineering_ForestOverflow,
+    /// Compaction 逾時 → Stage 8 中斷,回傳 partial forest
+    Engineering_CompactionTimeout,
+}
+
+/// Alternation 的「軸」(neely_rules.md §Rule of Alternation)。
+/// Phase 1 PR:只 Construction 軸實際被引用(W2/W4 alternation 用 Construction),
+/// 其他 axis variant 留後續 PR 用。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum AlternationAxis {
+    Price,
+    Time,
+    Severity,
+    Intricacy,
+    Construction,
 }

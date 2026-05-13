@@ -1,10 +1,15 @@
-// zigzag_rules.rs — Validator Z1-Z4(Zigzag 子規則)
+// zigzag_rules.rs — Validator Ch5 Zigzag 子規則
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §十(規則組)。
+// 對齊 m3Spec/neely_core_architecture.md §9.3 + m3Spec/neely_rules.md §Zigzags(5-3-5)。
 //
-// **M3 PR-3b 階段**:Z1-Z4 全部 Deferred。具體 Zigzag 規則(Single / Double /
-// Triple 子型號 + Fibonacci 比率約束)等 user 在 m3Spec/ 寫最新 neely_core spec
-// 後 batch 補。
+// **Phase 1 PR**:2 條規則 framework 落地(從 r4 自編號 Z1-Z4 對映 r5 §9.3 2 條),
+// **body Deferred**。具體門檻留 P4。
+//
+// **r4 → r5 對映**:
+//   - Z1(自編)→ Ch5_Zigzag_Max_BRetracement(b ≤ 61.8% × a)
+//   - Z2(自編)→ Ch5_Zigzag_C_TriangleException(c-wave Triangle 例外)
+//   - Z3, Z4(自編)→ r5 沒對應 Ch5 zigzag 規則(細項邏輯歸 Ch11_Zigzag_WaveByWave)
+//     P4 動工時若需要可用 Ch11_* variants
 
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
@@ -16,10 +21,8 @@ pub fn run(
     _classified: &[ClassifiedMonowave],
 ) -> Vec<RuleResult> {
     vec![
-        RuleResult::Deferred(RuleId::Zigzag(1)),
-        RuleResult::Deferred(RuleId::Zigzag(2)),
-        RuleResult::Deferred(RuleId::Zigzag(3)),
-        RuleResult::Deferred(RuleId::Zigzag(4)),
+        RuleResult::Deferred(RuleId::Ch5_Zigzag_Max_BRetracement),
+        RuleResult::Deferred(RuleId::Ch5_Zigzag_C_TriangleException),
     ]
 }
 
@@ -37,9 +40,12 @@ mod tests {
             initial_direction: MonowaveDirection::Up,
         };
         let results = run(&candidate, &[]);
-        assert_eq!(results.len(), 4);
+        assert_eq!(results.len(), 2);
         for r in &results {
             assert!(r.is_deferred());
+        }
+        if let RuleResult::Deferred(rid) = &results[0] {
+            assert!(matches!(rid, RuleId::Ch5_Zigzag_Max_BRetracement));
         }
     }
 }
