@@ -644,9 +644,56 @@ ind.abs() < 1e-12 skip warmup zeros (RSI/MACD 前幾 bar 為 0.0)
 
 ---
 
-**最後更新**:2026-05-12(P2 阻塞 5c + 阻塞 6 + P5 divergence 算法重寫 全部收尾)
-**Rust workspace**:24 crate / **168 tests passed** / 22 cores production verified
+**最後更新**:2026-05-13(§16 valuation_core spec staleness 記錄 + ma/revenue Reference 補完)
+**Rust workspace**:24 crate / **178 tests passed**(168 + ma_core +6 precision +4 P5 = 178)/ 22 cores production verified
 **alembic head**:`x3y4z5a6b7c8`(不變,本 session 0 migration)
-**Production state(2026-05-12 全市場重跑後)**:
+**Production state**(2026-05-12 全市場重跑後):
   - facts 重寫:institutional + foreign_holding + kd + macd + rsi (5 cores)
   - 總 facts 量級待 p2_calibration_data.sql 統計(修前 4.4M,修後 Divergence 降量預估 ↓15–40%)
+
+---
+
+## §16. m3Spec/fundamental_cores.md §4.5 valuation_core spec staleness(2026-05-13)
+
+接 v1.33 spec alignment 校驗收尾後,2026-05-13 audit「除 neely 外 21 cores」揭露
+**`valuation_core` code 領先 spec** — 一個 m3Spec/ 文件回寫項目。
+
+### 偏離項
+
+| 來源 | EventKind 數 | 狀態 |
+|---|---|---|
+| `m3Spec/fundamental_cores.md` §4.5(spec)| **8 個** stay-in-zone | PerExtremeHigh/Low / PbrExtremeHigh/Low / YieldExtremeHigh / YieldHighThreshold / PerNegative / PbrBelowBookValue |
+| `rust_compute/cores/fundamental/valuation_core/src/lib.rs:90-108`(code)| **14 個** Round 4 transition | 12 個 Entered/Exited transition + PerNegative + PbrBelowBookValue |
+
+### 偏離原因(v1.30/v1.31 Round 4 落地紀錄)
+
+CLAUDE.md v1.30 / v1.31 「Round 4 transition pattern」commit 把 6 個 stay-in-zone
+EventKind(連日重複觸發)改為 12 個 Entered/Exited transition pattern,對齊
+fear_greed_core 範本。production 驗證 facts 從 9M → 4.4M(↓51%),valuation 部分
+2.0M → 189K(↓91%)。
+
+詳見 CLAUDE.md v1.30 / v1.31 Round 4 段落 + commit history `2b1cbc7` 系列。
+
+### 處理方式
+
+🟢 **code = source of truth**(production-verified)。Spec 文件待 user 同步更新:
+
+- m3Spec/fundamental_cores.md §4.5 `ValuationEventKind` enum:
+  - 砍 6 個 stay-in-zone variant(PerExtremeHigh/Low / PbrExtremeHigh/Low /
+    YieldExtremeHigh / YieldHighThreshold)
+  - 加 12 個 Entered/Exited variant
+  - PerNegative / PbrBelowBookValue 保留(本來就是 transition)
+- 加 Round 4 transition pattern 說明段(對齊 fear_greed 範本 + 連日重複觸發降量
+  ~51% 的設計動機)
+
+### 不阻塞項
+
+本偏離是 **doc-only staleness**,production code 已驗證正確,無下游 consumer 出問題。
+**不擋 P0 Gate / P3 後續工作**。等 user 寫 m3Spec/ 下一輪 spec update 時順手收掉。
+
+### 同 session(2026-05-13)落地項
+
+- `ma_core` lib.rs:加 Reference doc comments(Mulloy 1994 DEMA/TEMA + Hull 2005 HMA)+ 6 precision tests(SMA/EMA/WMA/DEMA/TEMA/HMA 數學恆等校準)
+- `revenue_core` lib.rs:加 Reference doc comments for 5 threshold defaults
+  (Lakonishok/Shleifer 1994 + Moskowitz 2012 + Brown & Warner 1985 + 業界慣例出處)
+- 兩個 cores spec ↔ code **完全對齊**,無 staleness

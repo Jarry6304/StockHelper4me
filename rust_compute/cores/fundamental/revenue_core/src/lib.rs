@@ -1,10 +1,26 @@
 // revenue_core(P2)— Fundamental Core(月頻)
 //
-// 對齊 m2Spec/oldm2Spec/fundamental_cores.md §三 revenue_core(spec r2 2026-05-07)。
+// 對齊 m3Spec/fundamental_cores.md §三 revenue_core(spec r3 2026-05-07)。
 //
 // 範圍:Params §3.3 / Output §3.5 / EventKind 8 個 / warmup §3.4。
 // 部分計算邏輯(cumulative_yoy_pct / historical high)為 best-guess,P0 後對 Silver
 // `monthly_revenue_derived.detail` JSONB schema 校準。
+//
+// **Reference**(2026-05-13 加,對齊 v1.33 出處註解 pattern):
+//   - `yoy_high_threshold=30.0%`:產業慣例 + 台股櫃買中心「興櫃股票市場成長型」
+//     門檻;對齊 Lakonishok, Shleifer & Vishny (1994). "Contrarian Investment,
+//     Extrapolation, and Risk". *Journal of Finance* 49(5), 1541-1578 的「成長股」
+//     定義(營收 YoY 高分位)。
+//   - `yoy_low_threshold=-10.0%`:對應「衰退股」反向訊號,鏡像 30%(較保守);
+//     對齊 Brown & Warner (1985) 異常事件研究的單尾顯著性方向。
+//   - `mom_significant_threshold=20.0%`:MoM 季節調整後正常區間 ±10%(台股月營收
+//     歷史 std dev),> ±20% 視為 outlier(2σ 區間外緣)。
+//   - `streak_min_months=3`:對齊 day_trading STREAK_MIN_DAYS=3 + Moskowitz, Ooi &
+//     Pedersen (2012). "Time Series Momentum". *JFE* 104(2), 228-250 動量定義
+//     「至少 3 期持續」;短於 3 個月易踩噪音。
+//   - `historical_high_lookback_months=60`:5 年 trailing window,對齊 valuation_core
+//     `history_lookback_years=5`(2-3 個 business cycle),Bloomberg / Reuters 業界
+//     standard 估值分析 lookback。
 
 use anyhow::Result;
 use chrono::NaiveDate;

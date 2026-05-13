@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.33，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.34，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,81 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.34 — m3Spec/ 9 份 spec 落地 audit + ma_core / revenue_core Reference 補完(2026-05-13 後續)
+
+接 v1.33 P2 收尾後,同日(2026-05-13)user 問「M3 進度 + 除 neely 外可否做完
+評估」。Audit 揭露兩個 CLAUDE.md 還沒記到的進展:
+
+### m3Spec/ 從 1 份 → 10 份(commits `c2bc5e4` / `6272ce0` / `6521836`)
+
+v1.33 寫「m3Spec/ 只有 chip_cores.md」,但實際 user 已落地 9 份新 spec:
+
+```
+m3Spec/
+├── chip_cores.md                       28 KB ✅ user 既有
+├── cores_overview.md                   33 KB 🆕
+├── environment_cores.md                29 KB 🆕
+├── fundamental_cores.md                16 KB 🆕
+├── indicator_cores_{momentum,pattern,volatility,volume}.md  🆕(60 KB total)
+├── neely_core_architecture.md          73 KB 🆕
+└── neely_rules.md                      178 KB 🆕  ← 解鎖 PR-3c
+```
+
+**最大解鎖**:`neely_rules.md` 178 KB 涵蓋 Stage 4 22 條 Deferred 規則
+(R4-R7 + F1-F2 + Z1-Z4 + T1-T10 + W1-W2)— **PR-3c 不再 spec-blocked**。
+
+### 21 cores(除 neely)現狀 audit
+
+- ✅ **17 cores 完整就緒**:7 indicator(macd/rsi/kd/adx/bollinger/atr/obv)+
+  5 chip + financial_statement + 4 environment
+- 🟡 **3 cores** ma_core / revenue_core / valuation_core(本 session 全收尾)
+- 🔴 **1 core** exchange_rate_core(spec 仍缺 currency_pairs / key_levels 預設值)
+
+### 本 session 落地(3 cores 收尾)
+
+| Core | 改動 | 範圍 |
+|---|---|---|
+| `ma_core` | + Reference doc comments(Mulloy 1994 DEMA/TEMA / Hull 2005 HMA / Murphy 1999 EMA)+ 6 precision tests | `lib.rs:1-22` doc / `lib.rs:331-410` tests |
+| `revenue_core` | + Reference doc comments for 5 threshold defaults(Lakonishok/Shleifer 1994 / Moskowitz 2012 / Brown & Warner 1985 + 業界慣例) | `lib.rs:1-23` doc |
+| `valuation_core` | code 不動(production-verified Round 4 transition pattern);**spec staleness 記錄進 docs/m3_cores_spec_pending.md §16** | docs only |
+
+### v1.31 Round 4 揭露的 spec staleness(留 user 同步)
+
+`m3Spec/fundamental_cores.md §4.5 ValuationEventKind` 仍寫 8 個 stay-in-zone
+variant,但 `rust_compute/cores/fundamental/valuation_core/src/lib.rs:90-108`
+已落地 14 個 Round 4 transition pattern(12 Entered/Exited + PerNegative +
+PbrBelowBookValue)。code 是 production-verified source of truth,**spec 待
+user 同步**,不阻塞任何下游。詳見 `docs/m3_cores_spec_pending.md §16`。
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml / 0 schema 改動
+- ma_core 6 precision tests 是 mathematical identity 驗證(SMA ramp / EMA α=1/3
+  recursive / WMA 線性權重 / DEMA & TEMA & HMA 常數恆等),production 行為不變
+- revenue_core 純 doc 註解,0 default 值改變
+- valuation_core 完全不動 code
+- Rollback:單 commit `git revert` 即可
+
+### 沙箱驗證(已通)
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 178 tests passed / 0 failed / 0 warnings(172 + 6 ma_core precision)
+```
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變,本 session 0 migration)
+- Rust workspace:24 crate / **178 tests passed** / 0 warnings
+- m3Spec/:10 份 spec 全部落地(包含 neely_rules.md 178 KB 解鎖 PR-3c)
+- 下個 session 動工選項:
+  1. **PR-3c**:neely Stage 4 22 條 Deferred 規則(spec 解鎖,~1-2 天)
+  2. **P0 Gate 五檔校準**(0050 / 2330 / 3363 / 6547 / 1312)+ `docs/benchmarks/`
+  3. **exchange_rate_core** 等 user 寫定 `m3Spec/environment_cores.md` §五
 
 ---
 

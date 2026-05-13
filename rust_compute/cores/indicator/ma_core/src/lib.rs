@@ -1,4 +1,4 @@
-// ma_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §七 r2
+// ma_core(P1)— 對齊 m3Spec/indicator_cores_momentum.md §七 r2
 //
 // Spec critical:
 //   - Output 是 `MaOutput { series_by_spec: Vec<MaSeriesEntry> }`(非單一 series)
@@ -7,7 +7,17 @@
 //   - CrossPairPolicy: None / AllPairs / Pairs(Vec<(usize, usize)>)
 //   - 跨均線交叉(SMA20 vs SMA60)單一實例內部偵測,對齊 §7.8 不違反零耦合
 //
-// Dema/Tema/Hma 演算法用 best-guess 標準公式,P0 後可校準。
+// **Formula Reference**(2026-05-13 加,對齊 v1.33 出處註解 pattern):
+//   - SMA:標準算術平均,partial-window(i<p 時除以 i+1)
+//   - EMA:α=2/(p+1) recursive(Wilder 1978 之前的 J. Welles Wilder 慣例;
+//          現代教科書 e.g. Murphy 1999 *Technical Analysis of the Financial Markets*
+//          McGraw-Hill, ch.9 標準定義)
+//   - WMA:線性加權 (1*v[i-p+1] + 2*v[i-p+2] + ... + p*v[i]) / Σ(1..p)
+//   - DEMA / TEMA:Mulloy, Patrick (1994). "Smoothing Data with Faster Moving Averages".
+//                 *Technical Analysis of Stocks & Commodities*, Feb 1994 + April 1994。
+//                 DEMA = 2*EMA - EMA(EMA);TEMA = 3*EMA - 3*EMA(EMA) + EMA(EMA(EMA))
+//   - HMA:Hull, Alan (2005). "Hull Moving Average". www.alanhull.com。
+//          HMA(p) = WMA(2*WMA(p/2) - WMA(p), sqrt(p))
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -316,5 +326,88 @@ mod tests {
         let input = OhlcvSeries { stock_id: "t".to_string(), timeframe: Timeframe::Daily, bars: vec![] };
         let out = core.compute(&input, params).unwrap();
         assert_eq!(out.series_by_spec.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Precision tests(2026-05-13)— 對齊 v1.33 Reference 註解 pattern。
+    // 用 mathematical identity + 標準教科書手算值校準 6 種 MaKind 公式精確性。
+    // 容差 ±1e-9(浮點 indicator 對比業界標準)。
+    // -----------------------------------------------------------------------
+
+    const TOL: f64 = 1e-9;
+
+    fn approx_eq(a: f64, b: f64) -> bool { (a - b).abs() < TOL }
+
+    /// SMA(5) on linear ramp [1..10]:partial-window 前 4 個值
+    /// = [1.0, 1.5, 2.0, 2.5]、完整窗後 = [3.0, 4.0, 5.0, 6.0, 7.0, 8.0]。
+    #[test]
+    fn sma_5_on_ramp_matches_known_values() {
+        let input: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let out = sma(&input, 5);
+        let expected = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        for (i, &e) in expected.iter().enumerate() {
+            assert!(approx_eq(out[i], e), "SMA[{}] = {} != expected {}", i, out[i], e);
+        }
+    }
+
+    /// EMA(5) α=2/(5+1)=1/3,out[0]=v[0]=1.0,遞迴公式:
+    ///   out[1] = (1/3)*2 + (2/3)*1     = 4/3
+    ///   out[2] = (1/3)*3 + (2/3)*(4/3) = 1 + 8/9 = 17/9
+    ///   out[3] = (1/3)*4 + (2/3)*(17/9) = 4/3 + 34/27 = 70/27
+    #[test]
+    fn ema_5_recursive_alpha_one_third() {
+        let input: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let out = ema(&input, 5);
+        assert!(approx_eq(out[0], 1.0), "EMA[0] = {}", out[0]);
+        assert!(approx_eq(out[1], 4.0 / 3.0), "EMA[1] = {}", out[1]);
+        assert!(approx_eq(out[2], 17.0 / 9.0), "EMA[2] = {}", out[2]);
+        assert!(approx_eq(out[3], 70.0 / 27.0), "EMA[3] = {}", out[3]);
+    }
+
+    /// WMA(5) at index 4(warmup 完成):權重 1,2,3,4,5 對 v[0..=4] = 1..5。
+    ///   = (1*1 + 2*2 + 3*3 + 4*4 + 5*5) / (1+2+3+4+5) = 55/15 = 11/3
+    /// WMA(5) at index 5:權重對 v[1..=5] = 2..6。
+    ///   = (1*2 + 2*3 + 3*4 + 4*5 + 5*6) / 15 = (2+6+12+20+30)/15 = 70/15 = 14/3
+    #[test]
+    fn wma_5_linear_weights() {
+        let input: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let out = wma(&input, 5);
+        assert!(approx_eq(out[4], 11.0 / 3.0), "WMA[4] = {} expected 11/3", out[4]);
+        assert!(approx_eq(out[5], 14.0 / 3.0), "WMA[5] = {} expected 14/3", out[5]);
+    }
+
+    /// DEMA(p) on constant input [C; N]:EMA(constant) = constant,
+    /// EMA(EMA(constant)) = constant,所以 DEMA = 2C - C = C。
+    /// 數學恆等,verify Mulloy 1994 DEMA = 2*EMA - EMA(EMA) 公式正確性。
+    #[test]
+    fn dema_constant_input_equals_constant() {
+        let input = vec![5.0; 30];
+        let out = dema(&input, 5);
+        for (i, &v) in out.iter().enumerate() {
+            assert!(approx_eq(v, 5.0), "DEMA[{}] = {} expected 5.0", i, v);
+        }
+    }
+
+    /// TEMA(p) on constant input [C; N]:同 DEMA 數學恆等,
+    /// TEMA = 3C - 3C + C = C。verify Mulloy 1994 TEMA 公式。
+    #[test]
+    fn tema_constant_input_equals_constant() {
+        let input = vec![5.0; 30];
+        let out = tema(&input, 5);
+        for (i, &v) in out.iter().enumerate() {
+            assert!(approx_eq(v, 5.0), "TEMA[{}] = {} expected 5.0", i, v);
+        }
+    }
+
+    /// HMA(p) on constant input:WMA(constant) = constant,
+    /// 2*WMA(p/2) - WMA(p) = 2C - C = C,WMA(C, sqrt(p)) = C。
+    /// verify Hull 2005 HMA = WMA(2*WMA(p/2) - WMA(p), sqrt(p)) 公式。
+    #[test]
+    fn hma_constant_input_equals_constant() {
+        let input = vec![5.0; 50];
+        let out = hma(&input, 9);
+        for (i, &v) in out.iter().enumerate() {
+            assert!(approx_eq(v, 5.0), "HMA[{}] = {} expected 5.0", i, v);
+        }
     }
 }
