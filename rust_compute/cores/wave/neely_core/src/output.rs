@@ -133,6 +133,8 @@ pub struct Scenario {
 
     pub wave_tree: WaveNode,
     pub pattern_type: NeelyPatternType,
+    /// candidate 起始 monowave direction(Phase 5 PR 新增,供 Power Rating 判 Bullish/Bearish 符號)
+    pub initial_direction: MonowaveDirection,
     /// 例:"5-3-5 Zigzag in W4 of larger Impulse"
     pub structure_label: String,
     pub complexity_level: ComplexityLevel,

@@ -66,6 +66,7 @@ mod tests {
                 children: Vec::new(),
             },
             pattern_type: NeelyPatternType::Impulse,
+            initial_direction: MonowaveDirection::Up,
             structure_label: "test".to_string(),
             complexity_level: complexity,
             power_rating: PowerRating::Neutral,

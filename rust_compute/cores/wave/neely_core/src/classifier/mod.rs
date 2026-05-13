@@ -29,8 +29,8 @@
 use crate::candidates::WaveCandidate;
 use crate::output::{
     ComplexityLevel, DiagonalKind, FibZone, NeelyPatternType,
-    PostBehavior, PowerRating, RuleId, Scenario, StructuralFacts, Trigger,
-    WaveNode, ZigzagKind,
+    PostBehavior, PowerRating, RuleId, Scenario, StructuralFacts, StructureLabel,
+    Trigger, WaveNode, ZigzagKind,
 };
 use crate::monowave::ClassifiedMonowave;
 use crate::validator::ValidationReport;
@@ -53,14 +53,21 @@ pub fn classify(
     }
 
     let pattern_type = match candidate.wave_count {
-        5 => classify_5wave(candidate, report)?,
+        5 => classify_5wave(candidate, report, classified)?,
         3 => classify_3wave(candidate, report),
         _ => return None,
     };
 
+    // Phase 5:initial_direction 從第一個 monowave 取得,供 Power Rating 判 Bullish/Bearish
+    let initial_direction = classified[mi[0]].monowave.direction;
+
     let structure_label = format!(
-        "{:?} ({}-wave from mw{} to mw{})",
-        pattern_type, candidate.wave_count, mi[0], mi[mi.len() - 1]
+        "{:?} {:?} ({}-wave from mw{} to mw{})",
+        pattern_type,
+        initial_direction,
+        candidate.wave_count,
+        mi[0],
+        mi[mi.len() - 1]
     );
 
     let wave_tree = build_wave_tree(candidate, classified);
@@ -69,6 +76,7 @@ pub fn classify(
         id: candidate.id.clone(),
         wave_tree,
         pattern_type,
+        initial_direction,
         structure_label,
         complexity_level: classify_complexity(candidate),
         power_rating: PowerRating::Neutral, // Stage 10a Power Rating 查表後填
@@ -94,6 +102,7 @@ pub fn classify(
 fn classify_5wave(
     candidate: &WaveCandidate,
     report: &ValidationReport,
+    classified: &[ClassifiedMonowave],
 ) -> Option<NeelyPatternType> {
     let trending_failed = report
         .failed
@@ -112,7 +121,7 @@ fn classify_5wave(
         (true, false) => {
             // Trending fail + Terminal pass → Terminal Impulse(Diagonal)
             Some(NeelyPatternType::Diagonal {
-                sub_kind: classify_diagonal_subkind(candidate),
+                sub_kind: classify_diagonal_subkind(candidate, classified),
             })
         }
         (true, true) => {
@@ -129,15 +138,60 @@ fn classify_5wave(
     }
 }
 
-/// Diagonal sub_kind 簡化版:位置 heuristic
-/// - candidate 從 monowave[0] 開始 → Leading(起始位置較可能是 higher-impulse 之 W1)
-/// - 否則 → Ending(後續位置較可能是 higher-impulse 之 W5/C)
+/// Phase 5 改進的 Diagonal sub_kind heuristic — 用相鄰 monowave label context。
 ///
-/// **限制**(architecture §9.1 / r5 spec 註):
-///   真正判定需 higher-degree context(Stage 8 Compaction 提供),
-///   Phase 1 採此 heuristic 留 P5(Ch8 Complex Polywaves)校準。
-fn classify_diagonal_subkind(candidate: &WaveCandidate) -> DiagonalKind {
-    if candidate.monowave_indices.first().copied() == Some(0) {
+/// 對齊 spec(Ch5 Realistic Representations):
+///   - Leading Diagonal = 高一級 Impulse / Correction 之首段(W1 / A 位置)
+///   - Ending Diagonal = 高一級 Impulse / Correction 之末段(W5 / C 位置)
+///
+/// **Phase 5 heuristic**(無真實 higher-degree context 前提下的近似):
+///   1. candidate.monowave_indices[0] 之前有 :L3 / :L5 monowave → 先前修正/衝動剛結束
+///      → 該 Diagonal 在「新段起始」位置 → **Leading**
+///   2. candidate.monowave_indices[0] 自身的 structure_label_candidates 含 :F3 / :F5
+///      → 強烈 Leading 訊號
+///   3. candidate.monowave_indices[4] 自身含 :L3 / :L5 → 強烈 Ending 訊號
+///   4. fallback:mi[0] == 0(序列起點)→ Leading,否則 → Ending
+///
+/// 完整 higher-degree context 留 P6/P8 Compaction Three Rounds(Phase 5 之後)。
+fn classify_diagonal_subkind(
+    candidate: &WaveCandidate,
+    classified: &[ClassifiedMonowave],
+) -> DiagonalKind {
+    let mi = &candidate.monowave_indices;
+    let start_mw_idx = mi[0];
+    let end_mw_idx = mi[mi.len() - 1];
+
+    // Check 1:前一個 monowave 是 :L3 / :L5(先前段剛結束)→ Leading
+    if start_mw_idx > 0 {
+        let prev_labels = &classified[start_mw_idx - 1].structure_label_candidates;
+        let prev_is_last_anchor = prev_labels.iter().any(|c| {
+            matches!(c.label, StructureLabel::L3 | StructureLabel::L5)
+        });
+        if prev_is_last_anchor {
+            return DiagonalKind::Leading;
+        }
+    }
+
+    // Check 2:Start monowave 含 :F3 / :F5 → Leading
+    let start_labels = &classified[start_mw_idx].structure_label_candidates;
+    let start_has_first = start_labels.iter().any(|c| {
+        matches!(c.label, StructureLabel::F3 | StructureLabel::F5)
+    });
+    if start_has_first {
+        return DiagonalKind::Leading;
+    }
+
+    // Check 3:End monowave 含 :L3 / :L5 → Ending
+    let end_labels = &classified[end_mw_idx].structure_label_candidates;
+    let end_has_last = end_labels.iter().any(|c| {
+        matches!(c.label, StructureLabel::L3 | StructureLabel::L5)
+    });
+    if end_has_last {
+        return DiagonalKind::Ending;
+    }
+
+    // Fallback:序列起點 → Leading,否則 → Ending
+    if start_mw_idx == 0 {
         DiagonalKind::Leading
     } else {
         DiagonalKind::Ending
