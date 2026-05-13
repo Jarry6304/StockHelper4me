@@ -65,6 +65,7 @@ pub mod monowave;
 pub mod output;
 pub mod post_validator;
 pub mod power_rating;
+pub mod pre_constructive;
 pub mod triggers;
 pub mod validator;
 
@@ -75,10 +76,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.8.0",
+        "0.9.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch5 Essential R1-R7 + Overlap;r5 spec alignment baseline)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 Pre-Constructive Logic + Ch5 Essential R1-R7 + Overlap)",
     )
 }
 
@@ -109,8 +110,10 @@ impl WaveCore for NeelyCore {
         // 隨 spec / 演算法版本變動。
         // 0.7.0 → 0.8.0(Phase 1 PR r5 spec alignment baseline:Hybrid OHLC +
         // RuleId 章節編碼重寫 + Ch5 Essential R1-R7 + Overlap_Trending/Terminal 完整)。
+        // 0.8.0 → 0.9.0(Phase 2 PR:Stage 0 Ch3 Pre-Constructive Logic
+        // 全 200+ branches if-else cascade,StructureLabel candidates 落地)。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.8.0"
+        "0.9.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -131,7 +134,7 @@ impl WaveCore for NeelyCore {
 
         // ── Stage 2:Rule of Neutrality + Rule of Proportion
         let stage_2_start = Instant::now();
-        let classified = monowave::classify_monowaves(
+        let mut classified = monowave::classify_monowaves(
             &input.bars,
             raw_monowaves,
             &input.stock_id,
@@ -140,6 +143,16 @@ impl WaveCore for NeelyCore {
         stage_elapsed.insert(
             "stage_2_classify".to_string(),
             stage_2_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 0:Pre-Constructive Logic(Phase 2 PR — Ch3 Rule 1-7 if-else cascade)
+        //    對齊 m3Spec/neely_core_architecture.md §7.1 Stage 0
+        //    spec 把這 stage 編號為「Stage 0」是 Pipeline 邏輯位置(Stage 2 之後 / Stage 3 之前)
+        let stage_0_start = Instant::now();
+        pre_constructive::run(&mut classified);
+        stage_elapsed.insert(
+            "stage_0_preconstructive".to_string(),
+            stage_0_start.elapsed().as_millis() as u64,
         );
 
         // ── Stage 3:Bottom-up Candidate Generator(M3 PR-3a)
@@ -335,7 +348,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.8.0");
+        assert_eq!(core.version(), "0.9.0");
     }
 
     // -------------------------------------------------------------
@@ -377,6 +390,7 @@ mod tests {
         for stage_key in &[
             "stage_1_monowave",
             "stage_2_classify",
+            "stage_0_preconstructive",
             "stage_3_candidates",
             "stage_4_validator",
             "stage_5_classifier",

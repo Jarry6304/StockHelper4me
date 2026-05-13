@@ -433,3 +433,83 @@ pub enum AlternationAxis {
     Intricacy,
     Construction,
 }
+
+// ---------------------------------------------------------------------------
+// Structure Label(Ch3 Pre-Constructive Logic + Ch4 Structure Labels)
+// 對齊 m3Spec/neely_rules.md §Structure Labels 完整清單(319-346 行)
+// ---------------------------------------------------------------------------
+
+/// Structure Label — Ch3 Pre-Constructive Logic 輸出於每個 monowave 的「結構候選」標籤。
+///
+/// 對應 neely_rules.md §Structure Labels 完整清單(319-346 行)。
+/// 命名規則:Position Indicator + Base(`:3` / `:5`),例:
+///   - `F3` = `:F3`(First 修正 3 段)
+///   - `XC3` = `x:c3`(X-wave 變體 c3)
+///   - `BC3` = `b:c3`(Flat b-wave 變體 c3)
+///   - `S5` = `:s5`(Special Five — Neely extension)
+///
+/// Phase 2 PR 範圍只宣告 Ch3 引用的 label。未來 Ch4-Ch12 若引入新 label 需擴 enum。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+#[allow(non_camel_case_types)]
+pub enum StructureLabel {
+    /// `:5` — 衝動五段(無 Position Indicator)
+    Five,
+    /// `:3` — 修正三段(無 Position Indicator)
+    Three,
+
+    /// `:F3` — First(序列首段)修正 3 段
+    F3,
+    /// `:c3` — center(序列中段)修正 3 段
+    C3,
+    /// `:L3` — Last(序列末段)修正 3 段
+    L3,
+    /// `:?3` — 位置未定 修正 3 段
+    UnknownThree,
+
+    /// `:F5` — First(序列首段)衝動 5 段
+    F5,
+    /// `:L5` — Last(序列末段)衝動 5 段
+    L5,
+    /// `:?5` — 位置未定 衝動 5 段
+    UnknownFive,
+
+    /// `:s5` — special five(Neely extension):可替代 `:L5` 但不需反轉確認
+    S5,
+    /// `:sL3` — special last three(Neely extension):Triangle 倒二段
+    SL3,
+    /// `:sL5` — special last five(Neely extension):罕用,功能類似弱化 `:L5`
+    SL5,
+
+    /// `x:c3` — X-wave 變體(分隔兩個 Standard 修正的修正波)
+    XC3,
+    /// `b:c3` — Flat b-wave 變體(Flat 中的 b-wave)
+    BC3,
+    /// `b:F3` — Flat b-wave F3 變體(missing-wave bundle 用)
+    BF3,
+}
+
+/// Certainty — Structure Label 的封裝強度(neely_rules.md §封裝慣例 343-346 行)。
+///
+/// - Primary(無封裝):主要選項(機率最高)
+/// - Possible(`(...)`):可能但機率較低
+/// - Rare(`[...]`):罕見,僅在極特定條件成立時才考量
+/// - MissingWaveBundle(`?` 後綴):missing-wave 場景的束帶標記
+///   (對齊 neely_rules.md §1054-1057「missing wave 標記慣例」:成組捆綁,一個被棄整組刪)
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+pub enum Certainty {
+    /// 主要選項(無封裝)
+    Primary,
+    /// 可能(`(...)` 圓括)
+    Possible,
+    /// 罕見(`[...]` 方括)
+    Rare,
+    /// missing-wave 束帶標記(`?` 後綴)
+    MissingWaveBundle,
+}
+
+/// Structure Label Candidate — 單一候選 label + certainty。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+pub struct StructureLabelCandidate {
+    pub label: StructureLabel,
+    pub certainty: Certainty,
+}
