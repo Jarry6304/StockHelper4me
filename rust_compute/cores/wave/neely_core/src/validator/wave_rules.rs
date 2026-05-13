@@ -10,7 +10,7 @@
 //   - W2(Ch12FibonacciInternal):Essential Construction + Fibonacci 內部比例
 //     (wave-c Zigzag 常 = a;Triangle 常有 61.8%;Impulse W5/W1 常 = 100/161.8%)
 
-use super::helpers::{magnitude, matches_any_fib_ratio, safe_pct, FIB_TOLERANCE_PCT};
+use super::helpers::{magnitude, matches_any_fib_ratio, safe_pct};
 use super::RuleResult;
 use crate::candidates::WaveCandidate;
 use crate::monowave::ClassifiedMonowave;
@@ -268,6 +268,6 @@ mod tests {
 
     #[test]
     fn fib_tolerance_constant() {
-        assert_eq!(FIB_TOLERANCE_PCT, 4.0);
+        assert_eq!(super::super::helpers::FIB_TOLERANCE_PCT, 4.0);
     }
 }

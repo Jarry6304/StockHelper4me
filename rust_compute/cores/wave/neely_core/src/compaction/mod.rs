@@ -132,6 +132,7 @@ mod tests {
             invalidation_triggers: Vec::new(),
             expected_fib_zones: Vec::new(),
             structural_facts: StructuralFacts::default(),
+            awaiting_l_label: false,
         }
     }
 

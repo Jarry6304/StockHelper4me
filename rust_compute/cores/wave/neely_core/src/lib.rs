@@ -198,17 +198,17 @@ impl WaveCore for NeelyCore {
         );
         let mut forest = compaction_result.forest;
 
-        // ── Stage 9a:Missing Wave 偵測(M3 PR-6 skeleton)
+        // ── Stage 9a:Missing Wave 偵測(PR-6b-3 完整實作,Ch12 lookup)
         let stage_9a_start = Instant::now();
-        let _ = missing_wave::apply_to_forest(&forest);
+        let _ = missing_wave::apply_to_forest(&mut forest);
         stage_elapsed.insert(
             "stage_9a_missing_wave".to_string(),
             stage_9a_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 9b:Emulation 辨識(M3 PR-6 skeleton)
+        // ── Stage 9b:Emulation 辨識(PR-6b-3 完整實作,5 EmulationKind)
         let stage_9b_start = Instant::now();
-        let _ = forest.iter().map(emulation::detect_emulation).count();
+        let _ = emulation::apply_to_forest(&mut forest, &classified);
         stage_elapsed.insert(
             "stage_9b_emulation".to_string(),
             stage_9b_start.elapsed().as_millis() as u64,
@@ -222,9 +222,9 @@ impl WaveCore for NeelyCore {
             stage_10a_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 10b:Fibonacci 投影(M3 PR-6 skeleton — projection 留 PR-6b 接 monowave price)
+        // ── Stage 10b:Fibonacci 投影 + per-pattern alignment(PR-6b-2)
         let stage_10b_start = Instant::now();
-        fibonacci::apply_to_forest(&mut forest);
+        fibonacci::apply_to_forest(&mut forest, &classified);
         stage_elapsed.insert(
             "stage_10b_fibonacci".to_string(),
             stage_10b_start.elapsed().as_millis() as u64,
@@ -232,7 +232,7 @@ impl WaveCore for NeelyCore {
 
         // ── Stage 10c:Invalidation Triggers 生成(M3 PR-6 best-guess)
         let stage_10c_start = Instant::now();
-        triggers::apply_to_forest(&mut forest);
+        triggers::apply_to_forest(&mut forest, &classified);
         stage_elapsed.insert(
             "stage_10c_triggers".to_string(),
             stage_10c_start.elapsed().as_millis() as u64,
@@ -252,6 +252,29 @@ impl WaveCore for NeelyCore {
                 start: input.bars.first().unwrap().date,
                 end: input.bars.last().unwrap().date,
             }
+        };
+
+        // ── Round 3 Pause detection(PR-5b §8.4):
+        //   - 至少一個 scenario 已完成形態識別(not awaiting_l_label) → None
+        //   - 全部 scenario 等候 L-label 或 forest 空但有 candidates → Some(Round3PauseInfo)
+        let all_awaiting = !forest.is_empty() && forest.iter().all(|s| s.awaiting_l_label);
+        let no_scenarios_despite_candidates =
+            forest.is_empty() && !wave_candidates.is_empty();
+        let round3_pause = if all_awaiting || no_scenarios_despite_candidates {
+            Some(crate::output::Round3PauseInfo {
+                scenarios_affected: forest.len(),
+                last_l_label_date: forest
+                    .iter()
+                    .map(|s| s.wave_tree.end)
+                    .max(),
+                strategy_implication: if no_scenarios_despite_candidates {
+                    "持有原方向,等候新形態收尾條件(無 scenario 通過 validator)".to_string()
+                } else {
+                    "持有原方向,等候新形態收尾條件(全部 scenario 等候 L-label)".to_string()
+                },
+            })
+        } else {
+            None
         };
 
         Ok(NeelyCoreOutput {
@@ -276,6 +299,7 @@ impl WaveCore for NeelyCore {
             },
             rule_book_references: Vec::new(),
             insufficient_data: input.bars.len() < warmup,
+            round3_pause,
         })
     }
 

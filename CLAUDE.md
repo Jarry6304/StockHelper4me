@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.37，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.38，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,76 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.38 — neely 9 sub-PR sequence 完整收尾(PR-4b/5b/6b-1/6b-2/6b-3 一次到位)(2026-05-13 後續)
+
+接 v1.37 PR-3c-2 + PR-3c-3 落地後同日連續推進 PR-4b → PR-6b-3 → PR-5b,9 個 sub-PR
+**全部完成**。從 178 tests(PR-3c-pre 起點)→ **286 tests**(+108 across 9 sub-PR)。
+
+### 範圍(5 個 sub-PR 同 batch)
+
+| PR | 重點 | 改動檔 |
+|---|---|---|
+| **PR-4b** | classifier sub_kind 完整識別:Impulse Extension(1st/3rd/5th/Non/FifthFailure)+ Flat 7 變體 + Zigzag 3 變體 + Triangle 9 變體 + RunningCorrection top-level | `classifier/mod.rs` 完整重寫 665 行 |
+| **PR-6b-1** | Power Rating 7 級完整 Ch10 查表 + Max Retracement + direction-aware(Down 翻轉)+ Triangle/Terminal override | `power_rating/{mod,table}.rs` |
+| **PR-6b-2** | Fibonacci 5 standard ratios + per-pattern alignment + StructuralFacts.fibonacci_alignment | `fibonacci/{ratios,projection,mod}.rs` |
+| **PR-6b-3** | Missing Wave Ch12 lookup + Emulation 5 kinds + Triggers 4 TriggerType per pattern + direction-aware | `missing_wave/mod.rs` / `emulation/mod.rs` / `triggers/mod.rs` |
+| **PR-5b** | Round3PauseInfo(§8.4)+ `Scenario.awaiting_l_label` 雙標設計 | `output.rs` / `lib.rs` |
+
+完整 exhaustive nested compaction(需 candidate generator 支援 sub-wave 嵌套)
+留未來 PR;PR-5b 聚焦 spec §8.4 Round 3 整體狀態追蹤。
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 231 → 286 tests passed / 0 failed / 0 warnings
+# 新增 55 個 unit test 跨 5 個 sub-PR
+```
+
+### 9 sub-PR sequence 全部 ✅
+
+```
+✅ PR-3c-pre  RuleId chapter-based migration + TerminalImpulse
+✅ PR-3c-1    F1-F2 + Z1-Z3 + W1-W2(7 完整 + Z4 Deferred)
+✅ PR-3c-2    T4-T6 Triangle Ch5 通用規則
+✅ PR-3c-3    R4-R7 Ch3 m2/m1 ratio 範圍分類
+✅ PR-4b      classifier sub_kind(Impulse Ext + Flat 7 + Zigzag 3 + Triangle 9 + RunningCorrection)
+✅ PR-5b      Round3PauseInfo + awaiting_l_label
+✅ PR-6b-1    Power Rating 7 級 Ch10 完整查表 + Max Retracement + Triangle override
+✅ PR-6b-2    Fibonacci 5 standard ratios + per-pattern alignment
+✅ PR-6b-3    Missing Wave + Emulation 5 kinds + Triggers 4 types
+```
+
+Stage 4 完整度:**22 條規則 → 14 完整 + 8 Deferred**(sub-variant specific,
+classifier 已能識別變體;規則細節 P0 Gate 五檔 production 校準後補)
+
+### 留未來 PR(non-blocking)
+
+- 完整 exhaustive nested compaction(改造 Stage 3 candidate generator)
+- T1-T3 / T7-T10 sub-variant 規則具體門檻(wave-c/wave-e)
+- R4-R7 Structure Label 200+ 分支(`:F3/:c3/:sL3/:s5/:L5` 完整決策樹)
+- DegreeCeiling / CrossTimeframeHints(§8.5/8.6)
+- P0 Gate 五檔(0050/2330/3363/6547/1312)production 校準
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml / 0 schema 改動
+- 0 cargo warnings
+- production 既有 facts 不受影響(欄位 backward-compat:awaiting_l_label 默認 false,
+  round3_pause 默認 None)
+- Rollback:單 commit `git revert` 即可
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變)
+- Rust workspace:24 crate / **286 tests passed** / 0 warnings
+- neely_core:v0.7.0 / Stage 1-10 完整 pipeline(含 Round 3 detection)
+- **9 sub-PR sequence 全部完成** — 進入 P0 Gate 五檔校準階段或 user 寫定 m3Spec/
+  各 sub-variant 規則細節後再回頭補完
 
 ---
 

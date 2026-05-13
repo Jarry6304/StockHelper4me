@@ -74,6 +74,18 @@ pub struct NeelyCoreOutput {
 
     /// 資料充分性(歷史不足會導致大量 candidate 被 reject,實際是「無法判斷」)
     pub insufficient_data: bool,
+
+    /// Round 3 Pause:所有 scenario 都等候 :L5/:L3 結束標籤時的整體狀態(§8.4)。
+    /// None = 至少一個 scenario 已完成形態識別;Some = 全部暫停。
+    pub round3_pause: Option<Round3PauseInfo>,
+}
+
+/// Round 3 Pause Info(§8.4)— Three Rounds Compaction 整體暫停狀態摘要。
+#[derive(Debug, Clone, Serialize)]
+pub struct Round3PauseInfo {
+    pub scenarios_affected: usize,
+    pub last_l_label_date: Option<NaiveDate>,
+    pub strategy_implication: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +181,10 @@ pub struct Scenario {
 
     /// 結構性事實 8 維(§9.5 Item 7 拆解,不加總)
     pub structural_facts: StructuralFacts,
+
+    /// 本 Scenario 是否等候 :L5/:L3 結束標籤(§8.4 雙標設計)。
+    /// true = 形態未完成,等更多資料;false = 已可判斷形態。
+    pub awaiting_l_label: bool,
 }
 
 /// Wave Tree(階層化波浪結構)。具體欄位於後續 PR 補完。

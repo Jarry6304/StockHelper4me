@@ -159,6 +159,7 @@ mod tests {
                 invalidation_triggers: Vec::new(),
                 expected_fib_zones: Vec::new(),
                 structural_facts: StructuralFacts::default(),
+            awaiting_l_label: false,
             })
             .collect();
 
@@ -188,6 +189,7 @@ mod tests {
             },
             rule_book_references: Vec::new(),
             insufficient_data: false,
+            round3_pause: None,
         }
     }
 

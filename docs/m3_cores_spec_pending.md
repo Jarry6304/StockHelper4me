@@ -644,8 +644,8 @@ ind.abs() < 1e-12 skip warmup zeros (RSI/MACD 前幾 bar 為 0.0)
 
 ---
 
-**最後更新**:2026-05-13(§19 PR-3c-2 T4-T6 Triangle 通用規則 + PR-3c-3 R4-R7 ratio 範圍分類落地)
-**Rust workspace**:24 crate / **231 tests passed**(213 + 11 PR-3c-2 + 7 PR-3c-3)/ 22 cores production verified
+**最後更新**:2026-05-13(§20 PR-4b classifier sub_kind + PR-6b-1/2/3 Power Rating / Fibonacci / Missing / Emulation / Triggers + PR-5b Round 3 Pause 落地)
+**Rust workspace**:24 crate / **286 tests passed**(231 + 55 new)/ 22 cores production verified
 **alembic head**:`x3y4z5a6b7c8`(不變,本 session 0 migration)
 **Production state**(2026-05-12 全市場重跑後):
   - facts 重寫:institutional + foreign_holding + kd + macd + rsi (5 cores)
@@ -959,3 +959,140 @@ cd rust_compute && cargo test --workspace --release --no-fail-fast
 - production 既有 facts 不受影響
 - 留 PR-4b 補:T1-T3 / T7-T10 sub-variant 邏輯 / Z4 Triangle exception /
   R4-R7 Structure Label 200+ 分支
+
+---
+
+## §20. neely_core 9 sub-PR sequence 完整收尾(2026-05-13 後續)
+
+接 PR-3c-3 R4-R7 落地後同日連續推進 PR-4b → PR-6b-3 → PR-5b,9 個 sub-PR 全部
+完成。從 178 tests(PR-3c-pre 起點)→ 286 tests(+108 across 9 sub-PR)。
+
+### PR-4b:Classifier sub_kind 完整識別
+
+`classifier/mod.rs` 完整重寫(665 行 with tests):
+
+- 5-wave 分類:Impulse / TerminalImpulse / Triangle(三選)
+  - R3 fail → TerminalImpulse(取代 r2 Diagonal)
+  - Triangle 規則(T4 + T5/T6)Pass + leg contracting/equality → Triangle
+- ImpulseExtension 分類:1st/3rd/5th/Non/FifthFailure(by longest wave magnitude)
+- TriangleVariant 分類:9 variants(Horizontal/Irregular/Running × Limiting/NonLimiting/Expanding)
+- 3-wave 分類:Flat 7 變體 / Zigzag 3 變體 / RunningCorrection top-level variant
+  - b/a > 142.2% → RunningCorrection
+  - b/a ≥ 57.8% → Flat(Common/BFailure/CFailure/Irregular/IrregularFailure/Elongated/DoubleFailure)
+  - b/a < 57.8% → Zigzag(Normal/Truncated/Elongated by c/a)
+
+### PR-6b-1:Power Rating 7 級完整 Ch10 查表
+
+`power_rating/{mod,table}.rs` 完整重寫:
+
+- Ch10 line 2006-2014 完整 7 級表(±3/±2/±1/0)
+- direction-aware:Up 順趨勢 + Down 翻轉(line 2006「向下則反號」)
+- Triangle / TerminalImpulse 內部 override → Neutral(line 2021)
+- max_retracement 對映:0/±1/±2/±3 → 1.0/0.90/0.80/0.65(line 2017-2020)
+- `apply_to_forest(forest)` 同時寫 power_rating + max_retracement
+
+### PR-6b-2:Fibonacci 5 ratios + per-pattern alignment
+
+`fibonacci/{ratios,projection,mod}.rs` 重寫:
+
+- 從 r2 10 ratios 砍至 spec r5 5 standard(38.2/61.8/100/161.8/261.8)
+- 加 NEELY_FIB_RATIOS_PCT 百分比版本 + match_fib_ratio helper
+- `compute_internal_alignment(scenario, classified)`:per-pattern 比例匹配
+  - Impulse:W3/W1 + W5/W1
+  - Zigzag/Flat:c/a + c/b
+  - Triangle:c/a + d/b
+- 寫入 `Scenario.structural_facts.fibonacci_alignment`(§9.5 8 子欄位之一)
+
+### PR-6b-3:Missing Wave + Emulation + Triggers 完整實作
+
+#### Missing Wave(missing_wave/mod.rs)
+
+Ch12 line 2580-2597 Min data points lookup:
+- Impulse/TerminalImpulse min=8 / Zigzag/Flat min=5 / Triangle min=13 / Combination 13~18
+- 標到 `structural_facts.overlap_pattern.label`(暫用,避免 schema 改動)
+
+#### Emulation(emulation/mod.rs)
+
+5 種 EmulationKind 啟發式偵測(§9.3 line 1026):
+- DoubleFailureAsTriangle(Flat DoubleFailure 自然收斂)
+- DoubleFlatAsImpulse(Combination DoubleThree)
+- FirstExtAsZigzag(c/a < 0.5)
+- FifthExtAsZigzag(c/a > 2.0)
+- MultiZigzagAsImpulse(預留,Combination TripleThree)
+
+#### Triggers(triggers/mod.rs)完整重寫
+
+接 classified slice 拿真實 price endpoints,7 種 pattern_type 各自的 invalidation triggers:
+- Impulse:R1(InvalidateScenario)+ R3(WeakenScenario → TerminalImpulse)
+- TerminalImpulse:R1 only(R3 deferred)
+- Zigzag:Ch5 Z1 b 跨 a 起點 → invalidate
+- Flat:F1 b > 142.2% → Running Correction WeakenScenario
+- Triangle:Ch12 B-D trendline 穿破 + Ch5 wave-e thrust 異常
+- Combination:Ch8 結構違反
+- RunningCorrection:Ch12 後續延伸 Impulse < 161.8% → 失效
+
+direction-aware:Down 趨勢 → PriceBreakAbove(取代 Below)
+
+### PR-5b:Three Rounds Compaction 簡化版
+
+完整 exhaustive nested compaction(需 sub-wave 嵌套結構)留未來 PR;
+本 PR-5b 聚焦於 spec §8.4 Round3PauseInfo 整體狀態追蹤:
+
+新增 output.rs:
+- `Round3PauseInfo` struct(scenarios_affected / last_l_label_date / strategy_implication)
+- `NeelyCoreOutput.round3_pause: Option<Round3PauseInfo>` 頂層欄位
+- `Scenario.awaiting_l_label: bool`(雙標設計,§8.4 line 777)
+
+lib.rs compute() 加 Round 3 Pause detection:
+- 全部 scenario awaiting_l_label = true → Some(Round3PauseInfo)
+- forest 空但 candidates 非空 → Some(Round3PauseInfo,「無 scenario 通過 validator」)
+- 否則 → None
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 231 → 286 tests passed / 0 failed / 0 warnings
+# 新增 55 個 unit test:
+#   classifier:15(5-wave Impulse/TerminalImpulse/Triangle + Extension + Flat 7 + Zigzag 3 + RunningCorrection)
+#   power_rating:11(7 級 + direction flip + Triangle override + max_retracement + apply_to_forest)
+#   fibonacci:9(5 ratios + project + per-pattern alignment + no-match)
+#   missing_wave:9(lookup 各 pattern + apply_to_forest)
+#   emulation:7(5 kinds + apply_to_forest)
+#   triggers:8(7 pattern_type + direction flip + apply_to_forest)
+#   compaction:4(Round 3 pause 觸發條件)
+```
+
+### 完整 9 sub-PR sequence 狀態
+
+| PR | 狀態 | 範圍 |
+|---|---|---|
+| PR-3c-pre | ✅ | RuleId chapter-based + TerminalImpulse + Output/Diagnostics 對齊 spec |
+| PR-3c-1 | ✅ | F1-F2 + Z1-Z3 + W1-W2 wave-level 規則 |
+| PR-3c-2 | ✅ | T4-T6 Triangle 通用 Ch5 規則 |
+| PR-3c-3 | ✅ | R4-R7 Ch3 Pre-Constructive m2/m1 ratio 範圍分類 |
+| PR-4b | ✅ | classifier sub_kind 完整識別(本 batch) |
+| PR-5b | ✅ | Round 3 Pause + awaiting_l_label(本 batch,簡化版) |
+| PR-6b-1 | ✅ | Power Rating Ch10 7 級完整查表(本 batch) |
+| PR-6b-2 | ✅ | Fibonacci 5 ratios + per-pattern alignment(本 batch) |
+| PR-6b-3 | ✅ | Missing Wave + Emulation + Triggers 完整實作(本 batch) |
+
+### 留未來 PR
+
+- 完整 exhaustive nested compaction(需 candidate generator 支援 sub-wave 嵌套,改造 Stage 3)
+- Z4 Triangle exception 在 classifier 中重新評估(目前 validator Deferred)
+- T1-T3 / T7-T10 sub-variant 規則完整 wave-c/wave-e 具體門檻(目前 Deferred,
+  classifier sub_kind 識別已落,規則細節 P0 Gate 五檔校準後補)
+- R4-R7 Structure Label 200+ 分支(`:F3/:c3/:sL3/:s5/:L5` 完整決策樹)
+- DegreeCeiling / CrossTimeframeHints(§8.5/8.6)
+- P0 Gate 五檔(0050/2330/3363/6547/1312)production 校準
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml / 0 schema 改動
+- 0 cargo warnings
+- production 既有 facts 不受影響(Scenario 加 awaiting_l_label 默認 false,
+  NeelyCoreOutput 加 round3_pause 默認 None — 都不影響既有 serialization)
+- 22 條規則完整度:14 完整 + 8 Deferred(sub-variant specific,classifier 已能識別)
+
