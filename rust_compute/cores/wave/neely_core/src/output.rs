@@ -80,6 +80,12 @@ pub struct NeelyCoreOutput {
     /// Phase 8 新增:Three Rounds Round 3 暫停資訊(architecture §8.4)。
     /// 圖中無任何 :L5/:L3 base label → 進入 Round 3 暫停;否則 None。
     pub round3_pause: Option<Round3PauseInfo>,
+
+    /// Phase 9 新增:Stage 9a Missing Wave 偵測結果(spec Ch12 + 1054-1057 missing wave 標記慣例)。
+    pub missing_wave_suspects: Vec<MissingWaveSuspect>,
+
+    /// Phase 9 新增:Stage 9b Emulation 偵測結果(spec Ch12 Emulation)。
+    pub emulation_suspects: Vec<EmulationSuspect>,
 }
 
 /// Three Rounds Round 3 暫停資訊(neely_core_architecture.md §8.4)。
@@ -89,6 +95,70 @@ pub struct Round3PauseInfo {
     pub reason: String,
     /// 受影響的 scenario id 數量(全 forest 都標 awaiting_l_label)
     pub affected_scenario_count: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9:Missing Wave 偵測(Ch12 + Ch3 missing-wave 標記慣例)
+// 對齊 m3Spec/neely_rules.md §Pre-Constructive Logic 細部技術備註(1054-1057 行)
+// ---------------------------------------------------------------------------
+
+/// Missing Wave 位置分類(spec 1055-1057 行)。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum MissingWavePosition {
+    /// m1 中心 missing wave:左側標 `:5?`、右側標 `x:c3?` 或 `b:F3?`
+    M1Center,
+    /// m0 中心 missing wave:左側標 `:s5?`、右側標 `x:c3?`
+    M0Center,
+    /// m2 終點 missing wave:m2 終點標 `x:c3?`
+    M2Endpoint,
+    /// 模糊位置(bundle 標記成組,具體位置由 Aggregation Layer 判斷)
+    Ambiguous,
+}
+
+/// Missing Wave Suspect — 從 P2 已標的 MissingWaveBundle certainty 萃取的結構化資訊。
+///
+/// 對齊 spec 1054-1057 行「missing wave 標記慣例 — 標記成組捆綁」。
+#[derive(Debug, Clone, Serialize)]
+pub struct MissingWaveSuspect {
+    /// 對應的 monowave index(P2 標 bundle 的 monowave)
+    pub monowave_idx: usize,
+    /// missing wave 位置(M1Center / M0Center / M2Endpoint / Ambiguous)
+    pub position: MissingWavePosition,
+    /// bundle 中所有 missing-wave 標記 labels(必須成組保留)
+    pub bundle_labels: Vec<StructureLabel>,
+    /// 機械式陳述(對齊 cores_overview §6.1.1 禁主觀詞彙)
+    pub message: String,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9:Emulation 偵測(Ch12 Emulation)
+// 對齊 m3Spec/neely_rules.md §Ch8 Non-Standard Polywaves(1902-1906 行 Running 變體辨識要點)
+// ---------------------------------------------------------------------------
+
+/// Emulation 類型 — 視覺上相似但實際結構不同的 pattern 偽裝。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum EmulationKind {
+    /// Running Double Three Combination 偽裝 1st Wave Extension Impulse
+    /// spec 1905-1906:thrust > 該段「wave-3」+「wave-3 為 :3」可辨識
+    RunningDoubleThreeAsImpulse,
+    /// Diagonal (Terminal Impulse) 偽裝 Trending Impulse
+    DiagonalAsImpulse,
+    /// Triangle 偽裝 5-wave Failure pattern
+    TriangleAsFailure,
+    /// Trending Impulse with 1st Extension 偽裝 Terminal Impulse(wave-2/4 overlap 灰色地帶)
+    FirstExtAsTerminal,
+    /// 通用 — 視覺上 X 但結構為 Y
+    Generic,
+}
+
+/// Emulation Suspect — 形態偽裝候選。
+#[derive(Debug, Clone, Serialize)]
+pub struct EmulationSuspect {
+    /// 對應的 Scenario id(若可定位)
+    pub scenario_id: Option<String>,
+    pub kind: EmulationKind,
+    /// 機械式陳述(對齊 cores_overview §6.1.1 禁主觀詞彙)
+    pub message: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -304,8 +374,28 @@ pub enum TriangleKind {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub enum CombinationKind {
+    /// Table A 小 x-wave 組合:(5-3-5) + x + (5-3-5) = Double Zigzag
+    DoubleZigzag,
+    /// Table A:(5-3-5) + x + (3-3-5) 或變體 = Double Combination
+    DoubleCombination,
+    /// Table A:(3-3-5) + x + (3-3-5) = Double Flat
+    DoubleFlat,
+    /// Table A:3 Zigzag + 2 x = Triple Zigzag
+    TripleZigzag,
+    /// Table A:Triple 含 Combination 變體 = Triple Combination
+    TripleCombination,
+    /// Table B 大 x-wave:(3-3-5) + x + (3-3-5) = Double Three(舊有,保留)
     DoubleThree,
+    /// Table B:(3-3-5) + x + (3-3-3-3-3 c.t.) = Double Three Combination(最常見)
+    DoubleThreeCombination,
+    /// Table B 大 x 且不退至起點:Double Three Running
+    DoubleThreeRunning,
+    /// Table B:(3-3-5) + x + (3-3-5) + x + (3-3-5) = Triple Three(舊有,保留)
     TripleThree,
+    /// Table B:(3-3-5) + x + (3-3-5) + x + (3-3-3-3-3 c.t.) = Triple Three Combination
+    TripleThreeCombination,
+    /// Table B 大 x:Triple Three Running
+    TripleThreeRunning,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

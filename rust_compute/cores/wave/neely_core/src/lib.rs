@@ -79,10 +79,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.15.0",
+        "0.16.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 Compaction + Ch9 + Ch10 Power Rating + Three Rounds nested context)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation)",
     )
 }
 
@@ -129,8 +129,11 @@ impl WaveCore for NeelyCore {
         // 0.14.0 → 0.15.0(Phase 8 PR:Three Rounds nested parent context (Triangle 內部段標 in_triangle_context)
         // + Round 3 暫停偵測 (Scenario.awaiting_l_label + NeelyCoreOutput.round3_pause) +
         // Power Rating 接通 in_triangle_context 例外)。
+        // 0.15.0 → 0.16.0(Phase 9 PR:Stage 9a Missing Wave 完整偵測 (從 P2 MissingWaveBundle 萃取
+        // + MissingWavePosition 分類) + Stage 9b Ch12 Emulation 完整偵測 (4 種 EmulationKind) +
+        // CombinationKind enum 擴 11 variants 對齊 Ch8 Table A/B)。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.15.0"
+        "0.16.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -266,17 +269,21 @@ impl WaveCore for NeelyCore {
             stage_8_5_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 9a:Missing Wave 偵測(M3 PR-6 skeleton)
+        // ── Stage 9a:Missing Wave 偵測(Phase 9 PR 完整實作)
+        //    對齊 m3Spec/neely_rules.md §Pre-Constructive Logic missing wave 標記慣例(1054-1057 行)
+        //    從 Phase 2 已標的 MissingWaveBundle certainty 萃取結構化資訊
         let stage_9a_start = Instant::now();
-        let _ = missing_wave::apply_to_forest(&forest);
+        let missing_wave_suspects = missing_wave::detect(&classified);
         stage_elapsed.insert(
             "stage_9a_missing_wave".to_string(),
             stage_9a_start.elapsed().as_millis() as u64,
         );
 
-        // ── Stage 9b:Emulation 辨識(M3 PR-6 skeleton)
+        // ── Stage 9b:Emulation 辨識(Phase 9 PR 完整 Ch12 實作)
+        //    對齊 m3Spec/neely_rules.md §Ch8 Running 變體辨識(1902-1906 行)+ §Ch12 Emulation
+        //    對 forest 中每 scenario 套 4 種 emulation kind 檢測
         let stage_9b_start = Instant::now();
-        let _ = forest.iter().map(emulation::detect_emulation).count();
+        let emulation_suspects = emulation::detect_all(&forest, &classified);
         stage_elapsed.insert(
             "stage_9b_emulation".to_string(),
             stage_9b_start.elapsed().as_millis() as u64,
@@ -347,6 +354,8 @@ impl WaveCore for NeelyCore {
             pattern_bounds,
             detour_annotations,
             round3_pause,
+            missing_wave_suspects,
+            emulation_suspects,
         })
     }
 
@@ -400,7 +409,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.15.0");
+        assert_eq!(core.version(), "0.16.0");
     }
 
     // -------------------------------------------------------------
