@@ -41,6 +41,29 @@
 //
 // 不外部化 Neely 規則常數(architecture §4.5 / §6.6):Fibonacci 比率、±4%/±5%/±10% 三檔容差、
 // Power Rating 查表全部寫死,不可從 toml 設定。
+//
+// ## RuleId 範圍說明(v0.20.0 落地)
+//
+// 對齊 cores_overview §四(禁止抽象)+ §十四(prematurely declare 未實際 dispatch
+// 的 RuleId 不該做),`RuleId` enum 限縮為三組 — 實際會 dispatch 進 RuleRejection:
+//   - `Ch5_*` Essential / Overlap_Trending / Overlap_Terminal / Equality / Alternation /
+//             Flat_* / Zigzag_* / Triangle_* / Channeling_*
+//   - `Ch9_*` TrendlineTouchpoints / TimeRule / Independent / Simultaneous /
+//             Exception_Aspect{1,2} / StructureIntegrity
+//   - `Engineering_*` InsufficientData / ForestOverflow / CompactionTimeout
+//
+// 其他章節的規則「結果」改用 **domain-specific enums / fields**,不再宣告對應的 RuleId variant:
+//   - Ch3 Pre-Constructive Logic → `StructureLabel` candidates(寫入 ClassifiedMonowave)
+//   - Ch4 Three Rounds         → `Scenario.compacted_base_label` + `in_triangle_context`
+//   - Ch6 Post-Constructive    → `pattern_complete: bool`(Stage 6 過濾 forest)
+//   - Ch7 Compaction Reassessment → `Scenario.compacted_base_label`(:5 / :3)
+//   - Ch8 Complex Polywaves    → `CombinationKind` enum 11 variants
+//   - Ch10 Power Ratings       → `PowerRating` enum 7-level table
+//   - Ch11 Wave-by-Wave 變體   → 直接寫進 RuleRejection.gap(無 RuleId variant)
+//   - Ch12 Missing Wave / Emulation / Reverse Logic / Fibonacci →
+//     `MissingWaveSuspect` / `EmulationKind` / `ReverseLogicObservation` / `FibZone`
+//
+// P0 Gate 後若 production SQL 需「按 Chapter 統計拒絕原因」,再批量補 missing variants。
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -81,7 +104,7 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.19.0",
+        "0.20.0",
         core_registry::CoreKind::Wave,
         "P0",
         "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints)",
@@ -147,8 +170,12 @@ impl WaveCore for NeelyCore {
         // 為每 monowave 產 MonowaveSummary(structure_label_candidates / date_range / price_range)
         // 供 Aggregation Layer 跨 Timeframe 比對。NeelyCoreOutput 加 degree_ceiling +
         // cross_timeframe_hints 兩個非選用欄)。
+        // 0.19.0 → 0.20.0(Phase 12.5 PR / spec audit alignment:NeelyCoreOutput.compaction_timeout
+        // 上提至頂層(對稱 insufficient_data,對齊 spec §8.1「失敗旗標」段)+ NeelyDiagnostics 內
+        // 保留雙寫向下相容 + RuleId scope 限縮 Ch5/Ch9/Engineering 三組(其餘章節用 domain-specific
+        // enums 取代,對齊 cores_overview §四 禁止抽象 / §十四 prematurely declare 不該做))。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.19.0"
+        "0.20.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -396,6 +423,7 @@ impl WaveCore for NeelyCore {
             },
             rule_book_references: Vec::new(),
             insufficient_data: input.bars.len() < warmup,
+            compaction_timeout: compaction_result.timeout_triggered,
             pattern_bounds,
             detour_annotations,
             round3_pause,
@@ -457,7 +485,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.19.0");
+        assert_eq!(core.version(), "0.20.0");
     }
 
     // -------------------------------------------------------------

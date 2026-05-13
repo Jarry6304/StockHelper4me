@@ -69,6 +69,12 @@ pub struct NeelyCoreOutput {
     /// 資料充分性(歷史不足會導致大量 candidate 被 reject,實際是「無法判斷」)
     pub insufficient_data: bool,
 
+    /// Phase 12.5 新增:Compaction 階段是否觸發 timeout(架構 §8.1「失敗旗標」對稱 insufficient_data)。
+    ///
+    /// 與 `NeelyDiagnostics.compaction_timeout` 雙寫 — 對齊 spec §8.1 把兩個失敗旗標
+    /// 都放 Output 頂層,但保留 Diagnostics 內版本以維持向下相容。
+    pub compaction_timeout: bool,
+
     /// Stage 3.5 Pattern Isolation 識別出的形態邊界(Phase 3 PR)。
     /// 對齊 m3Spec/neely_rules.md §Pattern Isolation Procedures。
     pub pattern_bounds: Vec<PatternBound>,
