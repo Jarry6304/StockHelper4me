@@ -80,6 +80,7 @@ mod tests {
             invalidation_triggers: Vec::new(),
             expected_fib_zones: Vec::new(),
             structural_facts: StructuralFacts::default(),
+            advisory_findings: Vec::new(),
         }
     }
 

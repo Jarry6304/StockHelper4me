@@ -97,6 +97,7 @@ pub fn classify(
         invalidation_triggers: Vec::<Trigger>::new(), // Stage 10c triggers 補
         expected_fib_zones: Vec::<FibZone>::new(),    // Stage 10b Fibonacci 補
         structural_facts: StructuralFacts::default(),  // Stage 5+ 補
+        advisory_findings: Vec::new(),                 // Stage 7.5 advanced_rules 後填
     })
 }
 

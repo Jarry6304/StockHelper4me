@@ -51,7 +51,7 @@ fn scenario_to_fact(output: &NeelyCoreOutput, scenario: &Scenario) -> Fact {
         fact_date: output.data_range.end,
         timeframe: output.timeframe,
         source_core: "neely_core".to_string(),
-        source_version: "0.13.0".to_string(),
+        source_version: "0.14.0".to_string(),
         params_hash: None, // PR-7 caller 應填入(neely_core compute() 不知道 Workflow params 全貌)
         statement,
         metadata: json!({
@@ -82,7 +82,7 @@ fn forest_summary_fact(output: &NeelyCoreOutput) -> Fact {
         fact_date: output.data_range.end,
         timeframe: output.timeframe,
         source_core: "neely_core".to_string(),
-        source_version: "0.13.0".to_string(),
+        source_version: "0.14.0".to_string(),
         params_hash: None,
         statement,
         metadata: json!({
@@ -159,6 +159,7 @@ mod tests {
                 invalidation_triggers: Vec::new(),
                 expected_fib_zones: Vec::new(),
                 structural_facts: StructuralFacts::default(),
+            advisory_findings: Vec::new(),
             })
             .collect();
 

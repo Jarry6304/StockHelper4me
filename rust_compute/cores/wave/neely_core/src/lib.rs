@@ -51,6 +51,7 @@ use fact_schema::{Fact, Timeframe, WaveCore};
 
 use crate::output::TimeRange;
 
+pub mod advanced_rules;
 pub mod candidates;
 pub mod classifier;
 pub mod compaction;
@@ -77,10 +78,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.13.0",
+        "0.14.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + DETOUR + Ch5 變體 + Ch6 兩階段確認 + Ch7 Compaction Reassessment + Ch10 Power Rating)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Ch5 Channeling + Ch6 + Ch7 Compaction + Ch9 Advanced Rules + Ch10 Power Rating)",
     )
 }
 
@@ -121,8 +122,11 @@ impl WaveCore for NeelyCore {
         // Scenario.initial_direction 欄位 + Diagonal Leading/Ending heuristic 用相鄰 label context)。
         // 0.12.0 → 0.13.0(Phase 6 PR:Ch6 Post-Constructive 兩階段確認完整實作 +
         // Ch7 Compaction Reassessment base label (Scenario.compacted_base_label 新欄位))。
+        // 0.13.0 → 0.14.0(Phase 7 PR:Stage 7.5 Channeling 5 條 trendlines (0-2/1-3/2-4/0-B/B-D) +
+        // Ch9 Advanced Rules (Trendline Touchpoints / Time Rule / Exception Aspect 1/2 / Structure Integrity) +
+        // Scenario.advisory_findings 新欄位)。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.13.0"
+        "0.14.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -228,6 +232,16 @@ impl WaveCore for NeelyCore {
         stage_elapsed.insert(
             "stage_7_complexity".to_string(),
             stage_7_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 7.5:Channeling + Ch9 Advanced Rules(Phase 7 PR)
+        //    對齊 m3Spec/neely_rules.md §Ch5 Channeling + §Ch9 Basic Neely Extensions
+        //    諮詢性 stage — 寫 AdvisoryFinding 進 scenario.advisory_findings,不過濾 scenarios
+        let stage_7_5_start = Instant::now();
+        advanced_rules::run(&mut scenarios, &classified);
+        stage_elapsed.insert(
+            "stage_7_5_advanced_rules".to_string(),
+            stage_7_5_start.elapsed().as_millis() as u64,
         );
 
         // ── Stage 8:Compaction(M3 PR-5,簡化 pass-through + Forest 上限保護)
@@ -372,7 +386,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.13.0");
+        assert_eq!(core.version(), "0.14.0");
     }
 
     // -------------------------------------------------------------
@@ -421,6 +435,7 @@ mod tests {
             "stage_5_classifier",
             "stage_6_post_validator",
             "stage_7_complexity",
+            "stage_7_5_advanced_rules",
             "stage_8_compaction",
             "stage_9a_missing_wave",
             "stage_9b_emulation",

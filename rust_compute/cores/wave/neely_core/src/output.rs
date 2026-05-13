@@ -166,6 +166,32 @@ pub struct Scenario {
 
     /// 結構性事實 7 維(Item 7 拆解,不加總)
     pub structural_facts: StructuralFacts,
+
+    /// Phase 7 新增:Stage 7.5 Channeling + Ch9 Advanced Rules 的諮詢性發現。
+    /// 對齊 m3Spec/neely_rules.md §Ch5 Channeling + §Ch9 Advanced Rules。
+    /// 諮詢性 — 不直接影響 pattern_complete,提供下游 Aggregation Layer 使用。
+    pub advisory_findings: Vec<AdvisoryFinding>,
+}
+
+/// Phase 7 — Stage 7.5 諮詢性發現(Channeling / Ch9 Advanced Rules)。
+#[derive(Debug, Clone, Serialize)]
+pub struct AdvisoryFinding {
+    /// 對應的 RuleId(Ch5_Channeling_* / Ch9_*)
+    pub rule_id: RuleId,
+    /// 嚴重度(Info / Warning / Strong — 對應 spec 「應」 vs 「必」 vs 「絕不」)
+    pub severity: AdvisorySeverity,
+    /// 人類可讀訊息(機械式陳述,對齊 cores_overview §6.1.1 禁主觀詞彙)
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum AdvisorySeverity {
+    /// 資訊性(channeling 標註,無強制力)
+    Info,
+    /// 警告(spec 「應」或「常」描述,違反屬常見變體)
+    Warning,
+    /// 強烈警示(spec 「必」、「絕不」,違反通常表示計數錯誤)
+    Strong,
 }
 
 /// Wave Tree(階層化波浪結構)。具體欄位於後續 PR 補完。
@@ -431,6 +457,37 @@ pub enum RuleId {
     /// Ch5 Triangle 子規則:三條同度數腿價格相等性 ±5%(neely_rules.md §Triangles)
     Ch5_Triangle_LegEquality_5Pct,
 
+    /// Ch5 Channeling 0-2 trendline(Impulse 通道,W0→W2 連線)
+    Ch5_Channeling_02,
+    /// Ch5 Channeling 1-3 trendline(Impulse 通道,W1→W3 連線)
+    Ch5_Channeling_13,
+    /// Ch5 Channeling 2-4 trendline(Impulse breakout 通道,W2→W4 連線)
+    Ch5_Channeling_24,
+    /// Ch5 Channeling 0-B trendline(Zigzag/Flat 通道,a 起點→b 終點)
+    Ch5_Channeling_0B,
+    /// Ch5 Channeling B-D trendline(Triangle 通道,b→d 連線)
+    Ch5_Channeling_BD,
+
+    // === Ch9 Advanced Rules(Phase 7 PR)===
+    /// Ch9 Trendline Touchpoints Rule(spec 1957-1961 行):
+    /// 5+ 點觸線 → 該段不可能是 Impulse
+    Ch9_TrendlineTouchpoints,
+    /// Ch9 Time Rule(spec 1963-1971 行):
+    /// 任何三個相鄰同級波,不可時間皆相等
+    Ch9_TimeRule,
+    /// Ch9 Independent Rule(spec 1973-1974 行):各規則彼此獨立
+    Ch9_Independent,
+    /// Ch9 Simultaneous Occurrence(spec 1976-1977 行):同情境所有規則須同時成立
+    Ch9_Simultaneous,
+    /// Ch9 Exception Rule Aspect 1(spec 1980-1986 行):
+    /// 不尋常條件允許單一規則失靈,須符合 Multiwave 結尾 / Terminal w5/c / Triangle 進出三情境之一
+    Ch9_Exception_Aspect1 { situation: ExceptionSituation },
+    /// Ch9 Exception Rule Aspect 2(spec 1988-1990 行):
+    /// 規則失效本身啟動另一規則(例:2-4 線突破 → Terminal;Thrust 超時 → Non-Limiting/Terminal)
+    Ch9_Exception_Aspect2 { triggered_new_rule: String },
+    /// Ch9 Structure Integrity(spec 1992-1994 行):已壓縮確認的結構不可隨意修改
+    Ch9_StructureIntegrity,
+
     // === 工程護欄(非 Neely 規則,獨立列出 — architecture §9.3 末段)===
     /// 資料量不足(< warmup_periods)→ Stage 1 階段失敗
     Engineering_InsufficientData,
@@ -450,6 +507,17 @@ pub enum AlternationAxis {
     Severity,
     Intricacy,
     Construction,
+}
+
+/// Ch9 Exception Rule Aspect 1 的三個情境(neely_rules.md 1980-1986 行)。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum ExceptionSituation {
+    /// A:Multiwave 或更大形態的結尾
+    MultiwaveEnd,
+    /// B:Terminal (diagonal triangle) 的 wave-5 或 c-wave
+    TerminalW5OrC,
+    /// C:進入或離開 Contracting/Expanding Triangle 的位置
+    TriangleEntryExit,
 }
 
 /// Ch7 Compaction Reassessment 對應的 base label。
