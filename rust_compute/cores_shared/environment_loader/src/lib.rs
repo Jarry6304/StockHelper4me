@@ -15,12 +15,17 @@ use serde::Serialize;
 use sqlx::postgres::PgPool;
 
 // ===========================================================================
-// MarketIndexTw(加權指數)— stock_id 保留字 _index_taiex_
+// MarketIndexTw(加權指數)— TAIEX + TPEx 並列大盤,各自獨立保留字
+// 對齊 m3Spec/environment_cores.md §3.2 / §3.6:
+//   - TAIEX → _index_taiex_
+//   - TPEx  → _index_tpex_
+// Loader 內部依 Silver 端 stock_id 拆兩條獨立序列
 // ===========================================================================
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MarketIndexTwSeries {
-    pub points: Vec<MarketIndexTwRaw>,
+    pub taiex: Vec<MarketIndexTwRaw>,
+    pub tpex: Vec<MarketIndexTwRaw>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -33,8 +38,8 @@ pub struct MarketIndexTwRaw {
     pub volume: Option<i64>,
 }
 
-pub async fn load_taiex(pool: &PgPool, lookback_days: i32) -> Result<MarketIndexTwSeries> {
-    let points: Vec<MarketIndexTwRaw> = sqlx::query_as(
+async fn load_taiex_index(pool: &PgPool, silver_id: &str, lookback_days: i32) -> Result<Vec<MarketIndexTwRaw>> {
+    sqlx::query_as(
         r#"
         SELECT date,
                open::float8  AS open,
@@ -43,13 +48,18 @@ pub async fn load_taiex(pool: &PgPool, lookback_days: i32) -> Result<MarketIndex
                close::float8 AS close,
                volume
         FROM taiex_index_derived
-        WHERE stock_id = 'TAIEX'
-          AND date >= (CURRENT_DATE - $1::int)
+        WHERE stock_id = $1
+          AND date >= (CURRENT_DATE - $2::int)
         ORDER BY date ASC
         "#,
     )
-    .bind(lookback_days).fetch_all(pool).await.context("load_taiex failed")?;
-    Ok(MarketIndexTwSeries { points })
+    .bind(silver_id).bind(lookback_days).fetch_all(pool).await.with_context(|| format!("load_taiex_index({}) failed", silver_id))
+}
+
+pub async fn load_taiex(pool: &PgPool, lookback_days: i32) -> Result<MarketIndexTwSeries> {
+    let taiex = load_taiex_index(pool, "TAIEX", lookback_days).await?;
+    let tpex = load_taiex_index(pool, "TPEx", lookback_days).await?;
+    Ok(MarketIndexTwSeries { taiex, tpex })
 }
 
 // ===========================================================================
