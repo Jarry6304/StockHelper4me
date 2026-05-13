@@ -27,10 +27,15 @@ inventory::submit! {
 const STREAK_MIN_DAYS: usize = 3;
 
 /// GoldenCross / DeathCross 最小間距(防止短周期 KD 快速來回的 whipsaw 噪音)。
-/// Production data 校準(2026-05-12): GoldenCross 17/yr 🟠 → 目標 8–12/yr 🟢。
-/// Verification: scripts/p2_calibration_data.sql §2 (kd_core / GoldenCross|DeathCross)。
-/// 10-bar = 2 週,排除 < 2 週的反轉視為雜訊。KD period=9 × MIN_SPACING=10 ≈ 1.1 個完整周期。
-const MIN_KD_CROSS_SPACING: usize = 10;
+///
+/// **校準歷史**:
+/// - 2026-05-12 v1.32:從無 spacing → 10(目標 8-12/yr)
+/// - 2026-05-14 P0 Gate v3(1264 stocks production):觀察 GoldenCross 20.17/yr / DeathCross 20.13/yr,
+///   仍 2× 超標 8-12/yr 目標 → 升至 **15**(預期 ×0.66 降至 ~13/yr,落入目標範圍上沿)
+///
+/// Verification: docs/benchmarks/neely_p0_gate_results_v3_2026-05-14.md §N + scripts/p2_calibration_data.sql §2
+/// 15-bar = 3 週,排除 < 3 週的反轉視為雜訊。KD period=9 × MIN_SPACING=15 ≈ 1.67 個完整周期。
+const MIN_KD_CROSS_SPACING: usize = 15;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KdParams {
@@ -227,7 +232,7 @@ mod tests {
     }
     #[test]
     fn kd_cross_spacing_constant_is_10() {
-        assert_eq!(MIN_KD_CROSS_SPACING, 10);
+        assert_eq!(MIN_KD_CROSS_SPACING, 15); // P0 Gate v3 校準 2026-05-14:10 → 15(對齊 production 觀察)
     }
 
     #[test]

@@ -34,16 +34,26 @@ pub struct MacdParams {
 impl Default for MacdParams { fn default() -> Self { Self { fast: 12, slow: 26, signal: 9, timeframe: Timeframe::Daily } } }
 
 /// HistogramZeroCross 最小間距 — 防止 histogram 在 0 附近快速來回產生噪音。
-/// Production data 校準(2026-05-12): HistogramZeroCross 15.15/yr 🟠 → 目標 ≤ 12/yr 🟢。
-/// Verification: scripts/p2_calibration_data.sql §2 (macd_core / HistogramZeroCross)。
-/// 5-bar = 1 週,排除同一週內的 back-and-forth。短於 kd_core(10-bar)因 MACD histogram 本質波動更平滑。
-const MIN_ZERO_CROSS_SPACING: usize = 5;
+///
+/// **校準歷史**:
+/// - 2026-05-12 v1.32:從無 spacing → 5(目標 ≤ 12/yr)
+/// - 2026-05-14 P0 Gate v3(1264 stocks production):觀察 HistogramZeroCross 19.01/yr,
+///   仍 1.6× 超標 ≤ 12/yr 目標 → 升至 **8**(預期 ×0.625 降至 ~12/yr,落入目標範圍上沿)
+///
+/// Verification: docs/benchmarks/neely_p0_gate_results_v3_2026-05-14.md §N + scripts/p2_calibration_data.sql §2
+/// 8-bar ≈ 1.5 週,短於 kd_core(15-bar)因 MACD histogram 本質波動更平滑。
+const MIN_ZERO_CROSS_SPACING: usize = 8;
 
 /// GoldenCross / DeathCross 最小間距。
-/// Production data 校準(2026-05-12): GoldenCross 7.5/yr 🟢,但加間距防止快速 whipsaw。
-/// Verification: scripts/p2_calibration_data.sql §2 (macd_core / GoldenCross|DeathCross)。
-/// 10-bar = 2 週,與 kd_core MIN_KD_CROSS_SPACING 對齊(同屬 MACD-family cross events)。
-const MIN_MACD_CROSS_SPACING: usize = 10;
+///
+/// **校準歷史**:
+/// - 2026-05-12 v1.32:從無 spacing → 10(目標 5-7/yr,防止快速 whipsaw)
+/// - 2026-05-14 P0 Gate v3(1264 stocks production):觀察 GoldenCross 9.58/yr / DeathCross 9.42/yr,
+///   仍 1.4× 超標 5-7/yr 目標 → 升至 **15**(預期 ×0.66 降至 ~6.4/yr,落入目標範圍中段)
+///
+/// Verification: docs/benchmarks/neely_p0_gate_results_v3_2026-05-14.md §N + scripts/p2_calibration_data.sql §2
+/// 15-bar = 3 週,與 kd_core MIN_KD_CROSS_SPACING 對齊(同屬 MACD-family cross events)。
+const MIN_MACD_CROSS_SPACING: usize = 15;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MacdOutput {
@@ -230,8 +240,8 @@ mod tests {
     }
     #[test]
     fn macd_spacing_constants() {
-        assert_eq!(MIN_ZERO_CROSS_SPACING, 5);
-        assert_eq!(MIN_MACD_CROSS_SPACING, 10);
+        assert_eq!(MIN_ZERO_CROSS_SPACING, 8);  // P0 Gate v3 校準 2026-05-14:5 → 8
+        assert_eq!(MIN_MACD_CROSS_SPACING, 15); // P0 Gate v3 校準 2026-05-14:10 → 15
     }
 
     #[test]

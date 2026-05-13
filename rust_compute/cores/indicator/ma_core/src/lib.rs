@@ -35,10 +35,15 @@ fn above_ma_streak_min(period: usize) -> usize {
 }
 
 /// MaBullishCross / MaBearishCross / MaGoldenCross / MaDeathCross 最小間距。
-/// Production data 校準(2026-05-12): BullishCross ~11.5/yr 🟠 → 目標 6–9/yr 🟢。
-/// Verification: scripts/p2_calibration_data.sql §2 (ma_core / BullishCross|GoldenCross)。
-/// 10-bar = 2 週;適用全部 6 種 MA(SMA/EMA/WMA/DEMA/TEMA/HMA)同一閾值。
-const MIN_MA_CROSS_SPACING: usize = 10;
+///
+/// **校準歷史**:
+/// - 2026-05-12 v1.32:從無 spacing → 10(目標 6-9/yr)
+/// - 2026-05-14 P0 Gate v3(1264 stocks production):觀察 BullishCross 13.59/yr / BearishCross 13.42/yr,
+///   仍 1.5× 超標 6-9/yr 目標 → 升至 **15**(預期 ×0.66 降至 ~9/yr,落入目標範圍上沿)
+///
+/// Verification: docs/benchmarks/neely_p0_gate_results_v3_2026-05-14.md §N + scripts/p2_calibration_data.sql §2
+/// 15-bar = 3 週;適用全部 6 種 MA(SMA/EMA/WMA/DEMA/TEMA/HMA)同一閾值。
+const MIN_MA_CROSS_SPACING: usize = 15;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum MaKind { Sma, Ema, Wma, Dema, Tema, Hma }
@@ -299,7 +304,7 @@ mod tests {
     }
     #[test]
     fn ma_cross_spacing_constant_is_10() {
-        assert_eq!(MIN_MA_CROSS_SPACING, 10);
+        assert_eq!(MIN_MA_CROSS_SPACING, 15); // P0 Gate v3 校準 2026-05-14:10 → 15(對齊 production 觀察)
     }
 
     #[test]
