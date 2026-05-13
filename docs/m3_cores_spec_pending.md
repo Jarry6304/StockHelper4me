@@ -644,8 +644,8 @@ ind.abs() < 1e-12 skip warmup zeros (RSI/MACD 前幾 bar 為 0.0)
 
 ---
 
-**最後更新**:2026-05-13(§18 PR-3c-1 F/Z/W 8 條 wave-level 規則落地)
-**Rust workspace**:24 crate / **213 tests passed**(179 + 34 PR-3c-1)/ 22 cores production verified
+**最後更新**:2026-05-13(§19 PR-3c-2 T4-T6 Triangle 通用規則 + PR-3c-3 R4-R7 ratio 範圍分類落地)
+**Rust workspace**:24 crate / **231 tests passed**(213 + 11 PR-3c-2 + 7 PR-3c-3)/ 22 cores production verified
 **alembic head**:`x3y4z5a6b7c8`(不變,本 session 0 migration)
 **Production state**(2026-05-12 全市場重跑後):
   - facts 重寫:institutional + foreign_holding + kd + macd + rsi (5 cores)
@@ -878,3 +878,84 @@ cd rust_compute && cargo test --workspace --release --no-fail-fast
   validator output,classifier 行為仍對齊 PR-3c-pre)
 - 既有 R1-R3 / W1-W2 行為對齊 spec 新閾值(W1 不會 Fail)
 - Rollback:單 commit `git revert` 即可
+
+---
+
+## §19. neely_core PR-3c-2 + PR-3c-3 Triangle + R4-R7 落地(2026-05-13 後續)
+
+接 PR-3c-1 完成後動工 PR-3c-2 + PR-3c-3(同 commit 收尾,平行 sub-PR 對應
+plan §12.6 sequence)。
+
+### PR-3c-2:T4-T6 Triangle 通用 Ch5 規則
+
+對齊 m3Spec/neely_rules.md Ch5 line 1387 + 1547-1567。
+
+| 規則 | RuleId | 邏輯 |
+|---|---|---|
+| T4 | `Ch5TriangleBRange` | 5-wave + b/a ∈ [34.2%, 265.8%](= 38.2%-4% ~ 261.8%+4%)→ Pass(Triangle-consistent);超出 → NotApplicable |
+| T5 | `Ch5TriangleLegContraction` | 5-wave + T4 Pass-like + e<d<c → Pass(Contracting Triangle);e ≥ a → NotApplicable(Expanding);其他結構不一致 → Fail |
+| T6 | `Ch5TriangleLegEquality5Pct` | 5-wave + T4 Pass-like + (|a-c|/a ≤ 5% OR |b-d|/b ≤ 5%)→ Pass(leg equality);無 → NotApplicable |
+
+T1-T3(Contracting Limiting 變體 wave-c)/ T7-T9(Expanding 變體 wave-e)/ T10
+(Ch6 Expanding Non-Confirmation)維持 Deferred —這些是 sub-variant 特定規則,
+PR-4b classifier 識別 TriangleVariant 後 dispatch。
+
+容差寫死:`TRIANGLE_B_MIN_PCT=34.2 / TRIANGLE_B_MAX_PCT=265.8 / TRIANGLE_LEG_EQ_TOLERANCE_PCT=5.0`
+
+### PR-3c-3:R4-R7 Ch3 Pre-Constructive m2/m1 ratio 範圍分類
+
+對齊 m3Spec/neely_rules.md Ch3 p.3-48~60 line 422-493。
+
+| 規則 | RuleId | m2/m1 範圍(含 ±4%) |
+|---|---|---|
+| R4 | `Ch3PreConstructive { rule: 4, condition: 'a', ... }` | 57.8% < ratio < 104% |
+| R5 | `Ch3PreConstructive { rule: 5, condition: 'a', ... }` | 96% ≤ ratio < 165.8% |
+| R6 | `Ch3PreConstructive { rule: 6, condition: 'a', ... }` | 157.8% ≤ ratio ≤ 265.8% |
+| R7 | `Ch3PreConstructive { rule: 7, condition: 'a', ... }` | ratio > 257.8% |
+
+落實到 candidate 時:
+- 計算 m2/m1 比值(m1 = first monowave magnitude,m2 = second monowave)
+- 哪個範圍 match → 該規則 Pass,其他 R4-R7 NotApplicable
+- 邊界區重疊(±4% 容差導致 96-104% / 157.8-165.8% / 257.8-265.8% 兩規則並 Pass)
+
+**簡化版**:只實作 ratio 範圍分類。具體 Condition × Category × sub_rule_index
+完整 200+ 分支 Structure Label 決策樹(產出 `:F3 / :c3 / :sL3 / :s5 / :L5`
+標籤)留 PR-4b classifier 的 structure_labeler 系統。
+
+新 helper:`m2_over_m1_pct(candidate, classified) -> Option<f64>`
+(取 monowave_indices[0/1] 的 magnitude 比值;m1 ≈ 0 → None)
+
+### Stage 4 完整度更新
+
+| 規則組 | 狀態 |
+|---|---|
+| R1-R3(Ch5 Essential)| ✅ 完整實作(PR-3b)|
+| **R4-R7(Ch3 Pre-Constructive)** | **✅ ratio 範圍分類(PR-3c-3);Structure Label 完整邏輯留 PR-4b** |
+| F1-F2(Ch5 Flat min)| ✅ 完整實作(PR-3c-1)|
+| Z1-Z3(Ch5/Ch4/Ch11 Zigzag)| ✅ 完整實作(PR-3c-1)|
+| Z4(Ch5 Zigzag Triangle exception)| 🟡 Deferred(需 Triangle context)|
+| **T4-T6(Ch5 Triangle 通用)** | **✅ 完整實作(PR-3c-2)** |
+| T1-T3 / T7-T10(Ch11/Ch6 Triangle sub-variant)| 🟡 Deferred(需 classifier sub_kind 識別)|
+| W1-W2(Ch11/Ch12 通用)| ✅ 完整實作(PR-3c-1)|
+
+**22 條 → 14 條完整實作 + 8 條 Deferred(sub-variant / context-dependent)**
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 213 → 231 tests passed / 0 failed / 0 warnings
+# 新增 18 個 unit test:
+#   PR-3c-2 triangle_rules.rs:11 個(T4 in/out range / T5 contracting/non-contracting/expanding /
+#     T6 leg ac equal / bd equal / no equality / constants / run returns 10)
+#   PR-3c-3 core_rules.rs:7 個(r4 80% / r5 130% / r6 200% / r7 300% / short candidate /
+#     zero m1 / mutually exclusive non-boundary + 100% boundary both pass)
+```
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml / 0 schema 改動
+- production 既有 facts 不受影響
+- 留 PR-4b 補:T1-T3 / T7-T10 sub-variant 邏輯 / Z4 Triangle exception /
+  R4-R7 Structure Label 200+ 分支

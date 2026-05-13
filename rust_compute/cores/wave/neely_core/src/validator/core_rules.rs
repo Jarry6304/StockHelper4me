@@ -27,10 +27,10 @@ pub fn run(
         rule_r1(candidate, classified),
         rule_r2(candidate, classified),
         rule_r3(candidate, classified),
-        rule_r4_stub(),
-        rule_r5_stub(),
-        rule_r6_stub(),
-        rule_r7_stub(),
+        rule_r4(candidate, classified),
+        rule_r5(candidate, classified),
+        rule_r6(candidate, classified),
+        rule_r7(candidate, classified),
     ]
 }
 
@@ -189,23 +189,101 @@ fn rule_r3(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
 }
 
 // ---------------------------------------------------------------------------
-// R4-R7:留 PR-3c+ m3Spec/ 校準後實作
+// R4-R7:Ch3 Pre-Constructive Rules of Logic — m2/m1 ratio 分類(PR-3c-3 落地)
+//
+// 對齊 m3Spec/neely_rules.md Ch3 p.3-48~60 line 422-493。
+//
+// 邏輯:m2(第二 monowave,通常是 retracement)/ m1(第一 monowave)的比值範圍
+// 決定哪條 Ch3 規則適用,規則決定可以 add 哪些 Structure Labels(:F3 / :c3 /
+// :sL3 / :s5 / :L5)。
+//
+// PR-3c-3 階段:只實作 ratio range classification,Pass 表示「該 candidate
+// 符合此 Ch3 規則範圍」。具體 Condition × Category × sub_rule_index 完整 200+
+// 分支 Structure Label 決策樹留 PR-4b(classifier 的 structure_labeler 系統)。
 // ---------------------------------------------------------------------------
 
-fn rule_r4_stub() -> RuleResult {
-    RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 4, condition: 'a', category: None, sub_rule_index: None })
+/// R4 範圍:61.8% < m2/m1 < 100%(±4% 容差 → 57.8% < ratio < 104%)
+/// 邊界值在 Cond 與相鄰規則間;簡化版用開區間
+fn rule_r4(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
+    let rid = RuleId::Ch3PreConstructive {
+        rule: 4, condition: 'a', category: None, sub_rule_index: None,
+    };
+    let ratio_pct = match m2_over_m1_pct(candidate, classified) {
+        Some(r) => r,
+        None => return RuleResult::NotApplicable(rid),
+    };
+    if (57.8..104.0).contains(&ratio_pct) {
+        RuleResult::Pass
+    } else {
+        RuleResult::NotApplicable(rid)
+    }
 }
 
-fn rule_r5_stub() -> RuleResult {
-    RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 5, condition: 'a', category: None, sub_rule_index: None })
+/// R5 範圍:100% ≤ m2/m1 < 161.8%(± 4% 容差 → 96% ≤ ratio < 165.8%)
+fn rule_r5(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
+    let rid = RuleId::Ch3PreConstructive {
+        rule: 5, condition: 'a', category: None, sub_rule_index: None,
+    };
+    let ratio_pct = match m2_over_m1_pct(candidate, classified) {
+        Some(r) => r,
+        None => return RuleResult::NotApplicable(rid),
+    };
+    if (96.0..165.8).contains(&ratio_pct) {
+        RuleResult::Pass
+    } else {
+        RuleResult::NotApplicable(rid)
+    }
 }
 
-fn rule_r6_stub() -> RuleResult {
-    RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 6, condition: 'a', category: None, sub_rule_index: None })
+/// R6 範圍:161.8% ≤ m2/m1 ≤ 261.8%(±4% 容差 → 157.8% ≤ ratio ≤ 265.8%)
+fn rule_r6(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
+    let rid = RuleId::Ch3PreConstructive {
+        rule: 6, condition: 'a', category: None, sub_rule_index: None,
+    };
+    let ratio_pct = match m2_over_m1_pct(candidate, classified) {
+        Some(r) => r,
+        None => return RuleResult::NotApplicable(rid),
+    };
+    if (157.8..=265.8).contains(&ratio_pct) {
+        RuleResult::Pass
+    } else {
+        RuleResult::NotApplicable(rid)
+    }
 }
 
-fn rule_r7_stub() -> RuleResult {
-    RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 7, condition: 'a', category: None, sub_rule_index: None })
+/// R7 範圍:m2/m1 > 261.8%(±4% 容差 → ratio > 257.8%)
+fn rule_r7(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> RuleResult {
+    let rid = RuleId::Ch3PreConstructive {
+        rule: 7, condition: 'a', category: None, sub_rule_index: None,
+    };
+    let ratio_pct = match m2_over_m1_pct(candidate, classified) {
+        Some(r) => r,
+        None => return RuleResult::NotApplicable(rid),
+    };
+    if ratio_pct > 257.8 {
+        RuleResult::Pass
+    } else {
+        RuleResult::NotApplicable(rid)
+    }
+}
+
+/// helper:取 m2 / m1 比值(%)。m1 = monowave_indices[0],m2 = monowave_indices[1]。
+/// 若不足 2 個 monowave 或 m1 magnitude ≈ 0 → None。
+fn m2_over_m1_pct(
+    candidate: &WaveCandidate,
+    classified: &[ClassifiedMonowave],
+) -> Option<f64> {
+    if candidate.monowave_indices.len() < 2 {
+        return None;
+    }
+    let mi = &candidate.monowave_indices;
+    let m1_mag = classified.get(mi[0])?.metrics.magnitude;
+    let m2_mag = classified.get(mi[1])?.metrics.magnitude;
+    if m1_mag.abs() < 1e-9 {
+        None
+    } else {
+        Some(m2_mag / m1_mag * 100.0)
+    }
 }
 
 #[cfg(test)]
@@ -373,13 +451,127 @@ mod tests {
         assert!(matches!(result, RuleResult::NotApplicable(_)));
     }
 
-    // ---------- R4-R7 ----------
+    // ---------- R4-R7 Ch3 Pre-Constructive ratio range classification(PR-3c-3)----------
 
     #[test]
-    fn r4_to_r7_currently_deferred() {
-        assert!(matches!(rule_r4_stub(), RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 4, condition: 'a', category: None, sub_rule_index: None })));
-        assert!(matches!(rule_r5_stub(), RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 5, condition: 'a', category: None, sub_rule_index: None })));
-        assert!(matches!(rule_r6_stub(), RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 6, condition: 'a', category: None, sub_rule_index: None })));
-        assert!(matches!(rule_r7_stub(), RuleResult::Deferred(RuleId::Ch3PreConstructive { rule: 7, condition: 'a', category: None, sub_rule_index: None })));
+    fn r4_m2_80pct_passes() {
+        // m1=10 (100→110), m2=8 (110→102) → ratio 80% → R4 range Pass
+        let classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 102.0, MonowaveDirection::Down),
+        ];
+        let candidate = make_candidate(3, vec![0, 1, 0]);
+        assert!(rule_r4(&candidate, &classified).is_pass());
+        // 其他 R5-R7 應 NotApplicable
+        assert!(matches!(rule_r5(&candidate, &classified), RuleResult::NotApplicable(_)));
+        assert!(matches!(rule_r6(&candidate, &classified), RuleResult::NotApplicable(_)));
+        assert!(matches!(rule_r7(&candidate, &classified), RuleResult::NotApplicable(_)));
+    }
+
+    #[test]
+    fn r5_m2_130pct_passes() {
+        // m1=10, m2=13 → ratio 130% → R5 range Pass
+        let classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 97.0, MonowaveDirection::Down),
+        ];
+        let candidate = make_candidate(3, vec![0, 1, 0]);
+        assert!(rule_r5(&candidate, &classified).is_pass());
+        assert!(matches!(rule_r4(&candidate, &classified), RuleResult::NotApplicable(_)));
+        assert!(matches!(rule_r6(&candidate, &classified), RuleResult::NotApplicable(_)));
+    }
+
+    #[test]
+    fn r6_m2_200pct_passes() {
+        // m1=10, m2=20 → ratio 200% → R6 range Pass
+        let classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 90.0, MonowaveDirection::Down),
+        ];
+        let candidate = make_candidate(3, vec![0, 1, 0]);
+        assert!(rule_r6(&candidate, &classified).is_pass());
+        assert!(matches!(rule_r5(&candidate, &classified), RuleResult::NotApplicable(_)));
+        assert!(matches!(rule_r7(&candidate, &classified), RuleResult::NotApplicable(_)));
+    }
+
+    #[test]
+    fn r7_m2_300pct_passes() {
+        // m1=10, m2=30 → ratio 300% → R7 Pass
+        let classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 80.0, MonowaveDirection::Down),
+        ];
+        let candidate = make_candidate(3, vec![0, 1, 0]);
+        assert!(rule_r7(&candidate, &classified).is_pass());
+        assert!(matches!(rule_r6(&candidate, &classified), RuleResult::NotApplicable(_)));
+    }
+
+    #[test]
+    fn r4_short_candidate_not_applicable() {
+        // 只有 1 個 monowave → R4-R7 都 NotApplicable
+        let classified = vec![cmw(100.0, 110.0, MonowaveDirection::Up)];
+        let candidate = WaveCandidate {
+            id: "c-short".to_string(),
+            monowave_indices: vec![0],
+            wave_count: 1,
+            initial_direction: MonowaveDirection::Up,
+        };
+        assert!(matches!(rule_r4(&candidate, &classified), RuleResult::NotApplicable(_)));
+        assert!(matches!(rule_r5(&candidate, &classified), RuleResult::NotApplicable(_)));
+        assert!(matches!(rule_r6(&candidate, &classified), RuleResult::NotApplicable(_)));
+        assert!(matches!(rule_r7(&candidate, &classified), RuleResult::NotApplicable(_)));
+    }
+
+    #[test]
+    fn r4_zero_m1_not_applicable() {
+        // m1 magnitude = 0 → safe ratio = None → NotApplicable
+        let classified = vec![
+            cmw(100.0, 100.0, MonowaveDirection::Up),  // zero magnitude
+            cmw(100.0, 105.0, MonowaveDirection::Up),
+        ];
+        let candidate = make_candidate(3, vec![0, 1, 0]);
+        assert!(matches!(rule_r4(&candidate, &classified), RuleResult::NotApplicable(_)));
+    }
+
+    #[test]
+    fn r4_to_r7_at_most_two_overlap_at_boundaries() {
+        // 對任一 candidate,R4-R7 中**至多 2 個** Pass(±4% 容差導致相鄰規則邊界重疊)
+        // 邊界重疊區:96-104%(R4/R5)/ 157.8-165.8%(R5/R6)/ 257.8-265.8%(R6/R7)
+        // 非邊界區只應 1 個 Pass
+        let test_ratios = [50.0, 80.0, 130.0, 200.0, 300.0];
+        for ratio in test_ratios {
+            let m1_mag = 10.0;
+            let m2_mag = m1_mag * ratio / 100.0;
+            let classified = vec![
+                cmw(100.0, 100.0 + m1_mag, MonowaveDirection::Up),
+                cmw(100.0 + m1_mag, 100.0 + m1_mag - m2_mag, MonowaveDirection::Down),
+            ];
+            let candidate = make_candidate(3, vec![0, 1, 0]);
+            let pass_count = [
+                rule_r4(&candidate, &classified),
+                rule_r5(&candidate, &classified),
+                rule_r6(&candidate, &classified),
+                rule_r7(&candidate, &classified),
+            ]
+            .iter()
+            .filter(|r| r.is_pass())
+            .count();
+            assert!(pass_count <= 1, "非邊界 ratio={}% 有 {} 個 R4-R7 Pass(預期 ≤ 1)", ratio, pass_count);
+        }
+    }
+
+    #[test]
+    fn r4_r5_boundary_100pct_both_pass() {
+        // 邊界 100%:R4 上限 104% / R5 下限 96% → 兩規則都 Pass(設計如此)
+        let classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 100.0, MonowaveDirection::Down), // m2=10, ratio=100%
+        ];
+        let candidate = make_candidate(3, vec![0, 1, 0]);
+        assert!(rule_r4(&candidate, &classified).is_pass());
+        assert!(rule_r5(&candidate, &classified).is_pass());
+        // R6/R7 不在邊界
+        assert!(matches!(rule_r6(&candidate, &classified), RuleResult::NotApplicable(_)));
+        assert!(matches!(rule_r7(&candidate, &classified), RuleResult::NotApplicable(_)));
     }
 }

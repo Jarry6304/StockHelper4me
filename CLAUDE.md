@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.36，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.37，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -169,6 +169,64 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+
+---
+
+## v1.37 — neely PR-3c-2 Triangle T4-T6 + PR-3c-3 R4-R7 ratio 分類(2026-05-13 後續)
+
+接 v1.36 PR-3c-1 收尾後同 batch 落地 PR-3c-2 + PR-3c-3(平行 sub-PR per plan §12.6)。
+
+### PR-3c-2:Triangle T4-T6 通用 Ch5 規則
+
+| 規則 | RuleId | 邏輯 |
+|---|---|---|
+| T4 | `Ch5TriangleBRange` | 5-wave b/a ∈ [34.2%, 265.8%]→ Pass(Ch5 line 1387)|
+| T5 | `Ch5TriangleLegContraction` | e<d<c → Pass(Contracting);e ≥ a → NotApplicable(Expanding)|
+| T6 | `Ch5TriangleLegEquality5Pct` | |a-c|/a ≤ 5% OR |b-d|/b ≤ 5% → Pass(leg equality 對稱)|
+
+T1-T3 / T7-T10 sub-variant 規則維持 Deferred(PR-4b classifier 識別 TriangleVariant 後 dispatch)。
+
+### PR-3c-3:R4-R7 m2/m1 ratio 範圍分類
+
+| 規則 | m2/m1 範圍(含 ±4% 容差)|
+|---|---|
+| R4(Ch3PreConstructive rule:4)| 57.8% < ratio < 104% |
+| R5(rule:5)| 96% ≤ ratio < 165.8% |
+| R6(rule:6)| 157.8% ≤ ratio ≤ 265.8% |
+| R7(rule:7)| ratio > 257.8% |
+
+簡化版:只實作 ratio 範圍分類(Pass / NotApplicable)。具體 Condition × Category ×
+sub_rule_index 200+ 分支 Structure Label 決策樹(`:F3 / :c3 / :sL3 / :s5 / :L5`)
+留 PR-4b classifier 的 structure_labeler 系統。
+
+### Stage 4 完整度
+
+22 條 → **14 完整 + 8 Deferred**:
+- ✅ R1-R7(7)+ F1-F2(2)+ Z1-Z3(3)+ T4-T6(3)+ W1-W2(2)= 17 implemented
+  - 但其中 R4-R7 是 ratio 分類(Structure Label 留 PR-4b),不是完整實作
+- 🟡 Z4 / T1-T3 / T7-T10 = 8 Deferred(需 Triangle context 或 sub_kind 識別)
+
+### 沙箱驗證
+
+```bash
+cd rust_compute && cargo test --workspace --release --no-fail-fast
+# 213 → 231 tests passed / 0 failed / 0 warnings
+# 新增 18 個 unit test(triangle 11 / core_rules 7)
+```
+
+### 風險
+
+🟢 低:0 alembic / 0 Python / 0 collector.toml / 0 schema 改動。
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變)
+- Rust workspace:24 crate / **231 tests passed** / 0 warnings
+- neely_core Stage 4:14 完整 + 8 Deferred(待 PR-4b classifier sub-variant 識別)
+- 下個 sub-PR:**PR-4b**(TerminalImpulse 完整 sub_kind + Flat 8 變體 + Zigzag 3
+  變體 + Triangle 9 變體 classifier 識別,~1.5 天)
+- 9 sub-PR sequence:PR-3c-pre ✅ → PR-3c-1 ✅ → **PR-3c-2 ✅ + PR-3c-3 ✅** →
+  PR-4b → PR-5b → PR-6b-1~3
 
 ---
 
