@@ -76,6 +76,19 @@ pub struct NeelyCoreOutput {
     /// Stage 3.5 Zigzag DETOUR Test annotation(Phase 3 PR)。
     /// 對齊 m3Spec/neely_rules.md §Zigzag DETOUR Test。
     pub detour_annotations: Vec<DetourAnnotation>,
+
+    /// Phase 8 新增:Three Rounds Round 3 暫停資訊(architecture §8.4)。
+    /// 圖中無任何 :L5/:L3 base label → 進入 Round 3 暫停;否則 None。
+    pub round3_pause: Option<Round3PauseInfo>,
+}
+
+/// Three Rounds Round 3 暫停資訊(neely_core_architecture.md §8.4)。
+#[derive(Debug, Clone, Serialize)]
+pub struct Round3PauseInfo {
+    /// Round 3 觸發原因說明
+    pub reason: String,
+    /// 受影響的 scenario id 數量(全 forest 都標 awaiting_l_label)
+    pub affected_scenario_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +184,18 @@ pub struct Scenario {
     /// 對齊 m3Spec/neely_rules.md §Ch5 Channeling + §Ch9 Advanced Rules。
     /// 諮詢性 — 不直接影響 pattern_complete,提供下游 Aggregation Layer 使用。
     pub advisory_findings: Vec<AdvisoryFinding>,
+
+    /// Phase 8 新增:Three Rounds nested parent context — 該 scenario 範圍是否
+    /// 完全涵蓋於某 Triangle scenario 內。對齊 m3Spec/neely_rules.md §Ch10
+    /// (2021 行「三角形/Terminal 的內部段不傳遞 Power 暗示」例外)。
+    /// 由 Stage 8 Compaction 後處理階段填寫;true → Power Rating 套 in_triangle = 0。
+    pub in_triangle_context: bool,
+
+    /// Phase 8 新增:Three Rounds Round 3 暫停標記 — 該 scenario 是否在
+    /// 「圖中無任何新 :L5/:L3」狀態下標 awaiting。對齊 m3Spec/neely_rules.md
+    /// §Round 3(1258-1265 行)+ neely_core_architecture.md §8.4 Round3PauseInfo。
+    /// 策略含意:持有原方向,維持原計數,直到新形態具備收尾條件。
+    pub awaiting_l_label: bool,
 }
 
 /// Phase 7 — Stage 7.5 諮詢性發現(Channeling / Ch9 Advanced Rules)。

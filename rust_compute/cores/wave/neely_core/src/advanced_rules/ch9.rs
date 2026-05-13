@@ -208,6 +208,8 @@ mod tests {
             expected_fib_zones: Vec::new(),
             structural_facts: StructuralFacts::default(),
             advisory_findings: Vec::new(),
+            in_triangle_context: false,
+            awaiting_l_label: false,
         }
     }
 

@@ -68,6 +68,7 @@ pub mod pattern_isolation;
 pub mod post_validator;
 pub mod power_rating;
 pub mod pre_constructive;
+pub mod three_rounds;
 pub mod triggers;
 pub mod validator;
 
@@ -78,10 +79,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.14.0",
+        "0.15.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Ch5 Channeling + Ch6 + Ch7 Compaction + Ch9 Advanced Rules + Ch10 Power Rating)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 Compaction + Ch9 + Ch10 Power Rating + Three Rounds nested context)",
     )
 }
 
@@ -125,8 +126,11 @@ impl WaveCore for NeelyCore {
         // 0.13.0 → 0.14.0(Phase 7 PR:Stage 7.5 Channeling 5 條 trendlines (0-2/1-3/2-4/0-B/B-D) +
         // Ch9 Advanced Rules (Trendline Touchpoints / Time Rule / Exception Aspect 1/2 / Structure Integrity) +
         // Scenario.advisory_findings 新欄位)。
+        // 0.14.0 → 0.15.0(Phase 8 PR:Three Rounds nested parent context (Triangle 內部段標 in_triangle_context)
+        // + Round 3 暫停偵測 (Scenario.awaiting_l_label + NeelyCoreOutput.round3_pause) +
+        // Power Rating 接通 in_triangle_context 例外)。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.14.0"
+        "0.15.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -253,6 +257,15 @@ impl WaveCore for NeelyCore {
         );
         let mut forest = compaction_result.forest;
 
+        // ── Stage 8.5:Three Rounds nested context + Round 3 暫停偵測(Phase 8 PR)
+        //    對齊 m3Spec/neely_rules.md §Three Rounds + §Ch10 三角內 Power = 0 例外
+        let stage_8_5_start = Instant::now();
+        let round3_pause = three_rounds::apply(&mut forest);
+        stage_elapsed.insert(
+            "stage_8_5_three_rounds".to_string(),
+            stage_8_5_start.elapsed().as_millis() as u64,
+        );
+
         // ── Stage 9a:Missing Wave 偵測(M3 PR-6 skeleton)
         let stage_9a_start = Instant::now();
         let _ = missing_wave::apply_to_forest(&forest);
@@ -333,6 +346,7 @@ impl WaveCore for NeelyCore {
             insufficient_data: input.bars.len() < warmup,
             pattern_bounds,
             detour_annotations,
+            round3_pause,
         })
     }
 
@@ -386,7 +400,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.14.0");
+        assert_eq!(core.version(), "0.15.0");
     }
 
     // -------------------------------------------------------------
@@ -437,6 +451,7 @@ mod tests {
             "stage_7_complexity",
             "stage_7_5_advanced_rules",
             "stage_8_compaction",
+            "stage_8_5_three_rounds",
             "stage_9a_missing_wave",
             "stage_9b_emulation",
             "stage_10a_power_rating",

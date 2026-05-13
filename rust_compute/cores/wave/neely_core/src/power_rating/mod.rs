@@ -15,14 +15,16 @@ pub mod table;
 
 /// 對 Scenario 套 Power Rating(查表)。
 ///
-/// Phase 5 邏輯:
+/// Phase 8 邏輯(更新):
 ///   - 由 scenario.pattern_type + scenario.initial_direction 查 table::lookup_power_rating
-///   - in_triangle 預設 false(無 parent context — 留 P6/P8 Compaction)
+///   - **in_triangle 來自 scenario.in_triangle_context**(Stage 8 Three Rounds nested context 後填)
+///   - 對齊 spec §Ch10 2021 行:三角內任一規則例外 → power = 0
 pub fn rate_scenario(scenario: &Scenario) -> PowerRating {
-    // in_triangle 由 Stage 8 Compaction 提供 parent scenario context 後填;
-    // Phase 5 暫無 parent scenario chain → 一律 false
-    let in_triangle = false;
-    table::lookup_power_rating(&scenario.pattern_type, scenario.initial_direction, in_triangle)
+    table::lookup_power_rating(
+        &scenario.pattern_type,
+        scenario.initial_direction,
+        scenario.in_triangle_context,
+    )
 }
 
 /// 對 Forest 套 Power Rating,直接更新每 Scenario 的 power_rating 欄位。
@@ -72,6 +74,8 @@ mod tests {
             expected_fib_zones: Vec::new(),
             structural_facts: StructuralFacts::default(),
             advisory_findings: Vec::new(),
+            in_triangle_context: false,
+            awaiting_l_label: false,
         }
     }
 
