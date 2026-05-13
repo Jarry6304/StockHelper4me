@@ -68,6 +68,14 @@ pub struct NeelyCoreOutput {
 
     /// 資料充分性(歷史不足會導致大量 candidate 被 reject,實際是「無法判斷」)
     pub insufficient_data: bool,
+
+    /// Stage 3.5 Pattern Isolation 識別出的形態邊界(Phase 3 PR)。
+    /// 對齊 m3Spec/neely_rules.md §Pattern Isolation Procedures。
+    pub pattern_bounds: Vec<PatternBound>,
+
+    /// Stage 3.5 Zigzag DETOUR Test annotation(Phase 3 PR)。
+    /// 對齊 m3Spec/neely_rules.md §Zigzag DETOUR Test。
+    pub detour_annotations: Vec<DetourAnnotation>,
 }
 
 // ---------------------------------------------------------------------------
@@ -512,4 +520,42 @@ pub enum Certainty {
 pub struct StructureLabelCandidate {
     pub label: StructureLabel,
     pub certainty: Certainty,
+}
+
+// ---------------------------------------------------------------------------
+// Pattern Isolation(Stage 3.5)— Ch3 Pattern Isolation Procedures
+// 對齊 m3Spec/neely_rules.md §Pattern Isolation Procedures(1064-1126 行)
+// ---------------------------------------------------------------------------
+
+/// Pattern Isolation 識別出的「圖上可隔離的 Elliott 形態邊界」。
+///
+/// (start_idx, end_idx) 是 classified_monowaves 的 index 範圍(inclusive)。
+/// start_label / end_label 是 anchor 標籤(F3/XC3/L3/S5/L5 之一作為起點,
+/// L5/L3 作為終點)。
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct PatternBound {
+    /// 起點 monowave index(inclusive)
+    pub start_idx: usize,
+    /// 終點 monowave index(inclusive)
+    pub end_idx: usize,
+    /// 起點 anchor 標籤(spec 1107 行:F3/XC3/L3/S5/L5 之一)
+    pub start_label: StructureLabel,
+    /// 終點 anchor 標籤(L5/L3 之一)
+    pub end_label: StructureLabel,
+    /// 是否通過 Compaction(Ch7)驗證為合法 Elliott 形態(spec Step 5)。
+    /// Phase 3 預設 false,Phase 6/8(Compaction Three Rounds)實作後填 true。
+    pub validated: bool,
+    /// Special Circumstances(spec 1121-1123 行):
+    /// price action 超出自身起點 → 強制 base = `:3` corrective
+    pub forced_corrective: bool,
+}
+
+/// Zigzag DETOUR Test 對 wave_count == 3 candidate 的 annotation
+/// 對齊 m3Spec/neely_rules.md §Zigzag DETOUR Test(1283-1285 行)。
+#[derive(Debug, Clone, Serialize)]
+pub struct DetourAnnotation {
+    /// 對應 candidate id
+    pub candidate_id: String,
+    /// 若 detour 後 5-wave Trending Impulse 結構成立,提供替代 monowave_indices(共 5 個)
+    pub impulse_alternative: Option<Vec<usize>>,
 }

@@ -63,6 +63,7 @@ pub mod fibonacci;
 pub mod missing_wave;
 pub mod monowave;
 pub mod output;
+pub mod pattern_isolation;
 pub mod post_validator;
 pub mod power_rating;
 pub mod pre_constructive;
@@ -76,10 +77,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.9.0",
+        "0.10.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 Pre-Constructive Logic + Ch5 Essential R1-R7 + Overlap)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 Pre-Constructive Logic + Pattern Isolation + DETOUR + Ch5 Essential R1-R7 + Overlap)",
     )
 }
 
@@ -112,8 +113,10 @@ impl WaveCore for NeelyCore {
         // RuleId 章節編碼重寫 + Ch5 Essential R1-R7 + Overlap_Trending/Terminal 完整)。
         // 0.8.0 → 0.9.0(Phase 2 PR:Stage 0 Ch3 Pre-Constructive Logic
         // 全 200+ branches if-else cascade,StructureLabel candidates 落地)。
+        // 0.9.0 → 0.10.0(Phase 3 PR:Stage 3.5 Pattern Isolation 6-step procedure
+        // + Zigzag DETOUR Test 落地,NeelyCoreOutput 加 pattern_bounds + detour_annotations)。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.9.0"
+        "0.10.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -161,6 +164,18 @@ impl WaveCore for NeelyCore {
         stage_elapsed.insert(
             "stage_3_candidates".to_string(),
             stage_3_start.elapsed().as_millis() as u64,
+        );
+
+        // ── Stage 3.5:Pattern Isolation + Zigzag DETOUR Test(Phase 3 PR)
+        //    對齊 m3Spec/neely_rules.md §Pattern Isolation Procedures + §Zigzag DETOUR Test
+        //    本 stage 為「資訊性」— 結果寫入 NeelyCoreOutput.pattern_bounds /
+        //    detour_annotations,Stage 4 Validator 暫不依賴(留 P5+ 串接)
+        let stage_3_5_start = Instant::now();
+        let pattern_bounds = pattern_isolation::run(&classified);
+        let detour_annotations = pattern_isolation::run_detour(&wave_candidates, &classified);
+        stage_elapsed.insert(
+            "stage_3_5_pattern_isolation".to_string(),
+            stage_3_5_start.elapsed().as_millis() as u64,
         );
 
         // ── Stage 4:Validator R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2(M3 PR-3b)
@@ -295,6 +310,8 @@ impl WaveCore for NeelyCore {
             },
             rule_book_references: Vec::new(),
             insufficient_data: input.bars.len() < warmup,
+            pattern_bounds,
+            detour_annotations,
         })
     }
 
@@ -348,7 +365,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.9.0");
+        assert_eq!(core.version(), "0.10.0");
     }
 
     // -------------------------------------------------------------
@@ -392,6 +409,7 @@ mod tests {
             "stage_2_classify",
             "stage_0_preconstructive",
             "stage_3_candidates",
+            "stage_3_5_pattern_isolation",
             "stage_4_validator",
             "stage_5_classifier",
             "stage_6_post_validator",
