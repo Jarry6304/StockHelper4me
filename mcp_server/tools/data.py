@@ -1,12 +1,18 @@
 """Data tools — 回 JSON(text content),包 src/agg/ aggregation layer。
 
-對齊 plan Phase D §Tool surface(Data tools)。
+對齊 plan Phase D §Tool surface(Data tools)+ MCP v2 重構 plan
+(`/root/.claude/plans/hashed-foraging-pixel.md`)。
 
-4 個 tools:
-- as_of_snapshot:as_of(stock_id, date) 主路徑
-- find_facts:跨股搜尋當日 fact(對齊 §9.4 use case)
-- list_cores:23 cores 清單 + priority/kind
-- fetch_ohlc:price_daily_fwd OHLC 序列
+**Public tools(LLM 預設曝露,LLM-friendly 高度封裝)**:
+- `market_context`:大盤環境綜合判讀(Tool 3,plan §Tool 3)
+- (Tool 1 `neely_forecast` 留 Step 3)
+- (Tool 2 `stock_health` 留 Step 2)
+
+**Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)**:
+- `as_of_snapshot`:raw AsOfSnapshot(可能爆 token,LLM 用 public tools 取代)
+- `find_facts`:跨股搜尋當日 fact
+- `list_cores`:23 cores 清單
+- `fetch_ohlc`:price_daily_fwd OHLC 序列
 """
 
 from __future__ import annotations
@@ -151,6 +157,130 @@ def list_cores() -> dict[str, Any]:
         "by_kind": by_kind,
         "cores": _CORES,
     }
+
+
+# ────────────────────────────────────────────────────────────
+# Public toolkit v2(LLM 預設曝露)— 對齊 plan §3 Tool 設計
+# ────────────────────────────────────────────────────────────
+
+
+def neely_forecast(
+    stock_id: str,
+    date: str,
+) -> dict[str, Any]:
+    """Neely 預測:4 個時間框架(月 / 季 / 半年 / 年)+ 上漲機率 + 價位區間(plan §Tool 1)。
+
+    內部:撈 Neely scenario_forest 取 top 5 by power_rating → Fibonacci 投影
+    分 4 時間框架 → 跨 cores 加權算 prob_up → invalidation_price 從 triggers 抽。
+
+    輸出只回結論(~2 KB / ~500 tokens),不回 raw scenario_forest。
+
+    Args:
+        stock_id: 股票代號(例 "2330")
+        date: 查詢日 ISO 字串
+
+    Returns:
+        {
+          "stock_id": "2330",
+          "as_of": "2026-05-13",
+          "current_price": 1234.5,
+          "primary_scenario": {label, pattern_type, power_rating, wave_count},
+          "scenario_count": int,
+          "forecasts": {
+            "1_month":   {"prob_up": 0.62, "range_high": [...], "range_low": [...]},
+            "1_quarter": {...},
+            "6_month":   {...},
+            "1_year":    {...}
+          },
+          "key_levels": {"support": [...], "resistance": [...]},
+          "invalidation_price": float | None
+        }
+    """
+    from mcp_server._forecast import compute_neely_forecast
+
+    return compute_neely_forecast(stock_id, _parse_date(date))
+
+
+def stock_health(
+    stock_id: str,
+    date: str,
+    lookback_days: int = 90,
+) -> dict[str, Any]:
+    """個股 4 維健康度評分(plan §Tool 2)。
+
+    內部:撈 agg.as_of() 全 cores → 4 維 score(technical / chip /
+    valuation / fundamental)加權 → top 5 訊號排序 → 1 句 narrative。
+
+    輸出只回結論(~2 KB / ~500 tokens),不回 raw indicator series。
+
+    Args:
+        stock_id: 股票代號(例 "2330")
+        date: 查詢日 ISO 字串
+        lookback_days: facts 期間。預設 90
+
+    Returns:
+        {
+          "stock_id": "2330",
+          "as_of": "2026-05-13",
+          "current_price": 1234.5,
+          "overall_score": -100~+100,
+          "dimensions": {
+            "technical":   {"score": X, "trend": "bullish|bearish|mixed|quiet", ...},
+            "chip":        {...},
+            "valuation":   {...},
+            "fundamental": {...}
+          },
+          "top_signals": [{date, core, kind, sign, weight}, ...],  # max 5
+          "narrative": "..."
+        }
+    """
+    from mcp_server._health import compute_stock_health
+
+    return compute_stock_health(stock_id, _parse_date(date), lookback_days=lookback_days)
+
+
+def market_context(
+    date: str,
+    lookback_days: int = 60,
+) -> dict[str, Any]:
+    """大盤環境綜合判讀(plan §Tool 3)。
+
+    內部:讀 5 個保留字 stock_id 的 market-level facts →
+    6 components score(taiex / us_market / fear_greed / business /
+    exchange_rate / market_margin)→ climate_score 加權平均 → systemic_risks
+    觸發 → 1 句 narrative。
+
+    輸出只回結論(~1.5 KB / ~400 tokens),不回 raw facts series。
+
+    Args:
+        date: 查詢日 ISO 字串(例 "2026-05-13")
+        lookback_days: facts 期間。預設 60(覆蓋月頻 + daily 雙重)
+
+    Returns:
+        {
+          "as_of": "2026-05-13",
+          "overall_climate": "neutral_bullish" | ...,
+          "climate_score": -100~+100,
+          "components": {
+            "taiex":         {"score": X, "fact_count": N},
+            "us_market":     {...},
+            "fear_greed":    {...},
+            "business":      {...},
+            "exchange_rate": {...},
+            "market_margin": {...}
+          },
+          "systemic_risks": [...],
+          "narrative": "..."
+        }
+    """
+    from mcp_server._climate import compute_market_context
+
+    return compute_market_context(_parse_date(date), lookback_days=lookback_days)
+
+
+# ────────────────────────────────────────────────────────────
+# Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
+# ────────────────────────────────────────────────────────────
 
 
 def fetch_ohlc(
