@@ -139,7 +139,12 @@ pub struct CandlestickPatternParams {
     pub tweezer_tolerance: f64,        // 預設 0.005(0.5%)
     pub enabled_patterns: Vec<PatternKind>,  // 可選擇開啟的型態
 }
+
+// 工程護欄常數(寫死,不外部化)
+const MIN_PATTERN_GAP_BARS: usize = 20;   // v1.34 Round 5 加 / Round 6 調至 20:同 PatternKind 至少間隔 20 bar 才再觸發
 ```
+
+> **v1.34 Round 5/6 production calibration(2026-05-14)**:r3 spec 沒對 K 線型態加 spacing,1264 stocks 跑出某型態(如 Doji)68.9/yr 🔴 過密。Round 5 加 `MIN_PATTERN_GAP_BARS=10` 仍偏多,Round 6 調至 **20**。每 PatternKind 獨立 last_fire 追蹤,避免同型態 20 bars 內反覆 fire。Per-EventKind 觸發率 ≤ 12/yr/stock 達標 ✅。
 
 ### 3.5 warmup_periods
 
@@ -310,11 +315,17 @@ pub struct SrStrength {
 pub struct TrendlineParams {
     pub timeframe: Timeframe,
     pub swing_source: SwingSource,         // Neely monowave / 自實作 swing detector
-    pub min_pivots: usize,                 // 至少需幾個 pivot,預設 3
+    pub min_pivots: usize,                 // 至少需幾個 pivot,預設 5(v1.34 Round 5 校準前 3)
     pub touch_tolerance: f64,              // 觸碰容差(相對),預設 0.005
-    pub min_slope_bars: usize,             // 趨勢線最短跨度,預設 10
+    pub min_slope_bars: usize,             // 趨勢線最短跨度,預設 30(v1.34 Round 5 校準前 10)
     pub max_lookback_bars: usize,          // 最大回看,預設 250
 }
+
+// 工程護欄常數(寫死,不外部化)
+const MAX_TRENDLINES_PER_STOCK: usize = 50;   // v1.34 Round 5 加:單股最多保留 50 條(by total touch_count top-K)
+```
+
+> **v1.34 Round 5 production calibration(2026-05-14)**:r3 spec 預設 `min_pivots=3 / min_slope_bars=10` 在 1264 stocks 跑出 737/yr 觸發率 🔴,改 `min_pivots=5 / min_slope_bars=30` + 加 `MAX_TRENDLINES_PER_STOCK=50`(by total touch_count top-K)後降至 15.6/yr ✅。趨勢線本質是「累積結構性 pivot」訊號,需 ≥5 pivot 才可信。
 
 pub enum SwingSource {
     NeelyMonowave,         // 消費 neely_core 輸出(P2 第一版)

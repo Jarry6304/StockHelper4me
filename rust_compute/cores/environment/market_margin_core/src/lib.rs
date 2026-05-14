@@ -1,4 +1,4 @@
-// market_margin_core(P2)— 對齊 m2Spec/oldm2Spec/environment_cores.md §七 r2
+// market_margin_core(P2)— 對齊 m3Spec/environment_cores.md §七 r3
 // Params §7.4(maintenance_warning/danger / significant_change)/
 // Output §7.6(maintenance_rate / change_pct / MarginZone)
 // EventKind 4 個(EnteredWarning/Danger / Exited / SignificantSingleDayDrop)

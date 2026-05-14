@@ -1,4 +1,4 @@
-// bollinger_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_volatility.md §三 r2
+// bollinger_core(P1)— 對齊 m3Spec/indicator_cores_volatility.md §三 r4(Round 4 transition pattern)
 // Params §3.2(period 20 / std_multiplier 2.0 / source PriceSource)/ Output §3.4(5 欄含 percent_b)
 //
 // **Reference(2026-05-10 加)**:

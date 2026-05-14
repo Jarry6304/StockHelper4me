@@ -349,13 +349,26 @@ pub struct DonchianPoint {
 }
 ```
 
-### 6.5 Fact 範例
+### 6.5 EventKind 與 Fact 範例
+
+```rust
+pub enum DonchianEventKind {
+    BreakoutUp,        // 突破 N 日新高(close > prev_period high)
+    Breakdown,         // 跌破 N 日新低
+}
+
+const MIN_BREAKOUT_SPACING: usize = 10;   // v1.34 Round 5 加:同方向突破至少間隔 10 bar
+```
 
 | Fact statement | metadata |
 |---|---|
 | `Donchian(20) breakout above 20-day high at 2026-04-15(close=580, high20=578)` | `{ event: "donchian_breakout_up", period: 20 }` |
 | `Donchian(20) breakdown below 20-day low at 2026-04-22` | `{ event: "donchian_breakdown", period: 20 }` |
 | `Donchian(55) new 55-day high at 2026-04-25` | `{ event: "donchian_breakout_up", period: 55 }` |
+
+> **v1.34 Round 5 production calibration(2026-05-14)**:r3 spec 沒對突破加
+> spacing,1264 stocks 跑出某型態(如 Doji)68.9/yr 🔴。加 `MIN_BREAKOUT_SPACING=10`
+> + `last_breakout_idx` 狀態追蹤,降至 per-EventKind ≤ 12/yr/stock ✅。
 
 ### 6.6 海龜系統慣例
 

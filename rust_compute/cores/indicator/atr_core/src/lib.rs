@@ -1,4 +1,4 @@
-// atr_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_volatility.md §四 r2
+// atr_core(P1)— 對齊 m3Spec/indicator_cores_volatility.md §四 r3
 // Params §4.2(period only)/ Output §4.4(atr + atr_pct)/ Fact §4.5(3 種)
 //
 // **Reference(2026-05-10 加)**:

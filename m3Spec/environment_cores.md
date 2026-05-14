@@ -691,6 +691,17 @@ pub struct BusinessIndicatorPoint {
     pub monitoring: i32,                          // 9–45 分
     pub monitoring_color: MonitoringColor,
 }
+```
+
+> **v1.34 實作備註(2026-05-14)**:目前 Silver `business_indicator_derived` 表
+> 只記錄 `fact_date`(月底日),`report_date` 由 Cores 端用 `fact_date + 27 天`
+> approx 計算(TODO 標於 `business_indicator_core/src/lib.rs:140`)。國發會
+> 實際發布日多在月底後 27 天左右,但個別月份可能 ±3 天偏差;若 Aggregation
+> Layer look-ahead bias 防衛要求精準對齊,後續可在 Bronze
+> `business_indicator_tw` 加 `publish_date` 欄位 + collector 補抓真實發布日。
+> 目前 T+27 fallback 在 1264 stocks production 已足夠通用。
+
+```rust
 
 pub enum MonitoringColor {
     Blue,           // 9-16 分,景氣低迷

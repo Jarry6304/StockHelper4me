@@ -1,6 +1,6 @@
 // revenue_core(P2)— Fundamental Core(月頻)
 //
-// 對齊 m2Spec/oldm2Spec/fundamental_cores.md §三 revenue_core(spec r2 2026-05-07)。
+// 對齊 m3Spec/fundamental_cores.md §三 revenue_core(spec r4 2026-05-14)。
 //
 // 範圍:Params §3.3 / Output §3.5 / EventKind 8 個 / warmup §3.4。
 // 部分計算邏輯(cumulative_yoy_pct / historical high)為 best-guess,P0 後對 Silver

@@ -1,6 +1,6 @@
 // ohlcv_loader — 從 Silver 層 price_*_fwd 表讀取 OHLCV 序列
 //
-// 對齊 m2Spec/oldm2Spec/cores_overview.md §3.4(各 Core Input 由各 loader 提供)
+// 對齊 m3Spec/cores_overview.md §3.4(各 Core Input 由各 loader 提供)
 // + §4.4(Cores 一律從 Silver 層讀取,不直接讀 Bronze)。
 //
 // 提供:

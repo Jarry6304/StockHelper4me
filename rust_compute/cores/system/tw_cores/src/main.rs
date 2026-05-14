@@ -1,6 +1,6 @@
 // tw_cores — Cores 層 Monolithic Binary 入口
 //
-// 對齊 m2Spec/oldm2Spec/cores_overview.md §五(Monolithic Binary 部署模型)
+// 對齊 m3Spec/cores_overview.md §五(Monolithic Binary 部署模型)
 //   - P0 / P1 / P2 一律單一 binary,inventory 自動註冊
 //   - 改任一 Core 重編全部(實測 ~5 分鐘可接受)
 //   - 無法 hot-fix 單一 Core,但台股一日一交易、batch 模式下沒有此需求
@@ -198,7 +198,7 @@ fn list_cores() -> Result<()> {
 
     println!();
     println!("Stage 1-10 + Facts + PG IO + Inventory + run-all dispatch ✅(M3 PR-9a)");
-    println!("(對齊 m2Spec/oldm2Spec/cores_overview.md §五 + neely_core.md §七)");
+    println!("(對齊 m3Spec/cores_overview.md §五 + neely_core_architecture.md §七)");
     Ok(())
 }
 

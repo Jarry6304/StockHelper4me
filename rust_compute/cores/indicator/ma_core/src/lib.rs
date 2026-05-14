@@ -1,4 +1,4 @@
-// ma_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §七 r2
+// ma_core(P1)— 對齊 m3Spec/indicator_cores_momentum.md §七 r4
 //
 // Spec critical:
 //   - Output 是 `MaOutput { series_by_spec: Vec<MaSeriesEntry> }`(非單一 series)

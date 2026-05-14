@@ -1,4 +1,4 @@
-// rsi_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §四 r2
+// rsi_core(P1)— 對齊 m3Spec/indicator_cores_momentum.md §四 r4
 // Output §4.4(僅 series.value)+ Fact §4.5(5 種)+ Failure Swing §4.6
 //
 // **Reference(2026-05-10 加)**:

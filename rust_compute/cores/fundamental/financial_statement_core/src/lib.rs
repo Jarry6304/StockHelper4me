@@ -1,6 +1,6 @@
 // financial_statement_core(P2)— Fundamental Core(季頻)
 //
-// 對齊 m2Spec/oldm2Spec/fundamental_cores.md §五 financial_statement_core(spec r2)。
+// 對齊 m3Spec/fundamental_cores.md §五 financial_statement_core(spec r4)。
 // Params §5.3 / Output §5.5(18 欄)/ EventKind 8 個 / warmup §5.4。
 //
 // **Reference(2026-05-10 加)**:

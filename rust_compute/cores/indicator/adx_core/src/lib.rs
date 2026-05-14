@@ -1,4 +1,4 @@
-// adx_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §六 r2
+// adx_core(P1)— 對齊 m3Spec/indicator_cores_momentum.md §六 r4
 // Params §6.2(strong_trend / very_strong)/ Output §6.4(僅 adx/+DI/-DI)/ warmup §6.3 ×6
 //
 // **Reference(2026-05-10 加)**:
