@@ -59,6 +59,29 @@ python src/main.py refresh --skip-bronze                # 跳過 Bronze(只跑 S
 
 `refresh` 串完整 chain:**Bronze incremental → Silver phase 7c → 7a → 7b → tw_cores run-all --write --dirty**。對應 user「沒有 cron / Task Scheduler 自動排程,但想一鍵拉到最新」場景。每段獨立 exception handling,前段失敗不阻擋後段(對齊 cores_overview §7.5 dirty 契約)。
 
+### Windows Task Scheduler 自動排程(v1.35.1 加)
+
+```powershell
+# 一鍵註冊每日 18:00 自動跑 refresh(對齊 chip_cores §2.3 batch 17:30 + 30 分緩衝)
+.\scripts\install_refresh_task.ps1
+
+# 改時間
+.\scripts\install_refresh_task.ps1 -At 19:30
+
+# 改排程名稱
+.\scripts\install_refresh_task.ps1 -TaskName "tw-stock-daily"
+
+# 變種:跳過 M3 cores(無 Rust binary 時)
+.\scripts\install_refresh_task.ps1 -NoCores
+
+# 驗證 / 手動觸發 / 移除
+Get-ScheduledTask -TaskName "StockHelper4me-Refresh"
+Start-ScheduledTask -TaskName "StockHelper4me-Refresh"
+Unregister-ScheduledTask -TaskName "StockHelper4me-Refresh" -Confirm:$false
+```
+
+Wrapper 是 `scripts/refresh_daily.ps1`,內含 venv 啟動 + .env 載入 + UTF-8 encoding 修法 + 每日 dated log 寫到 `logs/refresh_YYYY-MM-DD.log`。Task Scheduler 不需 admin,走當前 user(Interactive logon)。
+
 ### 驗證腳本（push 前必跑）
 
 ```bash
