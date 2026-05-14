@@ -40,6 +40,7 @@ from dashboards.charts import (  # noqa: E402
     facts_cloud,
     fundamental,
     indicators,
+    neely_wave,
     overlays,
 )
 
@@ -314,7 +315,26 @@ with tab_env:
             )
 
 with tab_neely:
-    st.info("🌳 Neely Wave Tab 留 Phase C-7(scenario picker + deep-dive)")
+    structural_neely = structural_dict.get("neely_core@daily")
+    scenarios = neely_wave.list_scenarios(structural_neely)
+    if not scenarios:
+        st.warning(f"無 neely_core structural snapshot for {stock_id}(可能 cores 還沒寫入或 stock 無料)")
+    else:
+        labels = [
+            f"#{s['idx']} · {s['id']} · {s['monowave_count']} waves · power={s['power_rating']}"
+            for s in scenarios
+        ]
+        sel = st.selectbox("選 scenario", options=labels, index=0)
+        sel_idx = scenarios[labels.index(sel)]["idx"]
+        show_fib = st.checkbox("顯示 Fibonacci zones", value=True)
+        deep_fig = neely_wave.build_neely_deep_dive(
+            ohlc, structural_neely, scenario_idx=sel_idx, show_fib_zones=show_fib,
+        )
+        st.plotly_chart(deep_fig, use_container_width=True)
+
+        with st.expander("🔧 Diagnostics", expanded=False):
+            diag = neely_wave.render_diagnostics(structural_neely)
+            st.json(diag, expanded=True)
 
 with tab_facts:
     if not facts_list:
