@@ -36,6 +36,7 @@ from agg import as_of_with_ohlc  # noqa: E402
 from dashboards.charts import (  # noqa: E402
     candlestick,
     chip,
+    environment,
     facts_cloud,
     fundamental,
     indicators,
@@ -277,7 +278,40 @@ with tab_fund:
             st.dataframe(fin_rows, use_container_width=True, height=300)
 
 with tab_env:
-    st.info("🌐 Environment Tab 留 Phase C-6(taiex / us_market / exchange_rate / fear_greed / market_margin / business_indicator)")
+    sub_taiex, sub_us, sub_global = st.tabs(["TAIEX/TPEx", "美股 + VIX", "全球指標"])
+    with sub_taiex:
+        st.plotly_chart(
+            environment.build_taiex_chart(indicators_dict.get("taiex_core@daily")),
+            use_container_width=True,
+        )
+    with sub_us:
+        st.plotly_chart(
+            environment.build_us_market_chart(indicators_dict.get("us_market_core@daily")),
+            use_container_width=True,
+        )
+    with sub_global:
+        col_l, col_r = st.columns(2)
+        with col_l:
+            st.plotly_chart(
+                environment.build_fear_greed_gauge(indicators_dict.get("fear_greed_core@daily")),
+                use_container_width=True,
+            )
+            st.plotly_chart(
+                environment.build_exchange_rate_chart(indicators_dict.get("exchange_rate_core@daily")),
+                use_container_width=True,
+            )
+        with col_r:
+            st.plotly_chart(
+                environment.build_market_margin_dial(indicators_dict.get("market_margin_core@daily")),
+                use_container_width=True,
+            )
+            st.plotly_chart(
+                environment.build_business_indicator_matrix(
+                    indicators_dict.get("business_indicator_core@monthly")
+                    or indicators_dict.get("business_indicator_core@daily")
+                ),
+                use_container_width=True,
+            )
 
 with tab_neely:
     st.info("🌳 Neely Wave Tab 留 Phase C-7(scenario picker + deep-dive)")
