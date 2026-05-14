@@ -45,4 +45,4 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where   = ["src"]
-include = ["silver*", "bronze*"]
+include = ["silver*", "bronze*", "agg*"]
