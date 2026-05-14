@@ -8,6 +8,8 @@ tw-stock-collector CLI 進入點。
   python src/main.py incremental [--stocks 2330,2317]
   python src/main.py phase 3
   python src/main.py silver phase 7a [--stocks 2330] [--full-rebuild]
+  python src/main.py refresh                       # 一鍵串完 Bronze→Silver→M3 cores
+  python src/main.py refresh --skip-cores          # 只到 Silver(無 Rust binary 時)
   python src/main.py status
   python src/main.py validate
 
@@ -185,6 +187,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="忽略 dirty queue,全表重算(目前唯一支援的模式)",
     )
 
+    # ── refresh 子命令(一鍵手動更新最新資料,以防沒 scheduler)
+    refresh_parser = subparsers.add_parser(
+        "refresh",
+        help="一鍵更新最新:incremental → silver 7c/7a/7b → tw_cores run-all --dirty",
+    )
+    refresh_parser.add_argument(
+        "--stocks",
+        help="覆蓋股票清單(逗號分隔);不指定 = 全市場",
+    )
+    refresh_parser.add_argument(
+        "--skip-cores",
+        action="store_true",
+        help="跳過 M3 cores 階段(只跑 Bronze + Silver)",
+    )
+    refresh_parser.add_argument(
+        "--skip-bronze",
+        action="store_true",
+        help="跳過 Bronze incremental(只跑 Silver + Cores,若已單獨跑過 incremental)",
+    )
+
     # ── status 子命令（不需要執行選項）
     subparsers.add_parser("status", help="顯示同步進度摘要")
 
@@ -232,6 +254,11 @@ def main() -> None:
     # silver 指令(Phase 7 dirty-driven 計算層)
     if args.command == "silver":
         asyncio.run(_run_silver(args, config))
+        return
+
+    # refresh 指令(一鍵手動更新最新資料)
+    if args.command == "refresh":
+        asyncio.run(_run_refresh(args, config, stock_list_cfg))
         return
 
     # 其他指令（backfill / incremental / phase）需要執行引擎
@@ -409,6 +436,139 @@ async def _run_silver(args, config) -> None:
 
     elapsed = int(time.monotonic() - start_time)
     logger.info(f"Silver finished. phase={phase_name}, elapsed={elapsed}s")
+
+
+# =============================================================================
+# 子命令:refresh(一鍵手動更新最新資料)
+# =============================================================================
+
+async def _run_refresh(args, config, stock_list_cfg) -> None:
+    """一鍵更新最新:Bronze incremental → Silver 7c/7a/7b → M3 cores run-all --dirty。
+
+    內建串完整 chain,以防沒 scheduler 排程。每段獨立 exception handling,前段失敗
+    不阻擋後段(對齊 cores_overview §7.5 dirty 契約)。
+
+    Steps:
+        1. Bronze incremental(FinMind → Bronze 表)
+        2. Silver 7c(Rust 後復權 price_*_fwd + price_limit_merge_events)
+        3. Silver 7a(12 個獨立 builder)
+        4. Silver 7b(financial_statement 跨表)
+        5. M3 Cores `tw_cores run-all --write --dirty`(只跑 dirty stock)
+    """
+    import argparse as _argparse
+    import os
+    import subprocess
+    from pathlib import Path
+
+    start_time = time.monotonic()
+    stocks = args.stocks
+    step_results: list[tuple[str, str, float]] = []  # (step, status, elapsed_s)
+
+    def _log_step(idx: int, total: int, label: str) -> None:
+        logger.info("=" * 60)
+        logger.info(f"[Refresh] Step {idx}/{total}: {label}")
+        logger.info("=" * 60)
+
+    def _record(step: str, status: str, t0: float) -> None:
+        step_results.append((step, status, time.monotonic() - t0))
+
+    total_steps = 5 if not args.skip_cores else 4
+    if args.skip_bronze:
+        total_steps -= 1
+    cur = 0
+
+    # Step 1: Bronze incremental
+    if not args.skip_bronze:
+        cur += 1
+        _log_step(cur, total_steps, "Bronze incremental(FinMind → Bronze 表)")
+        t0 = time.monotonic()
+        try:
+            bronze_args = _argparse.Namespace(
+                command="incremental",
+                phases=None,
+                stocks=stocks,
+                dry_run=False,
+                verbose=args.verbose,
+                config=args.config,
+                stock_list=args.stock_list,
+            )
+            await _run_collector(bronze_args, config, stock_list_cfg)
+            _record("bronze_incremental", "ok", t0)
+        except Exception as e:
+            logger.error(f"[Refresh] Bronze incremental 失敗: {e}")
+            _record("bronze_incremental", "failed", t0)
+    else:
+        logger.info("[Refresh] 跳過 Bronze incremental(--skip-bronze)")
+
+    # Step 2-4: Silver phases(7c 必須先跑,因為 7a/7b 讀 fwd 表)
+    for phase_name in ("7c", "7a", "7b"):
+        cur += 1
+        _log_step(cur, total_steps, f"Silver phase {phase_name}")
+        t0 = time.monotonic()
+        try:
+            silver_args = _argparse.Namespace(
+                command="silver",
+                silver_command="phase",
+                phase_name=phase_name,
+                stocks=stocks,
+                full_rebuild=False,
+                verbose=args.verbose,
+                config=args.config,
+                stock_list=args.stock_list,
+            )
+            await _run_silver(silver_args, config)
+            _record(f"silver_{phase_name}", "ok", t0)
+        except Exception as e:
+            logger.error(f"[Refresh] Silver {phase_name} 失敗: {e}")
+            _record(f"silver_{phase_name}", "failed", t0)
+
+    # Step 5: M3 Cores(可選)
+    if not args.skip_cores:
+        cur += 1
+        binary_dir = Path(config.global_cfg.rust_binary_path).parent
+        tw_cores_name = "tw_cores.exe" if os.name == "nt" else "tw_cores"
+        tw_cores_path = binary_dir / tw_cores_name
+        _log_step(cur, total_steps, f"M3 Cores ({tw_cores_path.name} run-all --write --dirty)")
+        t0 = time.monotonic()
+        if not tw_cores_path.exists():
+            logger.warning(
+                f"[Refresh] tw_cores binary 不存在:{tw_cores_path}\n"
+                f"  跑 `cd rust_compute && cargo build --release -p tw_cores` 編譯;跳過 M3 cores"
+            )
+            _record("m3_cores", "skipped(binary missing)", t0)
+        else:
+            cmd = [str(tw_cores_path), "run-all", "--write", "--dirty"]
+            if stocks:
+                cmd.extend(["--stocks", stocks])
+            logger.info(f"[Refresh] 執行:{' '.join(cmd)}")
+            try:
+                result = subprocess.run(cmd, check=False)
+                if result.returncode == 0:
+                    _record("m3_cores", "ok", t0)
+                else:
+                    logger.error(f"[Refresh] tw_cores exit code {result.returncode}")
+                    _record("m3_cores", f"exit={result.returncode}", t0)
+            except Exception as e:
+                logger.error(f"[Refresh] tw_cores 啟動失敗: {e}")
+                _record("m3_cores", "failed", t0)
+    else:
+        logger.info("[Refresh] 跳過 M3 cores(--skip-cores)")
+
+    # Summary
+    elapsed = time.monotonic() - start_time
+    print()
+    print("=" * 70)
+    print("Refresh 結果")
+    print("=" * 70)
+    print(f"{'step':<24} {'status':<24} {'elapsed':>10}")
+    print("-" * 70)
+    for step, status, t in step_results:
+        print(f"{step:<24} {status:<24} {t:>8.1f}s")
+    print("-" * 70)
+    print(f"{'total':<24} {'':<24} {elapsed:>8.1f}s")
+    print()
+    ok = sum(1 for _, s, _ in step_results if s == "ok")
+    print(f"OK: {ok}/{len(step_results)} steps")
 
 
 # =============================================================================

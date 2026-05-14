@@ -48,6 +48,17 @@ python src/main.py silver phase 7c [--stocks 2330]                    # tw_marke
 
 `--full-rebuild` 目前是唯一支援的模式;dirty queue pull 留 PR #20+。
 
+### 一鍵手動更新最新(`refresh` 子命令,v1.35.1 加)
+
+```bash
+python src/main.py refresh                              # Bronze incremental → Silver 7c/7a/7b → M3 cores run-all --dirty
+python src/main.py refresh --stocks 2330                # 限縮股票範圍
+python src/main.py refresh --skip-cores                 # 跳過 M3 cores(無 Rust binary 時)
+python src/main.py refresh --skip-bronze                # 跳過 Bronze(只跑 Silver+Cores,已手動跑過 incremental 時)
+```
+
+`refresh` 串完整 chain:**Bronze incremental → Silver phase 7c → 7a → 7b → tw_cores run-all --write --dirty**。對應 user「沒有 cron / Task Scheduler 自動排程,但想一鍵拉到最新」場景。每段獨立 exception handling,前段失敗不阻擋後段(對齊 cores_overview §7.5 dirty 契約)。
+
 ### 驗證腳本（push 前必跑）
 
 ```bash
