@@ -55,16 +55,28 @@ DB 連線從 `.env` 取 `DATABASE_URL`(對齊 collector / silver / agg)。
 
 ---
 
-## Tools(10 個)
+## Tools(9 個 — 3 public + 6 render)
 
-### Data tools(回 JSON)
+> **v2 重構(2026-05-14)**:從 v1 的 4 data + 6 render = 10 tools,改為 **3 個高度
+> 封裝 public toolkit + 6 render tools = 9 tools**。對齊 plan
+> `/root/.claude/plans/hashed-foraging-pixel.md`:LLM 只看 3 個 tool,內部處理時間
+> 區間 / 數字 / 排序,輸出只回結論(每 tool ≤ 5K tokens,3-tool chain ≤ 15K tokens)。
+>
+> 舊 4 tools(`as_of_snapshot` / `find_facts` / `list_cores` / `fetch_ohlc`)
+> **不再對 LLM 暴露**,但 function 留在 `mcp_server.tools.data` 內供 dashboard /
+> direct python 呼叫者使用(舊 9 tests 仍 pass)。
 
-| Tool | 簽章 | 用途 |
+### Public toolkit(LLM 入口,3 tools)
+
+| Tool | 簽章 | 用途 + 輸出尺寸 |
 |---|---|---|
-| `as_of_snapshot` | `(stock_id, date, lookback_days=90, include_market=True, cores?, timeframes?)` | 主路徑 — 單股 as_of 查詢:facts + indicator_latest + structural + market |
-| `find_facts` | `(date, source_core?, kind?)` | 跨股搜尋:當日哪些股票觸發某 fact(對齊 §9.4 use case) |
-| `list_cores` | `()` | 列出 23 個 cores(分 Wave / Indicator / Chip / Fundamental / Environment) |
-| `fetch_ohlc` | `(stock_id, date, lookback_days=90)` | `price_daily_fwd` 後復權 OHLC 序列 |
+| `neely_forecast` | `(stock_id, date)` | NEoWave 預測:4 個時間框架(月 / 季 / 半年 / 年)的上漲機率(`prob_up`)+ 價位區間(`range_high` / `range_low`)+ 主要 scenario + invalidation_price。**~2 KB / ~500 tokens** |
+| `stock_health` | `(stock_id, date, lookback_days=90)` | 個股 4 維健康度(技術 / 籌碼 / 估值 / 基本面)各 -100~+100 分 + top 5 訊號 + 1 句中文敘述。**~2 KB / ~500 tokens** |
+| `market_context` | `(date, lookback_days=60)` | 大盤環境綜合判讀(TAIEX / 美股 + VIX / Fear-Greed / 景氣 / 匯率 / 融資維持率)6 components 分數 + climate_score + systemic_risks。**~1.5 KB / ~400 tokens** |
+
+3 tools 內部各自寫 `_forecast.py` / `_health.py` / `_climate.py`,不抽共用 base
+class(對齊 cores_overview §四 / §十四 零耦合 + 不抽象)。跨 cores 加權算分屬
+Aggregation Layer 整合層責任(cores_overview §10.0 列為例外)。
 
 ### Render tools(回 PNG image + summary dict)
 
@@ -82,37 +94,37 @@ dict 是 summary metadata(facts_count / 主要 latest 值),純文字 fallback。
 
 ---
 
-## 對話內用法範例
+## 對話內用法範例(v2 toolkit)
 
 啟動 Claude Desktop 對話後,自然語言提問,Claude 自動 dispatch tool:
 
 ```
-你: 列一下 stockhelper 有哪些 tool
+你: 幫我分析 2330 接下來 1 年的走勢
 
-Claude: (call list_cores + 用 metadata 看其他 tool)
-  4 data tools + 6 render tools — ...
+Claude: (call neely_forecast stock_id="2330" date="2026-05-13")
+  primary_scenario = Impulse W3 of 5 (power=Bullish);
+  1 年 prob_up=0.55 / range_high [1500, 1800] / range_low [950, 1100];
+  invalidation_price = 880(跌破此價主場景失效)...
 
-你: 2330 在 2026-05-13 那天有哪些 facts?
+你: 2330 現在能買嗎?
 
-Claude: (call as_of_snapshot stock_id="2330" date="2026-05-13")
-  facts 共 X 筆,主要訊號:RsiOversold(rsi_core)/ ... 
+Claude: (call stock_health stock_id="2330" date="2026-05-13")
+  overall_score=+35:技術面 +50(GoldenCross + RSI 升)+ 籌碼面 +20(法人買超),
+  但估值 -5(PER 78% 分位偏高)+ 基本面 +60(ROE 高 + 營收 YoY 強)。
+  建議短期觀察回檔買點...
 
-你: 把那天的 K-line 畫出來
+你: 今天大盤環境如何?
+
+Claude: (call market_context date="2026-05-13")
+  climate_score=+25 / 整體 neutral_bullish;TAIEX 偏多(+30)+ 景氣指標
+  改善(+40),但 Fear-Greed 已到貪婪區(72)+ TAIEX RSI 偏高(65),
+  短期注意修正。系統性風險:無。
+
+你: 把 2330 那天的 K-line 畫出來
 
 Claude: (call render_kline stock_id="2330" date="2026-05-13")
   [顯示 PNG]
-  K-line + bollinger + MA + facts markers 已顯示。最近收盤 590.0...
-
-你: 那天 neely 的第 0 個 scenario 長什麼樣
-
-Claude: (call render_neely stock_id="2330" date="2026-05-13" scenario_idx=0)
-  [顯示 PNG]
-  scenario_count=N,選定 scenario_0,monowave_count=12,power_rating=...
-
-你: 找出當天觸發 RsiOversold 的所有股票
-
-Claude: (call find_facts date="2026-05-13" source_core="rsi_core" kind="RsiOversold")
-  共 5 檔:1101 / 2317 / 2330 / 2884 / 6505 ...
+  K-line + bollinger + MA + facts markers 已顯示...
 ```
 
 ---
