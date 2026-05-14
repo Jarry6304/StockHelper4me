@@ -83,7 +83,7 @@ pub fn classify(
         structure_label,
         complexity_level: classify_complexity(candidate),
         power_rating: PowerRating::Neutral, // Stage 10a Power Rating 查表後填
-        max_retracement: 0.0,               // Stage 10a 補
+        max_retracement: None,               // Stage 10a 補
         post_pattern_behavior: PostBehavior::Indeterminate,
         passed_rules: report
             .passed

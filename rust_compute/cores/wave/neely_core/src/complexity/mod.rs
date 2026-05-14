@@ -71,7 +71,7 @@ mod tests {
             structure_label: "test".to_string(),
             complexity_level: complexity,
             power_rating: PowerRating::Neutral,
-            max_retracement: 0.0,
+            max_retracement: None,
             post_pattern_behavior: PostBehavior::Indeterminate,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),

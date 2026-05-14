@@ -3,41 +3,46 @@
 // 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
 //       + m3Spec/cores_overview.md r4
 //
-// 已實作(Phase 1 PR — r5 spec alignment baseline):
-//   - struct / enum 合約定義(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
-//   - WaveCore trait 實作 + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
-//   - **RuleId 章節編碼**(architecture §9.3)— 取代 r4 自編號;Phase 1 範圍宣告 Ch5_* + Engineering_*
+// 已實作(Phase 13 / v0.22.0 — 2026-05-14):
+//   - struct / enum 合約(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
+//   - WaveCore trait + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
+//   - **RuleId 章節編碼**(architecture §9.3)限縮 Ch5_* / Ch9_* / Engineering_* 三組
+//                       (其他章節 domain-specific enums,§十四 禁止抽象)
 //   - **Stage 1**:Monowave Detection — **Hybrid OHLC ((H+L)/2 mid_price)** + Wilder ATR-filtered reversal
 //   - **Stage 2**:Rule of Neutrality(個股 ATR / TAIEX %)+ Rule of Proportion metrics
 //   - **Stage 3**:Bottom-up Candidate Generator(滑窗 wave_count ∈ {3,5} + alternation filter + beam_width cap)
-//   - **Stage 4**:Validator framework + Ch5 Essential R1-R7 完整 + Ch5_Overlap_Trending + Ch5_Overlap_Terminal
-//                  完整;Ch5_Flat/Zigzag/Triangle/Equality/Alternation 9 條 Deferred(留 P4-P7)
-//   - **Stage 5**:Classifier(5wave + Overlap_Trending pass / Overlap_Terminal fail → Impulse;
-//                  Trending fail / Terminal pass → Diagonal { Leading/Ending heuristic };3wave → Zigzag Single)
-//   - **Stage 6**:Post-Constructive Validator skeleton(預設 pattern_complete = true,留 P6)
-//   - **Stage 7**:Complexity Rule 篩選(差距 ≤ 1 級為 anchor)
-//   - **Stage 8**:Compaction 簡化版 pass-through + Forest 上限保護(BeamSearchFallback by power_rating)
-//   - **Stage 9a**:Missing Wave 偵測 skeleton(預設 false,留 P9)
-//   - **Stage 9b**:Emulation 辨識 skeleton(預設 false,留 P9)
-//   - **Stage 10a**:Power Rating 查表(Impulse Up→Bullish / Down→Bearish 等 best-guess;留 P10 完整查表)
-//   - **Stage 10b**:Fibonacci 投影 framework + ratios.rs 寫死 NEELY_FIB_RATIOS
-//   - **Stage 10c**:Invalidation Triggers(Impulse Ch5_Essential(3) + Ch5_Overlap_Trending derived;
-//                  Diagonal Ch5_Essential(3) derived)
+//   - **Stage 3.5**:Pattern Isolation 6-step procedure + Zigzag DETOUR Test(Phase 3)
+//   - **Stage 0** (Phase 2):Ch3 Pre-Constructive Logic 200+ branch if-else
+//                            + StructureLabel candidates 落地
+//   - **Stage 4**:Validator framework + Ch5 全 18 條 **完整實作**(Essential R1-R7 + Overlap_Trending/Terminal
+//                  + Flat / Zigzag / Triangle / Equality / Alternation;Phase 4)
+//   - **Stage 5**:Classifier 完整 r5(Impulse / Diagonal {Leading/Ending} / Zigzag {Single..Triple} /
+//                  Flat / Triangle / Combination)+ ComplexityLevel + Power Rating
+//   - **Stage 6**:Ch6 Post-Constructive 兩階段確認(Phase 6 完整實作)
+//   - **Stage 7**:Ch7 Compaction Reassessment + `compacted_base_label`(Phase 6)
+//   - **Stage 7.5**:Channeling 5 條 trendlines(0-2 / 1-3 / 2-4 / 0-B / B-D)+ Ch9 Advanced Rules
+//                    + `advisory_findings`(Phase 7)
+//   - **Stage 8**:Three Rounds nested parent context(Triangle 內部 in_triangle_context)
+//                  + Round 3 暫停偵測(`awaiting_l_label` / `round3_pause`)+ Forest 上限保護
+//                  (BeamSearchFallback 雙重排序 PowerRating level + rules_passed_count;Phase 8 / P0 Gate v2)
+//   - **Stage 8 / Compaction**:exhaustive pass-through(待 sub-wave 嵌套後補,architecture §10.1 工程現實折衷)
+//   - **Stage 9a**:Missing Wave 完整偵測(P2 MissingWaveBundle + MissingWavePosition 分類;Phase 9)
+//   - **Stage 9b**:Ch12 Emulation 完整偵測(4 種 EmulationKind;Phase 9)
+//   - **Stage 10a**:Ch10 Power Rating r5 查表(±3..±3 7 級,寫死);
+//                    + **max_retracement** Option<f64> 同步寫入(±3→0.65 / ±2→0.80 / ±1→0.90 / 0→None /
+//                                                                 in_triangle_context→None;Phase 13)
+//   - **Stage 10b**:Fibonacci Internal/External 分離投影(從 monowave price 計算;Phase 10)
+//   - **Stage 10c**:Invalidation Triggers 接 monowave price(W1.start_price / W2.end_price;Phase 10)
+//   - **Stage 10.5**:Reverse Logic Rule(Neely Extension)— `ReverseLogicObservation` +
+//                     `suggested_filter_ids`(Phase 11)
+//   - **Stage 11**:Degree Ceiling 11 級體系(SubMicro..GrandSupercycle;Phase 12)
+//   - **Stage 12**:cross_timeframe_hints 給 Aggregation Layer 跨 Timeframe 比對(Phase 12)
 //   - **produce_facts()**:每 Scenario 1 條結構性 Fact + 1 條 forest summary
 //
-// 留後續 PR(完整 r5 spec roadmap 詳見 plan file 多 PR roadmap):
-//   - **P2**:Stage 0 Pre-Constructive Logic(~200 branch if-else,Ch3 Rule 1-7 × Cond × Cat)
-//   - **P3**:Stage 3.5 Pattern Isolation + Zigzag DETOUR Test
-//   - **P4**:Stage 4 Flat/Zigzag/Triangle 變體規則完整實作
-//   - **P5**:Stage 5 Ch8 Complex Polywaves + Ch10 Power Ratings
-//   - **P6**:Stage 6/7 Ch6 Post-Constructive + Ch7 Compaction Three Rounds
-//   - **P7**:Stage 7.5 Channeling + Ch9 Advanced Rules
-//   - **P8**:Stage 8 Compaction Three Rounds 遞迴改造
-//   - **P9**:Stage 9 Missing Wave + Emulation 完整
-//   - **P10**:Stage 10 完整 + Ch12 Fibonacci Internal/External + Waterfall
-//   - **P11**:Stage 10.5 Reverse Logic
-//   - **P12**:Stage 11/12 Degree Ceiling + cross_timeframe_hints
-//   - **P13**:P0 Gate 六檔實測 + 校準
+// 留後續 PR(後續 1.0 release 路徑):
+//   - **Compaction exhaustive 真窮舉**:需 sub-wave 嵌套(5-wave-of-3),architecture §10.1 折衷後留
+//   - **P0 Gate v5+ 校準**:6 個 Divergence EventKind 真實值 user verify(留 v5 production)
+//   - **P0 Gate 六檔實測通過後**:bump 到 1.0.0
 //
 // 不外部化 Neely 規則常數(architecture §4.5 / §6.6):Fibonacci 比率、±4%/±5%/±10% 三檔容差、
 // Power Rating 查表全部寫死,不可從 toml 設定。
@@ -104,10 +109,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.21.0",
+        "0.22.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement)",
     )
 }
 
@@ -176,8 +181,13 @@ impl WaveCore for NeelyCore {
         // enums 取代,對齊 cores_overview §四 禁止抽象 / §十四 prematurely declare 不該做))。
         // 0.20.0 → 0.21.0(P0 Gate v2 production 校準 — 2026-05-14 / 1264 stocks:
         // forest_max_size 1000 → 200(觀察 forest_size max=37 / p99=16 / p95=10,留 5× p99 餘量))。
+        // 0.21.0 → 0.22.0(Phase 13 PR / max_retracement 落地 — 2026-05-14:
+        // Scenario.max_retracement 由 f64 改 Option<f64> 對齊 architecture §9.1;
+        // 新建 power_rating/max_retracement.rs 依 Ch10 line 2016-2022 查表(±3→0.65 /
+        // ±2→0.80 / ±1→0.90 / 0→None);apply_to_forest 同步寫入 + Triangle 內部覆蓋 None。
+        // 取代 13 處 `max_retracement: 0.0` placeholder(從未被計算)。)
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.21.0"
+        "0.22.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -487,7 +497,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.21.0");
+        assert_eq!(core.version(), "0.22.0");
     }
 
     // -------------------------------------------------------------

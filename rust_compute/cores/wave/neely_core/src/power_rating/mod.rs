@@ -11,6 +11,7 @@
 
 use crate::output::{PowerRating, Scenario};
 
+pub mod max_retracement;
 pub mod table;
 
 /// 對 Scenario 套 Power Rating(查表)。
@@ -27,10 +28,16 @@ pub fn rate_scenario(scenario: &Scenario) -> PowerRating {
     )
 }
 
-/// 對 Forest 套 Power Rating,直接更新每 Scenario 的 power_rating 欄位。
+/// 對 Forest 套 Power Rating + Max Retracement,
+/// 直接更新每 Scenario 的 `power_rating` + `max_retracement` 欄位。
+///
+/// 對齊 m3Spec/neely_rules.md §第 10 章 2016-2022 行(Power Rating × 回測限制聯動表)
+/// + m3Spec/neely_core_architecture.md §11.4(Triangle/Terminal 內部覆蓋規則)。
 pub fn apply_to_forest(forest: &mut [Scenario]) {
     for scenario in forest.iter_mut() {
         scenario.power_rating = rate_scenario(scenario);
+        scenario.max_retracement =
+            max_retracement::lookup(scenario.power_rating, scenario.in_triangle_context);
     }
 }
 
@@ -64,7 +71,7 @@ mod tests {
             structure_label: "test".to_string(),
             complexity_level: ComplexityLevel::Simple,
             power_rating: PowerRating::Neutral,
-            max_retracement: 0.0,
+            max_retracement: None,
             post_pattern_behavior: PostBehavior::Indeterminate,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
@@ -144,5 +151,34 @@ mod tests {
         apply_to_forest(&mut forest);
         assert!(matches!(forest[0].power_rating, PowerRating::StrongBullish));
         assert!(matches!(forest[1].power_rating, PowerRating::StrongBearish));
+    }
+
+    #[test]
+    fn apply_to_forest_fills_max_retracement_from_rating() {
+        // Strong (±3) → 0.65 / Slight (±1) → 0.90 / Neutral → None
+        let mut forest = vec![
+            make_scenario(NeelyPatternType::Impulse, MonowaveDirection::Up), // → Strong
+            make_scenario(
+                NeelyPatternType::Diagonal { sub_kind: DiagonalKind::Leading },
+                MonowaveDirection::Up,
+            ), // → Slight
+            make_scenario(
+                NeelyPatternType::Zigzag { sub_kind: ZigzagKind::Single },
+                MonowaveDirection::Up,
+            ), // → Neutral
+        ];
+        apply_to_forest(&mut forest);
+        assert_eq!(forest[0].max_retracement, Some(0.65));
+        assert_eq!(forest[1].max_retracement, Some(0.90));
+        assert_eq!(forest[2].max_retracement, None);
+    }
+
+    #[test]
+    fn apply_to_forest_in_triangle_context_overrides_to_none() {
+        let mut forest = vec![make_scenario(NeelyPatternType::Impulse, MonowaveDirection::Up)];
+        forest[0].in_triangle_context = true;
+        apply_to_forest(&mut forest);
+        // Triangle override: max_retracement → None regardless of underlying rating
+        assert_eq!(forest[0].max_retracement, None);
     }
 }

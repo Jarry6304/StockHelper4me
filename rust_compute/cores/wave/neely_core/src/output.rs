@@ -351,7 +351,16 @@ pub struct Scenario {
 
     /// r3 修正:由 i8 改 enum,避免 power_rating = 99 等無效值(§9.4)
     pub power_rating: PowerRating,
-    pub max_retracement: f64,
+    /// Power Rating 對應的最大回測比例(精華版 Ch10 表 2016-2022 行)。
+    ///
+    /// 對齊 m3Spec/neely_core_architecture.md §9.1:`max_retracement: Option<f64>`
+    /// - `None` = 任意回測(Neutral / 或 Triangle/Terminal 內部覆蓋)
+    /// - `Some(0.90)` = ±1 級 ≤ 90%
+    /// - `Some(0.80)` = ±2 級 ≤ 80%
+    /// - `Some(0.65)` = ±3 級 ≤ 60–70%(取中值)
+    ///
+    /// 由 `power_rating::max_retracement::lookup` 依 PowerRating + in_triangle_context 查表。
+    pub max_retracement: Option<f64>,
     pub post_pattern_behavior: PostBehavior,
 
     /// 客觀計數(取代 v1.1 主觀分數)
