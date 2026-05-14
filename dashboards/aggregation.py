@@ -37,6 +37,7 @@ from dashboards.charts import (  # noqa: E402
     candlestick,
     chip,
     facts_cloud,
+    fundamental,
     indicators,
     overlays,
 )
@@ -253,7 +254,27 @@ with tab_chip:
         st.plotly_chart(chip_fig, use_container_width=True)
 
 with tab_fund:
-    st.info("📊 Fundamental Tab 留 Phase C-5(revenue / valuation / financial_statement)")
+    sub_revenue, sub_valuation, sub_financial = st.tabs(
+        ["月營收", "估值 percentile", "財報季頻"]
+    )
+    with sub_revenue:
+        rev_fig = fundamental.build_revenue_chart(
+            indicators_dict.get("revenue_core@monthly")
+            or indicators_dict.get("revenue_core@daily")
+        )
+        st.plotly_chart(rev_fig, use_container_width=True)
+    with sub_valuation:
+        val_fig = fundamental.build_valuation_chart(indicators_dict.get("valuation_core@daily"))
+        st.plotly_chart(val_fig, use_container_width=True)
+    with sub_financial:
+        fin_fig, fin_rows = fundamental.build_financial_statement_view(
+            indicators_dict.get("financial_statement_core@quarterly")
+            or indicators_dict.get("financial_statement_core@daily")
+        )
+        st.plotly_chart(fin_fig, use_container_width=True)
+        if fin_rows:
+            st.markdown("**財報季頻 raw rows**")
+            st.dataframe(fin_rows, use_container_width=True, height=300)
 
 with tab_env:
     st.info("🌐 Environment Tab 留 Phase C-6(taiex / us_market / exchange_rate / fear_greed / market_margin / business_indicator)")
