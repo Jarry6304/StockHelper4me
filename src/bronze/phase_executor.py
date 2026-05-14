@@ -147,6 +147,12 @@ class PhaseExecutor:
         elapsed = int(time.monotonic() - phase_start)
         logger.info(f"[Phase {phase_num}] Completed. elapsed={elapsed}s")
 
+    # ---- Short-circuit thresholds for dataset-level errors -----------------
+    # 連續 N 次同 dataset 收到 dataset-level error(403 / 404 / 422)→ abort 整個 entry
+    # 剩餘 stocks(對齊「FinMind quota / tier / dataset 下架等系統性問題,不該 retry 1700+ 股」場景)
+    _DATASET_ERROR_CODES: frozenset[int] = frozenset({403, 404, 422})
+    _DATASET_ERROR_STREAK_THRESHOLD: int = 5
+
     async def _run_api(self, api_config: ApiConfig, mode: str) -> None:
         """
         執行單一 API 設定的所有股票 × 日期段組合。
@@ -157,6 +163,10 @@ class PhaseExecutor:
         """
         stock_ids = self._resolve_stock_ids(api_config)
         has_post_process = bool(api_config.post_process)
+
+        # Short-circuit:連續 dataset-level error 計數(403/404/422)。
+        # 滿閾值 → log + abort 此 entry 剩餘 stocks(不 reset is_dirty,留下次重試)。
+        dataset_error_streak = 0
 
         for stock_id in stock_ids:
             segments = self.date_segmenter.segments(api_config, mode, stock_id)
@@ -193,7 +203,27 @@ class PhaseExecutor:
                     self.sync_tracker.mark_failed(
                         api_config.name, stock_id, seg_start, seg_end, str(e)
                     )
+
+                    # Short-circuit:dataset-level error 累計
+                    if e.status_code in self._DATASET_ERROR_CODES:
+                        dataset_error_streak += 1
+                        if dataset_error_streak >= self._DATASET_ERROR_STREAK_THRESHOLD:
+                            logger.warning(
+                                f"[Phase {api_config.phase}][{api_config.name}] "
+                                f"連續 {dataset_error_streak} 次 HTTP {e.status_code} 錯誤,"
+                                f"視為 dataset-level 拒絕(token quota / tier / dataset 下架)。"
+                                f"Abort 此 entry 剩餘 stocks;後續 entries 繼續跑。"
+                                f"診斷:`python scripts/probe_finmind_datasets.py` 看 dataset 權限。"
+                            )
+                            return  # 跳出整個 _run_api,不跑 post_process
+                    else:
+                        # 非 dataset-level error(網路 / 個別股 issue)→ reset streak,
+                        # 繼續對其他 stocks retry
+                        dataset_error_streak = 0
                     continue
+
+                # 成功 → reset streak
+                dataset_error_streak = 0
 
                 # 欄位映射（回傳 rows 與 schema_mismatch 旗標）
                 rows, schema_mismatch = self.field_mapper.transform(api_config, raw_records)
