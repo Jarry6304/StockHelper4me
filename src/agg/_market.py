@@ -28,8 +28,17 @@ def fetch_market_facts(
     as_of: date,
     lookback_days: int,
     cores: list[str] | None = None,
+    apply_lookahead_filter: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
     """撈 5 個保留字 stock_id 的 facts,以 stock_id grouped 回傳。
+
+    Args:
+        conn: psycopg connection(dict_row factory)
+        as_of: 查詢日(look-ahead 上界)
+        lookback_days: 期間天數
+        cores: 限制 source_core 範圍。None = 全部
+        apply_lookahead_filter: 預設 True 內建 look-ahead 過濾(對齊 query.as_of() 行為)。
+            設 False 拿 raw rows(對齊舊 API,僅供 debug)
 
     Returns:
         {
@@ -39,6 +48,7 @@ def fetch_market_facts(
         }
     """
     from agg._db import fetch_facts
+    from agg._lookahead import filter_visible
 
     rows = fetch_facts(
         conn,
@@ -52,4 +62,6 @@ def fetch_market_facts(
         sid = r["stock_id"]
         if sid in grouped:
             grouped[sid].append(r)
+    if apply_lookahead_filter:
+        grouped = {sid: filter_visible(fs, as_of) for sid, fs in grouped.items()}
     return grouped

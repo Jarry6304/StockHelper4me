@@ -18,12 +18,13 @@ from agg._types import (
     StructuralRow,
     QueryMetadata,
 )
-from agg.query import as_of, as_of_with_ohlc, find_facts_today
+from agg.query import as_of, as_of_with_ohlc, find_facts_today, health_check
 
 __all__ = [
     "as_of",
     "as_of_with_ohlc",
     "find_facts_today",
+    "health_check",
     "AsOfSnapshot",
     "FactRow",
     "IndicatorRow",
