@@ -72,7 +72,7 @@ mod tests {
             complexity_level: complexity,
             power_rating: PowerRating::Neutral,
             max_retracement: None,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,

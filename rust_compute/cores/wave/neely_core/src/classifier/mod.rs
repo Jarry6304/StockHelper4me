@@ -84,7 +84,7 @@ pub fn classify(
         complexity_level: classify_complexity(candidate),
         power_rating: PowerRating::Neutral, // Stage 10a Power Rating 查表後填
         max_retracement: None,               // Stage 10a 補
-        post_pattern_behavior: PostBehavior::Indeterminate,
+        post_pattern_behavior: PostBehavior::Unconstrained,
         passed_rules: report
             .passed
             .iter()

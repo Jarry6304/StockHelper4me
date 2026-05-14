@@ -147,7 +147,7 @@ mod tests {
                 complexity_level: ComplexityLevel::Simple,
                 power_rating: PowerRating::Bullish,
                 max_retracement: None,
-                post_pattern_behavior: PostBehavior::Indeterminate,
+                post_pattern_behavior: PostBehavior::Unconstrained,
                 passed_rules: vec![
                     RuleId::Ch5_Essential(1),
                     RuleId::Ch5_Essential(2),

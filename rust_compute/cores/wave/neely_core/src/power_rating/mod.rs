@@ -12,6 +12,7 @@
 use crate::output::{PowerRating, Scenario};
 
 pub mod max_retracement;
+pub mod post_behavior;
 pub mod table;
 
 /// 對 Scenario 套 Power Rating(查表)。
@@ -28,16 +29,23 @@ pub fn rate_scenario(scenario: &Scenario) -> PowerRating {
     )
 }
 
-/// 對 Forest 套 Power Rating + Max Retracement,
-/// 直接更新每 Scenario 的 `power_rating` + `max_retracement` 欄位。
+/// 對 Forest 套 Power Rating + Max Retracement + PostBehavior,
+/// 直接更新每 Scenario 的 `power_rating` + `max_retracement` + `post_pattern_behavior` 欄位。
 ///
 /// 對齊 m3Spec/neely_rules.md §第 10 章 2016-2022 行(Power Rating × 回測限制聯動表)
+/// + 2024-2037 行(各修正暗示重點 = PostBehavior dispatch)
 /// + m3Spec/neely_core_architecture.md §11.4(Triangle/Terminal 內部覆蓋規則)。
+///
+/// 三項 lookup 共用 `in_triangle_context` 覆蓋規則(spec line 2021):
+/// in_triangle → max_retracement = None / post_pattern_behavior = Unconstrained
+/// (power_rating 自身的 in_triangle 覆蓋已在 table::lookup_power_rating 處理)。
 pub fn apply_to_forest(forest: &mut [Scenario]) {
     for scenario in forest.iter_mut() {
         scenario.power_rating = rate_scenario(scenario);
         scenario.max_retracement =
             max_retracement::lookup(scenario.power_rating, scenario.in_triangle_context);
+        scenario.post_pattern_behavior =
+            post_behavior::lookup(&scenario.pattern_type, scenario.in_triangle_context);
     }
 }
 
@@ -72,7 +80,7 @@ mod tests {
             complexity_level: ComplexityLevel::Simple,
             power_rating: PowerRating::Neutral,
             max_retracement: None,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -180,5 +188,39 @@ mod tests {
         apply_to_forest(&mut forest);
         // Triangle override: max_retracement → None regardless of underlying rating
         assert_eq!(forest[0].max_retracement, None);
+    }
+
+    #[test]
+    fn apply_to_forest_fills_post_behavior() {
+        // Phase 14: PostBehavior 8-variant lookup 同步寫入
+        let mut forest = vec![
+            make_scenario(NeelyPatternType::Impulse, MonowaveDirection::Up), // → NotFullyRetracedUnless
+            make_scenario(
+                NeelyPatternType::Zigzag { sub_kind: ZigzagKind::Single },
+                MonowaveDirection::Up,
+            ), // → Unconstrained
+            make_scenario(
+                NeelyPatternType::Diagonal { sub_kind: DiagonalKind::Ending },
+                MonowaveDirection::Up,
+            ), // → FullRetracementRequired
+        ];
+        apply_to_forest(&mut forest);
+        assert!(matches!(
+            forest[0].post_pattern_behavior,
+            PostBehavior::NotFullyRetracedUnless { .. }
+        ));
+        assert!(matches!(forest[1].post_pattern_behavior, PostBehavior::Unconstrained));
+        assert!(matches!(
+            forest[2].post_pattern_behavior,
+            PostBehavior::FullRetracementRequired
+        ));
+    }
+
+    #[test]
+    fn apply_to_forest_in_triangle_overrides_post_behavior_to_unconstrained() {
+        let mut forest = vec![make_scenario(NeelyPatternType::Impulse, MonowaveDirection::Up)];
+        forest[0].in_triangle_context = true;
+        apply_to_forest(&mut forest);
+        assert!(matches!(forest[0].post_pattern_behavior, PostBehavior::Unconstrained));
     }
 }

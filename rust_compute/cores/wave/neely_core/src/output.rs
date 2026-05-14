@@ -533,11 +533,41 @@ pub enum ComplexityLevel {
     Complex,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+/// Neely wave number 標號(Impulse 1-5 + Combination X + Triangle/Flat A-E)。
+///
+/// 對齊 m3Spec/neely_core_architecture.md §9.2 PostBehavior::ReachesWaveZone 內部欄。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum WaveNumber {
+    W1, W2, W3, W4, W5,
+    WX,
+    WA, WB, WC, WD, WE,
+}
+
+/// 後續行為(spec §9.2 line 900–925 r5 結構化 enum)。
+///
+/// **舊 3-variant(Continuation/Reversal/Indeterminate)由 Phase 14 取代** —
+/// 對齊精華版 Ch10 line 2024–2037「各修正暗示重點」14 種具體後續行為。
+///
+/// 由 `power_rating::post_behavior::lookup(pattern_type, power_rating, in_triangle_context)`
+/// 查表得出;後續 Stage 5+ 細化規則時可在 classifier 內 override 為 Composite。
+#[derive(Debug, Clone, Serialize)]
 pub enum PostBehavior {
-    Continuation,
-    Reversal,
-    Indeterminate,
+    /// 後續必完全回測整段(例:5th Failure、C-Failure、Terminal Impulse)
+    FullRetracementRequired,
+    /// 後續必回測 ≥ ratio × 整段(0.0..=1.0,例:±1 級 ratio=0.90)
+    MinRetracement { ratio: f64 },
+    /// 後續必達 wave-X 區(例:Triangle 後續 thrust 須達 wave-D 區)
+    ReachesWaveZone { wave: WaveNumber },
+    /// 後續 Impulse 必 > ratio × 前一同向 Impulse(例:Running Correction ratio=1.618)
+    NextImpulseExceeds { ratio: f64 },
+    /// 不會被完全回測(除非為更大級的 5/c — 例:Double Zigzag/Double Flat)
+    NotFullyRetracedUnless { exception: String },
+    /// 任意後續(Neutral / Power Rating 0 / Triangle 內覆蓋)
+    Unconstrained,
+    /// 強烈暗示後續形態(例:±1~±3 被回測 100% → Triangle/Terminal)
+    HintsAtPattern { suggested_pattern: String, reason: String },
+    /// 多模式組合(後續行為跨多條規則 — 例:Irregular Failure = 必完全回測 + 後續 Impulse ≥ 161.8%)
+    Composite { behaviors: Vec<PostBehavior> },
 }
 
 // ---------------------------------------------------------------------------

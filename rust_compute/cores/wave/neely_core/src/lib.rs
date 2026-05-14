@@ -3,7 +3,7 @@
 // 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
 //       + m3Spec/cores_overview.md r4
 //
-// 已實作(Phase 13 / v0.22.0 — 2026-05-14):
+// 已實作(Phase 14 / v0.23.0 — 2026-05-14):
 //   - struct / enum 合約(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
 //   - WaveCore trait + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
 //   - **RuleId 章節編碼**(architecture §9.3)限縮 Ch5_* / Ch9_* / Engineering_* 三組
@@ -31,6 +31,11 @@
 //   - **Stage 10a**:Ch10 Power Rating r5 查表(±3..±3 7 級,寫死);
 //                    + **max_retracement** Option<f64> 同步寫入(±3→0.65 / ±2→0.80 / ±1→0.90 / 0→None /
 //                                                                 in_triangle_context→None;Phase 13)
+//                    + **post_pattern_behavior** 8-variant 結構化 enum 同步寫入
+//                      (對齊 neely_rules.md line 2024-2037「各修正暗示重點」查表;
+//                       FullRetracementRequired / MinRetracement / ReachesWaveZone / NextImpulseExceeds /
+//                       NotFullyRetracedUnless / Unconstrained / HintsAtPattern / Composite;
+//                       in_triangle_context → Unconstrained;Phase 14)
 //   - **Stage 10b**:Fibonacci Internal/External 分離投影(從 monowave price 計算;Phase 10)
 //   - **Stage 10c**:Invalidation Triggers 接 monowave price(W1.start_price / W2.end_price;Phase 10)
 //   - **Stage 10.5**:Reverse Logic Rule(Neely Extension)— `ReverseLogicObservation` +
@@ -109,10 +114,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.22.0",
+        "0.23.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement + post_behavior 8-variant)",
     )
 }
 
@@ -186,8 +191,14 @@ impl WaveCore for NeelyCore {
         // 新建 power_rating/max_retracement.rs 依 Ch10 line 2016-2022 查表(±3→0.65 /
         // ±2→0.80 / ±1→0.90 / 0→None);apply_to_forest 同步寫入 + Triangle 內部覆蓋 None。
         // 取代 13 處 `max_retracement: 0.0` placeholder(從未被計算)。)
+        // 0.22.0 → 0.23.0(Phase 14 PR / PostBehavior 8-variant + WaveNumber 落地 — 2026-05-14:
+        // PostBehavior 由 3-variant(Continuation/Reversal/Indeterminate)→ 8-variant 結構化 enum
+        // 對齊 architecture §9.2;新增 WaveNumber enum(W1-W5/WX/WA-WE);新建
+        // power_rating/post_behavior.rs 依 neely_rules.md line 2024-2037「各修正暗示重點」查表;
+        // apply_to_forest 同步寫入 + Triangle 內部覆蓋 Unconstrained。取代 14 處 `PostBehavior::Indeterminate`
+        // placeholder。Flat 3-variant 暫時 map(留 Phase 16 FlatKind 7-variant 細化))
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.22.0"
+        "0.23.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -497,7 +508,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.22.0");
+        assert_eq!(core.version(), "0.23.0");
     }
 
     // -------------------------------------------------------------
