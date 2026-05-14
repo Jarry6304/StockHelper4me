@@ -34,6 +34,12 @@ dashboard = [
     "pandas>=2.0",
     "plotly>=5.17",
 ]
+mcp = [
+    # FastMCP server framework(stdio + image content + tool registration)
+    "fastmcp>=2.0",
+    # Plotly Figure → PNG bytes(內含 chromium binary,首次下載 ~50MB)
+    "kaleido>=0.2",
+]
 
 # =============================================================================
 # Setuptools src layout
@@ -46,8 +52,13 @@ dashboard = [
 # alembic.ini 的 prepend_sys_path = . 保留(讓 alembic env.py 仍可從 root 跑)。
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "src", "mcp_server" = "mcp_server"}
 
 [tool.setuptools.packages.find]
-where   = ["src"]
-include = ["silver*", "bronze*", "agg*"]
+where   = ["src", "."]
+include = ["silver*", "bronze*", "agg*", "mcp_server*"]
+
+# Pytest sys.path:repo root(讓 mcp_server / dashboards 可直接 import)+ src/
+# (對齊 editable .pth 但 fallback,sandbox 沒裝 .pth 時也 work)
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
