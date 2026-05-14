@@ -434,8 +434,9 @@ pub struct NeelyEngineConfig {
     pub beam_width: usize,                      // 預設 50
 
     /// Forest 上限保護:超過此 size 用 BeamSearchFallback
-    /// P0 Gate 校準後可能改值
-    pub forest_max_size: usize,                 // 預設 1000
+    /// **v1.34 P0 Gate v2 校準後**:1000(r2 保守佔位)→ **200**
+    /// production 1264 stocks 實測 max=37 / p99=16,留 ~5× p99 餘量
+    pub forest_max_size: usize,                 // 預設 200(v1.34 校準前 1000)
 
     /// 單檔 Compaction 逾時(秒)
     pub compaction_timeout_secs: u64,           // 預設 60
@@ -475,7 +476,7 @@ impl Default for NeelyEngineConfig {
         Self {
             atr_period: 14,
             beam_width: 50,
-            forest_max_size: 1000,
+            forest_max_size: 200,                // v1.34 P0 Gate v2 校準(原 1000)
             compaction_timeout_secs: 60,
             overflow_strategy: OverflowStrategy::BeamSearchFallback { k: 100 },
             neutral_threshold_taiex: 0.5,
@@ -1175,7 +1176,7 @@ pub struct ExtensionSubdivisionPair {
 
 ```rust
 pub struct NeelyEngineConfig {
-    pub forest_max_size: usize,                  // 預設 1000
+    pub forest_max_size: usize,                  // 預設 200(v1.34 P0 Gate v2 校準前 1000)
     pub compaction_timeout_secs: u64,            // 預設 60
     pub overflow_strategy: OverflowStrategy,
 }
@@ -1240,7 +1241,7 @@ forest 累積 → 持續監控 size 與 elapsed
 
 | 參數 | 預設 | 理由 |
 |---|---|---|
-| `forest_max_size` | 1000 | 保守佔位,P0 Gate 六檔實測後校準 |
+| `forest_max_size` | **200** | **v1.34 P0 Gate v2(2026-05-14)校準後**:production 1264 stocks 實測 max=37 / p99=16,從 r2 保守佔位 1000 降至 200(留 ~5× p99 餘量);超過會走 BeamSearchFallback k=100 |
 | `compaction_timeout_secs` | 60 | 保守佔位 |
 | `BeamSearchFallback { k }` | 100 | 100 棵已遠超人類能消化的解讀數 |
 

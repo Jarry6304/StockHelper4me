@@ -26,10 +26,11 @@ inventory::submit! {
 /// 連續處於超賣 / 超買區的最小天數,觸發 streak event
 const STREAK_MIN_DAYS: usize = 3;
 
-/// **v1.34 Round 5 production calibration**:全市場 23.8 facts/yr/stock(2× 目標)。
-/// Streak / Exit 4 種事件加總過頻 — 加 spacing,同方向 streak 連續兩次至少間隔 15 bars,
-/// 對齊「14-period 振盪需 ≥ 1 cycle 才合理」直觀。預期 24 → ~12/yr。
-const MIN_STREAK_FIRE_SPACING: usize = 15;
+/// **v1.34 Round 5**:全市場 23.8 facts/yr/stock,加 spacing=15 → 17.6/yr(26% down)。
+///
+/// **v1.34 Round 6**:15 → 25(對應約 5 週,讓 Williams %R 14-period 振盪
+/// 完整跑完 1 cycle 才再觸發)。預期 17.6 → ~10/yr。
+const MIN_STREAK_FIRE_SPACING: usize = 25;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WilliamsRParams {

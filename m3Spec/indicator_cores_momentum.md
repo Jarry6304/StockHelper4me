@@ -569,7 +569,14 @@ pub struct IchimokuPoint {
 }
 ```
 
-### 8.5 Fact 範例
+### 8.5 EventKind 與 Fact 範例
+
+```rust
+const DISPLACEMENT: usize = 26;
+const MIN_TK_CROSS_SPACING: usize = 10;        // v1.34 Round 5 加
+const MIN_EVENT_SPACING: usize = 10;            // v1.34 Round 6 擴用到 CloudBreakout + KumoTwist
+const KUMO_TWIST_MIN_DIFF_PCT: f64 = 0.001;     // v1.34 Round 6 加:flat-cloud flicker 防衛(0.1%)
+```
 
 | Fact statement | metadata |
 |---|---|
@@ -578,6 +585,14 @@ pub struct IchimokuPoint {
 | `Price broke above Kumo cloud at 2026-04-25` | `{ event: "cloud_breakout", direction: "above" }` |
 | `Kumo twist(Senkou A/B cross) projected at 2026-05-10` | `{ event: "kumo_twist", projected_date: "2026-05-10" }` |
 | `Chikou span broke above price at 2026-04-20` | `{ event: "chikou_bullish_break" }` |
+
+> **v1.34 Round 5/6 production calibration(2026-05-14)**:r3 spec 沒對 cross/
+> breakout/twist 加 spacing,1264 stocks 跑出 25.3/yr 🟠。Round 5 加
+> `MIN_TK_CROSS_SPACING=10`;Round 6 重新命名 `MIN_EVENT_SPACING=10` 並擴用到
+> CloudBreakout + KumoTwist。**KumoTwist 加 `KUMO_TWIST_MIN_DIFF_PCT=0.001` flat-
+> cloud flicker 防衛**:當 |senkou_a - senkou_b| / max(senkou_a, senkou_b) < 0.1%
+> 時 senkou_a/b 在零附近反覆穿越會無意義 fire,加百分比門檻過濾。Per-EventKind
+> 觸發率達 ≤ 12/yr/stock ✅。
 
 ---
 
@@ -620,12 +635,29 @@ pub struct WilliamsRPoint {
 }
 ```
 
-### 9.5 Fact 範例
+### 9.5 EventKind 與 Fact 範例
+
+```rust
+pub enum WilliamsREventKind {
+    OversoldStreak,      // value < -80 連續 ≥ 3 天
+    OverboughtStreak,    // value > -20 連續 ≥ 3 天
+    OversoldExit,        // 跨出 oversold zone(prev < -80, cur > -80)
+    OverboughtExit,      // 跨出 overbought zone(prev > -20, cur < -20)
+}
+
+const STREAK_MIN_DAYS: usize = 3;
+const MIN_STREAK_FIRE_SPACING: usize = 25;   // v1.34 Round 5 加 / Round 6 調至 25(從 15)
+```
 
 | Fact statement | metadata |
 |---|---|
 | `Williams %R(14) = -85 at 2026-04-25, < -80 for 4 days` | `{ event: "oversold_streak", days: 4 }` |
 | `Williams %R(14) crossed above -80 at 2026-04-26(exiting oversold)` | `{ event: "oversold_exit" }` |
+
+> **v1.34 Round 5/6 production calibration(2026-05-14)**:r3 spec 只列 streak,
+> 實作補了 exit 對稱。Round 5 加 `MIN_STREAK_FIRE_SPACING=15` spacing,Round 6 調至
+> **25**(對應約 5 週,讓 Williams %R 14-period 振盪完整跑完 1 cycle 才再觸發)。
+> 每 EventKind 種類獨立 last_*_idx 追蹤。
 
 ---
 
@@ -670,13 +702,34 @@ pub struct CciPoint {
 }
 ```
 
-### 10.5 Fact 範例
+### 10.5 EventKind 與 Fact 範例
+
+```rust
+pub enum CciEventKind {
+    ExtremeHigh,           // edge trigger:CCI 跨上 +200(extreme zone 入界)
+    ExtremeLow,            // edge trigger:CCI 跨下 -200
+    OverboughtEntry,       // edge trigger:CCI 跨上 +100(進入超買)
+    OversoldEntry,         // edge trigger:CCI 跨下 -100(進入超賣)
+    ZeroCrossPositive,     // 零線上穿
+    ZeroCrossNegative,     // 零線下穿
+}
+
+const CCI_CONST: f64 = 0.015;
+const MIN_EVENT_SPACING: usize = 10;   // v1.34 Round 5 加(zero cross)/ Round 6 擴用到全 4 edge events
+```
 
 | Fact statement | metadata |
 |---|---|
 | `CCI(20) = 215 at 2026-04-25, exceeded extreme zone(>200)` | `{ event: "extreme_high", value: 215.0 }` |
 | `CCI(20) crossed above 100 at 2026-04-15` | `{ event: "overbought_entry" }` |
 | `CCI(20) zero line cross(positive) at 2026-04-10` | `{ event: "zero_cross_positive" }` |
+
+> **v1.34 Round 5/6 production calibration(2026-05-14)**:r3 spec Fact 範例
+> 只列 3 種 event,實作補滿 6 種(對稱 Low / Entry / Negative)。Round 5 加
+> `MIN_ZERO_CROSS_SPACING=10`,Round 6 重新命名 `MIN_EVENT_SPACING=10` 並擴用到
+> 全部 4 種 edge events(ExtremeHigh/Low + OverboughtEntry/OversoldEntry)
+> 各自獨立 last_*_idx 追蹤。1264 stocks production 觸發率從 91/yr 🔴 降至
+> per-kind ~3-5/yr 🟢。
 
 ---
 
@@ -726,14 +779,29 @@ pub struct CoppockPoint {
 }
 ```
 
-### 11.5 Fact 範例
+### 11.5 EventKind 與 Fact 範例
+
+```rust
+pub enum CoppockEventKind {
+    ZeroCrossPositive,
+    ZeroCrossNegative,
+    Trough,                  // 底部轉折(rising since trough)
+}
+
+const MIN_EVENT_SPACING_BARS: usize = 30;   // v1.34 Round 5 加(daily timeframe 噪音抑制)
+```
 
 | Fact statement | metadata |
 |---|---|
 | `Coppock(14,11,10) zero line cross(positive) at 2026-04-30` | `{ event: "zero_cross_positive", date: "2026-04-30" }` |
 | `Coppock(14,11,10) zero line cross(negative) at 2026-03-31` | `{ event: "zero_cross_negative", date: "2026-03-31" }` |
 | `Coppock(14,11,10) trough at -45.2 on 2026-02-28, rising since` | `{ event: "trough", value: -45.2, since_date: "2026-02-28" }` |
-| `Coppock(14,11,10) bullish divergence: price LL 2026-01-31, Coppock HL 2026-04-30` | `{ event: "bullish_divergence", price_date: "2026-01-31", indicator_date: "2026-04-30" }` |
+
+> **v1.34 Round 5 production calibration(2026-05-14)**:r3 spec Fact 範例
+> 列「bullish_divergence」但實作未做(deferred — Coppock 月線粒度算 divergence
+> 需 ≥6 月 pivot,1264 stocks daily 觸發機會極少)。Round 5 加
+> `MIN_EVENT_SPACING_BARS=30` 對 zero_cross + trough 用獨立 spacing,避免 daily
+> timeframe 訊號雜訊。月線(spec 推薦)觸發本身就稀疏,spacing 不會誤殺。
 
 ### 11.6 月線時間框架建議
 

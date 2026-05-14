@@ -62,6 +62,15 @@ def as_of(
         RuntimeError: 無法解出 DATABASE_URL
         ImportError: psycopg 未安裝
     """
+    # Input validation(失敗 early,避免 silently 跑 SQL 或誤觸 spec gap)
+    if not stock_id or not stock_id.strip():
+        raise ValueError("stock_id 不可為空字串")
+    if lookback_days < 0:
+        raise ValueError(f"lookback_days 不可為負(got {lookback_days})")
+    if cores is not None and len(cores) == 0:
+        # 明確傳空 list 容易誤殺整次查詢,raise 比 silently 回空 snapshot 安全
+        raise ValueError("cores 不可為空 list;若要查全部請傳 None")
+
     owns_conn = conn is None
     if owns_conn:
         conn = get_connection(database_url)
@@ -104,18 +113,17 @@ def as_of(
             key = _indicator_key(r["core_name"], r["timeframe"])
             structural[key] = _to_structural_row(r)
 
-        # 4. market-level facts(5 保留字 stock_id 並排)
+        # 4. market-level facts(5 保留字 stock_id 並排;_market.fetch_market_facts 內建 look-ahead filter)
         market: dict[str, list[FactRow]] = {}
         if include_market:
-            raw_market = fetch_market_facts(
+            visible_market = fetch_market_facts(
                 conn,
                 as_of=as_of,
                 lookback_days=lookback_days,
                 cores=cores,
             )
-            for sid, sid_facts in raw_market.items():
-                visible = filter_visible(sid_facts, as_of)
-                market[sid] = [_to_fact_row(r) for r in visible]
+            for sid, sid_facts in visible_market.items():
+                market[sid] = [_to_fact_row(r) for r in sid_facts]
 
         metadata = QueryMetadata(
             stock_id=stock_id,
@@ -230,6 +238,81 @@ def as_of_with_ohlc(
         return snapshot, ohlc
     finally:
         if owns_conn:
+            conn.close()
+
+
+def health_check(
+    database_url: str | None = None,
+    *,
+    conn=None,
+) -> dict[str, Any]:
+    """快速確認 PG 可達 + Aggregation Layer 三表存在 + row counts。
+
+    對齊 m3Spec/aggregation_layer.md §三 三張 M3 表。供 dashboard / CLI / MCP server
+    啟動時呼叫,失敗時點明是 PG / schema / 三表中哪一環掛掉。
+
+    Args:
+        database_url: 可選 PG 連線字串
+        conn: 既有 connection(重複利用)
+
+    Returns:
+        dict {
+            "ok": bool,                 # True 若 PG 連得到 + 三表皆存在
+            "database_url": str | None, # 不含 password masked
+            "tables": {
+                "facts": {"exists": bool, "row_count": int | None},
+                "indicator_values": {...},
+                "structural_snapshots": {...},
+            },
+            "errors": list[str],
+        }
+    """
+    result: dict[str, Any] = {
+        "ok": False,
+        "database_url": None,
+        "tables": {},
+        "errors": [],
+    }
+    owns_conn = conn is None
+    try:
+        if owns_conn:
+            conn = get_connection(database_url)
+    except Exception as e:
+        result["errors"].append(f"connect_failed: {type(e).__name__}: {e}")
+        return result
+
+    try:
+        for tbl in ("facts", "indicator_values", "structural_snapshots"):
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT to_regclass(%s) IS NOT NULL AS exists_flag",
+                        [tbl],
+                    )
+                    row = cur.fetchone()
+                    exists = bool(row and row.get("exists_flag"))
+                    info: dict[str, Any] = {"exists": exists, "row_count": None}
+                    if exists:
+                        cur.execute(f"SELECT COUNT(*) AS n FROM {tbl}")
+                        cnt_row = cur.fetchone()
+                        info["row_count"] = int(cnt_row["n"]) if cnt_row else None
+                    result["tables"][tbl] = info
+            except Exception as e:
+                result["tables"][tbl] = {"exists": False, "row_count": None}
+                result["errors"].append(f"{tbl}: {type(e).__name__}: {e}")
+
+        result["ok"] = (
+            not result["errors"]
+            and all(t.get("exists") for t in result["tables"].values())
+        )
+        # PG dsn 通常不放 password 在 conn.info.dsn 之外的位置,但保險不回 raw url
+        try:
+            result["database_url"] = f"{conn.info.host}:{conn.info.port}/{conn.info.dbname}"
+        except Exception:
+            result["database_url"] = "unknown"
+        return result
+    finally:
+        if owns_conn and conn is not None:
             conn.close()
 
 

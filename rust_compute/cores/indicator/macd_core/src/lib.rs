@@ -1,5 +1,5 @@
 // macd_core(P1)— Indicator Core
-// 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §三 macd_core(spec r2)
+// 對齊 m3Spec/indicator_cores_momentum.md §三 macd_core(spec r4)
 // Output §3.4(僅 series)+ Fact §3.5(5 種)+ Divergence §3.6(嚴格規則式)
 //
 // **Reference(2026-05-10 加 / 2026-05-13 校驗)**:

@@ -28,12 +28,17 @@ inventory::submit! {
     )
 }
 
-/// TK Cross 最小間距(避免噪音放大)。
+/// TK Cross / Cloud Breakout / Kumo Twist 最小間距(避免噪音放大)。
 ///
-/// **v1.34 Round 5 production calibration**:全市場 27.9 facts/yr/stock(2× 目標)。
-/// Tenkan/Kijun cross 在震盪期密集穿越 → 對齊 v1.32 ma/kd cross 10 慣例。
-/// 預期 28 → ~13/yr。
-const MIN_TK_CROSS_SPACING: usize = 10;
+/// **v1.34 Round 5**:加 TK spacing=10 → 27.9 → 25.3/yr(僅 9% down,效果差)。
+///
+/// **v1.34 Round 6**:擴展 spacing 到 CloudBreakout / KumoTwist;
+/// KumoTwist 加 senkou_a / senkou_b 最小差幅閾值 0.1% 防 flat-cloud flicker。
+/// 預期 25.3 → ~12/yr。
+const MIN_EVENT_SPACING: usize = 10;
+const MIN_TK_CROSS_SPACING: usize = MIN_EVENT_SPACING;
+/// KumoTwist 最小翻轉幅度(防 sa/sb 接近 0 時的 flat-cloud 反覆 twist 噪音)
+const KUMO_TWIST_MIN_DIFF_PCT: f64 = 0.001; // 0.1%
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IchimokuParams {
@@ -177,8 +182,10 @@ impl IndicatorCore for IchimokuCore {
 
         let mut events = Vec::new();
         let warmup = self.warmup_periods(&params).min(n);
-        // v1.34 Round 5:TK Cross spacing 狀態追蹤
+        // v1.34 Round 5 + 6:每 event 種類獨立 spacing 狀態
         let mut last_tk_cross_idx: Option<usize> = None;
+        let mut last_cloud_breakout_idx: Option<usize> = None;
+        let mut last_kumo_twist_idx: Option<usize> = None;
         for i in warmup..n {
             let p = &series[i - 1];
             let c = &series[i];
@@ -204,32 +211,52 @@ impl IndicatorCore for IchimokuCore {
                 last_tk_cross_idx = Some(i);
             }
             // cloud breakout — close 從雲內 / 雲下 突破到雲上(對齊 §8.5 "cloud_breakout")
+            // v1.34 Round 6 加 MIN_EVENT_SPACING
             let close = input.bars[i].close;
             let prev_close = input.bars[i - 1].close;
             let upper = c.senkou_a.max(c.senkou_b);
             let lower = c.senkou_a.min(c.senkou_b);
             let prev_upper = p.senkou_a.max(p.senkou_b);
             let prev_lower = p.senkou_a.min(p.senkou_b);
-            if prev_close <= prev_upper && close > upper {
-                events.push(IchimokuEvent {
-                    date: c.date,
-                    kind: IchimokuEventKind::CloudBreakoutAbove,
-                    metadata: json!({"event": "cloud_breakout", "direction": "above", "close": close, "cloud_top": upper}),
-                });
-            } else if prev_close >= prev_lower && close < lower {
-                events.push(IchimokuEvent {
-                    date: c.date,
-                    kind: IchimokuEventKind::CloudBreakoutBelow,
-                    metadata: json!({"event": "cloud_breakout", "direction": "below", "close": close, "cloud_bottom": lower}),
-                });
+            let breakout_above = prev_close <= prev_upper && close > upper;
+            let breakout_below = prev_close >= prev_lower && close < lower;
+            if (breakout_above || breakout_below)
+                && last_cloud_breakout_idx
+                    .is_none_or(|last| i >= last + MIN_EVENT_SPACING)
+            {
+                if breakout_above {
+                    events.push(IchimokuEvent {
+                        date: c.date,
+                        kind: IchimokuEventKind::CloudBreakoutAbove,
+                        metadata: json!({"event": "cloud_breakout", "direction": "above", "close": close, "cloud_top": upper}),
+                    });
+                } else {
+                    events.push(IchimokuEvent {
+                        date: c.date,
+                        kind: IchimokuEventKind::CloudBreakoutBelow,
+                        metadata: json!({"event": "cloud_breakout", "direction": "below", "close": close, "cloud_bottom": lower}),
+                    });
+                }
+                last_cloud_breakout_idx = Some(i);
             }
-            // kumo twist — cloud color 翻轉
-            if p.cloud_color != c.cloud_color && c.cloud_color != CloudColor::Neutral {
+            // kumo twist — cloud color 翻轉 + v1.34 Round 6 加 spacing + min diff 防 flat-cloud flicker
+            let twist = p.cloud_color != c.cloud_color && c.cloud_color != CloudColor::Neutral;
+            // 防 flat-cloud:senkou_a / senkou_b 接近 0 時微小差距即翻 → 加 0.1% 閾值
+            let diff_pct = if upper > 0.0 {
+                (c.senkou_a - c.senkou_b).abs() / upper
+            } else {
+                0.0
+            };
+            if twist
+                && diff_pct >= KUMO_TWIST_MIN_DIFF_PCT
+                && last_kumo_twist_idx.is_none_or(|last| i >= last + MIN_EVENT_SPACING)
+            {
                 events.push(IchimokuEvent {
                     date: c.date,
                     kind: IchimokuEventKind::KumoTwist,
-                    metadata: json!({"event": "kumo_twist", "to_color": format!("{:?}", c.cloud_color)}),
+                    metadata: json!({"event": "kumo_twist", "to_color": format!("{:?}", c.cloud_color), "diff_pct": diff_pct}),
                 });
+                last_kumo_twist_idx = Some(i);
             }
         }
 

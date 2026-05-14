@@ -1,4 +1,4 @@
-// kd_core(P1)— 對齊 m2Spec/oldm2Spec/indicator_cores_momentum.md §五 r2
+// kd_core(P1)— 對齊 m3Spec/indicator_cores_momentum.md §五 r4
 // Params §5.2(period 9 / k_smooth 3 / d_smooth 3)/ Output §5.4(僅 k/d)/ warmup §5.3
 //
 // **Reference(2026-05-10 加)**:

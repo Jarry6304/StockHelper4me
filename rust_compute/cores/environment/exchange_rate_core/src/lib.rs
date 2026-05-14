@@ -1,4 +1,4 @@
-// exchange_rate_core(P2)— 對齊 m2Spec/oldm2Spec/environment_cores.md §五 r2
+// exchange_rate_core(P2)— 對齊 m3Spec/environment_cores.md §五 r3
 // Params §5.4(currency_pairs / ma_period / key_levels / significant_change)/
 // Output §5.6(rate / change_pct / ma_value / TrendState)/ EventKind 4 個
 

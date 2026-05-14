@@ -1,4 +1,4 @@
-// fear_greed_core(P2)— 對齊 m2Spec/oldm2Spec/environment_cores.md §六 r2
+// fear_greed_core(P2)— 對齊 m3Spec/environment_cores.md §六 r3
 // Params §6.3(extreme_fear/fear/greed/extreme_greed/streak_min_days)/
 // Output §6.5(zone enum)/ EventKind 5 個(Entered/Exited/StreakInZone)
 // 已知架構例外:暫直讀 Bronze fear_greed_index(§6.2)

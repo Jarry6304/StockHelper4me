@@ -1,6 +1,6 @@
 // core_registry — inventory CoreRegistration + CoreRegistry::discover
 //
-// 對齊 m2Spec/oldm2Spec/cores_overview.md §五(Monolithic Binary 部署模型)。
+// 對齊 m3Spec/cores_overview.md §五(Monolithic Binary 部署模型)。
 //
 // 設計:
 //   - 每個 Core 在自己的 lib 用 `inventory::submit!` 註冊一個 CoreRegistration

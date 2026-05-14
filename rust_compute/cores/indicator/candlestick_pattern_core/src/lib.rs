@@ -32,14 +32,13 @@ inventory::submit! {
 
 /// 同一 PatternKind 連續 N 個交易日內只觸發一次(避免噪音放大)。
 ///
-/// **v1.34 Round 5 production calibration**:全市場 1263 stocks 跑出
-/// 115.5 facts/yr/stock(10× 嚴重噪音)。Doji 在動盪期 / Bullish/Bearish Engulfing
-/// 在震盪區頻繁觸發 → spec §3.7「強訊號型態」失去信號價值。
+/// **v1.34 Round 5 production calibration**:全市場 115.5 facts/yr/stock(10× 嚴重噪音)。
+/// 設 10 → 68.9/yr(40% down)仍 5× 目標。
 ///
-/// 加 MIN_PATTERN_GAP_BARS = 10 — 同 pattern_kind 至少 10 個 bar 才能再次觸發,
-/// 對齊 v1.32 ma_core / kd_core MIN_X_CROSS_SPACING=10 慣例。
-/// 預期 115.5 → ~40-50/yr/stock(2.5× 降量),仍 > 12 但對 16 patterns 加總合理。
-const MIN_PATTERN_GAP_BARS: usize = 10;
+/// **v1.34 Round 6 production calibration**:10 → 20(每 PatternKind 至少 20 bars
+/// 才再觸發,合理對齊「30+ trading days 才算新型態出現」實務直覺)。
+/// 預期 68.9 → ~30/yr。
+const MIN_PATTERN_GAP_BARS: usize = 20;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
 pub enum PatternKind {

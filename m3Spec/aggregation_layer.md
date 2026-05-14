@@ -1,11 +1,12 @@
-# Aggregation Layer 規格 r1
+# Aggregation Layer 規格 r2
 
-> **狀態**:r1(2026-05-14 立稿)
+> **狀態**:r2(2026-05-14 更新 — Phase B-2 / B-3 / C / D 全套落地反寫)
 > **層級**:System Core(對齊 `cores_overview.md` §8.6)
 > **路徑**:即時請求路徑(對 batch 計算路徑 M3 Cores 而言)
 > **原則**:**並排呈現,不整合**(對齊 §九 / §十一)
 > **依賴**:`facts` / `indicator_values` / `structural_snapshots` + Silver 主數據表
 > **不依賴**:Rust core 模組(避免循環);純讀 PG layer
+> **實作位置**:`src/agg/`(Python lib)+ `dashboards/`(Streamlit)+ `mcp_server/`(MCP)
 
 ## 目錄
 
@@ -57,35 +58,60 @@
 
 Python lib 永遠是基礎層;FastAPI / Streamlit / GUI 都是 thin wrapper。
 
-### 2.2 對外 API surface
+### 2.2 對外 API surface(r2 反寫 — 實際 `src/agg/`)
 
 ```python
-# agg/query.py
+# src/agg/query.py(r2 實作版)
 from datetime import date
 from dataclasses import dataclass
+from agg import as_of, find_facts_today, as_of_with_ohlc, health_check
 
-@dataclass
-class AsOfSnapshot:
-    stock_id: str
-    as_of: date
-    facts: list[dict]                    # 期間內 facts(已過 look-ahead 防衛)
-    indicator_latest: dict[str, dict]    # 各 indicator 最新值
-    structural: dict[str, dict]          # neely scenario_forest 等
-    market: dict[str, list[dict]]        # market-level facts 並排
-    metadata: dict                       # query 參數記錄
-
+# 主入口 — 對齊 r1 設計,簽章微調(stock_id positional / database_url 可選 / conn 可選)
 def as_of(
-    db_url: str,
     stock_id: str,
     as_of: date,
+    *,
     cores: list[str] | None = None,
     lookback_days: int = 90,
     include_market: bool = True,
     timeframes: list[str] | None = None,
+    database_url: str | None = None,
+    conn=None,
 ) -> AsOfSnapshot: ...
+
+# Dashboard / MCP server 一次撈 snapshot + OHLC
+def as_of_with_ohlc(
+    stock_id: str,
+    as_of_date: date,
+    *,  # 同 as_of() 全部 kwargs
+) -> tuple[AsOfSnapshot, list[dict]]: ...
+
+# 跨 stock 搜尋(§9.4 use case)
+def find_facts_today(
+    today: date,
+    *,
+    source_core: str | None = None,
+    kind: str | None = None,
+    database_url: str | None = None,
+    conn=None,
+) -> list[FactRow]: ...
+
+# 啟動健康檢查(r2 新增,2026-05-14 補強)
+def health_check(
+    database_url: str | None = None,
+    *,
+    conn=None,
+) -> dict:
+    """
+    回傳 {ok: bool, database_url: str, tables: {...}, errors: [...]}。
+    確認 PG 可達 + facts / indicator_values / structural_snapshots 三表存在 + row counts。
+    """
 ```
 
 `as_of()` 是核心入口;backtest 與即時查詢共用此介面,look-ahead bias 防衛集中一處。
+
+**r2 新增 input validation**:`stock_id` 空字串 / negative `lookback_days` /
+空 `cores` list 早 raise `ValueError`,避免 silently 回空 snapshot。
 
 ---
 
@@ -171,7 +197,7 @@ Aggregation 不寫入 fwd 表 — 只讀。
 
 ### 6.1 防衛點集中
 
-所有 fact 過濾都在 `agg/_lookahead.py` 一處:
+所有 fact 過濾都在 `agg/_lookahead.py` 一處(r2 更新:`agg/_market.py` 內建呼叫):
 
 ```python
 def is_visible_at(fact: dict, as_of: date) -> bool:
@@ -200,6 +226,17 @@ def is_visible_at(fact: dict, as_of: date) -> bool:
 
 - `financial_statement_core` 沒記錄真實發布日,用 T+45 sliding window 過濾;若有公司提前 / 延遲公告,可能對齊偏差 ±15 天
 - `report_date` 在 facts.metadata 內,需 JSONB query 過濾;perf 可接受,但寫法比一般 SQL 過濾繁瑣
+
+### 6.4 過濾呼叫位置(r2 補)
+
+| 位置 | 過濾觸發 |
+|---|---|
+| `agg.query.as_of()` — 個股 facts | 撈完 raw_facts 後 `filter_visible(raw_facts, as_of)` |
+| `agg.query.find_facts_today()` | SQL 撈完後 `filter_visible(rows, today)` |
+| `agg._market.fetch_market_facts()` | r2 起內建 `apply_lookahead_filter=True`(可關閉 `apply_lookahead_filter=False` 走 debug) |
+
+直接呼叫 `_market.fetch_market_facts()` **不會** leak 未來 fact(r2 補強;r1 設計
+時要 caller 自己 filter,容易踩坑)。`as_of()` 內呼叫不再 redundant double-filter。
 
 ---
 
@@ -361,50 +398,74 @@ snap = as_of(db_url, "2330", today, include_market=True)
 
 ---
 
-## 十一、實作分階段
+## 十一、實作分階段(r2 反寫 — 落地狀態)
 
-### Phase B-2:Python lib(`agg/` package)
+### Phase B-2:Python lib(`src/agg/`)— ✅ 已完成
 
-範圍:
-- `agg/__init__.py`:expose `as_of`, `AsOfSnapshot`
-- `agg/query.py`:`as_of()` 入口
-- `agg/_lookahead.py`:`is_visible_at()` 防衛
-- `agg/_market.py`:`fetch_market_facts()` 5 保留字組合
-- `agg/_serialize.py`:dataclass + `to_dict()` / `to_json()` / DataFrame
-- `agg/_db.py`:reuse `src/db.py:create_writer()` connection
+實作落地(commit `50d5310`,2026-05-14):
 
-接口套件層:加進 `pyproject.toml`:
-```toml
-[tool.setuptools.packages.find]
-include = ["silver*", "bronze*", "agg*"]
+```
+src/agg/
+├── __init__.py        — 5 public exports
+├── query.py           — as_of() / find_facts_today() / as_of_with_ohlc() / health_check()
+├── _types.py          — 5 dataclasses(AsOfSnapshot / FactRow / IndicatorRow / StructuralRow / QueryMetadata)+ slots
+├── _lookahead.py      — is_visible_at() + filter_visible() + FINANCIAL_STATEMENT_LAG_DAYS=45
+├── _market.py         — fetch_market_facts() 5 保留字 + 內建 look-ahead filter(r2 補強)
+└── _db.py             — get_connection() / fetch_facts / fetch_indicator_latest / fetch_ohlc / fetch_structural_latest
 ```
 
-測試:
-- 5 個 use case 各一個 pytest
-- mock PG 用合成 facts 資料
-- 至少一個 integration test(對 dev DB)
+`pyproject.toml` 已加 `agg*`:
 
-### Phase B-3:Streamlit dashboard
+```toml
+[tool.setuptools.packages.find]
+where   = ["src", "."]
+include = ["silver*", "bronze*", "agg*", "mcp_server*"]
+```
 
-範圍(MVP):
-- 一個 page,選股(2330 預設)+ date picker
-- 4 區塊並排:
-  - **時間軸**(`price_daily_fwd` + facts 標註)
-  - **Indicator 最新值表**
-  - **Neely scenario forest 摘要**(主要 scenario power_rating)
-  - **市場環境**(TAIEX / VIX 同期 facts)
-- 走 `as_of()` 拉資料,本機 `streamlit run dashboard.py`
+測試(`tests/agg/`):
+- **30 passed / 1 skipped(pandas)**(2026-05-14 狀態)
+- 5 個 test 模組:test_types / test_lookahead / test_query_logic / test_health_check / test_market_lookahead / test_validation
+- mock PG 走 unittest.mock(沙箱無 PG 也跑得起)
+- 走 dev DB 的 integration smoke 由 user 在本機跑(沙箱限制)
 
-不做(留 follow-up):
-- 多用戶 / auth / deploy
-- 圖表互動細節(zoom / brush selection)
-- 跨股對比(個股之間 pair)
+### Phase B-3:Streamlit dashboard — ✅ 已完成
 
-### Phase B-4(未來):FastAPI thin wrap
+實作落地(commit `29e66c9` + Phase C-1~C-8 9 commits,2026-05-14):
+
+`dashboards/aggregation.py` 主入口 + `dashboards/charts/` 9 個 plotly figure builders:
+- `_base.py` — palette / make_kline_subplots / helpers
+- `candlestick.py` — build_kline_figure
+- `overlays.py` — MA / Bollinger / Neely zigzag
+- `indicators.py` — 6 indicator subplots(macd/rsi/kd/adx/atr/obv)
+- `chip.py` — 5 chip subplots(institutional/margin/foreign/day_trading/shareholder)
+- `fundamental.py` — revenue / valuation / financial_statement
+- `environment.py` — taiex / us_market / fear_greed / market_margin / business_indicator
+- `neely_wave.py` — scenario picker + zigzag deep-dive + Fib zones
+- `facts_cloud.py` — build_facts_scatter
+
+跑法:`pip install -e ".[dashboard]" && streamlit run dashboards/aggregation.py`
+
+6 tabs:📈 K-line / 💰 Chip / 📊 Fundamental / 🌐 Environment / 🌳 Neely Wave / ⭐ Facts 散點雲。
+
+### Phase D(超出 r1 範圍):MCP server — ✅ 已完成
+
+實作落地(commit `8ca1a7d`,2026-05-14):
+
+`mcp_server/` — FastMCP stdio server 包 agg + dashboards/charts:
+- `server.py` — entry
+- `tools/data.py` — list_cores / as_of_snapshot / find_facts / fetch_ohlc
+- `tools/render.py` — render_kline / render_chip / render_facts_cloud(回 PNG via kaleido)
+
+Claude Desktop 對話內 call tools 撈資料 / 看套圖(對齊 plan Phase D)。
+
+跑法:`pip install -e ".[mcp]" && plotly_get_chrome -y`。
+
+### Phase B-4(未來):FastAPI thin wrap — 🟡 留 future
 
 需要時補(對外網站化前):
 - `agg_api/main.py`:FastAPI app
 - `/as_of/{stock_id}` endpoint thin wrap `agg.as_of()`
+- `/health_check` endpoint thin wrap `agg.health_check()`
 - Auth / rate limit / monitoring 屬「網站工程」非「資料工程」,獨立規格
 
 ---
@@ -443,3 +504,4 @@ include = ["silver*", "bronze*", "agg*"]
 | Version | Date | Changes |
 |---|---|---|
 | r1 | 2026-05-14 | 立稿 — Phase B 設計討論 + 落地藍圖 |
+| r2 | 2026-05-14 | Phase B-2 / B-3 / C / D 全套落地反寫 — `src/agg/`(Python lib,6 modules)+ `dashboards/`(Streamlit 6 tabs)+ `mcp_server/`(FastMCP stdio)。補 §2.2 實際 API surface(含 `health_check` + `as_of_with_ohlc`)+ §6.1 內建 look-ahead filter 在 `_market.fetch_market_facts` + `as_of()` input validation。30 unit tests passed,user 本機 production verify pass(per-EventKind ≤ 12/yr 全部命中)。|

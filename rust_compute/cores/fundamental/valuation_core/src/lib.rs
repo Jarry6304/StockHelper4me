@@ -1,7 +1,7 @@
 // valuation_core(P2)— Fundamental Core(日頻)
 //
-// 對齊 m2Spec/oldm2Spec/fundamental_cores.md §四 valuation_core(spec r2)。
-// Params §4.3 / Output §4.5 / EventKind 14 個 / warmup §4.4 / PER N/A §4.7。
+// 對齊 m3Spec/fundamental_cores.md §四 valuation_core(spec r4)。
+// Params §4.3 / Output §4.5 / EventKind 14 個(含 Round 4 Entered/Exited transition pattern)/ warmup §4.4 / PER N/A §4.7。
 //
 // **Reference(2026-05-10 加)**:
 //   history_lookback_years=5(1260 trading days):業界估值分析慣例 — Bloomberg PE band
