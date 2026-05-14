@@ -171,6 +171,14 @@ fn list_cores() -> Result<()> {
     let _ = bollinger_core::BollingerCore::new();
     let _ = atr_core::AtrCore::new();
     let _ = obv_core::ObvCore::new();
+    let _ = williams_r_core::WilliamsRCore::new();
+    let _ = cci_core::CciCore::new();
+    let _ = keltner_core::KeltnerCore::new();
+    let _ = donchian_core::DonchianCore::new();
+    let _ = vwap_core::VwapCore::new();
+    let _ = mfi_core::MfiCore::new();
+    let _ = coppock_core::CoppockCore::new();
+    let _ = ichimoku_core::IchimokuCore::new();
     let _ = day_trading_core::DayTradingCore::new();
     let _ = institutional_core::InstitutionalCore::new();
     let _ = margin_core::MarginCore::new();
@@ -523,11 +531,13 @@ async fn run_stock_cores(
     }
     }
 
-    // ---- 2-9. Indicator(8)— 共用 OhlcvSeries ----
-    // 8 indicator cores 共用 ohlcv,若 8 個全 disabled 可整段 skip(節省 1 個 query)
+    // ---- 2-9. Indicator(P1 8 + P3 8 = 16)— 共用 OhlcvSeries ----
+    // 16 indicator cores 共用 ohlcv,若全 disabled 可整段 skip(節省 1 個 query)
     let any_indicator_enabled = [
         "macd_core", "rsi_core", "kd_core", "adx_core",
         "ma_core", "bollinger_core", "atr_core", "obv_core",
+        "williams_r_core", "cci_core", "keltner_core", "donchian_core",
+        "vwap_core", "mfi_core", "coppock_core", "ichimoku_core",
     ].iter().any(|n| filter.is_enabled(n));
     if any_indicator_enabled {
     let ohlcv_result = match tf {
@@ -637,6 +647,116 @@ async fn run_stock_cores(
                 .await,
             );
             }
+            // ---- P3 indicator cores(williams_r / cci / keltner / donchian / mfi / coppock / ichimoku)----
+            if filter.is_enabled("williams_r_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &williams_r_core::WilliamsRCore::new(),
+                    &ohlcv,
+                    williams_r_core::WilliamsRParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("cci_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &cci_core::CciCore::new(),
+                    &ohlcv,
+                    cci_core::CciParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("keltner_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &keltner_core::KeltnerCore::new(),
+                    &ohlcv,
+                    keltner_core::KeltnerParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("donchian_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &donchian_core::DonchianCore::new(),
+                    &ohlcv,
+                    donchian_core::DonchianParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("mfi_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &mfi_core::MfiCore::new(),
+                    &ohlcv,
+                    mfi_core::MfiParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("coppock_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &coppock_core::CoppockCore::new(),
+                    &ohlcv,
+                    coppock_core::CoppockParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("ichimoku_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &ichimoku_core::IchimokuCore::new(),
+                    &ohlcv,
+                    ichimoku_core::IchimokuParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            // ---- vwap_core(P3,需 anchor_date)— 預設用 series 第一個 bar 的日期 ----
+            if filter.is_enabled("vwap_core") {
+            let anchor = ohlcv.bars.first().map(|b| b.date);
+            if let Some(anchor_date) = anchor {
+                let mut vwap_params = vwap_core::VwapParams::default();
+                vwap_params.anchor_date = Some(anchor_date);
+                summary.push(
+                    dispatch_indicator(
+                        pool,
+                        &vwap_core::VwapCore::new(),
+                        &ohlcv,
+                        vwap_params,
+                        write,
+                    )
+                    .await,
+                );
+            } else {
+                summary.push(loader_err_summary(
+                    "vwap_core",
+                    stock_id,
+                    "empty_series",
+                    &anyhow::anyhow!("ohlcv series 空,無法決定 vwap anchor_date"),
+                ));
+            }
+            }
         }
         Err(e) => {
             for name in [
@@ -648,6 +768,14 @@ async fn run_stock_cores(
                 "bollinger_core",
                 "atr_core",
                 "obv_core",
+                "williams_r_core",
+                "cci_core",
+                "keltner_core",
+                "donchian_core",
+                "vwap_core",
+                "mfi_core",
+                "coppock_core",
+                "ichimoku_core",
             ] {
                 if filter.is_enabled(name) {
                     summary.push(loader_err_summary(name, stock_id, "load_daily", &e));

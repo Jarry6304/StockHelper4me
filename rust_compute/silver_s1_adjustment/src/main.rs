@@ -348,8 +348,7 @@ fn derive_simple_event_af(events: &mut [AdjEvent], raw_prices: &[DailyPrice]) {
         if event.event_type == "dividend" {
             let bp_opt = event.before_price.or_else(|| {
                 raw_prices.iter()
-                    .filter(|p| p.date < event.date)
-                    .last()
+                    .rfind(|p| p.date < event.date)
                     .map(|p| p.close)
             });
             if let Some(bp) = bp_opt {
@@ -642,7 +641,7 @@ fn compute_capital_increase_af(raw_prices: &[DailyPrice], event_date: NaiveDate,
     if sub_price <= 0.0 { return None; }
     let sub_rate = detail.get("subscription_rate_raw").and_then(|v| v.as_f64())?;
     if sub_rate <= 0.0 { return None; }
-    let p_pre = raw_prices.iter().filter(|p| p.date < event_date).last()?.close;
+    let p_pre = raw_prices.iter().rfind(|p| p.date < event_date)?.close;
     if p_pre <= 0.0 { return None; }
     let r = sub_rate / 1000.0;
     let after_price = (p_pre + sub_price * r) / (1.0 + r);

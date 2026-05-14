@@ -24,7 +24,7 @@ use crate::output::FlatKind;
 ///   - CFailure:         b/a ∈ [81%, 100%]  AND  c/b < 100%
 ///   - DoubleFailure:    b/a ∈ [61.8%, 81%) AND  c/b < 100%
 ///   - Irregular:        b/a ∈ (100%, 138.2%]
-///                       (含 101-123.6% 與 123.6-138.2% 兩 sub-range,spec 24/05 v1.4 補完)
+///     (含 101-123.6% 與 123.6-138.2% 兩 sub-range,spec 24/05 v1.4 補完)
 ///   - IrregularFailure: b/a > 138.2%       AND  c/b < 100%(spec line 2238)
 ///   - Elongated:        b/a > 138.2%       AND  c > a(Triangle/Terminal 內罕見)
 ///

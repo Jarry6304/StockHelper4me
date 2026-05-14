@@ -238,6 +238,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cci_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -335,6 +349,20 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "coppock_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "core-foundation"
@@ -463,6 +491,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "donchian_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -884,6 +926,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ichimoku_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1066,6 +1122,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "keltner_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1221,6 +1291,20 @@ name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
+
+[[package]]
+name = "mfi_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "mio"
@@ -2371,11 +2455,14 @@ dependencies = [
  "atr_core",
  "bollinger_core",
  "business_indicator_core",
+ "cci_core",
  "chip_loader",
  "chrono",
  "clap",
+ "coppock_core",
  "core_registry",
  "day_trading_core",
+ "donchian_core",
  "dotenvy",
  "environment_loader",
  "exchange_rate_core",
@@ -2385,12 +2472,15 @@ dependencies = [
  "foreign_holding_core",
  "fundamental_loader",
  "futures",
+ "ichimoku_core",
  "institutional_core",
  "kd_core",
+ "keltner_core",
  "ma_core",
  "macd_core",
  "margin_core",
  "market_margin_core",
+ "mfi_core",
  "neely_core",
  "obv_core",
  "ohlcv_loader",
@@ -2407,6 +2497,8 @@ dependencies = [
  "tracing-subscriber",
  "us_market_core",
  "valuation_core",
+ "vwap_core",
+ "williams_r_core",
 ]
 
 [[package]]
@@ -2532,6 +2624,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vwap_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2648,6 +2754,20 @@ checksum = "5d4a4db5077702ca3015d3d02d74974948aba2ad9e12ab7df718ee64ccd7e97d"
 dependencies = [
  "libredox",
  "wasite",
+]
+
+[[package]]
+name = "williams_r_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
