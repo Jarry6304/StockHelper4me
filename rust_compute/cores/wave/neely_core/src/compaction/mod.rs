@@ -1,6 +1,6 @@
 // compaction — Stage 8:Compaction(窮舉 Forest)+ Forest 上限保護
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 8 / §十一 / §十二。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 8 / §十一 / §十二。
 //
 // 子模組:
 //   - exhaustive.rs   — 窮舉模式(預設,留 PR-5b 完整實作)
@@ -121,8 +121,8 @@ mod tests {
             structure_label: "test".to_string(),
             complexity_level: ComplexityLevel::Simple,
             power_rating: rating,
-            max_retracement: 0.0,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -133,6 +133,10 @@ mod tests {
             advisory_findings: Vec::new(),
             in_triangle_context: false,
             awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
         }
     }
 

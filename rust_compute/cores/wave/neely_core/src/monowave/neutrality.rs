@@ -1,6 +1,6 @@
 // Rule of Neutrality:標 monowave 為 Neutral 當 magnitude 過小
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 2 / §10.4.1。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 2 / §10.4.1。
 //
 // 個股(spec 描述「|單日漲跌幅| < 預設 ATR 比例 → Neutral」):
 //   monowave-level 套用為:|magnitude| < ATR(at start) * 1.0 → Neutral

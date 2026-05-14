@@ -1,6 +1,6 @@
 // Bottom-up Wave Candidate Generator(Stage 3)
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 3 / §4.2 Item 2。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 3 / §4.2 Item 2。
 //
 // 演算法(Bottom-up):
 //   1. 過濾掉 Neutral monowaves(Stage 2 Rule of Neutrality 已標)
@@ -17,7 +17,7 @@
 // beam_width 上限保護:候選數量超過 cfg.beam_width × 10 時 cap 住,避免 Stage 4
 // Validator 跑爆。實際 cap 值 P0 Gate 校準後可能調整。
 //
-// 留後續 PR(對齊 m2Spec/oldm2Spec/neely_core.md §三):
+// 留後續 PR(對齊 m3Spec/neely_core_architecture.md §三):
 //   - generator.rs 進階:5-wave-of-3 嵌套(Combination 類型需要)
 //   - 結合 ProportionMetrics 預先剔除 magnitude 顯著不對稱的視窗
 

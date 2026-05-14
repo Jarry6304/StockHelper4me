@@ -351,7 +351,16 @@ pub struct Scenario {
 
     /// r3 修正:由 i8 改 enum,避免 power_rating = 99 等無效值(§9.4)
     pub power_rating: PowerRating,
-    pub max_retracement: f64,
+    /// Power Rating 對應的最大回測比例(精華版 Ch10 表 2016-2022 行)。
+    ///
+    /// 對齊 m3Spec/neely_core_architecture.md §9.1:`max_retracement: Option<f64>`
+    /// - `None` = 任意回測(Neutral / 或 Triangle/Terminal 內部覆蓋)
+    /// - `Some(0.90)` = ±1 級 ≤ 90%
+    /// - `Some(0.80)` = ±2 級 ≤ 80%
+    /// - `Some(0.65)` = ±3 級 ≤ 60–70%(取中值)
+    ///
+    /// 由 `power_rating::max_retracement::lookup` 依 PowerRating + in_triangle_context 查表。
+    pub max_retracement: Option<f64>,
     pub post_pattern_behavior: PostBehavior,
 
     /// 客觀計數(取代 v1.1 主觀分數)
@@ -385,6 +394,77 @@ pub struct Scenario {
     /// §Round 3(1258-1265 行)+ neely_core_architecture.md §8.4 Round3PauseInfo。
     /// 策略含意:持有原方向,維持原計數,直到新形態具備收尾條件。
     pub awaiting_l_label: bool,
+
+    // ── 群 2 spec §9.1 line 858-863 ─────────────────────────────────────
+    //
+    // 由 Phase 15 落地。皆「pipeline 已算但未寫進 Scenario」狀態,
+    // 由 classifier::classify 階段填寫(對齊 spec §9.1 群 2「Pre-Constructive +
+    // Three Rounds 狀態」分組)。
+
+    /// 每 wave-monowave 的 Pre-Constructive Structure Label candidates(spec line 859)。
+    /// 1:1 對應 candidate.monowave_indices 順序;從 ClassifiedMonowave.structure_label_candidates wrap。
+    pub monowave_structure_labels: Vec<MonowaveStructureLabels>,
+
+    /// Three Rounds 狀態(spec line 860 / §Ch4)— 該 scenario 在 Round 1/2/3 的位置。
+    /// 由 Stage 8 Three Rounds 階段 + awaiting_l_label 推導。
+    pub round_state: RoundState,
+
+    /// Pattern Isolation 6-step procedure 識別出的 anchors(spec line 862)。
+    /// 從 NeelyCoreOutput.pattern_bounds(Stage 3.5)wrap;只篩涵蓋 scenario 範圍的 anchors。
+    pub pattern_isolation_anchors: Vec<PatternIsolationAnchor>,
+
+    /// Triplexity 偵測(spec line 863)— Ch8 Triple-grouping(Triple Zigzag / Triple Combination /
+    /// Triple Three / Triple Three Combination / Triple Three Running)。
+    /// 由 pattern_type 直接推導。
+    pub triplexity_detected: bool,
+}
+
+/// Phase 15 新增:每 monowave 的 Pre-Constructive structure label set。
+///
+/// 對齊 m3Spec/neely_core_architecture.md §9.1 line 859。
+/// 包裝 `ClassifiedMonowave.structure_label_candidates`,加上 monowave 在 Scenario 內的位置 index。
+#[derive(Debug, Clone, Serialize)]
+pub struct MonowaveStructureLabels {
+    /// 該 monowave 在 scenario candidate 內的索引(0..wave_count)
+    pub monowave_index: usize,
+    /// Pre-Constructive Logic 給出的 candidate labels(可有多個,不互斥)
+    pub labels: Vec<StructureLabelCandidate>,
+}
+
+/// Phase 15 新增:Three Rounds 狀態。
+///
+/// 對齊 m3Spec/neely_rules.md §Ch4(1200-1290 行):
+///   - Round 1:初始 Series 識別(從 Pre-Constructive Logic 標的 monowaves 找出 Standard/Non-Standard)
+///   - Round 2:Compaction 後重評估(`compacted_base_label` 已填,base label 已 reassign 為 :5 / :3)
+///   - Round 3Pause:圖中無新 :L5/:L3,等候(awaiting_l_label = true)
+///
+/// 由 classifier 階段依 `compacted_base_label` + `awaiting_l_label` 推導:
+///   - awaiting_l_label = true → Round3Pause
+///   - compacted_base_label 已 reassign(非預設)+ awaiting = false → Round2
+///   - 否則 → Round1
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum RoundState {
+    Round1,
+    Round2,
+    Round3Pause,
+}
+
+/// Phase 15 新增:Pattern Isolation anchor(spec line 862)。
+///
+/// 包裝 `PatternBound` 並標 anchor 起點/終點意圖(start_label / end_label),
+/// 供 Aggregation Layer 「依 Pre-Constructive Logic 標籤定位 scenario 在 higher-degree 中的位置」。
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct PatternIsolationAnchor {
+    /// 起點 monowave index(inclusive)
+    pub start_idx: usize,
+    /// 終點 monowave index(inclusive)
+    pub end_idx: usize,
+    /// 起點 anchor 標籤(F3/XC3/L3/S5/L5 之一)
+    pub start_label: StructureLabel,
+    /// 終點 anchor 標籤(L5/L3 之一)
+    pub end_label: StructureLabel,
+    /// Compaction(Ch7)驗證為合法 Elliott 形態(Step 5)
+    pub validated: bool,
 }
 
 /// Phase 7 — Stage 7.5 諮詢性發現(Channeling / Ch9 Advanced Rules)。
@@ -462,6 +542,14 @@ pub enum NeelyPatternType {
     Flat { sub_kind: FlatKind },
     Triangle { sub_kind: TriangleKind },
     Combination { sub_kinds: Vec<CombinationKind> },
+    /// Phase 16 新增:Running Correction 從 Flat sub_kind 上提為頂層 NeelyPatternType。
+    ///
+    /// 對齊 m3Spec/neely_core_architecture.md §9.1 r5 line 1161:
+    /// 「RunningCorrection 屬 Power Rating -3/+3 級別獨立,不再放 FlatKind::Running」。
+    /// 對齊 m3Spec/neely_rules.md line 2024-2037:
+    /// 「Running Correction:後續必為延伸 Impulse 或 Flat/Zigzag 的延伸 c-wave;
+    ///   後續 Impulse 多 > 161.8%(常達 261.8%)」— ±3 strongly favor continuation
+    RunningCorrection,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -477,11 +565,32 @@ pub enum ZigzagKind {
     Triple,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+/// FlatKind 7-variant(spec r5 line 1161 + neely_rules.md line 2157-2239)。
+///
+/// Phase 16(2026-05-14)重構:由 r4 3-variant(Regular/Expanded/Running)→ r5 7-variant
+/// 具體形態變體 + Running 上提為 NeelyPatternType::RunningCorrection。
+///
+/// 判定規則(spec line 2157-2239 + 2024-2034):
+/// | Variant          | b/a 範圍          | c 行為           | Power |
+/// |------------------|-------------------|------------------|-------|
+/// | Common           | 81%–100%          | c ≥ 100% × b     | 0     |
+/// | BFailure         | 61.8%–81%         | c ≥ 100% × b     | 0     |
+/// | CFailure         | 81%–100%          | c < 100% × b     | -1    |
+/// | DoubleFailure    | 61.8%–81%         | c < 100% × b     | -2    |
+/// | Irregular        | 100%–138.2%       | c ≥ 100% × b     | -1    |
+/// | IrregularFailure | > 138.2%          | c < 100% × b     | -2    |
+/// | Elongated        | ≥ 138.2%(Triangle/Terminal 內) | c > a | +1   |
+///
+/// 由 `classifier::flat_classifier::classify_flat` 從 monowave magnitudes 推導。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum FlatKind {
-    Regular,
-    Expanded,
-    Running,
+    Common,
+    BFailure,
+    CFailure,
+    DoubleFailure,
+    Irregular,
+    IrregularFailure,
+    Elongated,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -524,11 +633,41 @@ pub enum ComplexityLevel {
     Complex,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+/// Neely wave number 標號(Impulse 1-5 + Combination X + Triangle/Flat A-E)。
+///
+/// 對齊 m3Spec/neely_core_architecture.md §9.2 PostBehavior::ReachesWaveZone 內部欄。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum WaveNumber {
+    W1, W2, W3, W4, W5,
+    WX,
+    WA, WB, WC, WD, WE,
+}
+
+/// 後續行為(spec §9.2 line 900–925 r5 結構化 enum)。
+///
+/// **舊 3-variant(Continuation/Reversal/Indeterminate)由 Phase 14 取代** —
+/// 對齊精華版 Ch10 line 2024–2037「各修正暗示重點」14 種具體後續行為。
+///
+/// 由 `power_rating::post_behavior::lookup(pattern_type, power_rating, in_triangle_context)`
+/// 查表得出;後續 Stage 5+ 細化規則時可在 classifier 內 override 為 Composite。
+#[derive(Debug, Clone, Serialize)]
 pub enum PostBehavior {
-    Continuation,
-    Reversal,
-    Indeterminate,
+    /// 後續必完全回測整段(例:5th Failure、C-Failure、Terminal Impulse)
+    FullRetracementRequired,
+    /// 後續必回測 ≥ ratio × 整段(0.0..=1.0,例:±1 級 ratio=0.90)
+    MinRetracement { ratio: f64 },
+    /// 後續必達 wave-X 區(例:Triangle 後續 thrust 須達 wave-D 區)
+    ReachesWaveZone { wave: WaveNumber },
+    /// 後續 Impulse 必 > ratio × 前一同向 Impulse(例:Running Correction ratio=1.618)
+    NextImpulseExceeds { ratio: f64 },
+    /// 不會被完全回測(除非為更大級的 5/c — 例:Double Zigzag/Double Flat)
+    NotFullyRetracedUnless { exception: String },
+    /// 任意後續(Neutral / Power Rating 0 / Triangle 內覆蓋)
+    Unconstrained,
+    /// 強烈暗示後續形態(例:±1~±3 被回測 100% → Triangle/Terminal)
+    HintsAtPattern { suggested_pattern: String, reason: String },
+    /// 多模式組合(後續行為跨多條規則 — 例:Irregular Failure = 必完全回測 + 後續 Impulse ≥ 161.8%)
+    Composite { behaviors: Vec<PostBehavior> },
 }
 
 // ---------------------------------------------------------------------------
@@ -770,6 +909,8 @@ pub fn compaction_base_label(pattern: &NeelyPatternType) -> StructureLabel {
         NeelyPatternType::Triangle { .. } => StructureLabel::Three,
         // 含 x-wave 的任何形態 → :3
         NeelyPatternType::Combination { .. } => StructureLabel::Three,
+        // RunningCorrection → :3(Non-Standard correction,3-3-5 等基本仍是 corrective)
+        NeelyPatternType::RunningCorrection => StructureLabel::Three,
     }
 }
 

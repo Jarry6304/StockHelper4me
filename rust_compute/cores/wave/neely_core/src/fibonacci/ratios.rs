@@ -1,6 +1,6 @@
 // fibonacci/ratios.rs — Neely 體系 Fibonacci 比率清單(寫死)
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §4.4 / §十四 / §6.6。
+// 對齊 m3Spec/neely_core_architecture.md §4.4 / §十四 / §6.6。
 // **不可外部化**:比率清單與容差寫死 Rust 常數。
 //
 // 來源:Neely 原書(《Mastering Elliott Wave》,Glenn Neely 1990)。

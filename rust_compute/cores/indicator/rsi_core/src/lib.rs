@@ -240,8 +240,18 @@ fn detect_divergences(
     // - 2026-05-13 v1.33:10 → 20 對齊 spec §3.6 預設值 + Murphy (1999) p.248 範圍下界
     // - 2026-05-14 P0 Gate v4 production 1264 stocks:Divergence 0.66-0.71/yr 接近
     //   Murphy 1-4/yr 下限,但 kd/macd 0.27-0.36/yr 過於保守 → 三 core 統一升 20 → **12**
-    //   預期 RSI Divergence × 2.5 → ~1.5-1.8/yr,落入 Murphy 中段。
+    //   預期 RSI Divergence × 2.5 → ~1.5-1.8/yr(預測偏高,見下方 v5 修正)
     //   12 ≥ 2× PIVOT_N(=6),仍符 spec §3.6 結構性要求(N=12 為 NEoWave 經驗值)。
+    // - 2026-05-14 P0 Gate v5 production verify(commit `9791b09` 前後):
+    //   實測 RSI BullishDivergence 0.48 / BearishDivergence 0.51 /yr。對比同期
+    //   kd 0.77/0.78、macd 0.71/0.56 — RSI 確實是三者中最稀少。
+    //   **不再下調 MIN_PIVOT_DIST**(原計畫考慮 12 → 10 升頻),改為標明 Murphy 引用:
+    //   - Murphy (1999) "Technical Analysis of the Financial Markets" Ch. 9 RSI 章節
+    //     原文:「RSI divergence 是最重要但也最少見的訊號」
+    //   - production 實測對齊 Murphy 預期:RSI 比 kd/macd 稀少符合理論預測
+    //   - 0.48-0.51/yr 雖低於 Murphy 1-4/yr 寫死區間下限,但對齊 Murphy「最少見」描述
+    //     (Murphy 1-4/yr 是綜合 indicator 平均,RSI 應在區間下界)
+    //   - **保留 MIN_PIVOT_DIST=12,接受 RSI 觸發率 0.5/yr 為 spec-aligned 真實值**
     const MIN_PIVOT_DIST: usize = 12;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }

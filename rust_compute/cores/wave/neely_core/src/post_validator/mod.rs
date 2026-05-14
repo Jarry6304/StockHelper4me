@@ -74,6 +74,17 @@ pub fn post_validate(
                 pending_conditions: vec!["Combination Ch6 規則留 P9 Ch8 補完".to_string()],
             }
         }
+        NeelyPatternType::RunningCorrection => {
+            // RunningCorrection 的 Ch6 兩階段確認:後續 Impulse > 161.8% × 前一同向 Impulse
+            // (對齊 spec line 2035)— 完整 polywave 嵌套偵測留 P9 接 Ch8 Complex Polywaves
+            PostValidationReport {
+                scenario_id: scenario.id.clone(),
+                pattern_complete: true,
+                pending_conditions: vec![
+                    "RunningCorrection Ch6 後續 Impulse > 161.8% 驗證留 P9 接 polywave 嵌套".to_string(),
+                ],
+            }
+        }
     }
 }
 
@@ -649,8 +660,8 @@ mod tests {
             structure_label: "test".to_string(),
             complexity_level: ComplexityLevel::Simple,
             power_rating: PowerRating::Neutral,
-            max_retracement: 0.0,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -661,6 +672,10 @@ mod tests {
             advisory_findings: Vec::new(),
             in_triangle_context: false,
             awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
         }
     }
 

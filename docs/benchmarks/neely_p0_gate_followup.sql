@@ -143,23 +143,33 @@ WITH event_kinds AS (
                     ELSE 'Other'
                 END
             WHEN source_core = 'day_trading_core' THEN
+                -- Phase 19(2026-05-14):pattern 對齊 Rust event_to_fact format
+                -- spec §7 4 EventKind:RatioExtremeHigh / RatioExtremeLow /
+                --                      RatioStreakHigh / RatioStreakLow
                 CASE
-                    WHEN statement LIKE '%RatioExtremeHigh%'   THEN 'RatioExtremeHigh'
-                    WHEN statement LIKE '%RatioExtremeLow%'    THEN 'RatioExtremeLow'
-                    WHEN statement LIKE '%entered%'            THEN 'EnteredZone'
-                    WHEN statement LIKE '%exited%'             THEN 'ExitedZone'
+                    WHEN statement LIKE 'Day trade ratio reached%(extreme high)'
+                        THEN 'RatioExtremeHigh'
+                    WHEN statement LIKE 'Day trade ratio dropped to%(extreme low)'
+                        THEN 'RatioExtremeLow'
+                    WHEN statement LIKE 'Day trade ratio above threshold%'
+                        THEN 'RatioStreakHigh'
+                    WHEN statement LIKE 'Day trade ratio below threshold%'
+                        THEN 'RatioStreakLow'
                     ELSE 'Other'
                 END
             WHEN source_core = 'institutional_core' THEN
+                -- Phase 19(2026-05-14):pattern 對齊 Rust event_to_fact format
+                -- spec §3 4 EventKind:NetBuyStreak / NetSellStreak /
+                --                      LargeTransaction / DivergenceWithinInstitution
+                -- LargeTransaction 細分到 institution(Foreign / Trust / Dealer)by metadata
                 CASE
-                    WHEN statement LIKE 'Foreign large net buy%'  THEN 'ForeignLargeNetBuy'
-                    WHEN statement LIKE 'Foreign large net sell%' THEN 'ForeignLargeNetSell'
-                    WHEN statement LIKE 'Trust large net buy%'    THEN 'TrustLargeNetBuy'
-                    WHEN statement LIKE 'Trust large net sell%'   THEN 'TrustLargeNetSell'
-                    WHEN statement LIKE 'Dealer large net buy%'   THEN 'DealerLargeNetBuy'
-                    WHEN statement LIKE 'Dealer large net sell%'  THEN 'DealerLargeNetSell'
-                    WHEN statement LIKE 'Government bank net buy%' THEN 'GovBankNetBuy'
-                    WHEN statement LIKE 'Government bank net sell%' THEN 'GovBankNetSell'
+                    WHEN statement LIKE 'Foreign net buy%consecutive days%' THEN 'NetBuyStreak'
+                    WHEN statement LIKE 'Foreign net sell%consecutive days%' THEN 'NetSellStreak'
+                    WHEN statement LIKE 'Foreign single-day large transaction%' THEN 'LargeTransactionForeign'
+                    WHEN statement LIKE 'Trust single-day large transaction%' THEN 'LargeTransactionTrust'
+                    WHEN statement LIKE 'Dealer single-day large transaction%' THEN 'LargeTransactionDealer'
+                    WHEN statement LIKE '%single-day large transaction%' THEN 'LargeTransactionOther'
+                    WHEN statement LIKE 'Foreign and dealer diverge%' THEN 'DivergenceWithinInstitution'
                     ELSE 'Other'
                 END
             ELSE 'Aggregated'

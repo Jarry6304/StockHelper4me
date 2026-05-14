@@ -1,6 +1,6 @@
 // complexity — Stage 7:Complexity Rule
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 7。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 7。
 // Neely Complexity Level(Item 8.1)— 篩選 Scenario 的複雜度層級。
 //
 // **M3 PR-4 階段**(先實踐以後再改):
@@ -71,8 +71,8 @@ mod tests {
             structure_label: "test".to_string(),
             complexity_level: complexity,
             power_rating: PowerRating::Neutral,
-            max_retracement: 0.0,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -83,6 +83,10 @@ mod tests {
             advisory_findings: Vec::new(),
             in_triangle_context: false,
             awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
         }
     }
 

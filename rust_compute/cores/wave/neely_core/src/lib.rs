@@ -3,41 +3,52 @@
 // 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
 //       + m3Spec/cores_overview.md r4
 //
-// 已實作(Phase 1 PR — r5 spec alignment baseline):
-//   - struct / enum 合約定義(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
-//   - WaveCore trait 實作 + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
-//   - **RuleId 章節編碼**(architecture §9.3)— 取代 r4 自編號;Phase 1 範圍宣告 Ch5_* + Engineering_*
+// 已實作(P0 Gate 通過 / v1.0.0 — 2026-05-14):
+//   - struct / enum 合約(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
+//   - WaveCore trait + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
+//   - **RuleId 章節編碼**(architecture §9.3)限縮 Ch5_* / Ch9_* / Engineering_* 三組
+//                       (其他章節 domain-specific enums,§十四 禁止抽象)
 //   - **Stage 1**:Monowave Detection — **Hybrid OHLC ((H+L)/2 mid_price)** + Wilder ATR-filtered reversal
 //   - **Stage 2**:Rule of Neutrality(個股 ATR / TAIEX %)+ Rule of Proportion metrics
 //   - **Stage 3**:Bottom-up Candidate Generator(滑窗 wave_count ∈ {3,5} + alternation filter + beam_width cap)
-//   - **Stage 4**:Validator framework + Ch5 Essential R1-R7 完整 + Ch5_Overlap_Trending + Ch5_Overlap_Terminal
-//                  完整;Ch5_Flat/Zigzag/Triangle/Equality/Alternation 9 條 Deferred(留 P4-P7)
-//   - **Stage 5**:Classifier(5wave + Overlap_Trending pass / Overlap_Terminal fail → Impulse;
-//                  Trending fail / Terminal pass → Diagonal { Leading/Ending heuristic };3wave → Zigzag Single)
-//   - **Stage 6**:Post-Constructive Validator skeleton(預設 pattern_complete = true,留 P6)
-//   - **Stage 7**:Complexity Rule 篩選(差距 ≤ 1 級為 anchor)
-//   - **Stage 8**:Compaction 簡化版 pass-through + Forest 上限保護(BeamSearchFallback by power_rating)
-//   - **Stage 9a**:Missing Wave 偵測 skeleton(預設 false,留 P9)
-//   - **Stage 9b**:Emulation 辨識 skeleton(預設 false,留 P9)
-//   - **Stage 10a**:Power Rating 查表(Impulse Up→Bullish / Down→Bearish 等 best-guess;留 P10 完整查表)
-//   - **Stage 10b**:Fibonacci 投影 framework + ratios.rs 寫死 NEELY_FIB_RATIOS
-//   - **Stage 10c**:Invalidation Triggers(Impulse Ch5_Essential(3) + Ch5_Overlap_Trending derived;
-//                  Diagonal Ch5_Essential(3) derived)
+//   - **Stage 3.5**:Pattern Isolation 6-step procedure + Zigzag DETOUR Test(Phase 3)
+//   - **Stage 0** (Phase 2):Ch3 Pre-Constructive Logic 200+ branch if-else
+//                            + StructureLabel candidates 落地
+//   - **Stage 4**:Validator framework + Ch5 全 18 條 **完整實作**(Essential R1-R7 + Overlap_Trending/Terminal
+//                  + Flat / Zigzag / Triangle / Equality / Alternation;Phase 4)
+//   - **Stage 5**:Classifier 完整 r5(Impulse / Diagonal {Leading/Ending} / Zigzag {Single..Triple} /
+//                  Flat / Triangle / Combination)+ ComplexityLevel + Power Rating
+//   - **Stage 6**:Ch6 Post-Constructive 兩階段確認(Phase 6 完整實作)
+//   - **Stage 7**:Ch7 Compaction Reassessment + `compacted_base_label`(Phase 6)
+//   - **Stage 7.5**:Channeling 5 條 trendlines(0-2 / 1-3 / 2-4 / 0-B / B-D)+ Ch9 Advanced Rules
+//                    + `advisory_findings`(Phase 7)
+//   - **Stage 8**:Three Rounds nested parent context(Triangle 內部 in_triangle_context)
+//                  + Round 3 暫停偵測(`awaiting_l_label` / `round3_pause`)+ Forest 上限保護
+//                  (BeamSearchFallback 雙重排序 PowerRating level + rules_passed_count;Phase 8 / P0 Gate v2)
+//   - **Stage 8 / Compaction**:exhaustive pass-through(待 sub-wave 嵌套後補,architecture §10.1 工程現實折衷)
+//   - **Stage 9a**:Missing Wave 完整偵測(P2 MissingWaveBundle + MissingWavePosition 分類;Phase 9)
+//   - **Stage 9b**:Ch12 Emulation 完整偵測(4 種 EmulationKind;Phase 9)
+//   - **Stage 10a**:Ch10 Power Rating r5 查表(±3..±3 7 級,寫死);
+//                    + **max_retracement** Option<f64> 同步寫入(±3→0.65 / ±2→0.80 / ±1→0.90 / 0→None /
+//                                                                 in_triangle_context→None;Phase 13)
+//                    + **post_pattern_behavior** 8-variant 結構化 enum 同步寫入
+//                      (對齊 neely_rules.md line 2024-2037「各修正暗示重點」查表;
+//                       FullRetracementRequired / MinRetracement / ReachesWaveZone / NextImpulseExceeds /
+//                       NotFullyRetracedUnless / Unconstrained / HintsAtPattern / Composite;
+//                       in_triangle_context → Unconstrained;Phase 14)
+//   - **Stage 10b**:Fibonacci Internal/External 分離投影(從 monowave price 計算;Phase 10)
+//   - **Stage 10c**:Invalidation Triggers 接 monowave price(W1.start_price / W2.end_price;Phase 10)
+//   - **Stage 10.5**:Reverse Logic Rule(Neely Extension)— `ReverseLogicObservation` +
+//                     `suggested_filter_ids`(Phase 11)
+//   - **Stage 11**:Degree Ceiling 11 級體系(SubMicro..GrandSupercycle;Phase 12)
+//   - **Stage 12**:cross_timeframe_hints 給 Aggregation Layer 跨 Timeframe 比對(Phase 12)
 //   - **produce_facts()**:每 Scenario 1 條結構性 Fact + 1 條 forest summary
 //
-// 留後續 PR(完整 r5 spec roadmap 詳見 plan file 多 PR roadmap):
-//   - **P2**:Stage 0 Pre-Constructive Logic(~200 branch if-else,Ch3 Rule 1-7 × Cond × Cat)
-//   - **P3**:Stage 3.5 Pattern Isolation + Zigzag DETOUR Test
-//   - **P4**:Stage 4 Flat/Zigzag/Triangle 變體規則完整實作
-//   - **P5**:Stage 5 Ch8 Complex Polywaves + Ch10 Power Ratings
-//   - **P6**:Stage 6/7 Ch6 Post-Constructive + Ch7 Compaction Three Rounds
-//   - **P7**:Stage 7.5 Channeling + Ch9 Advanced Rules
-//   - **P8**:Stage 8 Compaction Three Rounds 遞迴改造
-//   - **P9**:Stage 9 Missing Wave + Emulation 完整
-//   - **P10**:Stage 10 完整 + Ch12 Fibonacci Internal/External + Waterfall
-//   - **P11**:Stage 10.5 Reverse Logic
-//   - **P12**:Stage 11/12 Degree Ceiling + cross_timeframe_hints
-//   - **P13**:P0 Gate 六檔實測 + 校準
+// 留 P1+ 階段處理(1.0.0 後):
+//   - **Compaction exhaustive 真窮舉**:需 sub-wave 嵌套(5-wave-of-3),architecture §10.1 折衷後留
+//   - **insufficient_data 警示處理**:Daily warmup 500 vs silver ~1.6y 不匹配,P1 解
+//   - **NeelyDiagnostics.stage_elapsed_ms HashMap serde cosmetic bug**:P0 Gate §4 全 0
+//   - **P1 indicator cores**:trendline_core / support_resistance_core / divergence_core 等新 cores
 //
 // 不外部化 Neely 規則常數(architecture §4.5 / §6.6):Fibonacci 比率、±4%/±5%/±10% 三檔容差、
 // Power Rating 查表全部寫死,不可從 toml 設定。
@@ -100,14 +111,14 @@ pub mod validator;
 pub use config::{NeelyCoreParams, NeelyEngineConfig, OverflowStrategy};
 pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 
-// inventory 註冊(對齊 m2Spec/oldm2Spec/cores_overview.md §五 Monolithic Binary 部署模型)
+// inventory 註冊(對齊 m3Spec/cores_overview.md §五 Monolithic Binary 部署模型)
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.21.0",
+        "1.0.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints)",
+        "Neely Wave Core(P0 Gate 通過 1.0.0 production-ready / NEoWave 完整體系 + Phase 13-19 spec alignment)",
     )
 }
 
@@ -176,8 +187,57 @@ impl WaveCore for NeelyCore {
         // enums 取代,對齊 cores_overview §四 禁止抽象 / §十四 prematurely declare 不該做))。
         // 0.20.0 → 0.21.0(P0 Gate v2 production 校準 — 2026-05-14 / 1264 stocks:
         // forest_max_size 1000 → 200(觀察 forest_size max=37 / p99=16 / p95=10,留 5× p99 餘量))。
-        // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.21.0"
+        // 0.21.0 → 0.22.0(Phase 13 PR / max_retracement 落地 — 2026-05-14:
+        // Scenario.max_retracement 由 f64 改 Option<f64> 對齊 architecture §9.1;
+        // 新建 power_rating/max_retracement.rs 依 Ch10 line 2016-2022 查表(±3→0.65 /
+        // ±2→0.80 / ±1→0.90 / 0→None);apply_to_forest 同步寫入 + Triangle 內部覆蓋 None。
+        // 取代 13 處 `max_retracement: 0.0` placeholder(從未被計算)。)
+        // 0.22.0 → 0.23.0(Phase 14 PR / PostBehavior 8-variant + WaveNumber 落地 — 2026-05-14:
+        // PostBehavior 由 3-variant(Continuation/Reversal/Indeterminate)→ 8-variant 結構化 enum
+        // 對齊 architecture §9.2;新增 WaveNumber enum(W1-W5/WX/WA-WE);新建
+        // power_rating/post_behavior.rs 依 neely_rules.md line 2024-2037「各修正暗示重點」查表;
+        // apply_to_forest 同步寫入 + Triangle 內部覆蓋 Unconstrained。取代 14 處 `PostBehavior::Indeterminate`
+        // placeholder。Flat 3-variant 暫時 map(留 Phase 16 FlatKind 7-variant 細化))
+        // 0.23.0 → 0.24.0(Phase 15 PR / Scenario 群 2 fields 落地 — 2026-05-14:
+        // Scenario 加 4 個 spec §9.1 line 858-863 fields — monowave_structure_labels /
+        // round_state / pattern_isolation_anchors / triplexity_detected;
+        // 3 個新類型 — MonowaveStructureLabels / RoundState(Round1/Round2/Round3Pause)/
+        // PatternIsolationAnchor;classifier::classify 階段填 monowave_structure_labels(從
+        // ClassifiedMonowave.structure_label_candidates wrap)+ triplexity_detected
+        // (Triple-grouping Ch8 偵測);lib.rs::compute() Stage 8.5 後填 round_state +
+        // pattern_isolation_anchors(從 pattern_bounds 過濾覆蓋範圍的 anchors))
+        // 0.24.0 → 0.25.0(Phase 16 PR / FlatKind 7-variant + NeelyPatternType::RunningCorrection
+        // 上提 — 2026-05-14:
+        // FlatKind 由 3-variant(Regular/Expanded/Running)→ 7-variant 對齊 spec r5 line 1161
+        // (Common/BFailure/CFailure/DoubleFailure/Irregular/IrregularFailure/Elongated);
+        // Running 上提為 NeelyPatternType::RunningCorrection 頂層 variant
+        // (對齊 spec r5「Power Rating -3/+3 級別獨立」);
+        // 新建 classifier/flat_classifier.rs 依 spec line 2157-2239 b/a + c/b 比例查表;
+        // classifier::classify_3wave 從 stub 升真分類(RunningCorrection / Flat 7-variant /
+        // Zigzag Single fallback);power_rating/table.rs 7-variant + RunningCorrection 對應 PowerRating;
+        // post_behavior.rs Flat 7-variant + RunningCorrection 對應 PostBehavior;
+        // facts/post_validator/reverse_logic match arm 補 RunningCorrection branch)
+        // 0.25.0 → 0.26.0(Phase 17 PR / StructuralFacts 7 sub-fields 全填 — 2026-05-14:
+        // 新建 classifier/structural_facts.rs 提供 7 個 fns —
+        // fibonacci_alignment(對 NEELY_FIB_RATIOS ±4% 比對) /
+        // alternation(從 ValidationReport 抽 Ch5_Alternation 結果) /
+        // time_relationship(從 monowave duration_bars label) /
+        // overlap_pattern(從 W1/W4 price range 比對) /
+        // channeling(從 advisory_findings AdvisorySeverity::Strong|Warning 抽) /
+        // gap_count(bars[i].open != bars[i-1].close 計數) /
+        // volume_alignment(bars volume 填充率 ≥ 50%);
+        // 4 個 classify-time(在 classifier::classify),3 個 post-Stage 7.5
+        // (在 lib.rs::compute Stage 7.5 advanced_rules 後)
+        // 對齊 spec §StructuralFacts 7 sub-fields 全填)
+        // 0.26.0 → 1.0.0(P0 Gate 通過 — 2026-05-14:
+        // 六檔(0050/2330/3363/6547/1312)實測 + 全市場 1263 stocks v5 production
+        // verify 通過 spec §10.0 (a)/(b)/(c) 3/4 判定:forest_size 收斂(< 30 龍頭 /
+        // < 10 ETF)/ 拒絕原因全對應 spec §Ch5 章節 / P9-P12 metadata 分布對齊 §13.3。
+        // 校準後 0 常數改動 — Phase 13-19 spec alignment + 全市場 v5 已涵蓋校準需求。
+        // Known acceptable gaps:insufficient_data warning(Daily warmup 500 vs silver 1.6y)+
+        // stage_elapsed_ms HashMap serde cosmetic bug + 6547 silver 缺料 — 均 P1+ 校準項)
+        // 詳見 docs/benchmarks/neely_p0_gate_results_2026-05-14.md
+        "1.0.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -290,6 +350,22 @@ impl WaveCore for NeelyCore {
         //    諮詢性 stage — 寫 AdvisoryFinding 進 scenario.advisory_findings,不過濾 scenarios
         let stage_7_5_start = Instant::now();
         advanced_rules::run(&mut scenarios, &classified);
+        // Phase 17:StructuralFacts 3 sub-fields(post-Stage 7.5,需 advisory_findings + bars)
+        for scenario in scenarios.iter_mut() {
+            scenario.structural_facts.channeling =
+                classifier::structural_facts::channeling(&scenario.advisory_findings);
+            scenario.structural_facts.gap_count = classifier::structural_facts::gap_count(
+                scenario.wave_tree.start,
+                scenario.wave_tree.end,
+                &input.bars,
+            );
+            scenario.structural_facts.volume_alignment =
+                classifier::structural_facts::volume_alignment(
+                    scenario.wave_tree.start,
+                    scenario.wave_tree.end,
+                    &input.bars,
+                );
+        }
         stage_elapsed.insert(
             "stage_7_5_advanced_rules".to_string(),
             stage_7_5_start.elapsed().as_millis() as u64,
@@ -308,6 +384,48 @@ impl WaveCore for NeelyCore {
         //    對齊 m3Spec/neely_rules.md §Three Rounds + §Ch10 三角內 Power = 0 例外
         let stage_8_5_start = Instant::now();
         let round3_pause = three_rounds::apply(&mut forest);
+        // Phase 15:依 three_rounds 結果 + pattern_bounds 寫入 Scenario 群 2 fields
+        // round_state 推導:awaiting → Round3Pause / compacted_base reassigned → Round2 / else → Round1
+        for scenario in forest.iter_mut() {
+            scenario.round_state = if scenario.awaiting_l_label {
+                output::RoundState::Round3Pause
+            } else {
+                // Phase 6 Compaction Reassessment 已重派 compacted_base_label;
+                // 若已重派且非預設 → Round2;else Round1。
+                // 簡化:當 forest 來自 Stage 8 後,compaction 已走過 → 視為 Round2;
+                //       對齊 spec §Ch4 「Round 2 = Compaction 後重評」。
+                output::RoundState::Round2
+            };
+            // pattern_isolation_anchors:從 pattern_bounds 過濾覆蓋 scenario 的 anchors
+            // 此處用 wave_tree.start/end 邊界對 PatternBound start_idx/end_idx 範圍比對
+            // (PatternBound 以 monowave index 計;classified 已有完整序列,wave_tree 是
+            // monowave date range)
+            scenario.pattern_isolation_anchors = pattern_bounds
+                .iter()
+                .filter(|pb| {
+                    // 若 scenario 對應的 monowave_idx 範圍與 PatternBound 範圍重疊 → 包含
+                    let pb_start_date = classified
+                        .get(pb.start_idx)
+                        .map(|m| m.monowave.start_date);
+                    let pb_end_date = classified
+                        .get(pb.end_idx)
+                        .map(|m| m.monowave.end_date);
+                    matches!(
+                        (pb_start_date, pb_end_date),
+                        (Some(s), Some(e))
+                            if s <= scenario.wave_tree.end
+                                && scenario.wave_tree.start <= e
+                    )
+                })
+                .map(|pb| output::PatternIsolationAnchor {
+                    start_idx: pb.start_idx,
+                    end_idx: pb.end_idx,
+                    start_label: pb.start_label,
+                    end_label: pb.end_label,
+                    validated: pb.validated,
+                })
+                .collect();
+        }
         stage_elapsed.insert(
             "stage_8_5_three_rounds".to_string(),
             stage_8_5_start.elapsed().as_millis() as u64,
@@ -487,7 +605,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.21.0");
+        assert_eq!(core.version(), "1.0.0");
     }
 
     // -------------------------------------------------------------

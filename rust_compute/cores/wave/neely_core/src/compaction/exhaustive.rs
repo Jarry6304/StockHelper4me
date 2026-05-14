@@ -1,6 +1,6 @@
 // exhaustive.rs — Compaction 窮舉模式(M3 PR-5 簡化版)
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §十一(Compaction 重新定位)。
+// 對齊 m3Spec/neely_core_architecture.md §十一(Compaction 重新定位)。
 //
 // 設計目標:
 //   - 純結構壓縮(§11.2)— 不選最優,窮舉所有合法 compression paths
@@ -44,8 +44,8 @@ mod tests {
             structure_label: "test".to_string(),
             complexity_level: ComplexityLevel::Simple,
             power_rating: PowerRating::Neutral,
-            max_retracement: 0.0,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -56,6 +56,10 @@ mod tests {
             advisory_findings: Vec::new(),
             in_triangle_context: false,
             awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
         }
     }
 

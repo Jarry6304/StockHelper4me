@@ -1,6 +1,6 @@
 // beam_search.rs — Forest 上限保護的 Fallback
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §十二(Forest 上限保護機制)。
+// 對齊 m3Spec/neely_core_architecture.md §十二(Forest 上限保護機制)。
 //
 // 觸發條件:
 //   - exhaustive Compaction 後 forest.len() > cfg.forest_max_size
@@ -65,8 +65,8 @@ mod tests {
             structure_label: "test".to_string(),
             complexity_level: ComplexityLevel::Simple,
             power_rating: rating,
-            max_retracement: 0.0,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -77,6 +77,10 @@ mod tests {
             advisory_findings: Vec::new(),
             in_triangle_context: false,
             awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
         }
     }
 

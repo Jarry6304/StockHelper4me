@@ -105,7 +105,11 @@ pub fn validate_candidate(
     results.extend(triangle_rules::run(candidate, classified));
     results.extend(wave_rules::run(candidate, classified));
 
-    let mut essential_fail = false;
+    /// Ch9 Exception Rule 容差(spec neely_rules.md §第 3 章 line 529 + Ch 9, p.9-7):
+    /// 「單一未通過、且差距不大(< 10%)時,通常仍可套用該規則的結論」
+    const CH9_EXCEPTION_GAP_PCT: f64 = 10.0;
+
+    let mut essential_fail_gaps: Vec<f64> = Vec::new();
     let mut overlap_trending_failed = false;
     let mut overlap_terminal_failed = false;
 
@@ -116,7 +120,7 @@ pub fn validate_candidate(
             }
             RuleResult::Fail(rej) => {
                 match rej.rule_id {
-                    RuleId::Ch5_Essential(_) => essential_fail = true,
+                    RuleId::Ch5_Essential(_) => essential_fail_gaps.push(rej.gap.abs()),
                     RuleId::Ch5_Overlap_Trending => overlap_trending_failed = true,
                     RuleId::Ch5_Overlap_Terminal => overlap_terminal_failed = true,
                     // 變體規則 Fail 不 block(資訊性 — Stage 5 Classifier 用)
@@ -133,6 +137,13 @@ pub fn validate_candidate(
         }
     }
 
+    // Ch9 Exception Rule:單一 Essential 規則失敗 AND gap < 10% 視為仍 pass
+    // 多於一條 Essential 失敗時直接 fail(無論 gap 大小)
+    let essential_fail = match essential_fail_gaps.len() {
+        0 => false,
+        1 => essential_fail_gaps[0] >= CH9_EXCEPTION_GAP_PCT,
+        _ => true,
+    };
     let both_overlaps_failed = overlap_trending_failed && overlap_terminal_failed;
     report.overall_pass = !(essential_fail || both_overlaps_failed);
     report
@@ -273,5 +284,78 @@ mod tests {
         // 不跑 dispatcher,只驗 ValidationReport struct 行為(實際 dispatcher 的兩條 fail 邏輯
         // 已在 validate_candidate 內 reduce — 此測試只佔位確認 struct 可同時持 2 個 fail RuleRejection)
         assert_eq!(report.failed.len(), 2);
+    }
+
+    // ── Ch9 Exception Rule(spec line 529 + Ch 9, p.9-7)─────────────────
+    // 單一 Essential 規則失敗 + gap < 10% → 仍視為 overall_pass
+
+    /// 構造 W2 微越 W1 起點(R1 fail with small gap)的 5-wave Up impulse。
+    /// R1 預期 fail with gap_pct = overshoot / W1_magnitude * 100。
+    /// gap_pct = 0.5 / 10 * 100 = 5% < 10% → Ch9 Exception 應觸發。
+    fn make_5wave_r1_micro_violation_up() -> Vec<ClassifiedMonowave> {
+        // W1 100→110 (mag=10) / W2 110→99.5 (越過 W1 start 100 by 0.5,gap=5%)
+        // W3 99.5→125 / W4 125→118 / W5 118→132
+        vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 99.5, MonowaveDirection::Down),
+            cmw(99.5, 125.0, MonowaveDirection::Up),
+            cmw(125.0, 118.0, MonowaveDirection::Down),
+            cmw(118.0, 132.0, MonowaveDirection::Up),
+        ]
+    }
+
+    /// 構造 W2 大幅越過 W1 起點(R1 fail with large gap)的 5-wave。
+    /// gap_pct = 2.0 / 10 * 100 = 20% > 10% → Ch9 Exception 不觸發。
+    fn make_5wave_r1_severe_violation_up() -> Vec<ClassifiedMonowave> {
+        // W1 100→110 / W2 110→98 (越過 W1 start 100 by 2.0,gap=20%)
+        vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 98.0, MonowaveDirection::Down),
+            cmw(98.0, 125.0, MonowaveDirection::Up),
+            cmw(125.0, 118.0, MonowaveDirection::Down),
+            cmw(118.0, 132.0, MonowaveDirection::Up),
+        ]
+    }
+
+    #[test]
+    fn ch9_exception_passes_single_micro_essential_fail() {
+        let classified = make_5wave_r1_micro_violation_up();
+        let candidate = make_candidate_5wave(MonowaveDirection::Up);
+        let report = validate_candidate(&candidate, &classified);
+        // 應仍 overall_pass(單一 R1 fail with gap < 10%,套 Ch9 Exception)
+        let essential_fails: Vec<&RuleRejection> = report
+            .failed
+            .iter()
+            .filter(|r| matches!(r.rule_id, RuleId::Ch5_Essential(_)))
+            .collect();
+        assert_eq!(essential_fails.len(), 1, "應只有 R1 一條 essential fail");
+        assert!(essential_fails[0].gap.abs() < 10.0, "gap 應 < 10%,實際 {}", essential_fails[0].gap);
+        assert!(
+            report.overall_pass,
+            "Ch9 Exception 應觸發:單一 essential fail with gap < 10% 仍 pass。failed = {:?}",
+            report.failed
+        );
+    }
+
+    #[test]
+    fn ch9_exception_does_not_apply_to_severe_violation() {
+        let classified = make_5wave_r1_severe_violation_up();
+        let candidate = make_candidate_5wave(MonowaveDirection::Up);
+        let report = validate_candidate(&candidate, &classified);
+        let essential_fails: Vec<&RuleRejection> = report
+            .failed
+            .iter()
+            .filter(|r| matches!(r.rule_id, RuleId::Ch5_Essential(_)))
+            .collect();
+        assert!(!essential_fails.is_empty(), "應有 essential fail");
+        assert!(
+            essential_fails.iter().any(|r| r.gap.abs() >= 10.0),
+            "至少一條 gap ≥ 10%,實際 gaps = {:?}",
+            essential_fails.iter().map(|r| r.gap).collect::<Vec<_>>()
+        );
+        assert!(
+            !report.overall_pass,
+            "Ch9 Exception 不應觸發(gap ≥ 10%);overall_pass 應 false"
+        );
     }
 }

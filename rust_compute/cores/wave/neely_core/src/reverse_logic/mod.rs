@@ -99,6 +99,8 @@ fn is_near_completion(scenario: &Scenario) -> bool {
         // Zigzag / Flat 單獨出現 → 中段候選(多半是更大 Combination 的子段)
         NeelyPatternType::Zigzag { .. } => false,
         NeelyPatternType::Flat { .. } => false,
+        // RunningCorrection(Phase 16 r5)→ ±3 Strong 等同 Triple* 變體,完成候選
+        NeelyPatternType::RunningCorrection => true,
     }
 }
 
@@ -124,8 +126,8 @@ mod tests {
             structure_label: "test".to_string(),
             complexity_level: ComplexityLevel::Simple,
             power_rating: PowerRating::Neutral,
-            max_retracement: 0.0,
-            post_pattern_behavior: PostBehavior::Indeterminate,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
             rules_passed_count: 0,
@@ -136,6 +138,10 @@ mod tests {
             advisory_findings: Vec::new(),
             in_triangle_context: in_triangle,
             awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
         }
     }
 

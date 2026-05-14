@@ -1,7 +1,7 @@
 // facts.rs — Fact 產出規則
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §十五。
-// 從 NeelyCoreOutput 萃取機械式 Fact(禁主觀詞彙,m2Spec/oldm2Spec/cores_overview §6.1.1)。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §十五。
+// 從 NeelyCoreOutput 萃取機械式 Fact(禁主觀詞彙,m3Spec/cores_overview.md §6.1.1)。
 //
 // **M3 PR-6 階段**(先實踐以後再改)— produce_facts 基本實作:
 //   - 對每個 Scenario 產出 1 條結構性 Fact
@@ -106,6 +106,7 @@ fn pattern_label(p: &NeelyPatternType) -> String {
         NeelyPatternType::Flat { sub_kind } => format!("Flat({:?})", sub_kind),
         NeelyPatternType::Triangle { sub_kind } => format!("Triangle({:?})", sub_kind),
         NeelyPatternType::Combination { sub_kinds } => format!("Combination({:?})", sub_kinds),
+        NeelyPatternType::RunningCorrection => "RunningCorrection".to_string(),
     }
 }
 
@@ -146,8 +147,8 @@ mod tests {
                 structure_label: "test".to_string(),
                 complexity_level: ComplexityLevel::Simple,
                 power_rating: PowerRating::Bullish,
-                max_retracement: 0.0,
-                post_pattern_behavior: PostBehavior::Indeterminate,
+                max_retracement: None,
+                post_pattern_behavior: PostBehavior::Unconstrained,
                 passed_rules: vec![
                     RuleId::Ch5_Essential(1),
                     RuleId::Ch5_Essential(2),
@@ -162,6 +163,10 @@ mod tests {
             advisory_findings: Vec::new(),
             in_triangle_context: false,
             awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
             })
             .collect();
 
