@@ -1,10 +1,24 @@
 # Fundamental Cores 規格(基本面)
 
-> **版本**:v2.0 抽出版 r3
-> **日期**:2026-05-07
+> **版本**:v2.0 抽出版 r4
+> **日期**:2026-05-14
 > **配套文件**:`cores_overview.md`(共通規範)
 > **包含 Core**:3 個
 > **優先級**:全部 P2
+
+---
+
+## r4 修訂摘要(2026-05-14 — Round 4 transition pattern 回寫)
+
+- **`valuation_core` §4.5 EventKind 從 8 個擴 14 個**(對齊 v1.31 Round 4
+  production-driven 修法,2026-05-10 commit `91804df`):
+  - 既有 6 個 stay-in-zone(`PerExtremeHigh/Low`、`PbrExtremeHigh/Low`、
+    `YieldExtremeHigh`、`YieldHighThreshold`)→ 拆 12 個 Entered/Exited transition
+  - 既有 2 個 transition(`PerNegative`、`PbrBelowBookValue`)維持不變
+- **修正動機**:r3 spec 列的 stay-in-zone EventKind 在 production 1263 stocks
+  全市場跑出每日重複觸發,facts 量爆掉(對比 fear_greed_core 的 zone transition
+  範本)。Round 4 fix 把 valuation facts 從 2.0M → 189K(↓91%)
+- 詳見 `CLAUDE.md` v1.31 Round 4 + `lib.rs:92-104` 14 EventKind 列表
 
 ---
 
@@ -252,16 +266,30 @@ pub struct ValuationEvent {
 }
 
 pub enum ValuationEventKind {
-    PerExtremeHigh,           // PER 高百分位
-    PerExtremeLow,
-    PbrExtremeHigh,
-    PbrExtremeLow,
-    YieldExtremeHigh,         // 殖利率歷史高位
-    YieldHighThreshold,       // 殖利率超過絕對閾值
+    // Round 4 transition pattern(r4 2026-05-10):6 個 stay-in-zone → 12 個 Entered/Exited
+    EnteredPerExtremeHigh,
+    ExitedPerExtremeHigh,
+    EnteredPerExtremeLow,
+    ExitedPerExtremeLow,
+    EnteredPbrExtremeHigh,
+    ExitedPbrExtremeHigh,
+    EnteredPbrExtremeLow,
+    ExitedPbrExtremeLow,
+    EnteredYieldExtremeHigh,
+    ExitedYieldExtremeHigh,
+    EnteredYieldHighThreshold,
+    ExitedYieldHighThreshold,
+    // 既有 transition pattern(無需改動)
     PerNegative,              // PER 轉負(虧損)
     PbrBelowBookValue,        // PBR < 1
 }
 ```
+
+> **r4 修訂理由**:原 r3 spec 的 6 個 stay-in-zone EventKind(`PerExtremeHigh/Low`
+> 等)在 production 1263 stocks 全市場跑出每日重複觸發(極值股票會每日重複觸發)。
+> Round 4(2026-05-10)拆成 Enter/Exit 邊緣偵測:只在進入 / 退出 zone 當日各觸發一次。
+> 對齊 `fear_greed_core` r3 + `bollinger_core` r4 + `margin_core` r4 同款 transition
+> pattern。facts 量從 2.0M → 189K(↓91%)— 本子類受惠最大。
 
 > **fact_date 與 date 為何並列**:本 Core 為日頻,兩者數值相同,但保留 `fact_date` 欄位是為了與 revenue / financial_statement 同構,便於下游通用處理。
 
@@ -269,9 +297,11 @@ pub enum ValuationEventKind {
 
 | Fact statement | metadata |
 |---|---|
-| `PER 12.3 at 2026-04-25, 5-year percentile 18%` | `{ per: 12.3, percentile_5y: 18.0 }` |
-| `PER at 5-year low percentile(8.5) on 2026-04-22` | `{ percentile_5y: 8.5 }` |
-| `Dividend yield 6.8% on 2026-04-25, exceeded 5% threshold` | `{ yield: 6.8, threshold: 5.0 }` |
+| `PER 12.3 at 2026-04-25, 5-year percentile 18%(daily series 不入 facts)` | `{ per: 12.3, percentile_5y: 18.0 }` |
+| `PER entered 5-year low percentile(8.5) on 2026-04-22` | `{ event: "entered_per_extreme_low", percentile_5y: 8.5 }` |
+| `PER exited 5-year low percentile(15.2) on 2026-05-02` | `{ event: "exited_per_extreme_low", percentile_5y: 15.2 }` |
+| `Dividend yield entered above 5% threshold(6.8%) on 2026-04-25` | `{ event: "entered_yield_high_threshold", yield: 6.8, threshold: 5.0 }` |
+| `Dividend yield exited above 5% threshold(4.8%) on 2026-05-10` | `{ event: "exited_yield_high_threshold", yield: 4.8, threshold: 5.0 }` |
 | `PBR turned below 1.0 on 2026-04-22(0.95)` | `{ pbr: 0.95 }` |
 | `PER turned negative on 2026-04-25(company in loss)` | `{ }` |
 

@@ -1,10 +1,29 @@
 # Indicator Cores:波動 / 通道類
 
-> **版本**:v2.0 抽出版 r2
-> **日期**:2026-05-06
+> **版本**:v2.0 抽出版 r4
+> **日期**:2026-05-14
 > **配套文件**:`cores_overview.md`(共通規範)、`layered_schema_post_refactor.md`(Silver 層)、`adr/0001_tw_market_handling.md`
 > **包含 Core**:4 個
 > **優先級分布**:P1(2 個)/ P3(2 個)
+
+---
+
+## r4 修訂摘要(2026-05-14 — P2 production calibration 回寫)
+
+- **`bollinger_core` EventKind 從 5 個擴 12 個**(對齊 v1.31 Round 4 production-driven
+  修法,2026-05-10 commit `91804df`):
+  - **既有 4 個** stay-in-zone / streak / extreme:`BandwidthExtremeLow`、
+    `SqueezeStreak`、`WalkingUpperBand`、`WalkingLowerBand`(無需改動)
+  - **新增 8 個 Entered/Exited transition**(取代 spec r2 原本的 stay-in-zone EventKind):
+    `EnteredUpperBandTouch` / `ExitedUpperBandTouch`、
+    `EnteredLowerBandTouch` / `ExitedLowerBandTouch`、
+    `EnteredAboveUpperBand` / `ExitedAboveUpperBand`、
+    `EnteredBelowLowerBand` / `ExitedBelowLowerBand`
+- **修正動機**:r2 spec 列「`upper_band_touch` / `above_upper_band` 等 stay-in-zone」
+  在 production 1263 stocks 全市場跑出每日重複觸發 → facts 量爆掉(對比 fear_greed_core
+  的 zone transition 範本只在進出區間時觸發一次)。Round 4 fix(2026-05-10)
+  改 Enter/Exit 邊緣偵測,facts 量從 466K → 457K(本質 bouncy,小幅降量)
+- 詳見 `CLAUDE.md` v1.31 Round 4 §「Entered/Exited bouncy 防衛」
 
 ---
 
@@ -119,15 +138,43 @@ pub struct BollingerPoint {
 }
 ```
 
-### 3.5 Fact 範例
+### 3.5 EventKind 與 Fact 範例
+
+```rust
+pub enum BollingerEventKind {
+    // 既有 streak / extreme(無需改動)
+    BandwidthExtremeLow,
+    SqueezeStreak,
+    WalkingUpperBand,
+    WalkingLowerBand,
+    // Round 4 transition pattern(2026-05-10):取代 r2 spec 原本的 stay-in-zone EventKind
+    EnteredUpperBandTouch,
+    ExitedUpperBandTouch,
+    EnteredLowerBandTouch,
+    ExitedLowerBandTouch,
+    EnteredAboveUpperBand,
+    ExitedAboveUpperBand,
+    EnteredBelowLowerBand,
+    ExitedBelowLowerBand,
+}
+```
+
+**Fact 範例**:
 
 | Fact statement | metadata |
 |---|---|
 | `Bollinger(20,2) bandwidth at 5-year low(0.062) on 2026-04-25` | `{ event: "bandwidth_extreme_low", value: 0.062, lookback: "5y" }` |
-| `Price touched upper band at 2026-04-15(close=580, upper=578)` | `{ event: "upper_band_touch", close: 580, upper: 578 }` |
-| `Bollinger(20,2) %B = 1.05 at 2026-04-22(price above upper band)` | `{ event: "above_upper_band", percent_b: 1.05 }` |
 | `Bollinger(20,2) squeeze: bandwidth < 0.10 for 8 consecutive days` | `{ event: "squeeze_streak", days: 8 }` |
 | `Bollinger(20,2) walking the band: 5 consecutive closes near upper band` | `{ event: "walking_upper_band", days: 5 }` |
+| `Price entered upper band touch zone at 2026-04-15(close=580, upper=578)` | `{ event: "entered_upper_band_touch", close: 580, upper: 578 }` |
+| `Price exited upper band touch zone at 2026-04-18` | `{ event: "exited_upper_band_touch" }` |
+| `Bollinger(20,2) %B entered above upper band at 2026-04-22(%B=1.05)` | `{ event: "entered_above_upper_band", percent_b: 1.05 }` |
+| `Bollinger(20,2) %B exited above upper band at 2026-04-25(%B=0.95)` | `{ event: "exited_above_upper_band", percent_b: 0.95 }` |
+
+> **設計提醒(r4)**:`EnteredX` / `ExitedX` 為**邊緣觸發**(edge trigger),
+> 只在狀態轉變當日產出一次 Fact;非「每日落在 zone 內」每日觸發。對齊
+> `fear_greed_core` r3 同款 transition pattern,避免 bouncy zone 帶來
+> facts 表爆量。
 
 ### 3.6 Bollinger Squeeze 的處理
 

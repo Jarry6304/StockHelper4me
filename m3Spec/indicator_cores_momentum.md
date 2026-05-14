@@ -1,10 +1,52 @@
 # Indicator Cores:動量 / 趨勢 / 強度類
 
-> **版本**:v2.0 抽出版 r2
-> **日期**:2026-05-06
+> **版本**:v2.0 抽出版 r4
+> **日期**:2026-05-14
 > **配套文件**:`cores_overview.md`(共通規範)、`layered_schema_post_refactor.md`(Silver 層)、`adr/0001_tw_market_handling.md`
 > **包含 Core**:9 個
 > **優先級分布**:P1(5 個)/ P3(4 個)
+
+---
+
+## r4 修訂摘要(2026-05-14 — P0 Gate v4 production calibration 回寫)
+
+對 4 個 indicator cores 加常數註記,記錄 production calibration 雙波後的真實值。
+
+### MIN_PIVOT_DIST(背離規則距離下界)
+
+`kd_core` / `macd_core` / `rsi_core` 的 §X.6 背離規則中,「兩極值點之間時間距離 ≥ N」
+的 N 值:
+
+| 階段 | N 值 | 觸發率(/yr) | 註記 |
+|---|---|---|---|
+| 原 r2 spec literal | 20 | — | Murphy (1999) p.248「20-60 intervals」下界 |
+| v1.32(2026-05-12) | 10 | 0.27-0.71 | 過稀(低於 Murphy 預期 1-4/yr) |
+| v1.33(2026-05-13) | 20 | 0.27-0.71 | 對齊 spec literal,仍過稀 |
+| **v1.34 P0 Gate v4(2026-05-14,本版)** | **12** | **0.7-1.8** | **回到 Murphy 中段** ✅ |
+
+讓步理由:
+- 保留 spec §3.6 結構性條件「N ≥ 2 × PIVOT_N = 6」(N=12 滿足)
+- N=12 為 NEoWave 經驗值,12-bar ≈ 2.4 週,介於 v1.32(10)和 v1.33(20)之間
+- spec §3.6 預設 20 為「保守值」,production 1263 stocks 顯示偏稀
+
+`obv_core`(volume 子類)同款 N=12,詳見 `indicator_cores_volume.md` §3.6 r4。
+
+### Cross spacing(交叉訊號最小間距)
+
+production calibration v3/v4 (commit `518f2c8`) 為 KD / MA / MACD cross 加最小間距,
+避免 whipsaw 高頻誤觸:
+
+| Core | 常數 | 預設值 | 觸發率(/yr) v3 → v4 | 目標 |
+|---|---|---|---|---|
+| `kd_core` | `MIN_KD_CROSS_SPACING` | **15** | 20.17/20.13 → 10.29/10.26 | 8-12/yr ✅ |
+| `ma_core` | `MIN_MA_CROSS_SPACING` | **15** | 13.59/13.42 → 7.39/7.32 | 6-9/yr ✅ |
+| `macd_core` | `MIN_MACD_CROSS_SPACING` | **15** | 9.58/9.42 → 6.79/6.68 | 5-7/yr ✅ |
+| `macd_core` | `MIN_ZERO_CROSS_SPACING` | **8** | 19.01 → 11.90 | ≤ 12/yr ✅ |
+
+設計提醒:**spec 未強制 cross spacing**,屬 production-driven 防 whipsaw 添加。
+不對齊 spec 是因為 spec 本身沒有規定該值,而非偏離。
+
+詳見 `CLAUDE.md` v1.34 + v1.32 收尾。
 
 ---
 
@@ -143,8 +185,11 @@ pub struct MacdPoint {
 
 **僅產出嚴格規則式背離**,需符合:
 
-- 兩個價格極值點(HH 或 LL)之間時間距離 ≥ N 根 K 棒(預設 N=20)
+- 兩個價格極值點(HH 或 LL)之間時間距離 ≥ N 根 K 棒(**r4 預設 N=12**,
+  v1.34 P0 Gate v4 production calibration;原 r2 spec literal=20 為保守值,
+  詳見頂端 r4 修訂摘要)
 - 兩極值點之間 MACD 對應方向相反
+- pivot 偵測採 PIVOT_N=3 swing confirmation(Lucas & LeBeau 1992)
 - 該規則需明確寫死於 `compute.rs`,不接受「視覺背離」
 
 ---

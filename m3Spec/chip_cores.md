@@ -1,10 +1,22 @@
 # Chip Cores 規格(籌碼面)
 
-> **版本**:v2.0 抽出版 r3
-> **日期**:2026-05-13
+> **版本**:v2.0 抽出版 r4
+> **日期**:2026-05-14
 > **配套文件**:`cores_overview.md`(共通規範)
 > **包含 Core**:5 個
 > **優先級**:全部 P2
+
+---
+
+## r4 修訂摘要(2026-05-14 — Round 4 transition pattern + Round 1 SuperLarge 回寫)
+
+| Core | 修改項 | 修前 EventKind 數 | 修後 |
+|---|---|---|---|
+| `margin_core` | §4.5 EventKind 加 3 對 Entered/Exited transition(取代 stay-in-zone) | 7 | **10** |
+| `shareholder_core` | §6.5 EventKind 加 SuperLarge 4-level(分大戶 / 千張大戶) | 6 | **8** |
+
+詳見下方各 Core 章節 r4 標註,及 `CLAUDE.md` v1.31 Round 4 +
+v1.29 Round 1 P2 阻塞 6 條目。
 
 ---
 
@@ -297,15 +309,26 @@ pub struct MarginEvent {
 }
 
 pub enum MarginEventKind {
+    // 既有 day-over-day pattern(無需改動)
     MarginSurge,            // 融資餘額暴增
     MarginCrash,            // 融資餘額暴減
     ShortSqueeze,           // 融券回補(餘額急減)
     ShortBuildUp,           // 融券暴增
-    ShortRatioExtremeHigh,  // 券資比異常高
-    ShortRatioExtremeLow,
-    MaintenanceLow,         // 維持率偏低
+    // Round 4 transition pattern(r4 2026-05-10):3 個 stay-in-zone → 6 個 Entered/Exited
+    EnteredShortRatioExtremeHigh,
+    ExitedShortRatioExtremeHigh,
+    EnteredShortRatioExtremeLow,
+    ExitedShortRatioExtremeLow,
+    EnteredMaintenanceLow,
+    ExitedMaintenanceLow,
 }
 ```
+
+> **r4 修訂理由**:原 r3 spec 的 `ShortRatioExtremeHigh/Low` 與 `MaintenanceLow`
+> 是 stay-in-zone EventKind,production 1263 stocks 全市場跑出每日重複觸發。
+> Round 4(2026-05-10)改 edge trigger:只在進入 / 退出 zone 當日各觸發一次。
+> 對齊 `fear_greed_core` r3 + `bollinger_core` r4 同款 transition pattern。
+> facts 量從 1.3M → 605K(↓54%)。
 
 ### 4.6 Fact 範例
 
@@ -313,8 +336,10 @@ pub enum MarginEventKind {
 |---|---|
 | `Margin balance up 12% to 25,000 lots on 2026-04-22` | `{ change_pct: 12.0, balance: 25000 }` |
 | `Short balance down 35% to 3,200 lots on 2026-04-25(short squeeze)` | `{ change_pct: -35.0, balance: 3200 }` |
-| `Short-to-margin ratio reached 32% on 2026-04-20(historical high)` | `{ ratio: 32.0, lookback: "60d" }` |
-| `Margin maintenance dropped to 142% on 2026-04-28` | `{ maintenance: 142.0 }` |
+| `Short-to-margin ratio entered extreme high zone(32%) on 2026-04-20` | `{ ratio: 32.0, threshold: 30.0 }` |
+| `Short-to-margin ratio exited extreme high zone(28%) on 2026-04-23` | `{ ratio: 28.0, threshold: 30.0 }` |
+| `Margin maintenance entered low zone(142%) on 2026-04-28` | `{ maintenance: 142.0, threshold: 145.0 }` |
+| `Margin maintenance exited low zone(148%) on 2026-05-02` | `{ maintenance: 148.0, threshold: 145.0 }` |
 
 ---
 
@@ -518,21 +543,35 @@ pub struct ShareholderEvent {
 }
 
 pub enum ShareholderEventKind {
-    SmallHoldersDecreasing,       // 散戶人數連續減少
+    SmallHoldersDecreasing,           // 散戶人數連續減少
     SmallHoldersIncreasing,
-    LargeHoldersAccumulating,     // 大戶持股連續增加
+    // 4-level 分級(r4 2026-05-10 Round 1):分「大戶」(50-1000 張)與「千張大戶」(>= 1000 張)
+    LargeHoldersAccumulating,         // 大戶持股連續增加(50-1000 張級距)
     LargeHoldersReducing,
+    SuperLargeHoldersAccumulating,    // 千張大戶持股連續增加(>= 1000 張級距)
+    SuperLargeHoldersReducing,
     ConcentrationRising,
     ConcentrationDecreasing,
 }
 ```
+
+> **r4 修訂理由**:原 r3 spec 只列「大戶」一級(>= 1000 張)。Round 1
+> (2026-05-10)依集保中心 17 levels 真實資料,user 拍版分兩級:
+> - **大戶**(50-1000 張,Money 錢雜誌 50-張中實戶 / 凱基 1000-張大戶基準):
+>   `LargeHolders*` 對應
+> - **千張大戶**(>= 1000 張,凱基 / 集保慣例):`SuperLargeHolders*` 對應
+>
+> Streak 預設 8 週(對齊 Moskowitz et al. 2012 *Journal of Financial Economics*
+> momentum 跨領域 8-週驗證下限)。詳見 `CLAUDE.md` v1.29 Round 1 +
+> `lib.rs:155-176` 17-level iterate + 「差異數調整(說明4)」skip 邏輯。
 
 ### 6.6 Fact 範例
 
 | Fact statement | metadata |
 |---|---|
 | `Small holders count down 1,250 to 38,500 on 2026-04-25(week)` | `{ change: -1250, count: 38500, frequency: "weekly" }` |
-| `Large holders holding pct up 1.8% to 42.3% on 2026-04-25(week)` | `{ change: 1.8, pct: 42.3, frequency: "weekly" }` |
+| `Large holders(50-1000 lots) holding pct up 1.8% to 42.3% on 2026-04-25(week)` | `{ change: 1.8, pct: 42.3, level: "large", frequency: "weekly" }` |
+| `Super-large holders(>=1000 lots) holding pct up 0.6% to 28.5% over 8 consecutive weeks` | `{ change: 0.6, pct: 28.5, level: "super_large", weeks: 8 }` |
 | `Concentration index up 2.1% over 4 consecutive weeks` | `{ change: 2.1, weeks: 4 }` |
 
 ### 6.7 週頻資料的時間對齊
