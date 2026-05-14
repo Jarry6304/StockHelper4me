@@ -1,5 +1,11 @@
 # Neely Core P0 Gate v4 Production Calibration Confirmation — 2026-05-14
 
+> ⚠️ **狀態:本機驗證未完成** — v4 Cross spacing 結果為「user 跑 v3 production
+> + DELETE Cross facts + 重跑 v3.5 production」後確認。v5 MIN_PIVOT_DIST 20→12
+> 的 Divergence 觸發率(預期 0.7-1.8/yr)**尚未跑 production 驗證**。
+> 文件內預期數值來自 v3 facts 表 DELETE 後純 v1.33 行為 ×2.5 推算。
+> User 跑完 v5 production(指令見文末)後填回 §v5 驗證結果。
+
 ## 摘要
 
 | 項目 | 值 |

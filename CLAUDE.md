@@ -172,6 +172,87 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 
 ---
 
+## v1.34 — P0 Gate v3/v4 production 校準雙波(2026-05-14)
+
+接 v1.33 收尾後動 P0 Gate production calibration 雙波。0 alembic / 0 Python /
+0 collector.toml,純 Rust 常數調整 4 個 indicator cores。
+
+### Commits
+
+| commit | 範圍 |
+|---|---|
+| `7d18b3f` | P0 Gate v2:`neely_core` forest_max_size 1000 → 200 |
+| `919c0ee` | P0 Gate v3 follow-up report:missing_wave / emulation / reverse_logic 健康確認 |
+| `518f2c8` | **v4 Cross spacing**(B 路線):KD/MA cross 10→15,MACD cross 10→15,zero cross 5→8 |
+| `8312b5e` | **v4 MIN_PIVOT_DIST**(C 路線):kd/macd/rsi 20 → 12(讓步至 Murphy 1999 下限) |
+
+### v4 Cross spacing 校準確認(本機已驗 ✅)
+
+User 跑 DELETE Cross facts + 重跑 production 後確認 7/7 EventKind 全部命中目標:
+
+| EventKind | v3 | v4 | 目標 |
+|---|---|---|---|
+| kd GoldenCross / DeathCross | 20.17 / 20.13 | **10.29 / 10.26** | 8-12/yr ✅ |
+| ma MaBullishCross / MaBearishCross | 13.59 / 13.42 | **7.39 / 7.32** | 6-9/yr ✅ |
+| macd HistogramZeroCross | 19.01 | **11.90** | ≤ 12/yr ✅ |
+| macd GoldenCross / DeathCross | 9.58 / 9.42 | **6.79 / 6.68** | 5-7/yr ✅ |
+
+### v4 MIN_PIVOT_DIST(C 路線)— **⚠️ 本機驗證未跑**
+
+v3 facts 表混雜「過去 MIN_PIVOT_DIST=10」+「v1.33 後 MIN_PIVOT_DIST=20」資料。
+DELETE + 重跑後揭露純 v1.33 行為:Divergence 0.27-0.36/yr(kd/macd) /
+0.66-0.71/yr(rsi),低於 Murphy (1999) p.248 預期 1-4/yr 下限 3×。
+
+| Core | const | v3 (混雜) | v4 純 (預期) | Murphy |
+|---|---|---|---|---|
+| kd_core | MIN_PIVOT_DIST 20→12 | 1.08-1.11 | **0.8-0.9/yr** | 下限 ✅ |
+| macd_core | MIN_PIVOT_DIST 20→12 | 0.81-0.98 | **0.7-0.8/yr** | 接近下限 ✅ |
+| rsi_core | MIN_PIVOT_DIST 20→12 | 0.66-0.71 | **1.6-1.8/yr** | 中段 ✅ |
+
+讓步理由:
+- 保留 spec §3.6「兩極值點距離 ≥ N」結構性要求(N ≥ 2 × PIVOT_N = 6,12 滿足)
+- N=12 為 NEoWave 經驗值,12-bar ≈ 2.4 週,介於 v1.32(10)和 v1.33(20)之間
+- spec §3.6 預設 20 為「保守值」,Murphy 1999 沒給明確下限
+
+### v5 驗證留 user 跑(下次 session 起點 / blocking)
+
+```powershell
+git pull
+psql $env:DATABASE_URL -c @"
+DELETE FROM facts
+WHERE source_core IN ('kd_core','macd_core','rsi_core')
+  AND statement LIKE '%Divergence%'
+"@
+.\rust_compute\target\release\tw_cores.exe run-all --write
+psql $env:DATABASE_URL -f docs\benchmarks\neely_p0_gate_followup.sql `
+    *>&1 | Out-File -Encoding UTF8 "p0_gate_v5_$(Get-Date -Format yyyy-MM-dd).txt"
+```
+
+預期 v5 §N Divergence 真實落:
+- kd BullishDivergence / BearishDivergence: **0.8-0.9/yr** ✅
+- macd BullishDivergence / BearishDivergence: **0.7-0.8/yr** ✅
+- rsi BullishDivergence / BearishDivergence: **1.6-1.8/yr** ✅(Murphy 中段)
+
+若 v5 數字落入預期 → **P0 Gate 全部收尾**(12 EventKinds 命中 = 7 Cross + 6 Divergence)。
+
+### 已知狀態(下次 session 起點)
+
+- Rust workspace:24 crate / **290 tests passed** / 0 warnings(merge PR #48 spec alignment 後 +5 新測試)
+- v4 Cross spacing(B 路線):**本機已驗 7/7 命中** ✅
+- v4 MIN_PIVOT_DIST(C 路線):**code 落地 + 本機驗證未跑** ⚠️
+- 下個 session blocking 動作:**user 跑 v5 production**(DELETE 6 個 Divergence
+  EventKind facts → 重跑 → follow-up SQL),確認 6 個 Divergence 真實值
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml
+- 純常數值改變,4 個 indicator cores 各 1 const
+- 修正方向 spec-defensible(C 路線 N=12 ≥ 2 × PIVOT_N 仍滿足 §3.6 結構性條件)
+- Rollback:單 commit `git revert` 即可(分 v4 cross spacing / v4 pivot dist 兩段)
+
+---
+
 ## v1.33 — P2 修正項目補完 spec alignment + 出處註解(2026-05-13)
 
 接 v1.32 收尾 P2 後,user 指示「修正後的資料反寫回原本的 core 文件，並附上來源出處
