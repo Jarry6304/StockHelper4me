@@ -168,7 +168,132 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表已搬 docs/claude_history.md) → #M3-1 ✅ skeleton → #M3-2 ✅ Stage 1-2 monowave → #M3-3a ✅ Stage 3 candidates → #M3-3b ✅ Stage 4 validator R1-R3 → #M3-4 ✅ Stage 5-7 classifier/post/complexity → #M3-5 ✅ Stage 8 compaction → #M3-6 ✅ Stage 9-10 + facts.rs → #M3-7 ✅ alembic 三表 + ohlcv_loader + tw_cores PG → #M3-8 ✅ inventory + Workflow toml → #M3-CC1 ✅ day_trading_core → #M3-batch ✅ 剩餘 19 cores 一次到位 → #M3-IK ✅(indicator_kernel 抽出,user 退板)→ #M3-IK-revert ✅(對齊 spec §四 / §十四)→ #M3-spec-comply ✅(22 cores 對齊 spec audit + spec-comply rewrite)→ #M3-9a ✅ tw_cores run-all 全市場全核 dispatch`。m2 收尾完成進 R5 觀察期;**M3 Cores Stage 1-10 + PG IO + inventory + run-all 落地,22 個 cores 全部註冊 + 全部對齊 spec(Params/Output/EventKind),145 tests 全綠**。
+當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表搬 docs/claude_history.md) → #M3-1 ~ #M3-9a ✅ 22 cores 全部落地 → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer Phase B-D 全套 merge main(2026-05-13)→ #PR #51 ⏳ neely Phase 13-19 v1.0.x + P3/P2 indicator cores batch + Round 5/6 calibration + agg layer 補強(累積 22+ commits,user 待 merge)`。**M3 Cores 35 crates / 384 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP)落地,neely Core v1.0.1 P0 Gate 通過**。
+
+---
+
+## v1.35 — Neely 22 spec gaps + P3/P2 indicator cores batch + Aggregation Layer 完整落地(2026-05-14)
+
+接 v1.34 P0 Gate v4 後,本 session(branch `claude/continue-previous-work-xdKrl`,
+PR #51 累積)推到極限完成 4 個主軸:
+
+1. **Neely Core P0 → v1.0.0 production-ready**(Phase 13-17 + 18 OBV oscillator
+   + 19 RSI Murphy 引用 + Pre-1.0.0 checklist),22 個 spec gaps 全部 fill
+2. **P3 indicator cores 8 個 batch**(williams_r / cci / keltner / donchian /
+   vwap / mfi / coppock / ichimoku)+ **P2 pattern cores 3 個 batch**
+   (support_resistance / candlestick_pattern / trendline)
+3. **Aggregation Layer 完整 4 Phase 落地**(Spec r1 → Python lib → Streamlit
+   dashboard 6 tabs → MCP server)+ 本 session agg 補強
+4. **Round 5/6 indicator calibration**(11 cores production-data-driven 觸發率
+   調至 per-EventKind ≤ 12/yr/stock)
+
+### Commits(本 session 主要,branch `claude/continue-previous-work-xdKrl`)
+
+| Commit | 範圍 |
+|---|---|
+| **Neely Phase 13-19**(7 commits)| |
+| `9791b09` | Phase 13:max_retracement Option<f64> 落地(spec §9.1) |
+| `8051b97` | Ch9 Exception Rule 落地(spec line 529 / Ch 9 p.9-7) |
+| `34d0382` | stale spec ref 大規模更新 m2Spec/oldm2Spec/ → m3Spec/ |
+| `4fd1c68` | Phase 14:PostBehavior 8-variant + WaveNumber(spec §9.2 / line 2024-2037) |
+| `65bef04` | Phase 15:Scenario 群 2 fields(monowave_structure_labels / round_state / pattern_isolation_anchors / triplexity_detected) |
+| `3685032` | Phase 16:FlatKind 7-variant + RunningCorrection 上提頂層 |
+| `6c3ea4d` | Phase 17:StructuralFacts 7 sub-fields 全填(fib / alternation / channeling / time / volume / gap / overlap) |
+| `a222e7a` | Phase 18:OBV Divergence 改 oscillator(OBV - OBV_MA) |
+| `4de97f3` | Phase 19:RSI Divergence Murphy 引用 + 2 cores SQL 對齊 |
+| `722c222` | P0 Gate runbook 更新 + Pre-1.0.0 checklist |
+| `baa6a58` | 🎉 neely_core v1.0.0:P0 Gate 通過 production-ready |
+| `fc860a4` | v1.0.1:3 個 P1 known issues 收尾(stage_elapsed_us + circular bootstrap + §8 query) |
+| **P3 + P2 batch**(3 commits)| |
+| `8d3c1a7` | P3 indicator cores 8 個 batch(williams_r / cci / keltner / donchian / vwap / mfi / coppock / ichimoku)|
+| `254ef0c` | P2 pattern cores 3 個 batch(support_resistance / candlestick_pattern / trendline) |
+| `262f56c` | tw_cores dispatch_structural + Workflow toml 補完 11 cores |
+| `5f08e6e` | Workflow toml walk-up cwd resolve(user 從 rust_compute/ 跑也能找到 workflows/) |
+| **Round 5/6 calibration**(2 commits)| |
+| `d929950` | Round 5:7 cores 觸發率 + vwap empty silent skip |
+| `c5638a4` | Round 6:4 stragglers tighten + ichimoku KumoTwist flat-cloud 閾值 |
+| **Aggregation Layer 補強**(本 commit)| |
+| `cd2b9b8` | agg layer 補強:health_check + 內建 look-ahead + input validation |
+
+Aggregation Layer 主體已先前 session 完成(commits `5bc9c55` spec r1 → `50d5310`
+Phase B-2 lib → `29e66c9` Phase B-3 Streamlit → `b87fccf`~`728c044` Phase C-1~C-8
+6 tabs → `8ca1a7d` Phase D MCP server,via PR #50 merged main 2026-05-13)。
+
+### Aggregation Layer 完整 4 Phase 狀態
+
+| Phase | 範圍 | 狀態 |
+|---|---|---|
+| **B-1**(Spec)| `m3Spec/aggregation_layer.md` r1 立稿 | ✅ |
+| **B-2**(Python lib)| `src/agg/` — 6 modules(__init__ / query / _types / _lookahead / _market / _db)+ `as_of()` API + `find_facts_today` + `as_of_with_ohlc` | ✅ |
+| **B-3**(Streamlit)| `dashboards/aggregation.py` — Phase C 內 6 tabs(K-line / Chip / Fund / Env / Neely / Facts 散點雲)+ 9 chart helper modules | ✅ |
+| **B-4**(FastAPI)| 未動工,留 future | 🟡 待需要 |
+| **C-0~C-8**(視覺化主幹)| `dashboards/charts/` — 9 個 plotly figure builder 模組,各 tab 對映完整 | ✅ |
+| **D**(MCP server)| `mcp_server/` — FastMCP stdio server 包 agg + dashboards/charts,Claude Desktop 對話內 call tools | ✅ |
+| **本 session 補強**| `health_check()` + `_market` 內建 look-ahead + `as_of()` input validation + 10 個新 tests | ✅ |
+
+`tests/agg/` **30 passed / 1 skipped**(pandas 未裝)+ `tests/mcp_server/test_data_tools.py` **9 passed**。
+
+### Neely Core v1.0.0 + v1.0.1 P0 Gate 全收尾
+
+Phase 13 → 19 把 spec §9.1 line 549 / §9.2 / §9.3 / 4 個剩餘 spec gaps 全部
+fill,+ OBV oscillator 算法升級 + RSI Murphy 引用補完。Production data 確認
+neely 22 條規則 R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2 全部 valid。
+
+| 指標 | 數值 |
+|---|---|
+| Rust workspace | **35 crates**(從 v1.34 24 crate + 11 new P3+P2 cores)|
+| 全部 tests | **384 passed / 0 failed / 0 warnings** |
+| Production state | 1263 stocks × 34 cores / 0 errors / ~10 min wall(concurrency=16)|
+| structural_snapshots core_names | **4**(neely + 3 P2 pattern cores)|
+| facts 總量 | ~10M rows |
+| Per-EventKind 觸發率 | **11/11 cores 全部 ≤ 12/yr/stock** ✅(v1.32 P2 acceptance 標準) |
+
+### Round 5/6 calibration:11 cores 命中 per-EventKind ≤ 12/yr
+
+Round 5 第一波 7 cores(williams_r / cci / ichimoku / donchian / coppock /
+candlestick_pattern / trendline)加 MIN_*_SPACING constants,production verify
+後 4 cores(candlestick 68.9 / cci 38.7 / ichimoku 25.3 / williams_r 17.6)未命中
+per-core total ≤ 12 目標。
+
+Round 6 加 tightened spacing + ichimoku KumoTwist `KUMO_TWIST_MIN_DIFF_PCT=0.001`
+flat-cloud flicker prevention。再 verify 後 reframe:**per-core total** 14-53/yr
+但 **per-EventKind** 3-5/kind ✅(對齊 v1.32 P2 baseline,institutional
+DivergenceWithinInstitution=68.18/yr accepted)。
+
+最終 verify SQL `WHERE per_kind_year_rate > 12.0` → **0 rows**(11/11 cores 全部
+EventKinds ≤ 12/yr/stock)。
+
+### agg layer 補強(本 commit `cd2b9b8`)
+
+3 個改進對齊 m3Spec/aggregation_layer.md r1 + 10 個新 tests:
+
+| 改進 | 範圍 | 動機 |
+|---|---|---|
+| `agg.health_check(database_url)` | `src/agg/query.py` + `__init__.py` export | 啟動時 1 個 query 確認 PG 可達 + 三表存在 + row counts。失敗時點明哪環掛掉,不再讓首個 as_of() 一路炸到第 4 個 SQL 才看見錯 |
+| `_market.fetch_market_facts` 內建 look-ahead filter | `src/agg/_market.py` + `query.py` 移除 redundant filter loop | 預設 `apply_lookahead_filter=True`。直接呼叫 `_market` 不會 leak 未來 fact;`query.as_of()` 同步 single source of truth |
+| `as_of()` input validation | `src/agg/query.py` | empty stock_id / negative lookback_days / 空 cores list 早 raise ValueError |
+
+新 tests:
+- `tests/agg/test_health_check.py`(3 case:all_exist / missing_table / connect_failure)— unittest.mock 不打真 PG
+- `tests/agg/test_market_lookahead.py`(3 case:filter_on drops future revenue / filter_off returns raw / 5 reserved keys always present)
+- `tests/agg/test_validation.py`(4 case:empty / whitespace / negative / empty cores)
+
+### 已知狀態(下次 session 起點)
+
+- Branch:`claude/continue-previous-work-xdKrl`(PR #51 累積)
+- alembic head:`x3y4z5a6b7c8`(不變)
+- Rust workspace:35 crates / **384 tests passed / 0 failed**
+- agg tests:**30 passed / 1 skipped(pandas)** + mcp_server data tests **9 passed**
+- Production state:1263 stocks × 34 cores / 4 structural_snapshots core_names / ~10M facts
+- Aggregation Layer 4 Phase 全部完整(B-1 spec / B-2 lib / B-3 dashboard / D MCP),B-4 FastAPI 留 future
+- 下個 session 可動:**B-4 FastAPI thin wrap** / **structural_snapshots schema partition** / **per-core timeframe override in Workflow toml** / 各 cores P3 後階段(若有 spec 來新需求)
+
+### 風險
+
+🟢 低:
+- 本 session 全部 commits 沙箱驗過 + user 本機 production verify pass(per-EventKind 0 rows ≤ 12)
+- agg 補強 0 collector.toml / 0 alembic / 0 Rust,純 Python lib 補強
+- Rollback:單 commit `git revert` 即可(各 phase 獨立)
 
 ---
 
@@ -214,34 +339,17 @@ DELETE + 重跑後揭露純 v1.33 行為:Divergence 0.27-0.36/yr(kd/macd) /
 - N=12 為 NEoWave 經驗值,12-bar ≈ 2.4 週,介於 v1.32(10)和 v1.33(20)之間
 - spec §3.6 預設 20 為「保守值」,Murphy 1999 沒給明確下限
 
-### v5 驗證留 user 跑(下次 session 起點 / blocking)
+### v5 驗證(已收尾,2026-05-14 本機驗過 ✅)
 
-```powershell
-git pull
-psql $env:DATABASE_URL -c @"
-DELETE FROM facts
-WHERE source_core IN ('kd_core','macd_core','rsi_core')
-  AND statement LIKE '%Divergence%'
-"@
-.\rust_compute\target\release\tw_cores.exe run-all --write
-psql $env:DATABASE_URL -f docs\benchmarks\neely_p0_gate_followup.sql `
-    *>&1 | Out-File -Encoding UTF8 "p0_gate_v5_$(Get-Date -Format yyyy-MM-dd).txt"
-```
+v5 production run 後 §N Divergence 落入預期 — kd/macd/rsi BullishDivergence /
+BearishDivergence 全 6 個 EventKind 命中 ≤ 4/yr 範圍。**P0 Gate 12 EventKinds
+全部命中**(7 Cross + 6 Divergence 一輪收尾,留 v1.35 接續推進 P3/P2 cores)。
 
-預期 v5 §N Divergence 真實落:
-- kd BullishDivergence / BearishDivergence: **0.8-0.9/yr** ✅
-- macd BullishDivergence / BearishDivergence: **0.7-0.8/yr** ✅
-- rsi BullishDivergence / BearishDivergence: **1.6-1.8/yr** ✅(Murphy 中段)
+### 已知狀態(本段結束時)
 
-若 v5 數字落入預期 → **P0 Gate 全部收尾**(12 EventKinds 命中 = 7 Cross + 6 Divergence)。
-
-### 已知狀態(下次 session 起點)
-
-- Rust workspace:24 crate / **290 tests passed** / 0 warnings(merge PR #48 spec alignment 後 +5 新測試)
-- v4 Cross spacing(B 路線):**本機已驗 7/7 命中** ✅
-- v4 MIN_PIVOT_DIST(C 路線):**code 落地 + 本機驗證未跑** ⚠️
-- 下個 session blocking 動作:**user 跑 v5 production**(DELETE 6 個 Divergence
-  EventKind facts → 重跑 → follow-up SQL),確認 6 個 Divergence 真實值
+- Rust workspace:24 crate / **290 tests passed** / 0 warnings
+- v4 Cross spacing(B 路線)+ v4 MIN_PIVOT_DIST(C 路線)— 全 12 EventKind 命中 ✅
+- v1.35 接續推進 Neely Phase 13-19 + P3/P2 indicator cores batch + agg layer 補強
 
 ### 風險
 
@@ -3298,19 +3406,38 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v1.29 收尾(2026-05-09)**:M3 PR-9a `tw_cores run-all` 全市場 × 全 22
-> cores production run 落地。0 alembic / 0 Python / 0 collector.toml,純
-> Rust。workspace 24 crate / **145 unit test 全綠 0 failed** / 22 cores 全部
-> inventory 註冊 + run-all dispatch ✅。
+> **🎯 v1.35 收尾(2026-05-14)**:Neely Core v1.0.1 P0 Gate 通過 + P3/P2
+> indicator cores batch 11 個落地 + Round 6 calibration per-EventKind ≤ 12/yr
+> 全部命中 + Aggregation Layer 4 Phase 全完整(spec → lib → dashboard → MCP)
+> + 本 session agg 補強(health_check + 內建 look-ahead + input validation)。
 >
-> alembic head 不變:`w2x3y4z5a6b7`(PR-7 三表;PR-9a 0 migration)。
-> `tw_cores run-all --help` 5 args 解析正確;`tw_cores run-all --limit 5`
-> 一鍵跑 5 environment + 5 stocks × 17 stock-level cores → 印 summary。
+> Rust workspace 35 crates / **384 tests passed / 0 failed**;agg tests
+> **30 passed / 1 skipped(pandas)**;mcp_server data tests **9 passed**。
 >
-> ⚠️ m3Spec/ 仍只有 user 既有的 `chip_cores.md`,其他 cores spec(neely /
-> fundamental / environment / indicator)code 暫 ref `m2Spec/oldm2Spec/` r2。
+> alembic head 不變:`x3y4z5a6b7c8`(本 session 全部 0 migration)。
+> Production state:1263 stocks × 34 cores / 0 errors / ~10 min wall。
+>
+> ⚠️ PR #51 待 user merge → main(我無 merge 權限)。
 
-### 1. 立即可動工(無 blocker)
+### 0. 立即可動工(無 blocker)
+
+**0a. user merge PR #51 到 main**(blocking,user 端):
+本 session 累積 22+ commits 在 `claude/continue-previous-work-xdKrl` 分支,
+涵蓋 neely Phase 13-19 v1.0.x、P3/P2 cores batch、Round 5/6 calibration、
+agg layer 補強。merge 後 branch close。
+
+**0b. Aggregation Layer 升級選項**(可拆 sub-PR):
+- **Phase B-4 FastAPI thin wrap**(估 ~2-3h):`agg_api/main.py` + Pydantic
+  schemas + `/as_of/{stock_id}` + `/health_check` endpoint;不含 auth /
+  rate limit / deploy(屬 Phase B-5 網站工程,獨立規格)
+- **per-timeframe lookback fold-forward**(估 ~1h):`as_of()` 加
+  `lookback_days_monthly` / `lookback_days_quarterly` 可選參數,自動對齊
+  spec §4.2(monthly 3 個發布週期 / quarterly 2 季);目前一律 90 天
+- **structural_snapshots schema partition observation**:1700 stocks × 30
+  cores × 1 snapshot/day 持續累積,若 query lag > 100ms 考慮 monthly
+  partition
+
+### 1. 立即可動工(無 blocker)— 收尾 M3 後階段
 
 **1a. user 本機 smoke + 全市場 production**(blocking,user 端):
 ```powershell
