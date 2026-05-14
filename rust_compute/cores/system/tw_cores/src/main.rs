@@ -80,6 +80,11 @@ enum Command {
         /// 串列跑用 1;全市場 1263 stocks 從 ~9min 降到 ~5min(PR-9d 升 16→32)
         #[arg(long, default_value_t = 32)]
         concurrency: usize,
+        /// 只跑 dirty queue(SELECT DISTINCT stock_id FROM price_daily_fwd WHERE is_dirty=TRUE)
+        /// 對齊 silver/orchestrator.py:_fetch_dirty_fwd_stocks pattern。
+        /// 與 --stocks 互斥;與 --limit 可疊加(取前 N 個 dirty stocks)
+        #[arg(long, default_value_t = false)]
+        dirty: bool,
     },
 }
 
@@ -113,7 +118,13 @@ async fn main() -> Result<()> {
             skip_stock,
             write,
             concurrency,
-        } => run_all(stocks, limit, &timeframe, skip_market, skip_stock, write, concurrency).await,
+            dirty,
+        } => {
+            if dirty && stocks.is_some() {
+                anyhow::bail!("--dirty 與 --stocks 互斥(dirty 從 PG dirty queue 拉,stocks 是顯式清單)");
+            }
+            run_all(stocks, limit, &timeframe, skip_market, skip_stock, write, concurrency, dirty).await
+        }
     }
 }
 
@@ -239,6 +250,7 @@ async fn run_all(
     skip_stock: bool,
     write: bool,
     concurrency: usize,
+    dirty: bool,
 ) -> Result<()> {
     use futures::stream::{self, StreamExt};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -262,14 +274,21 @@ async fn run_all(
     }
 
     if !skip_stock {
-        let stock_ids = resolve_stock_list(&pool, stocks.as_deref(), limit).await?;
+        let stock_ids = resolve_stock_list(&pool, stocks.as_deref(), limit, dirty).await?;
         let total = stock_ids.len();
-        tracing::info!(
-            "== Stage B: {} stocks × 17 cores(concurrency={}, timeframe={:?})==",
-            total,
-            concurrency,
-            tf
-        );
+        if dirty && total == 0 {
+            tracing::info!("dirty queue 為空(price_daily_fwd.is_dirty=TRUE 無 rows),skip Stage B");
+        } else if dirty {
+            tracing::info!(
+                "== Stage B: {} stocks × 17 cores(dirty queue, concurrency={}, timeframe={:?})==",
+                total, concurrency, tf
+            );
+        } else {
+            tracing::info!(
+                "== Stage B: {} stocks × 17 cores(concurrency={}, timeframe={:?})==",
+                total, concurrency, tf
+            );
+        }
         let progress = Arc::new(AtomicUsize::new(0));
         // PR-9b:per-stock task spawn 並行,sqlx pool 自動分配 connection
         // for_each_concurrent 限 N 個 future 同時 active;summary 用 Mutex 保護累加
@@ -1040,6 +1059,7 @@ async fn resolve_stock_list(
     pool: &PgPool,
     stocks: Option<&str>,
     limit: Option<usize>,
+    dirty: bool,
 ) -> Result<Vec<String>> {
     if let Some(s) = stocks {
         let list: Vec<String> = s
@@ -1053,18 +1073,27 @@ async fn resolve_stock_list(
         return Ok(list);
     }
 
-    // 從 price_daily_fwd 拉 distinct stock_id
-    let rows: Vec<(String,)> = sqlx::query_as(
+    // dirty=true:對齊 silver/orchestrator.py:_fetch_dirty_fwd_stocks
+    // 只拉 is_dirty=TRUE 的 stocks(走 PR #20 trigger 維護的 dirty queue)
+    let sql = if dirty {
+        r#"
+        SELECT DISTINCT stock_id
+        FROM price_daily_fwd
+        WHERE market = 'TW' AND is_dirty = TRUE
+        ORDER BY stock_id ASC
+        "#
+    } else {
         r#"
         SELECT DISTINCT stock_id
         FROM price_daily_fwd
         WHERE market = 'TW'
         ORDER BY stock_id ASC
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .context("query price_daily_fwd distinct stock_id failed")?;
+        "#
+    };
+    let rows: Vec<(String,)> = sqlx::query_as(sql)
+        .fetch_all(pool)
+        .await
+        .context("query price_daily_fwd distinct stock_id failed")?;
     let mut list: Vec<String> = rows.into_iter().map(|(s,)| s).collect();
     if let Some(n) = limit {
         list.truncate(n);
