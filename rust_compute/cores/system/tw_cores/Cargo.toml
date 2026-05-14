@@ -67,3 +67,6 @@ dotenvy = "0.15"
 
 # Async stream concurrency(PR-9b run-all per-stock task spawn)
 futures = { workspace = true }
+
+# Workflow toml dispatch(PR-9b 動態 core 過濾)
+toml = { workspace = true }

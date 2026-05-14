@@ -1,25 +1,32 @@
-# tw_stock_standard.toml — 台股標準 Workflow 範例
+# tw_stock_standard.toml — 台股標準 Workflow(production-ready)
 #
-# 對齊 m2Spec/oldm2Spec/cores_overview.md §13.1(Workflow vs Orchestrator)。
+# 對齊 m3Spec/cores_overview.md §13.1(Workflow vs Orchestrator)。
 #
 # Workflow:從 user 視角宣告「跑哪些 Core,各 Core 用什麼參數」。
 # Orchestrator(tw_cores binary)從 inventory CoreRegistry 動態 dispatch。
 #
-# **M3 PR-8 階段**:Workflow toml 為純宣告檔,tw_cores binary 尚未實作 toml 解析 +
-# orchestrator 依 toml dispatch 多 Core。本範例 toml 為「未來工作藍圖」(留 PR-9+)。
-# 目前 tw_cores 只支援 `run --stock-id ... --timeframe ...` 直接呼叫 NeelyCore。
+# **PR-9b 已落地**:tw_cores run-all --workflow <path> 解析本檔,過濾 dispatch 範圍。
+# 未指定 --workflow 時走全 23 cores hardcoded fallback(對齊 PR-9a 行為)。
+#
+# 用法:
+#   tw_cores run-all --workflow workflows/tw_stock_standard.toml --write
+#
+# 自訂子集:複製此檔改 enabled=false 即可,例 workflows/p1_only.toml 只跑 P1 indicator。
 
 [workflow]
 name        = "tw_stock_standard"
-description = "台股 P0 + P1 標準 Workflow:Wave Core(neely)+ 8 個 P1 Indicator(留 PR-P1)"
-version     = "0.1.0"
+description = "台股完整 Workflow:P0 Wave + P1 Indicator(8)+ P2 Chip(5)+ P2 Fundamental(3)+ P2 Environment(6)"
+version     = "1.0.0"
 
-# stock 範圍(可保留字 _index_taiex_ / _market_ / _global_)
+# stock 範圍(保留字 _index_taiex_ / _market_ / _global_ 由 environment cores 處理)
+# 註:本欄目前供 future use;tw_cores run-all 仍從 --stocks / --dirty / 全市場拉清單
 [targets]
-stock_ids = ["2330", "2317", "0050", "_index_taiex_"]
+stock_ids = []   # 空 = 全市場(從 price_daily_fwd 拉 distinct)
 timeframe = "daily"
 
-# Wave Cores 編排
+# ─────────────────────────────────────────────────────────
+# P0 Wave Core(1 個)
+# ─────────────────────────────────────────────────────────
 [[cores]]
 name     = "neely_core"
 enabled  = true
@@ -31,39 +38,147 @@ priority = "P0"
   [cores.params.engine_config]
   atr_period               = 14
   beam_width               = 50
-  forest_max_size          = 1000
+  forest_max_size          = 200      # v1.34 P0 Gate v2 校準
   compaction_timeout_secs  = 60
-  neutral_threshold_taiex  = 0.5    # 加權指數 Neutrality 閾值(%)
+  neutral_threshold_taiex  = 0.5
 
   [cores.params.engine_config.overflow_strategy]
   kind = "BeamSearchFallback"
   k    = 100
 
-# Indicator Cores 留 PR-P1+ 上線(目前 stub,不會被 dispatch)
+# ─────────────────────────────────────────────────────────
+# P1 Indicator Cores(8 個)
+# ─────────────────────────────────────────────────────────
 [[cores]]
 name     = "macd_core"
-enabled  = false  # 留 PR-P1
+enabled  = true
 priority = "P1"
 
 [[cores]]
 name     = "rsi_core"
-enabled  = false  # 留 PR-P1
+enabled  = true
 priority = "P1"
 
-# Chip Cores 留 PR-P2+
+[[cores]]
+name     = "kd_core"
+enabled  = true
+priority = "P1"
+
+[[cores]]
+name     = "adx_core"
+enabled  = true
+priority = "P1"
+
+[[cores]]
+name     = "ma_core"
+enabled  = true
+priority = "P1"
+
+[[cores]]
+name     = "bollinger_core"
+enabled  = true
+priority = "P1"
+
+[[cores]]
+name     = "atr_core"
+enabled  = true
+priority = "P1"
+
+[[cores]]
+name     = "obv_core"
+enabled  = true
+priority = "P1"
+
+# ─────────────────────────────────────────────────────────
+# P2 Chip Cores(5 個)
+# ─────────────────────────────────────────────────────────
 [[cores]]
 name     = "day_trading_core"
-enabled  = false  # 留 PR-P2(本 session 第 1 個 chip core 落地後切 true)
+enabled  = true
 priority = "P2"
 
-# 寫入策略(對齊 cores_overview §7.1)
-[output]
-write_indicator_values   = true   # IndicatorCore 每日數值寫 PG
-write_structural_snapshots = true # WaveCore Forest 寫 PG(每日全量重算)
-write_facts              = true   # 機械式 Fact append-only
+[[cores]]
+name     = "institutional_core"
+enabled  = true
+priority = "P2"
 
-# Batch 排程
+[[cores]]
+name     = "margin_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "foreign_holding_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "shareholder_core"
+enabled  = true
+priority = "P2"
+
+# ─────────────────────────────────────────────────────────
+# P2 Fundamental Cores(3 個)
+# ─────────────────────────────────────────────────────────
+[[cores]]
+name     = "revenue_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "valuation_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "financial_statement_core"
+enabled  = true
+priority = "P2"
+
+# ─────────────────────────────────────────────────────────
+# P2 Environment Cores(6 個)
+# ─────────────────────────────────────────────────────────
+[[cores]]
+name     = "taiex_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "us_market_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "exchange_rate_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "fear_greed_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "market_margin_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "business_indicator_core"
+enabled  = true
+priority = "P2"
+
+# ─────────────────────────────────────────────────────────
+# 寫入策略(對齊 cores_overview §7.1)
+# ─────────────────────────────────────────────────────────
+[output]
+write_indicator_values     = true
+write_structural_snapshots = true
+write_facts                = true
+
+# ─────────────────────────────────────────────────────────
+# Batch 排程(目前 tw_cores binary 不消費此 section,留 future use)
+# ─────────────────────────────────────────────────────────
 [schedule]
-# 對齊 chip_cores §2.3:籌碼資料 17:00-18:00 發布,batch 排程在 17:30 後啟動
-run_at     = "17:30"
-catch_up   = true   # 開機時補跑昨天的 batch(若有遺漏)
+run_at   = "17:30"
+catch_up = true
