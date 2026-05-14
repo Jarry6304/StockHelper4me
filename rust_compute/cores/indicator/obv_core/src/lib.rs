@@ -4,8 +4,12 @@
 //
 // **Reference**:
 //   Granville, Joseph (1963). "New Key to Stock Market Profits" — OBV 原始定義
+//     + divergence 用 OBV trend(非 absolute value)比對的設計依據
 //   Murphy, John (1999). "Technical Analysis of the Financial Markets" p.248
 //     — divergence 兩個極值點時間距離應 ≥ 20 bars(spec §3.6 同款慣例)
+//     p.250-252 OBV 章節:「Divergence is more meaningful when measured against OBV trend」
+//   Pring, Martin (2002). "Technical Analysis Explained" Ch. 14
+//     — industry 標準:OBV oscillator (OBV - OBV_MA) for divergence detection
 //   Lucas & LeBeau (1992). "Computer Analysis of the Futures Market"
 //     — pivot_n=3 swing pivot 確認
 
@@ -18,8 +22,8 @@ use serde_json::json;
 
 inventory::submit! {
     core_registry::CoreRegistration::new(
-        "obv_core", "0.2.0", core_registry::CoreKind::Indicator, "P1",
-        "OBV Core(累積式量能 + pivot-based divergence + obv_ma cross)",
+        "obv_core", "0.3.0", core_registry::CoreKind::Indicator, "P1",
+        "OBV Core(累積式量能 + pivot-based divergence on OBV oscillator + obv_ma cross)",
     )
 }
 
@@ -63,7 +67,7 @@ impl IndicatorCore for ObvCore {
     type Params = ObvParams;
     type Output = ObvOutput;
     fn name(&self) -> &'static str { "obv_core" }
-    fn version(&self) -> &'static str { "0.2.0" }
+    fn version(&self) -> &'static str { "0.3.0" }
     /// §3.3:有 ma_period 時 `p + 10`,無則 0
     fn warmup_periods(&self, params: &Self::Params) -> usize {
         match params.ma_period { Some(p) => p + 10, None => 0 }
@@ -105,25 +109,42 @@ impl IndicatorCore for ObvCore {
             }
         }
         let mut events = Vec::new();
-        // Divergence vs price(close)— pivot-based detection
-        // 對齊 v1.31 rsi/kd/macd P5 算法重寫:固定 20-bar window 算法在趨勢中每日重複觸發,
-        // 改用 swing pivot 偵測讓 divergence 回歸稀有訊號本質(Murphy 1999 p.248)
+        // Divergence vs price(close)— pivot-based detection 用 **OBV oscillator(OBV - OBV_MA)**
+        //
+        // **2026-05-14 calibration fix**:
+        // 原版直接比 raw OBV 累積值,對「OBV 是累積式 + 長期 ratchet 方向」失效 —
+        // production 揭露觸發率 94/yr (Bullish) + 55/yr (Bearish) ≈ 149/yr,
+        // 對比 kd/macd/rsi 同類 divergence 0.5-0.8/yr 高 ~200×,完全不合理。
+        //
+        // 修法:用 OBV oscillator(`obv - obv_ma`)取代 raw obv 做 pivot detection。
+        // - Granville (1963) "New Key to Stock Market Profits" 原始 OBV divergence 定義
+        // - Murphy (1999) p.250-252 OBV 章節:divergence 應「相對於 OBV trend 而非 absolute value」
+        // - Pring (2002) "Technical Analysis Explained" Ch. 14 industry 標準:OBV oscillator
+        //
+        // OBV oscillator 在 0 附近震盪(類似 MACD histogram),pivot detection 才有意義。
+        // 若 ma_period = None(用戶關閉 OBV_MA)→ fallback raw OBV(behavior 同舊版)。
         let closes: Vec<f64> = input.bars[anchor_idx..].iter().map(|b| b.close).collect();
-        let obv_values: Vec<f64> = series.iter().map(|p| p.obv).collect();
+        let obv_oscillator: Vec<f64> = series.iter()
+            .map(|p| p.obv - p.obv_ma.unwrap_or(p.obv))
+            .collect();
         let dates_vec: Vec<NaiveDate> = series.iter().map(|p| p.date).collect();
-        for (confirm_date, is_bearish, obv_at_pivot, price_at_pivot, prev_date, prev_obv) in
-            detect_divergences(&closes, &obv_values, &dates_vec)
+        for (confirm_date, is_bearish, obv_osc_at_pivot, price_at_pivot, prev_date, prev_obv_osc) in
+            detect_divergences(&closes, &obv_oscillator, &dates_vec)
         {
             let kind = if is_bearish { ObvEventKind::BearishDivergence } else { ObvEventKind::BullishDivergence };
             let label = if is_bearish { "bearish_divergence" } else { "bullish_divergence" };
+            // pivot index 反查 raw OBV 給 metadata(供下游 caller / 視覺化)
+            let pivot_idx = series.iter().position(|p| p.date == confirm_date).unwrap_or(0);
+            let raw_obv = series.get(pivot_idx).map(|p| p.obv).unwrap_or(0.0);
             events.push(ObvEvent {
-                date: confirm_date, kind, value: obv_at_pivot,
+                date: confirm_date, kind, value: raw_obv,
                 metadata: json!({
                     "event": label,
                     "pivot_price": price_at_pivot,
-                    "pivot_obv": obv_at_pivot,
+                    "pivot_obv": raw_obv,
+                    "pivot_obv_oscillator": obv_osc_at_pivot,
                     "prev_pivot_date": prev_date.to_string(),
-                    "prev_pivot_obv": prev_obv,
+                    "prev_pivot_obv_oscillator": prev_obv_osc,
                 }),
             });
         }
@@ -272,5 +293,45 @@ mod tests {
         let obv: Vec<f64> = (0..n).map(|i| 10_000_000.0 - (i as f64) * 10_000.0).collect();
         let r = detect_divergences(&prices, &obv, &dates);
         assert_eq!(r.len(), 0, "monotone trend: no pivots → 0 divergences");
+    }
+
+    /// 2026-05-14 fix:OBV divergence 用 oscillator(OBV - OBV_MA)
+    /// 而非 raw OBV(累積式 magnitude 巨大,pivot 比對失真)。
+    /// Verify:compute() 走 oscillator path,不再受 OBV 累積 ratchet 影響。
+    #[test]
+    fn divergence_uses_oscillator_not_raw_obv() {
+        use ohlcv_loader::{OhlcvBar, OhlcvSeries};
+        let n = 100usize;
+        let bars: Vec<OhlcvBar> = (0..n).map(|i| OhlcvBar {
+            // 構造 price oscillates(0..100 percent of price range)+ volume 全 1000(constant)
+            // OBV 在 stable price 下會跟著 sign(close - prev_close) 變,
+            // 但 OBV_MA 也會跟著走 → oscillator 在 0 附近震盪
+            date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap() + chrono::Duration::days(i as i64),
+            open: 100.0 + (i as f64).sin() * 10.0,
+            high: 105.0 + (i as f64).sin() * 10.0,
+            low: 95.0 + (i as f64).sin() * 10.0,
+            close: 100.0 + (i as f64).sin() * 10.0,
+            volume: Some(1000),
+        }).collect();
+        let series = OhlcvSeries {
+            stock_id: "TEST".to_string(),
+            timeframe: Timeframe::Daily,
+            bars,
+        };
+        let out = ObvCore::new().compute(&series, ObvParams::default()).unwrap();
+        // sinusoidal price → 多個 swing high/low pivot;OBV oscillator approach
+        // 應產生「結構性」divergence(price/OBV osc 真對立時),trigger 數 < pivots / 2
+        // (對比 raw OBV approach 在累積式 magnitude 下每 pivot 都 trigger)
+        let div_count = out.events.iter().filter(|e| matches!(
+            e.kind,
+            ObvEventKind::BullishDivergence | ObvEventKind::BearishDivergence
+        )).count();
+        // n=100 sinusoidal bars → ~30 pivots(每 period ≈ 6.28 bars 出 2 pivot);
+        // oscillator approach 預期 trigger 數遠小於 pivots 數(non-trivial filtering)
+        assert!(
+            div_count < 30,
+            "sinusoidal: oscillator approach 應 trigger 少於 pivot 半數,實測 {} 個",
+            div_count
+        );
     }
 }
