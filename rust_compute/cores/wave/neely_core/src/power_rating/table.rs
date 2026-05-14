@@ -61,16 +61,26 @@ fn signed_power_lookup(pattern: &NeelyPatternType, in_triangle: bool) -> SignedP
             sub_kind: ZigzagKind::Triple,
         } => 3, // Triple Zigzag
 
-        // Flat sub_kinds(spec 1425-1475 + 2010-2014)
-        NeelyPatternType::Flat {
-            sub_kind: FlatKind::Regular,
-        } => 0, // Common Flat
-        NeelyPatternType::Flat {
-            sub_kind: FlatKind::Expanded,
-        } => 1, // Elongated Flat(三角內 = 0,由 in_triangle handled)
-        NeelyPatternType::Flat {
-            sub_kind: FlatKind::Running,
-        } => -3, // Running Correction
+        // Flat 7-variant(spec line 2010-2014 + Phase 16 r5):
+        //   Common / BFailure → 0(spec 「B-Failure 最中性」line 2030)
+        //   CFailure          → -1
+        //   DoubleFailure     → -2(spec line 2034 「Double Three 後續 ≥ 161.8%」)
+        //   Irregular         → -1(三角內 = 0,由 in_triangle handled)
+        //   IrregularFailure  → -2(spec line 2033 「必完全回測;後續多為延伸 3rd wave」)
+        //   Elongated         → +1(spec line 2010「Elongated Flat 三角內 = 0」)
+        NeelyPatternType::Flat { sub_kind } => match sub_kind {
+            FlatKind::Common | FlatKind::BFailure => 0,
+            FlatKind::CFailure => -1,
+            FlatKind::DoubleFailure => -2,
+            FlatKind::Irregular => -1,
+            FlatKind::IrregularFailure => -2,
+            FlatKind::Elongated => 1,
+        },
+
+        // RunningCorrection 上提頂層(spec r5 line 1161):
+        //   Phase 16 r5:Running 從 FlatKind 上提 NeelyPatternType,
+        //   Power -3(對齊 r4 期間 FlatKind::Running 的 -3 值)
+        NeelyPatternType::RunningCorrection => -3,
 
         // Triangle:無強勁方向暗示,Power = 0
         NeelyPatternType::Triangle { .. } => 0,
@@ -191,12 +201,11 @@ mod tests {
     }
 
     #[test]
-    fn running_flat_up_strong_bearish() {
-        // Running Correction = -3 spec → Up direction → StrongBearish
+    fn running_correction_up_strong_bearish() {
+        // Phase 16 r5:RunningCorrection 從 Flat::Running 上提頂層
+        // Power -3 → Up direction → StrongBearish
         let p = lookup_power_rating(
-            &NeelyPatternType::Flat {
-                sub_kind: FlatKind::Running,
-            },
+            &NeelyPatternType::RunningCorrection,
             MonowaveDirection::Up,
             false,
         );
@@ -217,10 +226,10 @@ mod tests {
 
     #[test]
     fn elongated_flat_in_triangle_neutral() {
-        // 三角內 = 0 例外(spec 2021)
+        // 三角內 = 0 例外(spec 2021)— Phase 16 r5 用 FlatKind::Elongated
         let p = lookup_power_rating(
             &NeelyPatternType::Flat {
-                sub_kind: FlatKind::Expanded,
+                sub_kind: FlatKind::Elongated,
             },
             MonowaveDirection::Up,
             true, // in_triangle

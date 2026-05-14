@@ -35,6 +35,8 @@ use crate::output::{
 use crate::monowave::ClassifiedMonowave;
 use crate::validator::ValidationReport;
 
+pub mod flat_classifier;
+
 /// Stage 5 結果:Classifier 給 candidate 命名 pattern + 組裝成 Scenario(待 Stage 8 進 Forest)。
 ///
 /// 注意:Scenario 的 power_rating / fibonacci / triggers 等屬性留 Stage 9-10 補完,
@@ -54,7 +56,7 @@ pub fn classify(
 
     let pattern_type = match candidate.wave_count {
         5 => classify_5wave(candidate, report, classified)?,
-        3 => classify_3wave(candidate, report),
+        3 => classify_3wave(candidate, classified),
         _ => return None,
     };
 
@@ -255,9 +257,45 @@ fn classify_diagonal_subkind(
     }
 }
 
-fn classify_3wave(_candidate: &WaveCandidate, _report: &ValidationReport) -> NeelyPatternType {
-    // 3-wave correction 預設 Zigzag { Single }
-    // Flat / Triangle / Combination 區分留 P4
+/// Phase 16 r5:3-wave 分類精細化(Flat 7-variant + RunningCorrection 上提)。
+///
+/// 對齊 m3Spec/neely_rules.md §第 5 章 Flat 詳細規則(line 2157-2239)+
+/// §第 10 章 Pattern Implications line 2024-2037。
+///
+/// 流程:
+///   1. 抽 a / b / c monowave magnitudes
+///   2. 先試 `flat_classifier::is_running_correction`(b > a + c < a)→ RunningCorrection
+///   3. 再試 `flat_classifier::classify_flat` → FlatKind 7-variant 之一
+///   4. 都失敗(b/a < 61.8%)→ Zigzag { Single }(spec 預設;Triangle / Combination 需 5-wave 規模)
+fn classify_3wave(
+    candidate: &WaveCandidate,
+    classified: &[ClassifiedMonowave],
+) -> NeelyPatternType {
+    let mi = &candidate.monowave_indices;
+    if mi.len() < 3 {
+        // 不夠 3 段 — 回 Zigzag Single 作 safe fallback
+        return NeelyPatternType::Zigzag {
+            sub_kind: ZigzagKind::Single,
+        };
+    }
+    let a_mag = classified[mi[0]].metrics.magnitude;
+    let b_mag = classified[mi[1]].metrics.magnitude;
+    let c_mag = classified[mi[2]].metrics.magnitude;
+
+    // 1. Running Correction 上提頂層(spec r5 line 1161 + spec line 2035)
+    if flat_classifier::is_running_correction(a_mag, b_mag, c_mag) {
+        return NeelyPatternType::RunningCorrection;
+    }
+
+    // 2. Flat 7-variant 判定
+    if let Some(flat_kind) = flat_classifier::classify_flat(a_mag, b_mag, c_mag) {
+        return NeelyPatternType::Flat {
+            sub_kind: flat_kind,
+        };
+    }
+
+    // 3. b/a < 61.8% → 不符 Flat 任一變體,回 Zigzag Single
+    //    (Triangle 需 5 段;Combination 需更多;Phase 16 範圍只處理 Flat + Running)
     NeelyPatternType::Zigzag {
         sub_kind: ZigzagKind::Single,
     }
@@ -473,25 +511,68 @@ mod tests {
     }
 
     #[test]
-    fn three_wave_classified_as_zigzag_simple() {
+    fn three_wave_zigzag_when_b_too_shallow() {
+        // Phase 16 r5:b/a < 61.8% → 不符 Flat,回 Zigzag Single fallback
+        // a = 10 / b = 5(50%)/ c = 12 → b/a < 61.8% → Zigzag Single
         let classified = vec![
             cmw(100.0, 110.0, MonowaveDirection::Up),
-            cmw(110.0, 100.0, MonowaveDirection::Down),
-            cmw(100.0, 115.0, MonowaveDirection::Up),
+            cmw(110.0, 105.0, MonowaveDirection::Down), // b = 5(50% × a)
+            cmw(105.0, 117.0, MonowaveDirection::Up),
         ];
         let candidate = WaveCandidate {
-            id: "c3-mw0-mw2".to_string(),
+            id: "c3-zigzag".to_string(),
             monowave_indices: vec![0, 1, 2],
             wave_count: 3,
             initial_direction: MonowaveDirection::Up,
         };
-        let report = make_impulse_report(); // overall_pass = true
+        let report = make_impulse_report();
         let scenario = classify(&candidate, &report, &classified).expect("應產生 Scenario");
         assert!(matches!(
             scenario.pattern_type,
             NeelyPatternType::Zigzag { sub_kind: ZigzagKind::Single }
         ));
         assert!(matches!(scenario.complexity_level, ComplexityLevel::Simple));
+    }
+
+    #[test]
+    fn three_wave_classified_as_common_flat_when_b_strong_c_strong() {
+        // Phase 16 r5:b/a ∈ [81%, 100%] + c ≥ b → Common Flat
+        let classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),       // a = 10
+            cmw(110.0, 101.5, MonowaveDirection::Down),     // b = 8.5(85% × a)
+            cmw(101.5, 92.0, MonowaveDirection::Down),      // c = 9.5(≥ b)
+        ];
+        let candidate = WaveCandidate {
+            id: "c3-common-flat".to_string(),
+            monowave_indices: vec![0, 1, 2],
+            wave_count: 3,
+            initial_direction: MonowaveDirection::Up,
+        };
+        let report = make_impulse_report();
+        let scenario = classify(&candidate, &report, &classified).expect("應產生 Scenario");
+        assert!(matches!(
+            scenario.pattern_type,
+            NeelyPatternType::Flat { sub_kind: FlatKind::Common }
+        ));
+    }
+
+    #[test]
+    fn three_wave_classified_as_running_correction_when_b_above_a_and_c_short() {
+        // Phase 16 r5:b > a AND c < a → RunningCorrection 上提頂層
+        let classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),        // a = 10
+            cmw(110.0, 97.0, MonowaveDirection::Down),       // b = 13(130% × a)
+            cmw(97.0, 105.0, MonowaveDirection::Up),         // c = 8(80% × a)
+        ];
+        let candidate = WaveCandidate {
+            id: "c3-running".to_string(),
+            monowave_indices: vec![0, 1, 2],
+            wave_count: 3,
+            initial_direction: MonowaveDirection::Up,
+        };
+        let report = make_impulse_report();
+        let scenario = classify(&candidate, &report, &classified).expect("應產生 Scenario");
+        assert!(matches!(scenario.pattern_type, NeelyPatternType::RunningCorrection));
     }
 
     #[test]
@@ -542,7 +623,7 @@ mod tests {
     // 都有定義(編譯期檢查,不需 runtime test)
     #[allow(dead_code)]
     fn _enum_exhaustive_smoke() {
-        let _: FlatKind = FlatKind::Regular;
+        let _: FlatKind = FlatKind::Common;
         let _: TriangleKind = TriangleKind::Contracting;
         let _: CombinationKind = CombinationKind::DoubleThree;
     }

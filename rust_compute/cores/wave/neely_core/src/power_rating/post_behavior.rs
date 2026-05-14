@@ -49,20 +49,24 @@ pub fn lookup(pattern: &NeelyPatternType, in_triangle_context: bool) -> PostBeha
             },
         },
 
-        // Flat 3 variants(Phase 14 範圍):
-        //   - Regular(對應 Common Flat,0 Neutral)→ Unconstrained(spec 2030 「B-Failure 最中性」)
-        //   - Expanded(對應 Irregular / Irregular Failure 區段,-1~-2)→ Composite(必完全回測 + ≥ 161.8%)
-        //   - Running(對應現有「不退起點」Flat 變體,-3 StrongAgainst)→ NextImpulseExceeds 1.618
-        //     (注:Phase 16 將 Running 上提成 NeelyPatternType::RunningCorrection 頂層 + FlatKind 拆 7 variants)
+        // Flat 7 variants(Phase 16 r5 落地,對齊 spec line 2030-2033):
+        //   - Common / BFailure(0 Neutral 「B-Failure 最中性」 spec 2030)→ Unconstrained
+        //   - CFailure(-1 SlightAgainst)→ 必完全回測 + 後續 Impulse 大於前一(spec 2032)
+        //   - DoubleFailure(-2 ModerateAgainst)→ Composite:必完全回測 + 後續 ≥ 161.8%
+        //   - Irregular(-1 SlightAgainst,三角內 = 0)→ MinRetracement 90%
+        //     (Irregular 罕見,常為自我矛盾,後續多為 Triangle/Terminal — 給 MinRetracement)
+        //   - IrregularFailure(-2 ModerateAgainst)→ Composite:必完全回測 + 後續 ≥ 161.8%(spec 2033)
+        //   - Elongated(±1, 三角內 = 0)→ MinRetracement 90%
         NeelyPatternType::Flat { sub_kind } => match sub_kind {
-            FlatKind::Regular => PostBehavior::Unconstrained,
-            FlatKind::Expanded => PostBehavior::Composite {
+            FlatKind::Common | FlatKind::BFailure => PostBehavior::Unconstrained,
+            FlatKind::CFailure => PostBehavior::FullRetracementRequired,
+            FlatKind::DoubleFailure | FlatKind::IrregularFailure => PostBehavior::Composite {
                 behaviors: vec![
                     PostBehavior::FullRetracementRequired,
                     PostBehavior::NextImpulseExceeds { ratio: 1.618 },
                 ],
             },
-            FlatKind::Running => PostBehavior::NextImpulseExceeds { ratio: 1.618 },
+            FlatKind::Irregular | FlatKind::Elongated => PostBehavior::MinRetracement { ratio: 0.90 },
         },
 
         // Triangle:作為「整體形態」(不在內部段)時,後續 Thrust 必達 wave-D 區
@@ -88,6 +92,12 @@ pub fn lookup(pattern: &NeelyPatternType, in_triangle_context: bool) -> PostBeha
             } else {
                 PostBehavior::NextImpulseExceeds { ratio: 1.618 }
             }
+        }
+
+        // RunningCorrection(Phase 16 r5 上提頂層,spec 2035):
+        //   後續必為延伸 Impulse 或 Flat/Zigzag 延伸 c-wave;後續 Impulse 多 > 161.8%(常達 261.8%)
+        NeelyPatternType::RunningCorrection => {
+            PostBehavior::NextImpulseExceeds { ratio: 1.618 }
         }
     }
 }
@@ -151,10 +161,10 @@ mod tests {
     }
 
     #[test]
-    fn flat_regular_unconstrained() {
+    fn flat_common_unconstrained() {
         let pb = lookup(
             &NeelyPatternType::Flat {
-                sub_kind: FlatKind::Regular,
+                sub_kind: FlatKind::Common,
             },
             false,
         );
@@ -162,10 +172,33 @@ mod tests {
     }
 
     #[test]
-    fn flat_expanded_composite() {
+    fn flat_b_failure_unconstrained() {
+        // B-Failure 最中性(spec 2030)→ Unconstrained
         let pb = lookup(
             &NeelyPatternType::Flat {
-                sub_kind: FlatKind::Expanded,
+                sub_kind: FlatKind::BFailure,
+            },
+            false,
+        );
+        assert!(matches!(pb, PostBehavior::Unconstrained));
+    }
+
+    #[test]
+    fn flat_c_failure_full_retracement() {
+        let pb = lookup(
+            &NeelyPatternType::Flat {
+                sub_kind: FlatKind::CFailure,
+            },
+            false,
+        );
+        assert!(matches!(pb, PostBehavior::FullRetracementRequired));
+    }
+
+    #[test]
+    fn flat_irregular_failure_composite() {
+        let pb = lookup(
+            &NeelyPatternType::Flat {
+                sub_kind: FlatKind::IrregularFailure,
             },
             false,
         );
@@ -183,13 +216,23 @@ mod tests {
     }
 
     #[test]
-    fn flat_running_next_impulse_1618() {
+    fn flat_irregular_min_retracement_90() {
         let pb = lookup(
             &NeelyPatternType::Flat {
-                sub_kind: FlatKind::Running,
+                sub_kind: FlatKind::Irregular,
             },
             false,
         );
+        match pb {
+            PostBehavior::MinRetracement { ratio } => assert_eq!(ratio, 0.90),
+            other => panic!("expected MinRetracement(0.90), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn running_correction_next_impulse_1618() {
+        // Phase 16 r5:RunningCorrection 上提頂層,後續 ≥ 161.8%(spec 2035)
+        let pb = lookup(&NeelyPatternType::RunningCorrection, false);
         match pb {
             PostBehavior::NextImpulseExceeds { ratio } => assert!((ratio - 1.618).abs() < 1e-9),
             other => panic!("expected NextImpulseExceeds(1.618), got {:?}", other),
@@ -246,11 +289,12 @@ mod tests {
         for pattern in [
             NeelyPatternType::Impulse,
             NeelyPatternType::Flat {
-                sub_kind: FlatKind::Running,
+                sub_kind: FlatKind::CFailure,
             },
             NeelyPatternType::Flat {
-                sub_kind: FlatKind::Expanded,
+                sub_kind: FlatKind::IrregularFailure,
             },
+            NeelyPatternType::RunningCorrection,
             NeelyPatternType::Combination {
                 sub_kinds: vec![CombinationKind::TripleThreeRunning],
             },

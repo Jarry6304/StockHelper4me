@@ -542,6 +542,14 @@ pub enum NeelyPatternType {
     Flat { sub_kind: FlatKind },
     Triangle { sub_kind: TriangleKind },
     Combination { sub_kinds: Vec<CombinationKind> },
+    /// Phase 16 新增:Running Correction 從 Flat sub_kind 上提為頂層 NeelyPatternType。
+    ///
+    /// 對齊 m3Spec/neely_core_architecture.md §9.1 r5 line 1161:
+    /// 「RunningCorrection 屬 Power Rating -3/+3 級別獨立,不再放 FlatKind::Running」。
+    /// 對齊 m3Spec/neely_rules.md line 2024-2037:
+    /// 「Running Correction:後續必為延伸 Impulse 或 Flat/Zigzag 的延伸 c-wave;
+    ///   後續 Impulse 多 > 161.8%(常達 261.8%)」— ±3 strongly favor continuation
+    RunningCorrection,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -557,11 +565,32 @@ pub enum ZigzagKind {
     Triple,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+/// FlatKind 7-variant(spec r5 line 1161 + neely_rules.md line 2157-2239)。
+///
+/// Phase 16(2026-05-14)重構:由 r4 3-variant(Regular/Expanded/Running)→ r5 7-variant
+/// 具體形態變體 + Running 上提為 NeelyPatternType::RunningCorrection。
+///
+/// 判定規則(spec line 2157-2239 + 2024-2034):
+/// | Variant          | b/a 範圍          | c 行為           | Power |
+/// |------------------|-------------------|------------------|-------|
+/// | Common           | 81%–100%          | c ≥ 100% × b     | 0     |
+/// | BFailure         | 61.8%–81%         | c ≥ 100% × b     | 0     |
+/// | CFailure         | 81%–100%          | c < 100% × b     | -1    |
+/// | DoubleFailure    | 61.8%–81%         | c < 100% × b     | -2    |
+/// | Irregular        | 100%–138.2%       | c ≥ 100% × b     | -1    |
+/// | IrregularFailure | > 138.2%          | c < 100% × b     | -2    |
+/// | Elongated        | ≥ 138.2%(Triangle/Terminal 內) | c > a | +1   |
+///
+/// 由 `classifier::flat_classifier::classify_flat` 從 monowave magnitudes 推導。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum FlatKind {
-    Regular,
-    Expanded,
-    Running,
+    Common,
+    BFailure,
+    CFailure,
+    DoubleFailure,
+    Irregular,
+    IrregularFailure,
+    Elongated,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -880,6 +909,8 @@ pub fn compaction_base_label(pattern: &NeelyPatternType) -> StructureLabel {
         NeelyPatternType::Triangle { .. } => StructureLabel::Three,
         // 含 x-wave 的任何形態 → :3
         NeelyPatternType::Combination { .. } => StructureLabel::Three,
+        // RunningCorrection → :3(Non-Standard correction,3-3-5 等基本仍是 corrective)
+        NeelyPatternType::RunningCorrection => StructureLabel::Three,
     }
 }
 

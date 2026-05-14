@@ -106,6 +106,7 @@ fn pattern_label(p: &NeelyPatternType) -> String {
         NeelyPatternType::Flat { sub_kind } => format!("Flat({:?})", sub_kind),
         NeelyPatternType::Triangle { sub_kind } => format!("Triangle({:?})", sub_kind),
         NeelyPatternType::Combination { sub_kinds } => format!("Combination({:?})", sub_kinds),
+        NeelyPatternType::RunningCorrection => "RunningCorrection".to_string(),
     }
 }
 

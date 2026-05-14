@@ -178,7 +178,7 @@ mod tests {
                 10,
                 20,
                 NeelyPatternType::Flat {
-                    sub_kind: FlatKind::Regular,
+                    sub_kind: FlatKind::Common,
                 },
                 StructureLabel::Three,
             ),

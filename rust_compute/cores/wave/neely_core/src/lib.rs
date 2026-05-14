@@ -3,7 +3,7 @@
 // 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
 //       + m3Spec/cores_overview.md r4
 //
-// 已實作(Phase 15 / v0.24.0 — 2026-05-14):
+// 已實作(Phase 16 / v0.25.0 — 2026-05-14):
 //   - struct / enum 合約(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
 //   - WaveCore trait + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
 //   - **RuleId 章節編碼**(architecture §9.3)限縮 Ch5_* / Ch9_* / Engineering_* 三組
@@ -114,10 +114,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.24.0",
+        "0.25.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement + post_behavior 8-variant + Scenario 群 2 fields)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement + post_behavior 8-variant + Scenario 群 2 fields + FlatKind 7-variant + RunningCorrection)",
     )
 }
 
@@ -205,8 +205,19 @@ impl WaveCore for NeelyCore {
         // ClassifiedMonowave.structure_label_candidates wrap)+ triplexity_detected
         // (Triple-grouping Ch8 偵測);lib.rs::compute() Stage 8.5 後填 round_state +
         // pattern_isolation_anchors(從 pattern_bounds 過濾覆蓋範圍的 anchors))
+        // 0.24.0 → 0.25.0(Phase 16 PR / FlatKind 7-variant + NeelyPatternType::RunningCorrection
+        // 上提 — 2026-05-14:
+        // FlatKind 由 3-variant(Regular/Expanded/Running)→ 7-variant 對齊 spec r5 line 1161
+        // (Common/BFailure/CFailure/DoubleFailure/Irregular/IrregularFailure/Elongated);
+        // Running 上提為 NeelyPatternType::RunningCorrection 頂層 variant
+        // (對齊 spec r5「Power Rating -3/+3 級別獨立」);
+        // 新建 classifier/flat_classifier.rs 依 spec line 2157-2239 b/a + c/b 比例查表;
+        // classifier::classify_3wave 從 stub 升真分類(RunningCorrection / Flat 7-variant /
+        // Zigzag Single fallback);power_rating/table.rs 7-variant + RunningCorrection 對應 PowerRating;
+        // post_behavior.rs Flat 7-variant + RunningCorrection 對應 PostBehavior;
+        // facts/post_validator/reverse_logic match arm 補 RunningCorrection branch)
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.24.0"
+        "0.25.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -558,7 +569,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.24.0");
+        assert_eq!(core.version(), "0.25.0");
     }
 
     // -------------------------------------------------------------

@@ -99,6 +99,8 @@ fn is_near_completion(scenario: &Scenario) -> bool {
         // Zigzag / Flat 單獨出現 → 中段候選(多半是更大 Combination 的子段)
         NeelyPatternType::Zigzag { .. } => false,
         NeelyPatternType::Flat { .. } => false,
+        // RunningCorrection(Phase 16 r5)→ ±3 Strong 等同 Triple* 變體,完成候選
+        NeelyPatternType::RunningCorrection => true,
     }
 }
 
