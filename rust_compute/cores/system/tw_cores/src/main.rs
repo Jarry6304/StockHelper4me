@@ -414,6 +414,29 @@ async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunS
             &e,
         )),
     }
+
+    // 6. business_indicator_core(月頻;Silver 端 sentinel `_market_`,Core 端保留字 `_index_business_`)
+    match environment_loader::load_business_indicator(pool, ENV_LOOKBACK_DAYS).await {
+        Ok(series) => {
+            let core = business_indicator_core::BusinessIndicatorCore::new();
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &core,
+                    &series,
+                    business_indicator_core::BusinessIndicatorParams::default(),
+                    write,
+                )
+                .await,
+            );
+        }
+        Err(e) => summary.push(loader_err_summary(
+            "business_indicator_core",
+            "_index_business_",
+            "load_business_indicator",
+            &e,
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------

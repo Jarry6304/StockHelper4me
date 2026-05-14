@@ -1,8 +1,8 @@
-# Cores Schema Map(22 cores 為主軸)
+# Cores Schema Map(23 cores 為主軸)
 
 > **本檔定位**:**by-core 反查** — 給定 core 名 → 立刻看到讀哪張 Silver / 寫哪三表 / spec 章節。與 [`m3Spec/cores_overview.md`](../m3Spec/cores_overview.md)(by-spec 契約)、[`m2Spec/layered_schema_post_refactor.md`](../m2Spec/layered_schema_post_refactor.md)(by-table 規範)**反方向**。
 > **盤點時間**:2026-05-14
-> **總 cores**:22 / 已實作 22 ✅ / spec 有但 code 未實作 1(`business_indicator_core`,留 follow-up)
+> **總 cores**:23 / 已實作 23 ✅(2026-05-14 補 `business_indicator_core`)
 
 ---
 
@@ -46,6 +46,7 @@
 | `exchange_rate_core` | Environment | P2 | `exchange_rate_derived` | IV + F | [environment §五](../m3Spec/environment_cores.md) |
 | `fear_greed_core` | Environment | P2 | `fear_greed_index`(直讀 Bronze,**架構例外**) | IV + F | [environment §六](../m3Spec/environment_cores.md) |
 | `market_margin_core` | Environment | P2 | `market_margin_maintenance_derived` | IV + F | [environment §七](../m3Spec/environment_cores.md) |
+| `business_indicator_core` | Environment | P2 | `business_indicator_derived`(月頻) | IV + F | [environment §八](../m3Spec/environment_cores.md) |
 
 ### 寫入 M3 表選擇規則
 
@@ -55,13 +56,7 @@
 - **結構快照**(每 stock × timeframe 一份完整結構) → `structural_snapshots`(SS)
 - **事件邊界**(boolean 觸發 / 量化事實) → `facts`(F)— 所有 cores 都寫
 
-目前 SS 寫入者只有 `neely_core`(Scenario Forest);其他 21 cores 寫 IV + F。
-
-### Spec 有但 code 未實作
-
-| Core | 預計 spec | 狀態 |
-|---|---|---|
-| `business_indicator_core` | [environment §八 r3](../m3Spec/environment_cores.md)(景氣指標 — 領先/同時/落後/燈號) | Silver `business_indicator_derived` 已建,Core 未實作 |
+目前 SS 寫入者只有 `neely_core`(Scenario Forest);其他 22 cores 寫 IV + F。
 
 ---
 
@@ -132,7 +127,7 @@
   - `financial_statement_core`:`gross_margin=2.0 / roe_high=15.0(Buffett 慣例)/ debt_ratio=60 / fcf_streak=4 / TTM 4-quarter sum`
 - **Cores**:`revenue_core` / `valuation_core` / `financial_statement_core`
 
-### 3.7 Environment(P2,5 cores;1 spec 有 code 未實作)
+### 3.7 Environment(P2,6 cores)
 
 - **Spec**:[`m3Spec/environment_cores.md`](../m3Spec/environment_cores.md)(r3)
 - **共同**:market-level,Output 與個股無關;`stock_id` 用**保留字**(`cores_overview.md` §6.2.1):
@@ -141,8 +136,8 @@
   - `exchange_rate_core` → `_global_`
   - `fear_greed_core` → `_global_`
   - `market_margin_core` → `_market_`
-  - `business_indicator_core`(未實作)→ `_index_business_`
-- **Cores**:`taiex_core` / `us_market_core` / `exchange_rate_core` / `fear_greed_core` / `market_margin_core`
+  - `business_indicator_core` → `_index_business_`(月頻,Silver 端 sentinel `_market_`,loader 轉換)
+- **Cores**:`taiex_core` / `us_market_core` / `exchange_rate_core` / `fear_greed_core` / `market_margin_core` / `business_indicator_core`
 
 ---
 
@@ -173,7 +168,7 @@
 | `us_market_index_derived`(SPY + VIX)| `us_market_core` |
 | `exchange_rate_derived` | `exchange_rate_core` |
 | `market_margin_maintenance_derived` | `market_margin_core` |
-| `business_indicator_derived` | (`business_indicator_core` 未實作)|
+| `business_indicator_derived` | `business_indicator_core` |
 | `fear_greed_index`(Bronze 直讀,**架構例外**)| `fear_greed_core` |
 
 ### 未被任何 Core 讀的 Silver

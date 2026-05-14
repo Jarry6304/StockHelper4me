@@ -202,6 +202,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
+name = "business_indicator_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "environment_loader",
+ "fact_schema",
+ "inventory",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2306,6 +2320,7 @@ dependencies = [
  "anyhow",
  "atr_core",
  "bollinger_core",
+ "business_indicator_core",
  "chip_loader",
  "chrono",
  "clap",

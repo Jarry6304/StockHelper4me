@@ -202,3 +202,42 @@ pub async fn load_market_margin(pool: &PgPool, lookback_days: i32) -> Result<Mar
     .bind(lookback_days).fetch_all(pool).await.context("load_market_margin failed")?;
     Ok(MarketMarginMaintenanceSeries { points })
 }
+
+// ===========================================================================
+// BusinessIndicator(business_indicator_derived,月頻;PK 含 stock_id='_market_' sentinel)
+// 對齊 m3Spec/environment_cores.md §八 r3 — Cores 端用保留字 _index_business_(loader 轉)
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BusinessIndicatorSeries {
+    pub points: Vec<BusinessIndicatorRaw>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct BusinessIndicatorRaw {
+    pub date: NaiveDate,
+    pub leading_indicator: Option<f64>,
+    pub coincident_indicator: Option<f64>,
+    pub lagging_indicator: Option<f64>,
+    pub monitoring: Option<i32>,
+    pub monitoring_color: Option<String>,  // 'blue'/'yellow_blue'/'green'/'yellow_red'/'red'
+}
+
+pub async fn load_business_indicator(pool: &PgPool, lookback_days: i32) -> Result<BusinessIndicatorSeries> {
+    let points: Vec<BusinessIndicatorRaw> = sqlx::query_as(
+        r#"
+        SELECT date,
+               leading_indicator::float8    AS leading_indicator,
+               coincident_indicator::float8 AS coincident_indicator,
+               lagging_indicator::float8    AS lagging_indicator,
+               monitoring,
+               monitoring_color
+        FROM business_indicator_derived
+        WHERE stock_id = '_market_'
+          AND date >= (CURRENT_DATE - $1::int)
+        ORDER BY date ASC
+        "#,
+    )
+    .bind(lookback_days).fetch_all(pool).await.context("load_business_indicator failed")?;
+    Ok(BusinessIndicatorSeries { points })
+}

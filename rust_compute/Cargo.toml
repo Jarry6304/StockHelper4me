@@ -36,6 +36,7 @@ members = [
     "cores/environment/exchange_rate_core",
     "cores/environment/fear_greed_core",
     "cores/environment/market_margin_core",
+    "cores/environment/business_indicator_core",
     # System Cores(monolithic binary)
     "cores/system/tw_cores",
 ]
