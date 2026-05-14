@@ -1,10 +1,26 @@
 # Indicator Cores:量能類
 
-> **版本**:v2.0 抽出版 r2
-> **日期**:2026-05-06
+> **版本**:v2.0 抽出版 r4
+> **日期**:2026-05-14
 > **配套文件**:`cores_overview.md`(共通規範)、`layered_schema_post_refactor.md`(Silver 層)、`adr/0001_tw_market_handling.md`
 > **包含 Core**:3 個
 > **優先級分布**:P1(1 個)/ P3(2 個)
+
+---
+
+## r4 修訂摘要(2026-05-14 — `obv_core` divergence pivot-based 重寫 + P0 Gate v4 calibration)
+
+`obv_core` §3.5 / §3.6 補充:
+
+- **演算法重寫**:divergence 從固定 20-bar window 改 **pivot-based**(PIVOT_N=3
+  swing confirmation,Lucas & LeBeau 1992)。對齊 v1.31 P5 `rsi_core` / `kd_core`
+  / `macd_core` 同款重寫(原算法在趨勢中每日重複觸發 → 改邊緣偵測讓 divergence
+  回歸稀有訊號本質,Murphy 1999 p.248 預期 1-4/yr)
+- **MIN_PIVOT_DIST**:兩極值點時間距離下界:
+  - 原 r2 隱含 spec literal:20(Murphy 1999 p.248「20-60 intervals」下界)
+  - **v1.34 P0 Gate v4(2026-05-14):12**(NEoWave 經驗值,對齊 4 cores 一致)
+- 滿足 spec 結構性條件「N ≥ 2 × PIVOT_N = 6」,production-driven 讓步至 Murphy 範圍下界
+- 詳見 `CLAUDE.md` v1.34 + `obv_core/src/lib.rs:187` 出處註解 + `indicator_cores_momentum.md` r4
 
 ---
 
@@ -140,6 +156,21 @@ OBV 是**累積式**指標,起點選擇影響絕對值。建議:
 - 預設 `anchor_date = None`,從序列起始累積
 - Workflow 可指定 anchor_date(例:某次大事件後重新累積)
 - 寫入 `indicator_values` 時記錄 `anchor_date`,確保使用者知道「這條 OBV 從哪天起算」
+
+### 3.7 背離規則(r4 機械式定義)
+
+對齊 `rsi_core` / `kd_core` / `macd_core` §X.6 同款 pivot-based 重寫:
+
+- **PIVOT_N = 3**(Lucas & LeBeau 1992 "Computer Analysis of the Futures Market"
+  swing pivot 確認常數)
+- **MIN_PIVOT_DIST = 12**(v1.34 P0 Gate v4 production calibration;
+  Murphy 1999 p.248「20-60 intervals」下界範圍,讓步至 NEoWave 經驗值
+  讓 Divergence 觸發率回到 1-4/yr 預期區間)
+- Bearish:price 新 HH + OBV LH;Bullish:price 新 LL + OBV HL
+- `confirm_date = pivot_idx + PIVOT_N`(對齊指標子類同款慣例)
+- 該規則明確寫死於 `obv_core/src/lib.rs:detect_divergences`,
+  不接受「視覺背離」
+- 詳見頂端 r4 修訂摘要
 
 ---
 

@@ -48,6 +48,7 @@ us_market_core        = { path = "../../environment/us_market_core" }
 exchange_rate_core    = { path = "../../environment/exchange_rate_core" }
 fear_greed_core       = { path = "../../environment/fear_greed_core" }
 market_margin_core    = { path = "../../environment/market_margin_core" }
+business_indicator_core = { path = "../../environment/business_indicator_core" }
 
 # 一般依賴
 clap          = { workspace = true }
@@ -66,3 +67,6 @@ dotenvy = "0.15"
 
 # Async stream concurrency(PR-9b run-all per-stock task spawn)
 futures = { workspace = true }
+
+# Workflow toml dispatch(PR-9b 動態 core 過濾)
+toml = { workspace = true }

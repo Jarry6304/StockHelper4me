@@ -180,9 +180,11 @@ fn detect_divergences(
     dates: &[NaiveDate],
 ) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
     const PIVOT_N: usize = 3;        // Lucas & LeBeau: 3-bar swing confirmation
-    // 對齊 spec §3.6:「兩個價格極值點之間時間距離 ≥ N 根 K 棒(預設 N=20)」
-    // Murphy (1999) p.248 建議 20-60 intervals;此值對齊 spec 下限。
-    const MIN_PIVOT_DIST: usize = 20;
+    // 對齊 v4 production calibration(2026-05-14,commit 8312b5e):kd/macd/rsi
+    // MIN_PIVOT_DIST 從 20 讓步至 12,讓 Divergence 觸發率回到 Murphy (1999) p.248
+    // 預期 1-4/yr 區間下界。N=12 為 NEoWave 經驗值,仍滿足 spec §3.6 結構性條件
+    // (N ≥ 2 × PIVOT_N = 6);spec 預設 20 為保守值,production 顯示偏稀。
+    const MIN_PIVOT_DIST: usize = 12;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
     let mut out = Vec::new();
@@ -235,7 +237,7 @@ mod tests {
     #[test]
     fn bearish_divergence_pivot_fires_once() {
         // price 新高,OBV 反而比上次低 → bearish divergence
-        // 兩 pivot 間距 ≥ 20(MIN_PIVOT_DIST)
+        // 兩 pivot 間距 ≥ 12(MIN_PIVOT_DIST,v4 calibration)
         let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];

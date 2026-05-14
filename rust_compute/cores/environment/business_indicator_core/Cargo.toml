@@ -1,0 +1,18 @@
+[package]
+name        = "business_indicator_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Business Indicator Core(P2,景氣指標 — 領先/燈號月頻 events,stock_id _index_business_)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fact_schema       = { path = "../../../cores_shared/fact_schema" }
+environment_loader = { path = "../../../cores_shared/environment_loader" }
+core_registry     = { path = "../../../cores_shared/core_registry" }
+anyhow            = { workspace = true }
+chrono            = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+inventory         = "0.3"

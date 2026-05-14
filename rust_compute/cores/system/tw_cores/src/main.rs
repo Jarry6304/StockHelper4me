@@ -24,7 +24,11 @@ use clap::{Parser, Subcommand};
 use fact_schema::{params_hash, Fact, IndicatorCore, Timeframe, WaveCore};
 use serde::Serialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use std::path::PathBuf;
 use std::time::Instant;
+
+mod workflow;
+use workflow::CoreFilter;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -80,6 +84,16 @@ enum Command {
         /// 串列跑用 1;全市場 1263 stocks 從 ~9min 降到 ~5min(PR-9d 升 16→32)
         #[arg(long, default_value_t = 32)]
         concurrency: usize,
+        /// 只跑 dirty queue(SELECT DISTINCT stock_id FROM price_daily_fwd WHERE is_dirty=TRUE)
+        /// 對齊 silver/orchestrator.py:_fetch_dirty_fwd_stocks pattern。
+        /// 與 --stocks 互斥;與 --limit 可疊加(取前 N 個 dirty stocks)
+        #[arg(long, default_value_t = false)]
+        dirty: bool,
+        /// Workflow toml 路徑(動態決定跑哪些 cores)
+        /// 對齊 m3Spec/cores_overview.md §13.1 + workflows/tw_stock_standard.toml
+        /// 未指定 → 全 23 cores 跑(對齊原 PR-9a 行為)
+        #[arg(long)]
+        workflow: Option<PathBuf>,
     },
 }
 
@@ -113,7 +127,19 @@ async fn main() -> Result<()> {
             skip_stock,
             write,
             concurrency,
-        } => run_all(stocks, limit, &timeframe, skip_market, skip_stock, write, concurrency).await,
+            dirty,
+            workflow,
+        } => {
+            if dirty && stocks.is_some() {
+                anyhow::bail!("--dirty 與 --stocks 互斥(dirty 從 PG dirty queue 拉,stocks 是顯式清單)");
+            }
+            let filter = match workflow.as_deref() {
+                None => CoreFilter::all_enabled(),
+                Some(path) => CoreFilter::from_workflow_toml(path)?,
+            };
+            tracing::info!("workflow filter: {}", filter.count_summary());
+            run_all(stocks, limit, &timeframe, skip_market, skip_stock, write, concurrency, dirty, &filter).await
+        }
     }
 }
 
@@ -239,6 +265,8 @@ async fn run_all(
     skip_stock: bool,
     write: bool,
     concurrency: usize,
+    dirty: bool,
+    filter: &CoreFilter,
 ) -> Result<()> {
     use futures::stream::{self, StreamExt};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -255,21 +283,28 @@ async fn run_all(
     if !skip_market {
         tracing::info!("== Stage A: 5 environment cores(market-level run-once)==");
         let mut env_summary = Vec::new();
-        run_market_cores(&pool, write, &mut env_summary).await;
+        run_market_cores(&pool, write, filter, &mut env_summary).await;
         summary.lock().await.extend(env_summary);
     } else {
         tracing::info!("--skip-market 已指定,跳過 5 environment cores");
     }
 
     if !skip_stock {
-        let stock_ids = resolve_stock_list(&pool, stocks.as_deref(), limit).await?;
+        let stock_ids = resolve_stock_list(&pool, stocks.as_deref(), limit, dirty).await?;
         let total = stock_ids.len();
-        tracing::info!(
-            "== Stage B: {} stocks × 17 cores(concurrency={}, timeframe={:?})==",
-            total,
-            concurrency,
-            tf
-        );
+        if dirty && total == 0 {
+            tracing::info!("dirty queue 為空(price_daily_fwd.is_dirty=TRUE 無 rows),skip Stage B");
+        } else if dirty {
+            tracing::info!(
+                "== Stage B: {} stocks × 17 cores(dirty queue, concurrency={}, timeframe={:?})==",
+                total, concurrency, tf
+            );
+        } else {
+            tracing::info!(
+                "== Stage B: {} stocks × 17 cores(concurrency={}, timeframe={:?})==",
+                total, concurrency, tf
+            );
+        }
         let progress = Arc::new(AtomicUsize::new(0));
         // PR-9b:per-stock task spawn 並行,sqlx pool 自動分配 connection
         // for_each_concurrent 限 N 個 future 同時 active;summary 用 Mutex 保護累加
@@ -280,7 +315,7 @@ async fn run_all(
                 let progress = progress.clone();
                 async move {
                     let mut local: Vec<CoreRunSummary> = Vec::new();
-                    run_stock_cores(&pool, &stock_id, tf, write, &mut local).await;
+                    run_stock_cores(&pool, &stock_id, tf, write, filter, &mut local).await;
                     let n = progress.fetch_add(1, Ordering::Relaxed) + 1;
                     if n % 100 == 0 || n == total {
                         tracing::info!("progress: stock {}/{} ({})", n, total, stock_id);
@@ -302,11 +337,17 @@ async fn run_all(
 // Environment cores(5,run-once)
 // ---------------------------------------------------------------------------
 
-async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunSummary>) {
+async fn run_market_cores(
+    pool: &PgPool,
+    write: bool,
+    filter: &CoreFilter,
+    summary: &mut Vec<CoreRunSummary>,
+) {
     // 環境 cores 各自 warmup 不一,給 5 年(~1825 天)足量歷史
     const ENV_LOOKBACK_DAYS: i32 = 365 * 5;
 
     // 1. taiex_core
+    if filter.is_enabled("taiex_core") {
     match environment_loader::load_taiex(pool, ENV_LOOKBACK_DAYS).await {
         Ok(series) => {
             let core = taiex_core::TaiexCore::new();
@@ -322,8 +363,10 @@ async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunS
             &e,
         )),
     }
+    }
 
     // 2. us_market_core
+    if filter.is_enabled("us_market_core") {
     match environment_loader::load_us_market_combined(pool, ENV_LOOKBACK_DAYS).await {
         Ok(combined) => {
             let core = us_market_core::UsMarketCore::new();
@@ -345,8 +388,10 @@ async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunS
             &e,
         )),
     }
+    }
 
     // 3. exchange_rate_core(USD/TWD,後續 Params currency_pairs 多幣別留 follow-up)
+    if filter.is_enabled("exchange_rate_core") {
     match environment_loader::load_exchange_rate(pool, "USD", ENV_LOOKBACK_DAYS).await {
         Ok(series) => {
             let core = exchange_rate_core::ExchangeRateCore::new();
@@ -368,8 +413,10 @@ async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunS
             &e,
         )),
     }
+    }
 
     // 4. fear_greed_core
+    if filter.is_enabled("fear_greed_core") {
     match environment_loader::load_fear_greed(pool, ENV_LOOKBACK_DAYS).await {
         Ok(series) => {
             let core = fear_greed_core::FearGreedCore::new();
@@ -391,8 +438,10 @@ async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunS
             &e,
         )),
     }
+    }
 
     // 5. market_margin_core
+    if filter.is_enabled("market_margin_core") {
     match environment_loader::load_market_margin(pool, ENV_LOOKBACK_DAYS).await {
         Ok(series) => {
             let core = market_margin_core::MarketMarginCore::new();
@@ -414,6 +463,32 @@ async fn run_market_cores(pool: &PgPool, write: bool, summary: &mut Vec<CoreRunS
             &e,
         )),
     }
+    }
+
+    // 6. business_indicator_core(月頻;Silver 端 sentinel `_market_`,Core 端保留字 `_index_business_`)
+    if filter.is_enabled("business_indicator_core") {
+    match environment_loader::load_business_indicator(pool, ENV_LOOKBACK_DAYS).await {
+        Ok(series) => {
+            let core = business_indicator_core::BusinessIndicatorCore::new();
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &core,
+                    &series,
+                    business_indicator_core::BusinessIndicatorParams::default(),
+                    write,
+                )
+                .await,
+            );
+        }
+        Err(e) => summary.push(loader_err_summary(
+            "business_indicator_core",
+            "_index_business_",
+            "load_business_indicator",
+            &e,
+        )),
+    }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +500,7 @@ async fn run_stock_cores(
     stock_id: &str,
     tf: Timeframe,
     write: bool,
+    filter: &CoreFilter,
     summary: &mut Vec<CoreRunSummary>,
 ) {
     // Lookback 上限給足:6 年日線(覆蓋各 indicator warmup × 1.2 + 充足實際 series)
@@ -433,6 +509,7 @@ async fn run_stock_cores(
     const STOCK_LOOKBACK_QUARTERS: i32 = 6 * 4 + 4;
 
     // ---- 1. Wave: neely_core(走 structural_snapshots,不寫 indicator_values)----
+    if filter.is_enabled("neely_core") {
     let mut neely_params = neely_core::NeelyCoreParams::default();
     neely_params.timeframe = tf;
     match ohlcv_loader::load_for_neely(pool, stock_id, &neely_params).await {
@@ -444,8 +521,15 @@ async fn run_stock_cores(
             &e,
         )),
     }
+    }
 
     // ---- 2-9. Indicator(8)— 共用 OhlcvSeries ----
+    // 8 indicator cores 共用 ohlcv,若 8 個全 disabled 可整段 skip(節省 1 個 query)
+    let any_indicator_enabled = [
+        "macd_core", "rsi_core", "kd_core", "adx_core",
+        "ma_core", "bollinger_core", "atr_core", "obv_core",
+    ].iter().any(|n| filter.is_enabled(n));
+    if any_indicator_enabled {
     let ohlcv_result = match tf {
         Timeframe::Daily => ohlcv_loader::load_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await,
         Timeframe::Weekly => ohlcv_loader::load_weekly(pool, stock_id, STOCK_LOOKBACK_DAYS / 7).await,
@@ -457,6 +541,7 @@ async fn run_stock_cores(
     match ohlcv_result {
         Ok(ohlcv) => {
             // 每個 indicator core 獨立 dispatch,失敗不阻塞其他
+            if filter.is_enabled("macd_core") {
             summary.push(
                 dispatch_indicator(
                     pool,
@@ -467,6 +552,8 @@ async fn run_stock_cores(
                 )
                 .await,
             );
+            }
+            if filter.is_enabled("rsi_core") {
             summary.push(
                 dispatch_indicator(
                     pool,
@@ -477,6 +564,8 @@ async fn run_stock_cores(
                 )
                 .await,
             );
+            }
+            if filter.is_enabled("kd_core") {
             summary.push(
                 dispatch_indicator(
                     pool,
@@ -487,6 +576,8 @@ async fn run_stock_cores(
                 )
                 .await,
             );
+            }
+            if filter.is_enabled("adx_core") {
             summary.push(
                 dispatch_indicator(
                     pool,
@@ -497,6 +588,8 @@ async fn run_stock_cores(
                 )
                 .await,
             );
+            }
+            if filter.is_enabled("ma_core") {
             summary.push(
                 dispatch_indicator(
                     pool,
@@ -507,6 +600,8 @@ async fn run_stock_cores(
                 )
                 .await,
             );
+            }
+            if filter.is_enabled("bollinger_core") {
             summary.push(
                 dispatch_indicator(
                     pool,
@@ -517,6 +612,8 @@ async fn run_stock_cores(
                 )
                 .await,
             );
+            }
+            if filter.is_enabled("atr_core") {
             summary.push(
                 dispatch_indicator(
                     pool,
@@ -527,6 +624,8 @@ async fn run_stock_cores(
                 )
                 .await,
             );
+            }
+            if filter.is_enabled("obv_core") {
             summary.push(
                 dispatch_indicator(
                     pool,
@@ -537,6 +636,7 @@ async fn run_stock_cores(
                 )
                 .await,
             );
+            }
         }
         Err(e) => {
             for name in [
@@ -549,12 +649,16 @@ async fn run_stock_cores(
                 "atr_core",
                 "obv_core",
             ] {
-                summary.push(loader_err_summary(name, stock_id, "load_daily", &e));
+                if filter.is_enabled(name) {
+                    summary.push(loader_err_summary(name, stock_id, "load_daily", &e));
+                }
             }
         }
     }
+    }
 
     // ---- 10. day_trading_core ----
+    if filter.is_enabled("day_trading_core") {
     match chip_loader::load_day_trading(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
         Ok(series) => summary.push(
             dispatch_indicator(
@@ -573,8 +677,10 @@ async fn run_stock_cores(
             &e,
         )),
     }
+    }
 
     // ---- 11. institutional_core ----
+    if filter.is_enabled("institutional_core") {
     match chip_loader::load_institutional_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
         Ok(series) => summary.push(
             dispatch_indicator(
@@ -593,8 +699,10 @@ async fn run_stock_cores(
             &e,
         )),
     }
+    }
 
     // ---- 12. margin_core ----
+    if filter.is_enabled("margin_core") {
     match chip_loader::load_margin_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
         Ok(series) => summary.push(
             dispatch_indicator(
@@ -613,8 +721,10 @@ async fn run_stock_cores(
             &e,
         )),
     }
+    }
 
     // ---- 13. foreign_holding_core ----
+    if filter.is_enabled("foreign_holding_core") {
     match chip_loader::load_foreign_holding(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
         Ok(series) => summary.push(
             dispatch_indicator(
@@ -633,8 +743,10 @@ async fn run_stock_cores(
             &e,
         )),
     }
+    }
 
     // ---- 14. shareholder_core(週頻 — Params::default() timeframe = Weekly)----
+    if filter.is_enabled("shareholder_core") {
     match chip_loader::load_holding_shares_per(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
         Ok(series) => summary.push(
             dispatch_indicator(
@@ -653,8 +765,10 @@ async fn run_stock_cores(
             &e,
         )),
     }
+    }
 
     // ---- 15. revenue_core(月頻)----
+    if filter.is_enabled("revenue_core") {
     match fundamental_loader::load_monthly_revenue(pool, stock_id, STOCK_LOOKBACK_MONTHS).await {
         Ok(series) => summary.push(
             dispatch_indicator(
@@ -673,8 +787,10 @@ async fn run_stock_cores(
             &e,
         )),
     }
+    }
 
     // ---- 16. valuation_core(日頻)----
+    if filter.is_enabled("valuation_core") {
     match fundamental_loader::load_valuation_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
         Ok(series) => summary.push(
             dispatch_indicator(
@@ -693,8 +809,10 @@ async fn run_stock_cores(
             &e,
         )),
     }
+    }
 
     // ---- 17. financial_statement_core(季頻)----
+    if filter.is_enabled("financial_statement_core") {
     match fundamental_loader::load_financial_statement(pool, stock_id, STOCK_LOOKBACK_QUARTERS).await
     {
         Ok(series) => summary.push(
@@ -713,6 +831,7 @@ async fn run_stock_cores(
             "load_financial_statement",
             &e,
         )),
+    }
     }
 }
 
@@ -1017,6 +1136,7 @@ async fn resolve_stock_list(
     pool: &PgPool,
     stocks: Option<&str>,
     limit: Option<usize>,
+    dirty: bool,
 ) -> Result<Vec<String>> {
     if let Some(s) = stocks {
         let list: Vec<String> = s
@@ -1030,18 +1150,27 @@ async fn resolve_stock_list(
         return Ok(list);
     }
 
-    // 從 price_daily_fwd 拉 distinct stock_id
-    let rows: Vec<(String,)> = sqlx::query_as(
+    // dirty=true:對齊 silver/orchestrator.py:_fetch_dirty_fwd_stocks
+    // 只拉 is_dirty=TRUE 的 stocks(走 PR #20 trigger 維護的 dirty queue)
+    let sql = if dirty {
+        r#"
+        SELECT DISTINCT stock_id
+        FROM price_daily_fwd
+        WHERE market = 'TW' AND is_dirty = TRUE
+        ORDER BY stock_id ASC
+        "#
+    } else {
         r#"
         SELECT DISTINCT stock_id
         FROM price_daily_fwd
         WHERE market = 'TW'
         ORDER BY stock_id ASC
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .context("query price_daily_fwd distinct stock_id failed")?;
+        "#
+    };
+    let rows: Vec<(String,)> = sqlx::query_as(sql)
+        .fetch_all(pool)
+        .await
+        .context("query price_daily_fwd distinct stock_id failed")?;
     let mut list: Vec<String> = rows.into_iter().map(|(s,)| s).collect();
     if let Some(n) = limit {
         list.truncate(n);

@@ -36,6 +36,7 @@ members = [
     "cores/environment/exchange_rate_core",
     "cores/environment/fear_greed_core",
     "cores/environment/market_margin_core",
+    "cores/environment/business_indicator_core",
     # System Cores(monolithic binary)
     "cores/system/tw_cores",
 ]
@@ -76,6 +77,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Async stream + concurrency primitives(PR-9b 並行優化用 for_each_concurrent)
 futures = "0.3"
+
+# Workflow toml 解析(PR-9b workflow dispatch)
+toml = "0.8"
 
 [profile.release]
 opt-level     = 3
