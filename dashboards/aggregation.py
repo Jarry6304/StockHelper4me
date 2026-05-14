@@ -1,35 +1,44 @@
-"""Streamlit dashboard — Aggregation Layer 即時請求視覺化 demo。
+"""Aggregation Layer Streamlit dashboard(Phase C)。
 
-對齊 m3Spec/aggregation_layer.md §11 Phase B-3。
+對齊 m3Spec/aggregation_layer.md r1 + plan /root/.claude/plans/squishy-foraging-stroustrup.md。
+
+6 tabs:
+1. 📈 K-line  ── candlestick + bollinger + MA + neely zigzag + 6 indicator subplots + facts markers
+2. 💰 Chip    ── institutional / margin / foreign_holding / day_trading / shareholder
+3. 📊 Fundamental ── revenue 月頻 + valuation percentile + financial_statement 季表
+4. 🌐 Environment ── TAIEX/TPEx + SPY/VIX + Fear-Greed gauge + market margin + business indicator
+5. 🌳 Neely Wave ── scenario picker + zigzag deep-dive + Fib zones
+6. ⭐ Facts 散點雲 ── x=fact_date / y=source_core / color=kind
 
 用法:
-    pip install streamlit pandas
+    pip install -e ".[dashboard]"
     streamlit run dashboards/aggregation.py
-
-4 區塊並排:
-1. 個股 facts 時間軸
-2. Indicator 最新值表
-3. 結構性 snapshot 摘要(neely scenario forest)
-4. 市場環境並排(5 個保留字 stock_id facts)
 """
 
 from __future__ import annotations
 
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import streamlit as st
 
-# 確保從 repo root 跑 streamlit 時 src/ 可 import
-# (對齊 pip install -e . 後的 .pth 行為,但 streamlit 不一定吃 site-packages)
-import sys
-from pathlib import Path
-
+# 確保從 repo root 跑 streamlit 時 src/ 可 import(對齊 .pth 但 streamlit 不一定吃)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from agg import as_of  # noqa: E402
+from agg import as_of_with_ohlc  # noqa: E402
+
+from dashboards.charts import (  # noqa: E402
+    candlestick,
+    facts_cloud,
+    indicators,
+    overlays,
+)
 
 
 # ────────────────────────────────────────────────────────────
@@ -37,203 +46,207 @@ from agg import as_of  # noqa: E402
 # ────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="台股 Aggregation Layer Demo",
+    page_title="台股 Aggregation Dashboard",
     page_icon="📊",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.title("📊 台股 Aggregation Layer demo")
-st.caption("M3 即時請求路徑層 · 並排呈現,不整合 · 對齊 m3Spec/aggregation_layer.md r1")
+st.title("📊 台股 Aggregation Dashboard")
+st.caption("M3 即時請求路徑層 · 並排呈現,不整合 · plotly 視覺化主幹(Phase C)")
+
 
 # ────────────────────────────────────────────────────────────
-# Sidebar:查詢參數
+# Sidebar:查詢參數 + layer toggles
 # ────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("查詢參數")
+    st.header("🔎 查詢")
     stock_id = st.text_input("Stock ID", value="2330", help="例 2330 / 2317 / 0050")
-    as_of_date = st.date_input("As of 日期", value=date.today() - timedelta(days=1))
-    lookback_days = st.slider("Lookback 天數", 30, 365, 90)
-    include_market = st.checkbox("並排 market-level facts", value=True)
+    as_of_date = st.date_input("As of", value=date.today() - timedelta(days=1))
+    lookback_days = st.slider("Lookback days", 30, 365, 90)
+    include_market = st.checkbox("並排 market-level", value=True)
+    fetch_clicked = st.button("撈資料", type="primary", use_container_width=True)
 
     st.markdown("---")
-    st.markdown("**保留字 stock_id**")
-    st.code(
-        "\n".join(
-            [
-                "_index_taiex_      TAIEX",
-                "_index_us_market_  SPY / VIX",
-                "_index_business_   景氣指標",
-                "_market_           市場層級籌碼",
-                "_global_           匯率 / fear_greed",
-            ]
-        ),
-        language="text",
-    )
+    st.markdown("### 📈 K-line layers")
+    layer_volume     = st.checkbox("Volume",      value=True)
+    layer_ma         = st.checkbox("MA(SMA20/60/200)", value=True)
+    layer_bollinger  = st.checkbox("Bollinger",   value=True)
+    layer_neely      = st.checkbox("Neely zigzag", value=True)
+    layer_facts      = st.checkbox("Facts markers", value=True)
 
-    fetch_clicked = st.button("🔎 撈資料", type="primary", use_container_width=True)
+    st.markdown("### Indicator subplots")
+    layer_macd  = st.checkbox("MACD", value=True)
+    layer_rsi   = st.checkbox("RSI",  value=True)
+    layer_kd    = st.checkbox("KD",   value=True)
+    layer_adx   = st.checkbox("ADX",  value=False)
+    layer_atr   = st.checkbox("ATR",  value=False)
+    layer_obv   = st.checkbox("OBV",  value=False)
 
 
 # ────────────────────────────────────────────────────────────
-# 撈資料 + 渲染
+# Data fetch(快取 5 分鐘)
 # ────────────────────────────────────────────────────────────
 
 if not fetch_clicked:
-    st.info("👈 設定參數後按「撈資料」")
+    st.info("👈 設定 Stock ID + As of 後按「撈資料」")
     st.stop()
 
 
-@st.cache_data(ttl=300)
-def fetch_snapshot(stock_id: str, as_of_date: date, lookback_days: int, include_market: bool):
-    """走 agg.as_of() 撈資料(快取 5 分鐘)。"""
-    snap = as_of(
+@st.cache_data(ttl=300, show_spinner="撈 PG 三表 + price_daily_fwd...")
+def _fetch_all(stock_id: str, as_of_date: date, lookback_days: int, include_market: bool):
+    """as_of_with_ohlc → (snapshot_dict, ohlc_rows)。"""
+    snapshot, ohlc = as_of_with_ohlc(
         stock_id,
         as_of_date,
         lookback_days=lookback_days,
         include_market=include_market,
     )
-    return snap.to_dict()
+    return snapshot.to_dict(), ohlc
 
 
 try:
-    snapshot_dict = fetch_snapshot(stock_id, as_of_date, lookback_days, include_market)
+    snapshot, ohlc = _fetch_all(stock_id, as_of_date, lookback_days, include_market)
 except Exception as e:
-    st.error(f"❌ 撈資料失敗:{e}")
+    st.error(f"❌ 撈資料失敗: {e}")
     st.exception(e)
     st.stop()
 
 
-facts = snapshot_dict["facts"]
-indicator_latest = snapshot_dict["indicator_latest"]
-structural = snapshot_dict["structural"]
-market = snapshot_dict.get("market", {})
+# 摘要 metrics
+facts_list = snapshot["facts"]
+indicators_dict = snapshot["indicator_latest"]
+structural_dict = snapshot["structural"]
+market_dict = snapshot.get("market", {})
+
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("OHLC days", len(ohlc))
+c2.metric("Facts", len(facts_list))
+c3.metric("Indicators", len(indicators_dict))
+c4.metric("Structural", len(structural_dict))
+c5.metric("Market facts", sum(len(v) for v in market_dict.values()))
 
 
 # ────────────────────────────────────────────────────────────
-# Header 摘要
+# Tabs
 # ────────────────────────────────────────────────────────────
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("個股 facts", len(facts))
-col2.metric("Indicator cores", len(indicator_latest))
-col3.metric("Structural snapshots", len(structural))
-total_market = sum(len(v) for v in market.values())
-col4.metric("Market facts", total_market)
+tab_kline, tab_chip, tab_fund, tab_env, tab_neely, tab_facts = st.tabs([
+    "📈 K-line",
+    "💰 Chip",
+    "📊 Fundamental",
+    "🌐 Environment",
+    "🌳 Neely Wave",
+    "⭐ Facts 散點雲",
+])
 
 
-# ────────────────────────────────────────────────────────────
-# 個股 facts 時間軸(主區塊)
-# ────────────────────────────────────────────────────────────
+# ──────── Tab 1: K-line ────────
 
-st.markdown("---")
-st.subheader(f"📌 {stock_id} 個股 facts 時間軸")
+with tab_kline:
+    if not ohlc:
+        st.warning(f"price_daily_fwd 無 {stock_id} 在 {as_of_date} 往前 {lookback_days} 天的資料")
+    else:
+        # 算 indicator subplots 個數
+        active_indicators = []
+        if layer_macd:  active_indicators.append(("MACD",  "macd_core"))
+        if layer_rsi:   active_indicators.append(("RSI",   "rsi_core"))
+        if layer_kd:    active_indicators.append(("KD",    "kd_core"))
+        if layer_adx:   active_indicators.append(("ADX",   "adx_core"))
+        if layer_atr:   active_indicators.append(("ATR",   "atr_core"))
+        if layer_obv:   active_indicators.append(("OBV",   "obv_core"))
+        n_ind = len(active_indicators)
 
-if not facts:
-    st.warning(f"{stock_id} 在 {as_of_date} 往前 {lookback_days} 天內無 fact")
-else:
-    try:
-        import pandas as pd
-
-        df = pd.DataFrame(facts)
-        # 抽 metadata.kind / value
-        if "metadata" in df.columns:
-            df["kind"] = df["metadata"].apply(lambda m: (m or {}).get("kind"))
-            df["value"] = df["metadata"].apply(lambda m: (m or {}).get("value"))
-        st.dataframe(
-            df[["fact_date", "source_core", "statement", "kind", "value", "timeframe"]]
-                .sort_values("fact_date", ascending=False),
-            use_container_width=True,
-            height=400,
+        fig = candlestick.build_kline_figure(
+            ohlc,
+            n_indicator_subplots=n_ind,
+            indicator_titles=[t for t, _ in active_indicators],
+            with_volume=layer_volume,
         )
 
-        # source_core 觸發次數 chart
-        st.bar_chart(df["source_core"].value_counts())
-    except ImportError:
-        st.dataframe(facts, use_container_width=True)
+        # Overlays(主圖 row 1)
+        if layer_ma:
+            overlays.add_ma_lines(fig, indicators_dict.get("ma_core@daily"))
+        if layer_bollinger:
+            overlays.add_bollinger_band(fig, indicators_dict.get("bollinger_core@daily"))
+        if layer_neely:
+            overlays.add_neely_zigzag(
+                fig,
+                structural_dict.get("neely_core@daily"),
+                show_fib_zones=False,
+            )
+
+        # Indicator subplots(動態 row 安排)
+        # Row layout:1=K-line, 2=Volume(if layer_volume), 之後依序是 indicators
+        row_offset = 2 + (1 if layer_volume else 0)  # next row index after K-line + Volume
+        actual_row = row_offset
+        row_for_core: dict[str, int] = {}
+        for label, core_key in active_indicators:
+            ind = indicators_dict.get(f"{core_key}@daily")
+            if label == "MACD":
+                indicators.add_macd_subplot(fig, ind, row=actual_row)
+            elif label == "RSI":
+                indicators.add_rsi_subplot(fig, ind, row=actual_row)
+            elif label == "KD":
+                indicators.add_kd_subplot(fig, ind, row=actual_row)
+            elif label == "ADX":
+                indicators.add_adx_subplot(fig, ind, row=actual_row)
+            elif label == "ATR":
+                indicators.add_atr_subplot(fig, ind, row=actual_row)
+            elif label == "OBV":
+                indicators.add_obv_subplot(fig, ind, row=actual_row)
+            row_for_core[core_key] = actual_row
+            actual_row += 1
+
+        # Facts markers(animation row 對到 active subplot;沒被啟用的 indicator core facts 標主圖)
+        if layer_facts and facts_list:
+            facts_cloud.add_facts_to_kline(
+                fig,
+                facts_list,
+                row_map=row_for_core,
+                default_row=1,
+            )
+
+        # Height 隨 row 數動態調(避免 subplots 太擠)
+        total_rows = 1 + (1 if layer_volume else 0) + n_ind
+        fig_height = 400 + total_rows * 110
+        fig.update_layout(height=fig_height)
+        st.plotly_chart(fig, use_container_width=True)
+
+
+# ──────── Tab 2-6 stub(Phase C-4 ~ C-8 接) ────────
+
+with tab_chip:
+    st.info("💰 Chip Tab 留 Phase C-4(institutional / margin / foreign_holding / day_trading / shareholder)")
+
+with tab_fund:
+    st.info("📊 Fundamental Tab 留 Phase C-5(revenue / valuation / financial_statement)")
+
+with tab_env:
+    st.info("🌐 Environment Tab 留 Phase C-6(taiex / us_market / exchange_rate / fear_greed / market_margin / business_indicator)")
+
+with tab_neely:
+    st.info("🌳 Neely Wave Tab 留 Phase C-7(scenario picker + deep-dive)")
+
+with tab_facts:
+    if not facts_list:
+        st.warning(f"無 facts(stock={stock_id}, lookback={lookback_days})")
+    else:
+        # Filter sidebar(within tab)
+        all_cores = sorted({f.get("source_core") for f in facts_list if f.get("source_core")})
+        filt = st.multiselect("過濾 source_core(空 = 全部)", options=all_cores, default=[])
+        fig_scatter = facts_cloud.build_facts_scatter(
+            facts_list,
+            source_cores=filt or None,
+            title=f"{stock_id} Facts 散點雲(as_of {as_of_date}, lookback {lookback_days}d)",
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
 
 # ────────────────────────────────────────────────────────────
-# Indicator 最新值表
+# Raw debug(摺疊)
 # ────────────────────────────────────────────────────────────
 
-st.markdown("---")
-st.subheader("📈 各 Indicator Core 最新值")
-
-if not indicator_latest:
-    st.warning(f"{stock_id} 無 indicator_values 資料(可能 cores 還沒寫入或 stock 不在 backfill 範圍)")
-else:
-    indicator_rows = []
-    for key, ind in indicator_latest.items():
-        value = ind.get("value", {}) or {}
-        # series JSONB 的 indicator(macd / rsi 等)從 series 取最後一筆
-        latest_point = None
-        if isinstance(value.get("series"), list) and value["series"]:
-            latest_point = value["series"][-1]
-
-        indicator_rows.append({
-            "core@timeframe": key,
-            "value_date": ind.get("value_date"),
-            "series_len": len(value.get("series", [])) if isinstance(value.get("series"), list) else None,
-            "latest": str(latest_point)[:200] if latest_point else "(無 series)",
-        })
-
-    st.dataframe(indicator_rows, use_container_width=True)
-
-
-# ────────────────────────────────────────────────────────────
-# Structural snapshot(neely scenario forest 等)
-# ────────────────────────────────────────────────────────────
-
-st.markdown("---")
-st.subheader("🌳 Structural Snapshots(neely scenario forest)")
-
-if not structural:
-    st.warning(f"{stock_id} 無 structural snapshot")
-else:
-    for key, snap_row in structural.items():
-        with st.expander(f"{key} @ {snap_row.get('snapshot_date')}", expanded=False):
-            snapshot_data = snap_row.get("snapshot", {})
-            # neely_core 有 scenario_forest + diagnostics
-            forest = snapshot_data.get("scenario_forest", [])
-            diag = snapshot_data.get("diagnostics", {})
-
-            if forest:
-                st.metric("Forest size", len(forest))
-                # 印第 1 個 scenario
-                top = forest[0]
-                st.json(top, expanded=False)
-            if diag:
-                st.markdown("**Diagnostics**")
-                st.json(diag, expanded=False)
-
-
-# ────────────────────────────────────────────────────────────
-# 市場環境並排
-# ────────────────────────────────────────────────────────────
-
-if include_market and market:
-    st.markdown("---")
-    st.subheader("🌐 市場環境 facts 並排")
-
-    cols = st.columns(min(len(market), 3))
-    for i, (sid, market_facts) in enumerate(market.items()):
-        col = cols[i % len(cols)]
-        with col:
-            st.markdown(f"**{sid}** ({len(market_facts)} facts)")
-            if market_facts:
-                # 印最新 5 筆
-                top5 = market_facts[:5]
-                for f in top5:
-                    md = f.get("metadata", {}) or {}
-                    kind = md.get("kind", "")
-                    st.caption(f"`{f['fact_date']}` `{f['source_core']}` **{f['statement']}** {kind}")
-            else:
-                st.caption("(無 fact)")
-
-
-# ────────────────────────────────────────────────────────────
-# Raw JSON dump(debug)
-# ────────────────────────────────────────────────────────────
-
-with st.expander("🔧 Raw JSON snapshot(debug)"):
-    st.json(snapshot_dict, expanded=False)
+with st.expander("🔧 Raw snapshot dict(debug)"):
+    st.json(snapshot, expanded=False)
