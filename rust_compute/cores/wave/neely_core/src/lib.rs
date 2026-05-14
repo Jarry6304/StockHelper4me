@@ -104,7 +104,7 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.20.0",
+        "0.21.0",
         core_registry::CoreKind::Wave,
         "P0",
         "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints)",
@@ -174,8 +174,10 @@ impl WaveCore for NeelyCore {
         // 上提至頂層(對稱 insufficient_data,對齊 spec §8.1「失敗旗標」段)+ NeelyDiagnostics 內
         // 保留雙寫向下相容 + RuleId scope 限縮 Ch5/Ch9/Engineering 三組(其餘章節用 domain-specific
         // enums 取代,對齊 cores_overview §四 禁止抽象 / §十四 prematurely declare 不該做))。
+        // 0.20.0 → 0.21.0(P0 Gate v2 production 校準 — 2026-05-14 / 1264 stocks:
+        // forest_max_size 1000 → 200(觀察 forest_size max=37 / p99=16 / p95=10,留 5× p99 餘量))。
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.20.0"
+        "0.21.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -485,7 +487,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.20.0");
+        assert_eq!(core.version(), "0.21.0");
     }
 
     // -------------------------------------------------------------

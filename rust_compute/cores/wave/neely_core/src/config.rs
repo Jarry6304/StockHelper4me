@@ -31,7 +31,11 @@ pub struct NeelyEngineConfig {
     pub beam_width: usize,
 
     /// Forest 上限保護:超過此 size 用 BeamSearchFallback
-    /// r3 暫定 1000,P0 五檔實測後校準
+    ///
+    /// **校準歷史**:
+    /// - r3 暫定 1000(P0 Gate 校準前 placeholder)
+    /// - 2026-05-14 P0 Gate v2(1264 stocks production):forest max=37,p99=16,p95=10
+    ///   → 1000 過鬆,降至 **200**(留 5× p99 餘量 + 容受極端股票)
     pub forest_max_size: usize,
 
     /// 單檔 Compaction 逾時(秒)
@@ -50,7 +54,8 @@ impl Default for NeelyEngineConfig {
         Self {
             atr_period: 14,
             beam_width: 50,
-            forest_max_size: 1000,
+            // P0 Gate v2 production scale 校準後(1264 stocks):降 1000 → 200(留 5× p99 餘量)
+            forest_max_size: 200,
             compaction_timeout_secs: 60,
             overflow_strategy: OverflowStrategy::BeamSearchFallback { k: 100 },
             neutral_threshold_taiex: 0.5,
@@ -76,7 +81,7 @@ mod tests {
         let cfg = NeelyEngineConfig::default();
         assert_eq!(cfg.atr_period, 14);
         assert_eq!(cfg.beam_width, 50);
-        assert_eq!(cfg.forest_max_size, 1000);
+        assert_eq!(cfg.forest_max_size, 200); // P0 Gate v2 校準後(2026-05-14 production 1264 stocks max=37)
         assert_eq!(cfg.compaction_timeout_secs, 60);
         assert!((cfg.neutral_threshold_taiex - 0.5).abs() < 1e-9);
         match cfg.overflow_strategy {

@@ -6,8 +6,9 @@
 //   fast=12 / slow=26 / signal=9:Appel, Gerald (1979).
 //                                  "The Moving Average Convergence Divergence Method"
 //                                  原作者設計,12/26 對應 2 月/4 月 EMA(原始月線分析)
-//   MIN_PIVOT_DIST=20:對齊 spec §3.6「兩極值點距離 ≥ N=20」+ Murphy (1999) p.248
-//                      建議 20-60 intervals 的下界(原 fixed-20-bar window 已 P5 替換為 pivot-based)
+//   MIN_PIVOT_DIST=12:NEoWave 經驗值(2026-05-14 P0 Gate v4 校準後)。原 spec §3.6 預設 20
+//                      過於保守 → Divergence 0.27-0.33/yr 低於 Murphy 1-4/yr 下限 3× →
+//                      讓步至 12-bar 距離(spec §3.6「N」結構性條件 ≥ 2 × PIVOT_N = 6 仍滿足)
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -34,16 +35,26 @@ pub struct MacdParams {
 impl Default for MacdParams { fn default() -> Self { Self { fast: 12, slow: 26, signal: 9, timeframe: Timeframe::Daily } } }
 
 /// HistogramZeroCross 最小間距 — 防止 histogram 在 0 附近快速來回產生噪音。
-/// Production data 校準(2026-05-12): HistogramZeroCross 15.15/yr 🟠 → 目標 ≤ 12/yr 🟢。
-/// Verification: scripts/p2_calibration_data.sql §2 (macd_core / HistogramZeroCross)。
-/// 5-bar = 1 週,排除同一週內的 back-and-forth。短於 kd_core(10-bar)因 MACD histogram 本質波動更平滑。
-const MIN_ZERO_CROSS_SPACING: usize = 5;
+///
+/// **校準歷史**:
+/// - 2026-05-12 v1.32:從無 spacing → 5(目標 ≤ 12/yr)
+/// - 2026-05-14 P0 Gate v3(1264 stocks production):觀察 HistogramZeroCross 19.01/yr,
+///   仍 1.6× 超標 ≤ 12/yr 目標 → 升至 **8**(預期 ×0.625 降至 ~12/yr,落入目標範圍上沿)
+///
+/// Verification: docs/benchmarks/neely_p0_gate_results_v3_2026-05-14.md §N + scripts/p2_calibration_data.sql §2
+/// 8-bar ≈ 1.5 週,短於 kd_core(15-bar)因 MACD histogram 本質波動更平滑。
+const MIN_ZERO_CROSS_SPACING: usize = 8;
 
 /// GoldenCross / DeathCross 最小間距。
-/// Production data 校準(2026-05-12): GoldenCross 7.5/yr 🟢,但加間距防止快速 whipsaw。
-/// Verification: scripts/p2_calibration_data.sql §2 (macd_core / GoldenCross|DeathCross)。
-/// 10-bar = 2 週,與 kd_core MIN_KD_CROSS_SPACING 對齊(同屬 MACD-family cross events)。
-const MIN_MACD_CROSS_SPACING: usize = 10;
+///
+/// **校準歷史**:
+/// - 2026-05-12 v1.32:從無 spacing → 10(目標 5-7/yr,防止快速 whipsaw)
+/// - 2026-05-14 P0 Gate v3(1264 stocks production):觀察 GoldenCross 9.58/yr / DeathCross 9.42/yr,
+///   仍 1.4× 超標 5-7/yr 目標 → 升至 **15**(預期 ×0.66 降至 ~6.4/yr,落入目標範圍中段)
+///
+/// Verification: docs/benchmarks/neely_p0_gate_results_v3_2026-05-14.md §N + scripts/p2_calibration_data.sql §2
+/// 15-bar = 3 週,與 kd_core MIN_KD_CROSS_SPACING 對齊(同屬 MACD-family cross events)。
+const MIN_MACD_CROSS_SPACING: usize = 15;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MacdOutput {
@@ -185,8 +196,14 @@ fn detect_divergences(
     dates: &[NaiveDate],
 ) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
     const PIVOT_N: usize = 3;
-    // 對齊 spec §3.6:「兩個價格極值點之間時間距離 ≥ N 根 K 棒(預設 N=20)」。
-    const MIN_PIVOT_DIST: usize = 20;
+    // **校準歷史**:
+    // - 2026-05-12 v1.32 P5 algorithm rewrite:fixed-20-bar window → pivot-based,MIN=10
+    // - 2026-05-13 v1.33:10 → 20 對齊 spec §3.6 預設值
+    // - 2026-05-14 P0 Gate v4 production 1264 stocks:Divergence 0.27-0.33/yr 低於
+    //   Murphy (1999) p.248 預期 1-4/yr 下限 3× → 升 20 → **12** 讓步至 Murphy 下限
+    //   預期 events_per_stock_per_year × 2.5 → ~0.7-0.8/yr,接近 Murphy 1/yr 下限。
+    //   12 ≥ 2× PIVOT_N(=6),仍符 spec §3.6 結構性要求(N=12 為 NEoWave 經驗值)。
+    const MIN_PIVOT_DIST: usize = 12;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
     let mut out = Vec::new();
@@ -230,13 +247,13 @@ mod tests {
     }
     #[test]
     fn macd_spacing_constants() {
-        assert_eq!(MIN_ZERO_CROSS_SPACING, 5);
-        assert_eq!(MIN_MACD_CROSS_SPACING, 10);
+        assert_eq!(MIN_ZERO_CROSS_SPACING, 8);  // P0 Gate v3 校準 2026-05-14:5 → 8
+        assert_eq!(MIN_MACD_CROSS_SPACING, 15); // P0 Gate v3 校準 2026-05-14:10 → 15
     }
 
     #[test]
     fn macd_bearish_divergence_fires_once() {
-        // pivots placed ≥ 20 bars apart to satisfy MIN_PIVOT_DIST (spec §3.6 N=20)
+        // pivots placed ≥ 20 bars apart, well above MIN_PIVOT_DIST=12 (P0 Gate v4 校準後)
         let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];

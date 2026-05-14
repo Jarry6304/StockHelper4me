@@ -235,9 +235,14 @@ fn detect_divergences(
     dates: &[NaiveDate],
 ) -> Vec<(NaiveDate, bool, f64, f64, NaiveDate, f64)> {
     const PIVOT_N: usize = 3;        // Lucas & LeBeau: 3-bar swing confirmation
-    // 對齊 spec §3.6:「兩個價格極值點之間時間距離 ≥ N 根 K 棒(預設 N=20)」
-    // Murphy (1999) p.248 建議 20-60 intervals;此值對齊 spec 下限 + Murphy 範圍下界。
-    const MIN_PIVOT_DIST: usize = 20;
+    // **校準歷史**:
+    // - 2026-05-12 v1.32 P5 algorithm rewrite:fixed-20-bar window → pivot-based,MIN=10
+    // - 2026-05-13 v1.33:10 → 20 對齊 spec §3.6 預設值 + Murphy (1999) p.248 範圍下界
+    // - 2026-05-14 P0 Gate v4 production 1264 stocks:Divergence 0.66-0.71/yr 接近
+    //   Murphy 1-4/yr 下限,但 kd/macd 0.27-0.36/yr 過於保守 → 三 core 統一升 20 → **12**
+    //   預期 RSI Divergence × 2.5 → ~1.5-1.8/yr,落入 Murphy 中段。
+    //   12 ≥ 2× PIVOT_N(=6),仍符 spec §3.6 結構性要求(N=12 為 NEoWave 經驗值)。
+    const MIN_PIVOT_DIST: usize = 12;
     let n = prices.len();
     if n < PIVOT_N * 2 + MIN_PIVOT_DIST { return Vec::new(); }
     let mut out = Vec::new();
@@ -304,7 +309,7 @@ mod tests {
     #[test]
     fn bearish_divergence_pivot_fires_once() {
         // price makes higher swing high, indicator makes lower swing high → 1 bearish divergence
-        // pivots placed ≥ 20 bars apart to satisfy MIN_PIVOT_DIST (spec §3.6 N=20)
+        // pivots placed ≥ 20 bars apart, well above MIN_PIVOT_DIST=12 (P0 Gate v4 校準後)
         let n = 35usize;
         let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let dates = vec![d; n];
