@@ -1,6 +1,6 @@
 // exhaustive.rs — Compaction 窮舉模式(M3 PR-5 簡化版)
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §十一(Compaction 重新定位)。
+// 對齊 m3Spec/neely_core_architecture.md §十一(Compaction 重新定位)。
 //
 // 設計目標:
 //   - 純結構壓縮(§11.2)— 不選最優,窮舉所有合法 compression paths

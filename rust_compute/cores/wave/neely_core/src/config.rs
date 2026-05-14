@@ -1,5 +1,5 @@
 // NeelyCoreParams + NeelyEngineConfig + OverflowStrategy
-// 對齊 m2Spec/oldm2Spec/neely_core.md §六(2026-05-06 r2)。
+// 對齊 m3Spec/neely_core_architecture.md §六(2026-05-06 r2)。
 
 use fact_schema::Timeframe;
 use serde::Serialize;

@@ -1,7 +1,7 @@
 // facts.rs — Fact 產出規則
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §十五。
-// 從 NeelyCoreOutput 萃取機械式 Fact(禁主觀詞彙,m2Spec/oldm2Spec/cores_overview §6.1.1)。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §十五。
+// 從 NeelyCoreOutput 萃取機械式 Fact(禁主觀詞彙,m3Spec/cores_overview.md §6.1.1)。
 //
 // **M3 PR-6 階段**(先實踐以後再改)— produce_facts 基本實作:
 //   - 對每個 Scenario 產出 1 條結構性 Fact

@@ -1,6 +1,6 @@
 // complexity — Stage 7:Complexity Rule
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 7。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 7。
 // Neely Complexity Level(Item 8.1)— 篩選 Scenario 的複雜度層級。
 //
 // **M3 PR-4 階段**(先實踐以後再改):

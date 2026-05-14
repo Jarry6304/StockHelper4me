@@ -1,6 +1,6 @@
 // beam_search.rs — Forest 上限保護的 Fallback
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §十二(Forest 上限保護機制)。
+// 對齊 m3Spec/neely_core_architecture.md §十二(Forest 上限保護機制)。
 //
 // 觸發條件:
 //   - exhaustive Compaction 後 forest.len() > cfg.forest_max_size

@@ -1,6 +1,6 @@
 // Rule of Proportion:算 monowave 的 magnitude / time / 45° metrics
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §四(4.2 Item 1.2)/ §七 Stage 2。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §四(4.2 Item 1.2)/ §七 Stage 2。
 //
 // 本模組只計算 metrics(供 Stage 4 Validator R3 等規則消費),
 // 不做篩選 / 標註(篩選歸 Validator)。

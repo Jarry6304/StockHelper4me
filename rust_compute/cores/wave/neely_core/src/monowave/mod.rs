@@ -1,6 +1,6 @@
 // monowave — Stage 1+2:Monowave Detection + Classification
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 1-2。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 1-2。
 // Pipeline:
 //   bars → [Stage 1] detect_monowaves(Pure Close + ATR-filtered)→ Vec<Monowave>
 //        → [Stage 2] classify(Rule of Neutrality + Rule of Proportion)

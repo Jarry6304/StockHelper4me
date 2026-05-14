@@ -1,6 +1,6 @@
 // compaction — Stage 8:Compaction(窮舉 Forest)+ Forest 上限保護
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 8 / §十一 / §十二。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 8 / §十一 / §十二。
 //
 // 子模組:
 //   - exhaustive.rs   — 窮舉模式(預設,留 PR-5b 完整實作)

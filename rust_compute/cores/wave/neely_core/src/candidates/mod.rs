@@ -1,6 +1,6 @@
 // candidates — Stage 3:Bottom-up Candidate Generator
 //
-// 對齊 m2Spec/oldm2Spec/neely_core.md §三 / §七 Stage 3。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 3。
 // 子模組:
 //   - generator.rs:把 monowave 序列窮舉成所有可能的「波浪結構候選」
 //

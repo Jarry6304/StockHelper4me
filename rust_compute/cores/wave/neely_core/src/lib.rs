@@ -105,7 +105,7 @@ pub mod validator;
 pub use config::{NeelyCoreParams, NeelyEngineConfig, OverflowStrategy};
 pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 
-// inventory 註冊(對齊 m2Spec/oldm2Spec/cores_overview.md §五 Monolithic Binary 部署模型)
+// inventory 註冊(對齊 m3Spec/cores_overview.md §五 Monolithic Binary 部署模型)
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
