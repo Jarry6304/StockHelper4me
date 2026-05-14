@@ -35,7 +35,9 @@ pub struct CoreFilter {
 }
 
 impl CoreFilter {
-    /// 全 23 cores enabled(預設 / `--workflow` 未指定時)
+    /// 全 34 cores enabled(預設 / `--workflow` 未指定時)
+    /// 對應 P0 1 + P1 indicator 8 + P3 indicator 8 + P2 pattern 3 + P2 chip 5
+    /// + P2 fundamental 3 + P2 environment 6 = 34
     pub fn all_enabled() -> Self {
         Self { enabled: None }
     }
@@ -69,10 +71,10 @@ impl CoreFilter {
         }
     }
 
-    /// enabled cores 數量(僅供 log;None → 23 全跑)
+    /// enabled cores 數量(僅供 log;None → 34 全跑)
     pub fn count_summary(&self) -> String {
         match &self.enabled {
-            None => "all 23 cores enabled (no workflow toml)".to_string(),
+            None => "all 34 cores enabled (no workflow toml)".to_string(),
             Some(set) => format!("{} cores enabled via workflow toml", set.len()),
         }
     }

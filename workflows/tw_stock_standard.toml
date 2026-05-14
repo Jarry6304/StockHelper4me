@@ -15,8 +15,8 @@
 
 [workflow]
 name        = "tw_stock_standard"
-description = "台股完整 Workflow:P0 Wave + P1 Indicator(8)+ P2 Chip(5)+ P2 Fundamental(3)+ P2 Environment(6)"
-version     = "1.0.0"
+description = "台股完整 Workflow:P0 Wave(1)+ P1 Indicator(8)+ P3 Indicator(8)+ P2 Pattern(3)+ P2 Chip(5)+ P2 Fundamental(3)+ P2 Environment(6)= 34 cores"
+version     = "2.0.0"
 
 # stock 範圍(保留字 _index_taiex_ / _market_ / _global_ 由 environment cores 處理)
 # 註:本欄目前供 future use;tw_cores run-all 仍從 --stocks / --dirty / 全市場拉清單
@@ -88,6 +88,69 @@ priority = "P1"
 name     = "obv_core"
 enabled  = true
 priority = "P1"
+
+# ─────────────────────────────────────────────────────────
+# P3 Indicator Cores(8 個 — 動量 / 波動 / 量能補完)
+# ─────────────────────────────────────────────────────────
+[[cores]]
+name     = "williams_r_core"
+enabled  = true
+priority = "P3"
+
+[[cores]]
+name     = "cci_core"
+enabled  = true
+priority = "P3"
+
+[[cores]]
+name     = "keltner_core"
+enabled  = true
+priority = "P3"
+
+[[cores]]
+name     = "donchian_core"
+enabled  = true
+priority = "P3"
+
+[[cores]]
+name     = "vwap_core"
+enabled  = true
+priority = "P3"
+
+[[cores]]
+name     = "mfi_core"
+enabled  = true
+priority = "P3"
+
+[[cores]]
+name     = "coppock_core"
+enabled  = true
+priority = "P3"  # 建議走 monthly timeframe(Coppock 原意),tw_cores 預設 daily 為主
+
+[[cores]]
+name     = "ichimoku_core"
+enabled  = true
+priority = "P3"
+
+# ─────────────────────────────────────────────────────────
+# P2 Pattern Cores(3 個,結構性指標 — 寫入 structural_snapshots)
+# 對齊 m3Spec/indicator_cores_pattern.md(全 P2)。
+# trendline_core 是唯一允許消費 neely_core 的 documented_exception(§5.2 / §5.7)。
+# ─────────────────────────────────────────────────────────
+[[cores]]
+name     = "support_resistance_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "candlestick_pattern_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "trendline_core"
+enabled  = true
+priority = "P2"
 
 # ─────────────────────────────────────────────────────────
 # P2 Chip Cores(5 個)

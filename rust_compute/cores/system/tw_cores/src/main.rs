@@ -737,9 +737,11 @@ async fn run_stock_cores(
             );
             }
             // ---- P2 pattern cores(support_resistance / candlestick_pattern)— 共用 ohlcv ----
+            // 走 dispatch_structural(寫 structural_snapshots 而非 indicator_values,
+            // 對齊 m3Spec/indicator_cores_pattern.md §2.4)
             if filter.is_enabled("support_resistance_core") {
             summary.push(
-                dispatch_indicator(
+                dispatch_structural(
                     pool,
                     &support_resistance_core::SupportResistanceCore::new(),
                     &ohlcv,
@@ -751,7 +753,7 @@ async fn run_stock_cores(
             }
             if filter.is_enabled("candlestick_pattern_core") {
             summary.push(
-                dispatch_indicator(
+                dispatch_structural(
                     pool,
                     &candlestick_pattern_core::CandlestickPatternCore::new(),
                     &ohlcv,
@@ -762,6 +764,7 @@ async fn run_stock_cores(
             );
             }
             // ---- trendline_core(P2,唯一耦合例外)— 跑 neely_core 取 monowave_series 餵入 ----
+            // 同樣走 dispatch_structural(P2 pattern cores 寫 structural_snapshots)
             if filter.is_enabled("trendline_core") {
             let mut tl_neely_params = neely_core::NeelyCoreParams::default();
             tl_neely_params.timeframe = tf;
@@ -772,7 +775,7 @@ async fn run_stock_cores(
                         monowaves: neely_out.monowave_series.clone(),
                     };
                     summary.push(
-                        dispatch_indicator(
+                        dispatch_structural(
                             pool,
                             &trendline_core::TrendlineCore::new(),
                             &tl_input,
@@ -1080,6 +1083,89 @@ where
                             core = %core_name,
                             stock_id,
                             "write_indicator_value failed: {:#}",
+                            e
+                        ),
+                    }
+                }
+                match write_facts(pool, &facts).await {
+                    Ok(n) => fact_written = n,
+                    Err(e) => tracing::warn!(core = %core_name, "write_facts failed: {:#}", e),
+                }
+            }
+
+            CoreRunSummary {
+                core: core_name,
+                stock_id,
+                status: "ok".to_string(),
+                events: facts.len() as u64,
+                iv_written,
+                fact_written,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                error: None,
+            }
+        }
+        Err(e) => CoreRunSummary::err(&core_name, "", format!("compute failed: {:#}", e), start),
+    }
+}
+
+/// dispatch_structural — 走 IndicatorCore trait,但 Output 寫進 structural_snapshots
+/// 而非 indicator_values(對齊 m3Spec/indicator_cores_pattern.md §2.4)。
+///
+/// 用於 P2 pattern cores(support_resistance / candlestick_pattern / trendline)。
+/// Facts 同 dispatch_indicator 走 write_facts。
+async fn dispatch_structural<C>(
+    pool: &PgPool,
+    core: &C,
+    input: &C::Input,
+    params: C::Params,
+    write: bool,
+) -> CoreRunSummary
+where
+    C: IndicatorCore,
+{
+    let start = Instant::now();
+    let core_name = core.name().to_string();
+    let core_version = core.version().to_string();
+    let hash = params_hash(&params).unwrap_or_default();
+
+    match core.compute(input, params) {
+        Ok(output) => {
+            let facts = core.produce_facts(&output);
+            let snapshot_json = match serde_json::to_value(&output) {
+                Ok(v) => v,
+                Err(e) => {
+                    return CoreRunSummary::err(
+                        &core_name,
+                        "",
+                        format!("serialize output failed: {}", e),
+                        start,
+                    );
+                }
+            };
+            let (stock_id, snapshot_date, timeframe_str) = extract_indicator_meta(&snapshot_json);
+            let tf = parse_timeframe(&timeframe_str).unwrap_or(Timeframe::Daily);
+
+            let mut iv_written = 0u64; // 借用欄位記 snapshot 寫 1 row(對齊 dispatch_neely 慣例)
+            let mut fact_written = 0u64;
+            if write {
+                if !stock_id.is_empty() {
+                    match write_structural_snapshot(
+                        pool,
+                        &stock_id,
+                        snapshot_date,
+                        tf,
+                        &core_name,
+                        &core_version,
+                        &hash,
+                        &snapshot_json,
+                    )
+                    .await
+                    {
+                        Ok(()) => iv_written = 1,
+                        Err(e) => tracing::warn!(
+                            core = %core_name,
+                            stock_id,
+                            "write_structural_snapshot failed: {:#}",
                             e
                         ),
                     }
@@ -1418,7 +1504,15 @@ fn extract_indicator_meta(output_json: &serde_json::Value) -> (String, NaiveDate
         .and_then(|d| d.as_str())
         .map(String::from)
         .or_else(|| nested_last_date(output_json, "series_by_spec"))    // ma_core
-        .or_else(|| nested_last_date(output_json, "series_by_index"));  // taiex_core
+        .or_else(|| nested_last_date(output_json, "series_by_index"))   // taiex_core
+        // P2 pattern cores(support_resistance / candlestick_pattern / trendline)無 series array
+        // 但有 `generated_at: NaiveDate` 欄位作 last_date 來源(對齊 spec §4.4 / §5.5)
+        .or_else(|| {
+            output_json
+                .get("generated_at")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        });
     let last_date_str = last_date_str.as_deref();
 
     let last_date = last_date_str
