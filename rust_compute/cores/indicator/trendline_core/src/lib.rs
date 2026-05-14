@@ -48,13 +48,26 @@ impl Default for TrendlineParams {
         Self {
             timeframe: Timeframe::Daily,
             swing_source: SwingSource::NeelyMonowave,
-            min_pivots: 3,
+            // v1.34 Round 5 production calibration:全市場 737/yr/stock 嚴重噪音(60× spec 目標)
+            // 三管齊下:min_pivots 3→5 + min_slope_bars 10→30 + MAX_TRENDLINES_PER_STOCK cap
+            min_pivots: 5,
             touch_tolerance: 0.005,
-            min_slope_bars: 10,
+            min_slope_bars: 30,
             max_lookback_bars: 250,
         }
     }
 }
+
+/// Trendline 全市場每股上限(top-K by total touch_count)。
+///
+/// **v1.34 Round 5 production calibration**:全市場 1263 stocks 跑出
+/// 4423 facts/stock(737.2/yr,60× 嚴重噪音)。原 2-point combination O(n²)
+/// 候選暴增 + min_slope_bars=10 過短 → trendlines 過多。
+///
+/// 加 MAX_TRENDLINES_PER_STOCK 上限保留 touch_count 最多的 50 條(對齊 Schwager 1996
+/// 「真正有效的 trendlines 通常 < 20 條 per stock」放寬至 50 為 cap),預期
+/// 737 → ~50/yr/stock(15× 降量)。
+const MAX_TRENDLINES_PER_STOCK: usize = 50;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum TrendDirection {
@@ -302,6 +315,15 @@ fn find_trendlines(
             kept.push(tl);
         }
     }
+    // v1.34 Round 5:max cap top-K by total touch_count(對齊 Schwager 1996)
+    if kept.len() > MAX_TRENDLINES_PER_STOCK {
+        kept.sort_by(|a, b| {
+            let total_a = a.anchor_pivots.len() + a.additional_touches.len();
+            let total_b = b.anchor_pivots.len() + b.additional_touches.len();
+            total_b.cmp(&total_a)
+        });
+        kept.truncate(MAX_TRENDLINES_PER_STOCK);
+    }
     kept
 }
 
@@ -474,59 +496,47 @@ mod tests {
     }
 
     #[test]
-    fn three_collinear_lows_yields_support_trendline() {
+    fn five_collinear_lows_yields_support_trendline() {
+        // v1.34 Round 5:默認 min_pivots=5,構造 5 個 ascending support pivots
         let core = TrendlineCore::new();
-        // 50 個 bar,在 idx 10/25/40 處 close 為下方支撐
+        // 100 bar,5 個 pivot lows at i=10/30/50/70/90,間距 20(>= min_slope_bars=30 跨度)
+        // 上升斜率:price = 99.5 + 0.5 × (idx - 10) / 20,5 點共線
+        let idx_lows = [10usize, 30, 50, 70, 90];
+        let prices = [99.5f64, 100.0, 100.5, 101.0, 101.5];
         let mut bars: Vec<(f64, f64, f64, f64)> = Vec::new();
-        for i in 0..60 {
+        for i in 0..100 {
             let base = 100.0 + (i as f64 * 0.1);
-            // pivot lows at i=10/25/40,逐漸上升(ascending support trendline)
-            let bar = if i == 10 {
-                (100.0, 102.0, 99.0, 99.5)
-            } else if i == 25 {
-                (102.0, 104.0, 101.0, 101.0)
-            } else if i == 40 {
-                (104.0, 106.0, 103.0, 102.5)
+            let pivot_idx = idx_lows.iter().position(|&p| p == i);
+            let bar = if let Some(k) = pivot_idx {
+                let p = prices[k];
+                (p + 2.0, p + 2.5, p - 0.5, p)
             } else {
                 (base, base + 1.0, base - 1.0, base)
             };
             bars.push(bar);
         }
         let series = make_bars(bars);
-        // 構造 3 個 Monowave:Up → Down(end at i=10) → Up(end at i=25) → Down(end at i=40)
-        let monowaves = vec![
-            Monowave {
-                start_date: series.bars[0].date,
-                end_date: series.bars[10].date,
-                start_price: 100.0,
-                end_price: 99.5,
+        // 構造 5 個 Monowave:Down direction,end_price 在 pivot lows
+        let monowaves: Vec<Monowave> = idx_lows
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| Monowave {
+                start_date: series.bars[if k == 0 { 0 } else { idx_lows[k - 1] }].date,
+                end_date: series.bars[i].date,
+                start_price: if k == 0 { 100.0 } else { prices[k - 1] },
+                end_price: prices[k],
                 direction: MonowaveDirection::Down,
-            },
-            Monowave {
-                start_date: series.bars[10].date,
-                end_date: series.bars[25].date,
-                start_price: 99.5,
-                end_price: 101.0,
-                direction: MonowaveDirection::Down,
-            },
-            Monowave {
-                start_date: series.bars[25].date,
-                end_date: series.bars[40].date,
-                start_price: 101.0,
-                end_price: 102.5,
-                direction: MonowaveDirection::Down,
-            },
-        ];
+            })
+            .collect();
         let input = TrendlineInput {
             ohlcv: series,
             monowaves,
         };
         let out = core.compute(&input, TrendlineParams::default()).unwrap();
-        // 應該找到一條 ascending support trendline(三個 down end 共線上升)
-        // 注意:演算法上,3 個 Down direction 的 pivot 才會被視作 low pivot
+        // min_pivots=5 default + min_slope_bars=30 → 5 個 lows 滿足 2-point base 至少跨 30 bars
         assert!(
             out.trendlines.iter().any(|t| matches!(t.kind, TrendlineKind::Support)),
-            "should detect support trendline from 3 ascending lows"
+            "should detect support trendline from 5 ascending lows"
         );
     }
 }

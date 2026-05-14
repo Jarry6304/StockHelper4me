@@ -27,6 +27,17 @@ inventory::submit! {
     )
 }
 
+/// ZeroCross / Trough 最小間距(避免日線高頻噪音)。
+///
+/// **v1.34 Round 5 production calibration**:全市場 22.2 facts/yr/stock。
+/// Coppock spec §11.6 強調月線設計 — 但 tw_cores 預設 daily timeframe,日線下
+/// zero cross / trough 在震盪期密集觸發。
+///
+/// 加 MIN_EVENT_SPACING_BARS=30 對應月線 1 month(daily timeframe 下 ~30 trading days)。
+/// 預期 22 → ~10/yr(2× 降量),仍偏高反映 daily timeframe 不適用 Coppock 本質。
+/// 長期解:workflow toml 強制 coppock_core 走 monthly timeframe(P3-后续 follow-up)。
+const MIN_EVENT_SPACING_BARS: usize = 30;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CoppockParams {
     pub roc_long: usize,
@@ -149,35 +160,52 @@ impl IndicatorCore for CoppockCore {
 
         let mut events = Vec::new();
         let warmup = self.warmup_periods(&params).min(n);
+        // v1.34 Round 5:zero cross / trough 各自獨立 spacing 狀態
+        let mut last_zero_cross_idx: Option<usize> = None;
+        let mut last_trough_idx: Option<usize> = None;
         for i in warmup..n {
             let prev = series[i - 1].value;
             let cur = series[i].value;
-            // zero line cross
-            if prev <= 0.0 && cur > 0.0 {
-                events.push(CoppockEvent {
-                    date: series[i].date,
-                    kind: CoppockEventKind::ZeroCrossPositive,
-                    value: cur,
-                    metadata: json!({"event": "zero_cross_positive", "value": cur}),
-                });
-            } else if prev >= 0.0 && cur < 0.0 {
-                events.push(CoppockEvent {
-                    date: series[i].date,
-                    kind: CoppockEventKind::ZeroCrossNegative,
-                    value: cur,
-                    metadata: json!({"event": "zero_cross_negative", "value": cur}),
-                });
+            // zero line cross — 加 MIN_EVENT_SPACING_BARS
+            let cross_pos = prev <= 0.0 && cur > 0.0;
+            let cross_neg = prev >= 0.0 && cur < 0.0;
+            if (cross_pos || cross_neg)
+                && last_zero_cross_idx
+                    .is_none_or(|last| i >= last + MIN_EVENT_SPACING_BARS)
+            {
+                if cross_pos {
+                    events.push(CoppockEvent {
+                        date: series[i].date,
+                        kind: CoppockEventKind::ZeroCrossPositive,
+                        value: cur,
+                        metadata: json!({"event": "zero_cross_positive", "value": cur}),
+                    });
+                } else {
+                    events.push(CoppockEvent {
+                        date: series[i].date,
+                        kind: CoppockEventKind::ZeroCrossNegative,
+                        value: cur,
+                        metadata: json!({"event": "zero_cross_negative", "value": cur}),
+                    });
+                }
+                last_zero_cross_idx = Some(i);
             }
             // trough detection — local min(window 3)& value < 0
             if i + 1 < n {
                 let next = series[i + 1].value;
-                if cur < prev && cur < next && cur < 0.0 {
+                if cur < prev
+                    && cur < next
+                    && cur < 0.0
+                    && last_trough_idx
+                        .is_none_or(|last| i >= last + MIN_EVENT_SPACING_BARS)
+                {
                     events.push(CoppockEvent {
                         date: series[i].date,
                         kind: CoppockEventKind::Trough,
                         value: cur,
                         metadata: json!({"event": "trough", "value": cur}),
                     });
+                    last_trough_idx = Some(i);
                 }
             }
         }

@@ -26,6 +26,13 @@ inventory::submit! {
     )
 }
 
+/// Breakout/Breakdown 最小間距(避免噪音)。
+///
+/// **v1.34 Round 5 production calibration**:全市場 23.9 facts/yr/stock(2× 目標)。
+/// 突破後 close 在前 N-1 高 ±2% 來回會密集觸發 → 加 spacing 10 bars。
+/// 對齊 v1.32 慣例。預期 24 → ~12/yr。
+const MIN_BREAKOUT_SPACING: usize = 10;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DonchianParams {
     pub period: usize,
@@ -127,24 +134,33 @@ impl IndicatorCore for DonchianCore {
         }
 
         let mut events = Vec::new();
+        // v1.34 Round 5:Breakout spacing 狀態追蹤
+        let mut last_breakout_idx: Option<usize> = None;
         // 突破:close > 過去 N-1 天的最高 high(不含當天)— 對齊海龜系統「突破前 N 天高點」語意
         for i in p..n {
             let prev_window = &input.bars[i - p + 1..i]; // 過去 p-1 天(不含當天)
             let prev_high = prev_window.iter().map(|b| b.high).fold(f64::NEG_INFINITY, f64::max);
             let prev_low = prev_window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
             let close = input.bars[i].close;
-            if close > prev_high {
-                events.push(DonchianEvent {
-                    date: series[i].date,
-                    kind: DonchianEventKind::BreakoutUp,
-                    metadata: json!({"event": "donchian_breakout_up", "period": p, "close": close, "prev_high": prev_high}),
-                });
-            } else if close < prev_low {
-                events.push(DonchianEvent {
-                    date: series[i].date,
-                    kind: DonchianEventKind::Breakdown,
-                    metadata: json!({"event": "donchian_breakdown", "period": p, "close": close, "prev_low": prev_low}),
-                });
+            let breakout_up = close > prev_high;
+            let breakdown = close < prev_low;
+            if (breakout_up || breakdown)
+                && last_breakout_idx.is_none_or(|last| i >= last + MIN_BREAKOUT_SPACING)
+            {
+                if breakout_up {
+                    events.push(DonchianEvent {
+                        date: series[i].date,
+                        kind: DonchianEventKind::BreakoutUp,
+                        metadata: json!({"event": "donchian_breakout_up", "period": p, "close": close, "prev_high": prev_high}),
+                    });
+                } else {
+                    events.push(DonchianEvent {
+                        date: series[i].date,
+                        kind: DonchianEventKind::Breakdown,
+                        metadata: json!({"event": "donchian_breakdown", "period": p, "close": close, "prev_low": prev_low}),
+                    });
+                }
+                last_breakout_idx = Some(i);
             }
         }
 

@@ -794,6 +794,7 @@ async fn run_stock_cores(
             }
             }
             // ---- vwap_core(P3,需 anchor_date)— 預設用 series 第一個 bar 的日期 ----
+            // v1.34 Round 5:empty series(如 ETF 沒 Silver fwd 資料)silent skip 不算 error
             if filter.is_enabled("vwap_core") {
             let anchor = ohlcv.bars.first().map(|b| b.date);
             if let Some(anchor_date) = anchor {
@@ -810,12 +811,17 @@ async fn run_stock_cores(
                     .await,
                 );
             } else {
-                summary.push(loader_err_summary(
-                    "vwap_core",
-                    stock_id,
-                    "empty_series",
-                    &anyhow::anyhow!("ohlcv series 空,無法決定 vwap anchor_date"),
-                ));
+                // empty series → no work,記 status=skipped 不報 err
+                summary.push(CoreRunSummary {
+                    core: "vwap_core".to_string(),
+                    stock_id: stock_id.to_string(),
+                    status: "skipped".to_string(),
+                    events: 0,
+                    iv_written: 0,
+                    fact_written: 0,
+                    elapsed_ms: 0,
+                    error: Some("empty_series:no Silver data for stock".to_string()),
+                });
             }
             }
         }

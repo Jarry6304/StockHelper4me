@@ -30,6 +30,17 @@ inventory::submit! {
     )
 }
 
+/// 同一 PatternKind 連續 N 個交易日內只觸發一次(避免噪音放大)。
+///
+/// **v1.34 Round 5 production calibration**:全市場 1263 stocks 跑出
+/// 115.5 facts/yr/stock(10× 嚴重噪音)。Doji 在動盪期 / Bullish/Bearish Engulfing
+/// 在震盪區頻繁觸發 → spec §3.7「強訊號型態」失去信號價值。
+///
+/// 加 MIN_PATTERN_GAP_BARS = 10 — 同 pattern_kind 至少 10 個 bar 才能再次觸發,
+/// 對齊 v1.32 ma_core / kd_core MIN_X_CROSS_SPACING=10 慣例。
+/// 預期 115.5 → ~40-50/yr/stock(2.5× 降量),仍 > 12 但對 16 patterns 加總合理。
+const MIN_PATTERN_GAP_BARS: usize = 10;
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
 pub enum PatternKind {
     Doji,
@@ -432,10 +443,35 @@ impl IndicatorCore for CandlestickPatternCore {
             }
         }
 
+        // v1.34 Round 5:同 PatternKind MIN_PATTERN_GAP_BARS 後處理
+        // 對映 bar idx,後過濾(patterns Vec 已 date 順序 push,O(n) 即可)
+        let mut filtered: Vec<DetectedPattern> = Vec::with_capacity(patterns.len());
+        let mut last_idx_by_kind: std::collections::HashMap<PatternKind, usize> =
+            std::collections::HashMap::new();
+        let date_to_idx: std::collections::HashMap<NaiveDate, usize> = bars
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.date, i))
+            .collect();
+        for p in patterns {
+            let cur_idx = match date_to_idx.get(&p.date) {
+                Some(&v) => v,
+                None => continue,
+            };
+            let too_close = matches!(
+                last_idx_by_kind.get(&p.pattern_kind),
+                Some(&last) if cur_idx < last + MIN_PATTERN_GAP_BARS
+            );
+            if !too_close {
+                last_idx_by_kind.insert(p.pattern_kind, cur_idx);
+                filtered.push(p);
+            }
+        }
+
         Ok(CandlestickPatternOutput {
             stock_id: input.stock_id.clone(),
             timeframe: params.timeframe,
-            patterns,
+            patterns: filtered,
         })
     }
 

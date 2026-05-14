@@ -28,6 +28,13 @@ inventory::submit! {
 
 const CCI_CONST: f64 = 0.015;
 
+/// ZeroCross 最小間距(避免噪音放大)。
+///
+/// **v1.34 Round 5 production calibration**:全市場 51 facts/yr/stock(4× 目標)。
+/// ZeroCross 在震盪區密集穿越 → 對齊 v1.32 macd_core MIN_ZERO_CROSS_SPACING=5 + KD/MA
+/// cross 10 慣例,本 core 取 10 bars。預期 51 → ~15/yr(3× 降量)。
+const MIN_ZERO_CROSS_SPACING: usize = 10;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CciParams {
     pub period: usize,
@@ -140,6 +147,8 @@ impl IndicatorCore for CciCore {
         }
 
         let mut events = Vec::new();
+        // v1.34 Round 5:ZeroCross spacing 狀態追蹤(對齊 v1.32 慣例)
+        let mut last_zero_cross_idx: Option<usize> = None;
         for i in p..n {
             let cur = series[i].value;
             let prev = series[i - 1].value;
@@ -178,21 +187,29 @@ impl IndicatorCore for CciCore {
                 });
             }
 
-            // zero line cross
-            if prev <= 0.0 && cur > 0.0 {
-                events.push(CciEvent {
-                    date: series[i].date,
-                    kind: CciEventKind::ZeroCrossPositive,
-                    value: cur,
-                    metadata: json!({"event": "zero_cross_positive"}),
-                });
-            } else if prev >= 0.0 && cur < 0.0 {
-                events.push(CciEvent {
-                    date: series[i].date,
-                    kind: CciEventKind::ZeroCrossNegative,
-                    value: cur,
-                    metadata: json!({"event": "zero_cross_negative"}),
-                });
+            // zero line cross — v1.34 Round 5 加 MIN_ZERO_CROSS_SPACING
+            let cross_pos = prev <= 0.0 && cur > 0.0;
+            let cross_neg = prev >= 0.0 && cur < 0.0;
+            if (cross_pos || cross_neg)
+                && last_zero_cross_idx
+                    .is_none_or(|last| i >= last + MIN_ZERO_CROSS_SPACING)
+            {
+                if cross_pos {
+                    events.push(CciEvent {
+                        date: series[i].date,
+                        kind: CciEventKind::ZeroCrossPositive,
+                        value: cur,
+                        metadata: json!({"event": "zero_cross_positive"}),
+                    });
+                } else {
+                    events.push(CciEvent {
+                        date: series[i].date,
+                        kind: CciEventKind::ZeroCrossNegative,
+                        value: cur,
+                        metadata: json!({"event": "zero_cross_negative"}),
+                    });
+                }
+                last_zero_cross_idx = Some(i);
             }
         }
 

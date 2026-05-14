@@ -26,6 +26,11 @@ inventory::submit! {
 /// 連續處於超賣 / 超買區的最小天數,觸發 streak event
 const STREAK_MIN_DAYS: usize = 3;
 
+/// **v1.34 Round 5 production calibration**:全市場 23.8 facts/yr/stock(2× 目標)。
+/// Streak / Exit 4 種事件加總過頻 — 加 spacing,同方向 streak 連續兩次至少間隔 15 bars,
+/// 對齊「14-period 振盪需 ≥ 1 cycle 才合理」直觀。預期 24 → ~12/yr。
+const MIN_STREAK_FIRE_SPACING: usize = 15;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WilliamsRParams {
     pub period: usize,
@@ -145,6 +150,11 @@ impl IndicatorCore for WilliamsRCore {
         // streak / exit events
         let mut over_run = 0usize; // overbought (value > overbought = > -20)
         let mut under_run = 0usize; // oversold (value < oversold = < -80)
+        // v1.34 Round 5:每事件種類獨立 spacing 狀態,確保「兩次同 kind ≥ 15 bars」
+        let mut last_overbought_streak_idx: Option<usize> = None;
+        let mut last_overbought_exit_idx: Option<usize> = None;
+        let mut last_oversold_streak_idx: Option<usize> = None;
+        let mut last_oversold_exit_idx: Option<usize> = None;
         for i in p..n {
             let cur = series[i].value;
             let prev = series[i - 1].value;
@@ -152,22 +162,31 @@ impl IndicatorCore for WilliamsRCore {
             // overbought streak
             if cur > params.overbought {
                 over_run += 1;
-                if over_run == STREAK_MIN_DAYS {
+                if over_run == STREAK_MIN_DAYS
+                    && last_overbought_streak_idx
+                        .is_none_or(|last| i >= last + MIN_STREAK_FIRE_SPACING)
+                {
                     events.push(WilliamsREvent {
                         date: series[i].date,
                         kind: WilliamsREventKind::OverboughtStreak,
                         value: cur,
                         metadata: json!({"event": "overbought_streak", "days": STREAK_MIN_DAYS, "threshold": params.overbought}),
                     });
+                    last_overbought_streak_idx = Some(i);
                 }
             } else {
-                if over_run >= STREAK_MIN_DAYS && prev > params.overbought {
+                if over_run >= STREAK_MIN_DAYS
+                    && prev > params.overbought
+                    && last_overbought_exit_idx
+                        .is_none_or(|last| i >= last + MIN_STREAK_FIRE_SPACING)
+                {
                     events.push(WilliamsREvent {
                         date: series[i].date,
                         kind: WilliamsREventKind::OverboughtExit,
                         value: cur,
                         metadata: json!({"event": "overbought_exit", "threshold": params.overbought}),
                     });
+                    last_overbought_exit_idx = Some(i);
                 }
                 over_run = 0;
             }
@@ -175,22 +194,31 @@ impl IndicatorCore for WilliamsRCore {
             // oversold streak
             if cur < params.oversold {
                 under_run += 1;
-                if under_run == STREAK_MIN_DAYS {
+                if under_run == STREAK_MIN_DAYS
+                    && last_oversold_streak_idx
+                        .is_none_or(|last| i >= last + MIN_STREAK_FIRE_SPACING)
+                {
                     events.push(WilliamsREvent {
                         date: series[i].date,
                         kind: WilliamsREventKind::OversoldStreak,
                         value: cur,
                         metadata: json!({"event": "oversold_streak", "days": STREAK_MIN_DAYS, "threshold": params.oversold}),
                     });
+                    last_oversold_streak_idx = Some(i);
                 }
             } else {
-                if under_run >= STREAK_MIN_DAYS && prev < params.oversold {
+                if under_run >= STREAK_MIN_DAYS
+                    && prev < params.oversold
+                    && last_oversold_exit_idx
+                        .is_none_or(|last| i >= last + MIN_STREAK_FIRE_SPACING)
+                {
                     events.push(WilliamsREvent {
                         date: series[i].date,
                         kind: WilliamsREventKind::OversoldExit,
                         value: cur,
                         metadata: json!({"event": "oversold_exit", "threshold": params.oversold}),
                     });
+                    last_oversold_exit_idx = Some(i);
                 }
                 under_run = 0;
             }

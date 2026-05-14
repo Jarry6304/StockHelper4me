@@ -28,6 +28,13 @@ inventory::submit! {
     )
 }
 
+/// TK Cross 最小間距(避免噪音放大)。
+///
+/// **v1.34 Round 5 production calibration**:全市場 27.9 facts/yr/stock(2× 目標)。
+/// Tenkan/Kijun cross 在震盪期密集穿越 → 對齊 v1.32 ma/kd cross 10 慣例。
+/// 預期 28 → ~13/yr。
+const MIN_TK_CROSS_SPACING: usize = 10;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct IchimokuParams {
     pub tenkan_period: usize,
@@ -170,22 +177,31 @@ impl IndicatorCore for IchimokuCore {
 
         let mut events = Vec::new();
         let warmup = self.warmup_periods(&params).min(n);
+        // v1.34 Round 5:TK Cross spacing 狀態追蹤
+        let mut last_tk_cross_idx: Option<usize> = None;
         for i in warmup..n {
             let p = &series[i - 1];
             let c = &series[i];
-            // tenkan / kijun cross
-            if p.tenkan <= p.kijun && c.tenkan > c.kijun {
-                events.push(IchimokuEvent {
-                    date: c.date,
-                    kind: IchimokuEventKind::TkBullishCross,
-                    metadata: json!({"event": "tk_bullish_cross", "tenkan": c.tenkan, "kijun": c.kijun}),
-                });
-            } else if p.tenkan >= p.kijun && c.tenkan < c.kijun {
-                events.push(IchimokuEvent {
-                    date: c.date,
-                    kind: IchimokuEventKind::TkBearishCross,
-                    metadata: json!({"event": "tk_bearish_cross", "tenkan": c.tenkan, "kijun": c.kijun}),
-                });
+            // tenkan / kijun cross — v1.34 Round 5 加 MIN_TK_CROSS_SPACING
+            let cross_up = p.tenkan <= p.kijun && c.tenkan > c.kijun;
+            let cross_dn = p.tenkan >= p.kijun && c.tenkan < c.kijun;
+            if (cross_up || cross_dn)
+                && last_tk_cross_idx.is_none_or(|last| i >= last + MIN_TK_CROSS_SPACING)
+            {
+                if cross_up {
+                    events.push(IchimokuEvent {
+                        date: c.date,
+                        kind: IchimokuEventKind::TkBullishCross,
+                        metadata: json!({"event": "tk_bullish_cross", "tenkan": c.tenkan, "kijun": c.kijun}),
+                    });
+                } else {
+                    events.push(IchimokuEvent {
+                        date: c.date,
+                        kind: IchimokuEventKind::TkBearishCross,
+                        metadata: json!({"event": "tk_bearish_cross", "tenkan": c.tenkan, "kijun": c.kijun}),
+                    });
+                }
+                last_tk_cross_idx = Some(i);
             }
             // cloud breakout — close 從雲內 / 雲下 突破到雲上(對齊 §8.5 "cloud_breakout")
             let close = input.bars[i].close;
