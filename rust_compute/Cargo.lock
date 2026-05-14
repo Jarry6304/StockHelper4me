@@ -228,6 +228,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "candlestick_pattern_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2203,6 +2217,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "support_resistance_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2447,6 +2475,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "trendline_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "neely_core",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "tw_cores"
 version = "0.3.0"
 dependencies = [
@@ -2455,6 +2498,7 @@ dependencies = [
  "atr_core",
  "bollinger_core",
  "business_indicator_core",
+ "candlestick_pattern_core",
  "cci_core",
  "chip_loader",
  "chrono",
@@ -2490,11 +2534,13 @@ dependencies = [
  "serde_json",
  "shareholder_core",
  "sqlx",
+ "support_resistance_core",
  "taiex_core",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "trendline_core",
  "us_market_core",
  "valuation_core",
  "vwap_core",

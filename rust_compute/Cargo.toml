@@ -28,6 +28,9 @@ members = [
     "cores/indicator/mfi_core",
     "cores/indicator/coppock_core",
     "cores/indicator/ichimoku_core",
+    "cores/indicator/support_resistance_core",
+    "cores/indicator/candlestick_pattern_core",
+    "cores/indicator/trendline_core",
     # Chip Cores(P2 — 5 個)
     "cores/chip/day_trading_core",
     "cores/chip/institutional_core",

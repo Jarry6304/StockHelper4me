@@ -38,6 +38,11 @@ mfi_core          = { path = "../../indicator/mfi_core" }
 coppock_core      = { path = "../../indicator/coppock_core" }
 ichimoku_core     = { path = "../../indicator/ichimoku_core" }
 
+# Pattern Cores(P2 — 3,結構性指標)
+support_resistance_core     = { path = "../../indicator/support_resistance_core" }
+candlestick_pattern_core    = { path = "../../indicator/candlestick_pattern_core" }
+trendline_core              = { path = "../../indicator/trendline_core" }
+
 # Chip Cores(P2 — 5)
 day_trading_core      = { path = "../../chip/day_trading_core" }
 institutional_core    = { path = "../../chip/institutional_core" }

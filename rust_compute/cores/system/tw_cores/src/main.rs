@@ -179,6 +179,9 @@ fn list_cores() -> Result<()> {
     let _ = mfi_core::MfiCore::new();
     let _ = coppock_core::CoppockCore::new();
     let _ = ichimoku_core::IchimokuCore::new();
+    let _ = support_resistance_core::SupportResistanceCore::new();
+    let _ = candlestick_pattern_core::CandlestickPatternCore::new();
+    let _ = trendline_core::TrendlineCore::new();
     let _ = day_trading_core::DayTradingCore::new();
     let _ = institutional_core::InstitutionalCore::new();
     let _ = margin_core::MarginCore::new();
@@ -531,13 +534,14 @@ async fn run_stock_cores(
     }
     }
 
-    // ---- 2-9. Indicator(P1 8 + P3 8 = 16)— 共用 OhlcvSeries ----
-    // 16 indicator cores 共用 ohlcv,若全 disabled 可整段 skip(節省 1 個 query)
+    // ---- 2-9. Indicator(P1 8 + P3 8 + P2 pattern 3 = 19)— 共用 OhlcvSeries ----
+    // 19 cores 共用 ohlcv,若全 disabled 可整段 skip(節省 1 個 query)
     let any_indicator_enabled = [
         "macd_core", "rsi_core", "kd_core", "adx_core",
         "ma_core", "bollinger_core", "atr_core", "obv_core",
         "williams_r_core", "cci_core", "keltner_core", "donchian_core",
         "vwap_core", "mfi_core", "coppock_core", "ichimoku_core",
+        "support_resistance_core", "candlestick_pattern_core", "trendline_core",
     ].iter().any(|n| filter.is_enabled(n));
     if any_indicator_enabled {
     let ohlcv_result = match tf {
@@ -732,6 +736,60 @@ async fn run_stock_cores(
                 .await,
             );
             }
+            // ---- P2 pattern cores(support_resistance / candlestick_pattern)— 共用 ohlcv ----
+            if filter.is_enabled("support_resistance_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &support_resistance_core::SupportResistanceCore::new(),
+                    &ohlcv,
+                    support_resistance_core::SupportResistanceParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("candlestick_pattern_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &candlestick_pattern_core::CandlestickPatternCore::new(),
+                    &ohlcv,
+                    candlestick_pattern_core::CandlestickPatternParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            // ---- trendline_core(P2,唯一耦合例外)— 跑 neely_core 取 monowave_series 餵入 ----
+            if filter.is_enabled("trendline_core") {
+            let mut tl_neely_params = neely_core::NeelyCoreParams::default();
+            tl_neely_params.timeframe = tf;
+            match neely_core::NeelyCore::new().compute(&ohlcv, tl_neely_params) {
+                Ok(neely_out) => {
+                    let tl_input = trendline_core::TrendlineInput {
+                        ohlcv: ohlcv.clone(),
+                        monowaves: neely_out.monowave_series.clone(),
+                    };
+                    summary.push(
+                        dispatch_indicator(
+                            pool,
+                            &trendline_core::TrendlineCore::new(),
+                            &tl_input,
+                            trendline_core::TrendlineParams::default(),
+                            write,
+                        )
+                        .await,
+                    );
+                }
+                Err(e) => summary.push(loader_err_summary(
+                    "trendline_core",
+                    stock_id,
+                    "neely_monowave",
+                    &e,
+                )),
+            }
+            }
             // ---- vwap_core(P3,需 anchor_date)— 預設用 series 第一個 bar 的日期 ----
             if filter.is_enabled("vwap_core") {
             let anchor = ohlcv.bars.first().map(|b| b.date);
@@ -776,6 +834,9 @@ async fn run_stock_cores(
                 "mfi_core",
                 "coppock_core",
                 "ichimoku_core",
+                "support_resistance_core",
+                "candlestick_pattern_core",
+                "trendline_core",
             ] {
                 if filter.is_enabled(name) {
                     summary.push(loader_err_summary(name, stock_id, "load_daily", &e));
