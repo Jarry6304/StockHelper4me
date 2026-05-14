@@ -126,6 +126,38 @@ def fetch_indicator_latest(
         return cur.fetchall()
 
 
+def fetch_ohlc(
+    conn,
+    *,
+    stock_id: str,
+    as_of,
+    lookback_days: int,
+) -> list[dict[str, Any]]:
+    """從 price_daily_fwd 撈 OHLCV(供 dashboard K-line 用)。
+
+    Args:
+        stock_id: 股票代號(支援保留字 _index_taiex_ 等)
+        as_of: 上界(包含)
+        lookback_days: 期間天數
+
+    Returns:
+        list of dict {date, open, high, low, close, volume}, ORDER BY date ASC
+    """
+    from datetime import timedelta
+
+    start = as_of - timedelta(days=lookback_days)
+    sql = """
+        SELECT date, open, high, low, close, volume
+        FROM price_daily_fwd
+        WHERE market = 'TW' AND stock_id = %s
+          AND date BETWEEN %s AND %s
+        ORDER BY date ASC
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, [stock_id, start, as_of])
+        return cur.fetchall()
+
+
 def fetch_structural_latest(
     conn,
     *,

@@ -17,6 +17,7 @@ from typing import Any
 from agg._db import (
     fetch_facts,
     fetch_indicator_latest,
+    fetch_ohlc,
     fetch_structural_latest,
     get_connection,
 )
@@ -188,6 +189,49 @@ def _indicator_key(core: str, timeframe: str) -> str:
 # ────────────────────────────────────────────────────────────
 # Convenience helpers
 # ────────────────────────────────────────────────────────────
+
+def as_of_with_ohlc(
+    stock_id: str,
+    as_of_date: date,
+    *,
+    cores: list[str] | None = None,
+    lookback_days: int = 90,
+    include_market: bool = True,
+    timeframes: list[str] | None = None,
+    database_url: str | None = None,
+    conn=None,
+) -> tuple[AsOfSnapshot, list[dict[str, Any]]]:
+    """組合 as_of() + fetch_ohlc(),dashboards 一次撈完所需資料。
+
+    舊 as_of() 簽章不動;本函式只是便利 wrapper。
+
+    Returns:
+        (snapshot, ohlc_rows)
+    """
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_connection(database_url)
+    try:
+        snapshot = as_of(
+            stock_id,
+            as_of_date,
+            cores=cores,
+            lookback_days=lookback_days,
+            include_market=include_market,
+            timeframes=timeframes,
+            conn=conn,
+        )
+        ohlc = fetch_ohlc(
+            conn,
+            stock_id=stock_id,
+            as_of=as_of_date,
+            lookback_days=lookback_days,
+        )
+        return snapshot, ohlc
+    finally:
+        if owns_conn:
+            conn.close()
+
 
 def find_facts_today(
     today: date,
