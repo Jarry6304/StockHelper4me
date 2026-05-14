@@ -28,12 +28,16 @@ inventory::submit! {
 
 const CCI_CONST: f64 = 0.015;
 
-/// ZeroCross 最小間距(避免噪音放大)。
+/// ZeroCross / Extreme / Overbought/Oversold entry 最小間距(避免噪音放大)。
 ///
-/// **v1.34 Round 5 production calibration**:全市場 51 facts/yr/stock(4× 目標)。
-/// ZeroCross 在震盪區密集穿越 → 對齊 v1.32 macd_core MIN_ZERO_CROSS_SPACING=5 + KD/MA
-/// cross 10 慣例,本 core 取 10 bars。預期 51 → ~15/yr(3× 降量)。
-const MIN_ZERO_CROSS_SPACING: usize = 10;
+/// **v1.34 Round 5**:加 ZeroCross spacing=10 → 51 → 38.7/yr(24% down)仍 3× 目標。
+///
+/// **v1.34 Round 6**:擴展同 spacing=10 到所有 4 種 edge events
+/// (ExtremeHigh/Low + OverboughtEntry/OversoldEntry)。各 event 種類獨立 spacing。
+/// 預期 38.7 → ~15/yr。
+const MIN_EVENT_SPACING: usize = 10;
+/// 為向後相容保留別名(其他 const 引用)
+const MIN_ZERO_CROSS_SPACING: usize = MIN_EVENT_SPACING;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CciParams {
@@ -147,44 +151,67 @@ impl IndicatorCore for CciCore {
         }
 
         let mut events = Vec::new();
-        // v1.34 Round 5:ZeroCross spacing 狀態追蹤(對齊 v1.32 慣例)
+        // v1.34 Round 5 ZeroCross + Round 6 全 4 種 edge events 各自 spacing 狀態
         let mut last_zero_cross_idx: Option<usize> = None;
+        let mut last_extreme_high_idx: Option<usize> = None;
+        let mut last_extreme_low_idx: Option<usize> = None;
+        let mut last_overbought_entry_idx: Option<usize> = None;
+        let mut last_oversold_entry_idx: Option<usize> = None;
         for i in p..n {
             let cur = series[i].value;
             let prev = series[i - 1].value;
 
             // extreme zone:從非極值區間進入極值區間才觸發(edge trigger,對齊 P2 設計)
-            if cur > params.extreme_high && prev <= params.extreme_high {
+            // v1.34 Round 6 加 MIN_EVENT_SPACING
+            if cur > params.extreme_high
+                && prev <= params.extreme_high
+                && last_extreme_high_idx.is_none_or(|last| i >= last + MIN_EVENT_SPACING)
+            {
                 events.push(CciEvent {
                     date: series[i].date,
                     kind: CciEventKind::ExtremeHigh,
                     value: cur,
                     metadata: json!({"event": "extreme_high", "value": cur, "threshold": params.extreme_high}),
                 });
-            } else if cur < params.extreme_low && prev >= params.extreme_low {
+                last_extreme_high_idx = Some(i);
+            } else if cur < params.extreme_low
+                && prev >= params.extreme_low
+                && last_extreme_low_idx.is_none_or(|last| i >= last + MIN_EVENT_SPACING)
+            {
                 events.push(CciEvent {
                     date: series[i].date,
                     kind: CciEventKind::ExtremeLow,
                     value: cur,
                     metadata: json!({"event": "extreme_low", "value": cur, "threshold": params.extreme_low}),
                 });
+                last_extreme_low_idx = Some(i);
             }
 
-            // overbought / oversold entry(edge trigger)
-            if cur > params.overbought && prev <= params.overbought {
+            // overbought / oversold entry(edge trigger)— v1.34 Round 6 加 MIN_EVENT_SPACING
+            if cur > params.overbought
+                && prev <= params.overbought
+                && last_overbought_entry_idx
+                    .is_none_or(|last| i >= last + MIN_EVENT_SPACING)
+            {
                 events.push(CciEvent {
                     date: series[i].date,
                     kind: CciEventKind::OverboughtEntry,
                     value: cur,
                     metadata: json!({"event": "overbought_entry", "threshold": params.overbought}),
                 });
-            } else if cur < params.oversold && prev >= params.oversold {
+                last_overbought_entry_idx = Some(i);
+            } else if cur < params.oversold
+                && prev >= params.oversold
+                && last_oversold_entry_idx
+                    .is_none_or(|last| i >= last + MIN_EVENT_SPACING)
+            {
                 events.push(CciEvent {
                     date: series[i].date,
                     kind: CciEventKind::OversoldEntry,
                     value: cur,
                     metadata: json!({"event": "oversold_entry", "threshold": params.oversold}),
                 });
+                last_oversold_entry_idx = Some(i);
             }
 
             // zero line cross — v1.34 Round 5 加 MIN_ZERO_CROSS_SPACING
