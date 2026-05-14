@@ -36,6 +36,7 @@ use crate::monowave::ClassifiedMonowave;
 use crate::validator::ValidationReport;
 
 pub mod flat_classifier;
+pub mod structural_facts;
 
 /// Stage 5 結果:Classifier 給 candidate 命名 pattern + 組裝成 Scenario(待 Stage 8 進 Forest)。
 ///
@@ -79,6 +80,18 @@ pub fn classify(
     // Phase 15:Scenario 群 2 fields 從現有 pipeline output 萃取
     let monowave_structure_labels = build_monowave_structure_labels(candidate, classified);
     let triplexity_detected = detect_triplexity(&pattern_type);
+
+    // Phase 17:StructuralFacts 4 sub-fields(classify-time,有 candidate + classified + report)
+    let structural_facts = StructuralFacts {
+        fibonacci_alignment: structural_facts::fibonacci_alignment(candidate, classified),
+        alternation: structural_facts::alternation(report),
+        time_relationship: structural_facts::time_relationship(candidate, classified),
+        overlap_pattern: structural_facts::overlap_pattern(candidate, classified),
+        // 3 個 sub-fields 留 lib.rs::compute Stage 7.5 後填(需 bars / advisory_findings)
+        channeling: None,
+        volume_alignment: None,
+        gap_count: 0,
+    };
     // round_state / pattern_isolation_anchors classifier 階段預設 Round1 / 空 vec —
     // Stage 8 (three_rounds::apply) 之後由 lib.rs::compute 套 post-classifier 寫入(類似
     // power_rating::apply_to_forest 模式)。
@@ -105,7 +118,7 @@ pub fn classify(
         deferred_rules_count: report.deferred.len(),
         invalidation_triggers: Vec::<Trigger>::new(), // Stage 10c triggers 補
         expected_fib_zones: Vec::<FibZone>::new(),    // Stage 10b Fibonacci 補
-        structural_facts: StructuralFacts::default(),  // Phase 17 補 7 sub-fields
+        structural_facts,                              // Phase 17:4 sub-fields filled,3 留 lib.rs
         advisory_findings: Vec::new(),
         in_triangle_context: false,
         awaiting_l_label: false,                       // Stage 8 three_rounds 後填

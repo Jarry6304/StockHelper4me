@@ -3,7 +3,7 @@
 // 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
 //       + m3Spec/cores_overview.md r4
 //
-// 已實作(Phase 16 / v0.25.0 — 2026-05-14):
+// 已實作(Phase 17 / v0.26.0 — 2026-05-14):
 //   - struct / enum 合約(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
 //   - WaveCore trait + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
 //   - **RuleId 章節編碼**(architecture §9.3)限縮 Ch5_* / Ch9_* / Engineering_* 三組
@@ -114,10 +114,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.25.0",
+        "0.26.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement + post_behavior 8-variant + Scenario 群 2 fields + FlatKind 7-variant + RunningCorrection)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement + post_behavior 8-variant + Scenario 群 2 fields + FlatKind 7-variant + RunningCorrection + StructuralFacts 7-fill)",
     )
 }
 
@@ -216,8 +216,20 @@ impl WaveCore for NeelyCore {
         // Zigzag Single fallback);power_rating/table.rs 7-variant + RunningCorrection 對應 PowerRating;
         // post_behavior.rs Flat 7-variant + RunningCorrection 對應 PostBehavior;
         // facts/post_validator/reverse_logic match arm 補 RunningCorrection branch)
+        // 0.25.0 → 0.26.0(Phase 17 PR / StructuralFacts 7 sub-fields 全填 — 2026-05-14:
+        // 新建 classifier/structural_facts.rs 提供 7 個 fns —
+        // fibonacci_alignment(對 NEELY_FIB_RATIOS ±4% 比對) /
+        // alternation(從 ValidationReport 抽 Ch5_Alternation 結果) /
+        // time_relationship(從 monowave duration_bars label) /
+        // overlap_pattern(從 W1/W4 price range 比對) /
+        // channeling(從 advisory_findings AdvisorySeverity::Strong|Warning 抽) /
+        // gap_count(bars[i].open != bars[i-1].close 計數) /
+        // volume_alignment(bars volume 填充率 ≥ 50%);
+        // 4 個 classify-time(在 classifier::classify),3 個 post-Stage 7.5
+        // (在 lib.rs::compute Stage 7.5 advanced_rules 後)
+        // 對齊 spec §StructuralFacts 7 sub-fields 全填)
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.25.0"
+        "0.26.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -330,6 +342,22 @@ impl WaveCore for NeelyCore {
         //    諮詢性 stage — 寫 AdvisoryFinding 進 scenario.advisory_findings,不過濾 scenarios
         let stage_7_5_start = Instant::now();
         advanced_rules::run(&mut scenarios, &classified);
+        // Phase 17:StructuralFacts 3 sub-fields(post-Stage 7.5,需 advisory_findings + bars)
+        for scenario in scenarios.iter_mut() {
+            scenario.structural_facts.channeling =
+                classifier::structural_facts::channeling(&scenario.advisory_findings);
+            scenario.structural_facts.gap_count = classifier::structural_facts::gap_count(
+                scenario.wave_tree.start,
+                scenario.wave_tree.end,
+                &input.bars,
+            );
+            scenario.structural_facts.volume_alignment =
+                classifier::structural_facts::volume_alignment(
+                    scenario.wave_tree.start,
+                    scenario.wave_tree.end,
+                    &input.bars,
+                );
+        }
         stage_elapsed.insert(
             "stage_7_5_advanced_rules".to_string(),
             stage_7_5_start.elapsed().as_millis() as u64,
@@ -569,7 +597,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.25.0");
+        assert_eq!(core.version(), "0.26.0");
     }
 
     // -------------------------------------------------------------
