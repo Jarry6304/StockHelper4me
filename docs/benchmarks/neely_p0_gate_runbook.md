@@ -141,6 +141,54 @@ neely_core 版本:0.19.0
 - 修法:確認 P0 Gate 股票都有至少 2 年 daily 資料(對齊 §13.1 warmup_periods)
 - 或降 `warmup_periods` 預設(spec §13 留校準空間)
 
+### 6.1.1 某檔股票 `snapshot_date = 1900-01-01` / `monowave_count = 0`
+
+**症狀**:`tw_cores run --stock-id <X>` 跑完但 forest 全空。
+**根因**:Silver `price_daily_fwd` 對該股票完全沒資料(circular bootstrap miss)。
+Rust Phase 4 `resolve_stock_ids` 拉的是 `price_daily_fwd WHERE is_dirty=TRUE` —
+但若該 stock 從未進過 `price_daily_fwd`,dirty queue 永遠不會選到 → Phase 4 never
+runs → Silver 永遠空。
+
+**Diagnostic**:
+
+```powershell
+$STOCK = "6547"   # 改成有問題的股票
+
+# 1. Bronze 端是否有資料?
+psql $env:DATABASE_URL -c @"
+SELECT '$STOCK' AS stock_id,
+       (SELECT COUNT(*) FROM price_daily WHERE stock_id = '$STOCK') AS bronze_rows,
+       (SELECT MIN(date) FROM price_daily WHERE stock_id = '$STOCK') AS bronze_first,
+       (SELECT MAX(date) FROM price_daily WHERE stock_id = '$STOCK') AS bronze_last,
+       (SELECT COUNT(*) FROM price_daily_fwd WHERE stock_id = '$STOCK') AS silver_rows
+"@
+```
+
+預期診斷:
+- `bronze_rows > 0` AND `silver_rows = 0` → 確認 circular bootstrap miss
+- `bronze_rows = 0` → Bronze 也沒料,需先補 Bronze backfill(`python src/main.py
+  backfill --phases 3 --stocks $STOCK`)
+
+**Bootstrap fix**(對 single stock 顯式跑 Phase 4):
+
+```powershell
+# 顯式對 6547 跑 Rust Phase 4 後復權(--stocks 旁路 dirty queue,直接讀 Bronze)
+.\rust_compute\target\release\tw_stock_compute.exe --stocks $STOCK
+
+# 確認 silver 有資料了
+psql $env:DATABASE_URL -c "SELECT COUNT(*), MIN(date), MAX(date) FROM price_daily_fwd WHERE stock_id = '$STOCK'"
+
+# 重跑 tw_cores 對該股寫 snapshot
+.\rust_compute\target\release\tw_cores.exe run --stock-id $STOCK --write
+
+# 再跑 P0 Gate §0-§5 query 確認 snapshot_date 不再是 1900-01-01
+psql $env:DATABASE_URL -f docs\benchmarks\neely_p0_gate_check.sql > p0_gate_$STOCK.txt
+```
+
+**長期 fix**(留 P1):在 orchestrator `_fetch_dirty_fwd_stocks` 加 fallback ——
+若 `price_daily` 有但 `price_daily_fwd` 沒的 stocks → 自動加進 dirty queue,
+打破 circular bootstrap。對齊 PR #20 trigger 設計 spirit。
+
 ### 6.2 `overflow_triggered = true` 出現
 
 - forest 爆量,觸發 BeamSearchFallback

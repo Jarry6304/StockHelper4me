@@ -44,11 +44,16 @@
 //   - **Stage 12**:cross_timeframe_hints 給 Aggregation Layer 跨 Timeframe 比對(Phase 12)
 //   - **produce_facts()**:每 Scenario 1 條結構性 Fact + 1 條 forest summary
 //
-// 留 P1+ 階段處理(1.0.0 後):
+// 留 P1+ 階段處理(1.0.1 後):
 //   - **Compaction exhaustive 真窮舉**:需 sub-wave 嵌套(5-wave-of-3),architecture §10.1 折衷後留
 //   - **insufficient_data 警示處理**:Daily warmup 500 vs silver ~1.6y 不匹配,P1 解
-//   - **NeelyDiagnostics.stage_elapsed_ms HashMap serde cosmetic bug**:P0 Gate §4 全 0
 //   - **P1 indicator cores**:trendline_core / support_resistance_core / divergence_core 等新 cores
+//
+// 1.0.1 patch(2026-05-14):
+//   - stage_elapsed_ms HashMap as_millis() → as_micros() 精度 1000× 提升(rename
+//     field stage_elapsed_ms → stage_elapsed_us;P0 Gate §4 全 0 修復)
+//   - silver_s1_adjustment + silver/orchestrator 加 circular bootstrap fallback
+//     (Bronze 有但 Silver 沒的 stocks 自動加入 dirty queue;對齊 6547 缺料根因)
 //
 // 不外部化 Neely 規則常數(architecture §4.5 / §6.6):Fibonacci 比率、±4%/±5%/±10% 三檔容差、
 // Power Rating 查表全部寫死,不可從 toml 設定。
@@ -115,10 +120,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "1.0.0",
+        "1.0.1",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(P0 Gate 通過 1.0.0 production-ready / NEoWave 完整體系 + Phase 13-19 spec alignment)",
+        "Neely Wave Core(P0 Gate 通過 1.0.1 / NEoWave 完整體系 + Phase 13-19 spec alignment + stage_elapsed_us μs 精度 + circular bootstrap fix)",
     )
 }
 
@@ -235,15 +240,24 @@ impl WaveCore for NeelyCore {
         // < 10 ETF)/ 拒絕原因全對應 spec §Ch5 章節 / P9-P12 metadata 分布對齊 §13.3。
         // 校準後 0 常數改動 — Phase 13-19 spec alignment + 全市場 v5 已涵蓋校準需求。
         // Known acceptable gaps:insufficient_data warning(Daily warmup 500 vs silver 1.6y)+
-        // stage_elapsed_ms HashMap serde cosmetic bug + 6547 silver 缺料 — 均 P1+ 校準項)
+        // stage_elapsed_us HashMap serde cosmetic bug + 6547 silver 缺料 — 均 P1+ 校準項)
         // 詳見 docs/benchmarks/neely_p0_gate_results_2026-05-14.md
-        "1.0.0"
+        // 1.0.0 → 1.0.1(2026-05-14 patch — 三 known issue 收尾:
+        // (1)stage_elapsed_ms HashMap as_millis() → as_micros()(rename field
+        //     stage_elapsed_ms → stage_elapsed_us)精度 1000× 提升,
+        //     P0 Gate §4 全 0 修復(per-stage 真實 μs 計時)
+        // (2)circular bootstrap fix:silver_s1_adjustment::resolve_stock_ids +
+        //     silver/orchestrator::_fetch_dirty_fwd_stocks 加「Bronze 有但 Silver 沒」
+        //     fallback,打破新 listing 股票永遠跑不到 Phase 4 的 circular miss
+        // (3)P0 Gate runbook §6.1.1 補完 troubleshooting + §8 六檔限定 metadata SQL
+        //     寫進 docs/benchmarks/neely_p0_gate_followup.sql)
+        "1.0.1"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
         // M3 PR-2:Stage 1-2 已實作。Stage 3-10 仍留後續 PR,
         // scenario_forest 暫回空 vec(對齊「無 confirmed scenario」狀態,
-        // diagnostics.stage_elapsed_ms 標明只跑到 Stage 2)。
+        // diagnostics.stage_elapsed_us 標明只跑到 Stage 2)。
         let cfg = &params.engine_config;
         let mut stage_elapsed: HashMap<String, u64> = HashMap::new();
         let total_start = Instant::now();
@@ -253,7 +267,7 @@ impl WaveCore for NeelyCore {
         let raw_monowaves = monowave::detect_monowaves(&input.bars, cfg.atr_period);
         stage_elapsed.insert(
             "stage_1_monowave".to_string(),
-            stage_1_start.elapsed().as_millis() as u64,
+            stage_1_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 2:Rule of Neutrality + Rule of Proportion
@@ -266,7 +280,7 @@ impl WaveCore for NeelyCore {
         );
         stage_elapsed.insert(
             "stage_2_classify".to_string(),
-            stage_2_start.elapsed().as_millis() as u64,
+            stage_2_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 0:Pre-Constructive Logic(Phase 2 PR — Ch3 Rule 1-7 if-else cascade)
@@ -276,7 +290,7 @@ impl WaveCore for NeelyCore {
         pre_constructive::run(&mut classified);
         stage_elapsed.insert(
             "stage_0_preconstructive".to_string(),
-            stage_0_start.elapsed().as_millis() as u64,
+            stage_0_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 3:Bottom-up Candidate Generator(M3 PR-3a)
@@ -284,7 +298,7 @@ impl WaveCore for NeelyCore {
         let wave_candidates = candidates::generate_candidates(&classified, cfg);
         stage_elapsed.insert(
             "stage_3_candidates".to_string(),
-            stage_3_start.elapsed().as_millis() as u64,
+            stage_3_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 3.5:Pattern Isolation + Zigzag DETOUR Test(Phase 3 PR)
@@ -296,7 +310,7 @@ impl WaveCore for NeelyCore {
         let detour_annotations = pattern_isolation::run_detour(&wave_candidates, &classified);
         stage_elapsed.insert(
             "stage_3_5_pattern_isolation".to_string(),
-            stage_3_5_start.elapsed().as_millis() as u64,
+            stage_3_5_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 4:Validator R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2(M3 PR-3b)
@@ -304,7 +318,7 @@ impl WaveCore for NeelyCore {
         let validation_reports = validator::validate_all(&wave_candidates, &classified);
         stage_elapsed.insert(
             "stage_4_validator".to_string(),
-            stage_4_start.elapsed().as_millis() as u64,
+            stage_4_start.elapsed().as_micros() as u64,
         );
 
         let validator_pass_count = validation_reports.iter().filter(|r| r.overall_pass).count();
@@ -325,7 +339,7 @@ impl WaveCore for NeelyCore {
             .collect();
         stage_elapsed.insert(
             "stage_5_classifier".to_string(),
-            stage_5_start.elapsed().as_millis() as u64,
+            stage_5_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 6:Post-Constructive Validator(Phase 6 PR — Ch6 兩階段確認)
@@ -334,7 +348,7 @@ impl WaveCore for NeelyCore {
         scenarios.retain(|s| post_validator::post_validate(s, &classified).pattern_complete);
         stage_elapsed.insert(
             "stage_6_post_validator".to_string(),
-            stage_6_start.elapsed().as_millis() as u64,
+            stage_6_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 7:Complexity Rule 篩選(M3 PR-4)
@@ -342,7 +356,7 @@ impl WaveCore for NeelyCore {
         scenarios = complexity::apply_complexity_rule(scenarios);
         stage_elapsed.insert(
             "stage_7_complexity".to_string(),
-            stage_7_start.elapsed().as_millis() as u64,
+            stage_7_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 7.5:Channeling + Ch9 Advanced Rules(Phase 7 PR)
@@ -368,7 +382,7 @@ impl WaveCore for NeelyCore {
         }
         stage_elapsed.insert(
             "stage_7_5_advanced_rules".to_string(),
-            stage_7_5_start.elapsed().as_millis() as u64,
+            stage_7_5_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 8:Compaction(M3 PR-5,簡化 pass-through + Forest 上限保護)
@@ -376,7 +390,7 @@ impl WaveCore for NeelyCore {
         let compaction_result = compaction::compact(scenarios, cfg);
         stage_elapsed.insert(
             "stage_8_compaction".to_string(),
-            stage_8_start.elapsed().as_millis() as u64,
+            stage_8_start.elapsed().as_micros() as u64,
         );
         let mut forest = compaction_result.forest;
 
@@ -428,7 +442,7 @@ impl WaveCore for NeelyCore {
         }
         stage_elapsed.insert(
             "stage_8_5_three_rounds".to_string(),
-            stage_8_5_start.elapsed().as_millis() as u64,
+            stage_8_5_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 9a:Missing Wave 偵測(Phase 9 PR 完整實作)
@@ -438,7 +452,7 @@ impl WaveCore for NeelyCore {
         let missing_wave_suspects = missing_wave::detect(&classified);
         stage_elapsed.insert(
             "stage_9a_missing_wave".to_string(),
-            stage_9a_start.elapsed().as_millis() as u64,
+            stage_9a_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 9b:Emulation 辨識(Phase 9 PR 完整 Ch12 實作)
@@ -448,7 +462,7 @@ impl WaveCore for NeelyCore {
         let emulation_suspects = emulation::detect_all(&forest, &classified);
         stage_elapsed.insert(
             "stage_9b_emulation".to_string(),
-            stage_9b_start.elapsed().as_millis() as u64,
+            stage_9b_start.elapsed().as_micros() as u64,
         );
 
         // 提前構建 monowave_series — Stage 10b/10c 需要從中反查 W1/W2 prices
@@ -459,7 +473,7 @@ impl WaveCore for NeelyCore {
         power_rating::apply_to_forest(&mut forest);
         stage_elapsed.insert(
             "stage_10a_power_rating".to_string(),
-            stage_10a_start.elapsed().as_millis() as u64,
+            stage_10a_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 10b:Fibonacci 投影(Phase 10 — Internal + External 從 monowave price 投影)
@@ -467,7 +481,7 @@ impl WaveCore for NeelyCore {
         fibonacci::apply_to_forest(&mut forest, &monowave_series);
         stage_elapsed.insert(
             "stage_10b_fibonacci".to_string(),
-            stage_10b_start.elapsed().as_millis() as u64,
+            stage_10b_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 10c:Invalidation Triggers 生成(Phase 10 — 從 monowave price 填實際 W1/W2 break level)
@@ -475,7 +489,7 @@ impl WaveCore for NeelyCore {
         triggers::apply_to_forest(&mut forest, &monowave_series);
         stage_elapsed.insert(
             "stage_10c_triggers".to_string(),
-            stage_10c_start.elapsed().as_millis() as u64,
+            stage_10c_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 10.5:Reverse Logic 觀察(Phase 11 — Neely Extension)
@@ -485,7 +499,7 @@ impl WaveCore for NeelyCore {
         let reverse_logic_observation = reverse_logic::observe(&forest);
         stage_elapsed.insert(
             "stage_10_5_reverse_logic".to_string(),
-            stage_10_5_start.elapsed().as_millis() as u64,
+            stage_10_5_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 11:Degree Ceiling 推導(Phase 12 — architecture §8.5 / §13.3)
@@ -494,7 +508,7 @@ impl WaveCore for NeelyCore {
         let degree_ceiling = degree::compute_ceiling(&input.bars, input.timeframe);
         stage_elapsed.insert(
             "stage_11_degree_ceiling".to_string(),
-            stage_11_start.elapsed().as_millis() as u64,
+            stage_11_start.elapsed().as_micros() as u64,
         );
 
         // ── Stage 12:cross_timeframe_hints 計算(Phase 12 — architecture §8.6 / §3.4)
@@ -503,7 +517,7 @@ impl WaveCore for NeelyCore {
         let cross_timeframe_hints = cross_timeframe::compute_hints(&classified, input.timeframe);
         stage_elapsed.insert(
             "stage_12_cross_timeframe".to_string(),
-            stage_12_start.elapsed().as_millis() as u64,
+            stage_12_start.elapsed().as_micros() as u64,
         );
 
         let forest_size = forest.len();
@@ -537,7 +551,7 @@ impl WaveCore for NeelyCore {
                 compaction_paths: compaction_result.compaction_paths,
                 overflow_triggered: compaction_result.overflow_triggered,
                 compaction_timeout: compaction_result.timeout_triggered,
-                stage_elapsed_ms: stage_elapsed,
+                stage_elapsed_us: stage_elapsed,
                 elapsed_ms,
                 ..Default::default()
             },
@@ -605,7 +619,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "1.0.0");
+        assert_eq!(core.version(), "1.0.1");
     }
 
     // -------------------------------------------------------------
@@ -667,7 +681,7 @@ mod tests {
             "stage_12_cross_timeframe",
         ] {
             assert!(
-                out.diagnostics.stage_elapsed_ms.contains_key(*stage_key),
+                out.diagnostics.stage_elapsed_us.contains_key(*stage_key),
                 "stage timing key '{}' 應存在",
                 stage_key
             );

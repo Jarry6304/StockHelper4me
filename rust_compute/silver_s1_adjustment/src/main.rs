@@ -226,12 +226,24 @@ async fn resolve_stock_ids(pool: &PgPool, args: &Args) -> Result<Vec<String>> {
     if let Some(s) = &args.stocks {
         return Ok(s.split(',').map(|x| x.trim().to_string()).collect());
     }
+    // 2026-05-14 P1 circular bootstrap fix(對齊 silver/orchestrator._fetch_dirty_fwd_stocks):
+    // dirty queue + Bronze 有但 Silver 沒的 stocks fallback。
+    // 原邏輯只拉 price_daily_fwd dirty=TRUE,新 listing 股票從未進過 fwd 表 →
+    // dirty queue 永遠選不到 → Phase 4 never runs → Silver 永遠空。
     let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT stock_id FROM price_daily_fwd WHERE is_dirty = TRUE ORDER BY stock_id",
+        "SELECT DISTINCT stock_id FROM (
+             SELECT stock_id FROM price_daily_fwd WHERE is_dirty = TRUE
+             UNION
+             SELECT pd.stock_id FROM price_daily pd
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM price_daily_fwd pdf
+                 WHERE pdf.market = pd.market AND pdf.stock_id = pd.stock_id
+             )
+         ) t ORDER BY stock_id",
     )
     .fetch_all(pool)
     .await
-    .context("查詢 price_daily_fwd dirty queue 失敗")?;
+    .context("查詢 price_daily_fwd dirty queue + bootstrap fallback 失敗")?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 

@@ -299,8 +299,12 @@ pub struct NeelyDiagnostics {
     pub overflow_triggered: bool,
     /// Compaction 是否逾時
     pub compaction_timeout: bool,
-    /// 各階段耗時(Stage 1-10)
-    pub stage_elapsed_ms: HashMap<String, u64>,
+    /// 各階段耗時(Stage 0-12,**微秒精度**)。
+    ///
+    /// **2026-05-14 P1 fix**:從 ms → μs(Duration::as_micros)。原 ms 精度對 sub-ms
+    /// stages 截斷成 0(P0 Gate §4 §stage_elapsed 全 0 揭露);改 μs 提供 1000× 精度。
+    /// SQL caller 用 `(snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_X')::int` 取值。
+    pub stage_elapsed_us: HashMap<String, u64>,
     pub elapsed_ms: u64,
     /// 峰值記憶體(P0 Gate 校準用)
     pub peak_memory_mb: u64,

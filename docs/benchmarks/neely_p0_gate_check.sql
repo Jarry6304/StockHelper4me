@@ -155,36 +155,36 @@ LIMIT 60;
 -- ============================================================
 -- §4  Stage_elapsed_ms 性能 breakdown
 -- ============================================================
-\echo '=== §4 各 Stage 性能 breakdown ==='
+\echo '=== §4 各 Stage 性能 breakdown(2026-05-14 升 μs 精度)==='
 
 SELECT
     stock_id,
     -- Stage 1 / 2(monowave + classify)
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_1_monowave')::int          AS s1_monowave,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_2_classify')::int          AS s2_classify,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_1_monowave')::int          AS s1_monowave,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_2_classify')::int          AS s2_classify,
     -- Stage 0(P2 Pre-Constructive ~200 branches — 最可能熱點)
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_0_preconstructive')::int   AS s0_preconstr,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_0_preconstructive')::int   AS s0_preconstr,
     -- Stage 3 / 3.5 / 4
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_3_candidates')::int        AS s3_candidates,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_3_5_pattern_isolation')::int AS s3_5_pi,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_4_validator')::int         AS s4_validator,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_3_candidates')::int        AS s3_candidates,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_3_5_pattern_isolation')::int AS s3_5_pi,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_4_validator')::int         AS s4_validator,
     -- Stage 5 / 6 / 7
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_5_classifier')::int        AS s5_classifier,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_6_post_validator')::int    AS s6_post,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_7_complexity')::int        AS s7_complexity,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_5_classifier')::int        AS s5_classifier,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_6_post_validator')::int    AS s6_post,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_7_complexity')::int        AS s7_complexity,
     -- Stage 7.5 / 8 / 8.5
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_7_5_advanced_rules')::int  AS s7_5_adv,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_8_compaction')::int        AS s8_compact,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_8_5_three_rounds')::int    AS s8_5_3r,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_7_5_advanced_rules')::int  AS s7_5_adv,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_8_compaction')::int        AS s8_compact,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_8_5_three_rounds')::int    AS s8_5_3r,
     -- Stage 9a / 9b / 10a / 10b / 10c / 10.5 / 11 / 12
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_9a_missing_wave')::int     AS s9a_mw,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_9b_emulation')::int        AS s9b_emul,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_10a_power_rating')::int    AS s10a_pr,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_10b_fibonacci')::int       AS s10b_fib,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_10c_triggers')::int        AS s10c_trg,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_10_5_reverse_logic')::int  AS s10_5_rl,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_11_degree_ceiling')::int   AS s11_dc,
-    (snapshot->'diagnostics'->'stage_elapsed_ms'->>'stage_12_cross_timeframe')::int  AS s12_ct
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_9a_missing_wave')::int     AS s9a_mw,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_9b_emulation')::int        AS s9b_emul,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_10a_power_rating')::int    AS s10a_pr,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_10b_fibonacci')::int       AS s10b_fib,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_10c_triggers')::int        AS s10c_trg,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_10_5_reverse_logic')::int  AS s10_5_rl,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_11_degree_ceiling')::int   AS s11_dc,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_12_cross_timeframe')::int  AS s12_ct
 FROM structural_snapshots s
 WHERE core_name = 'neely_core'
   AND stock_id IN (:P0_GATE_STOCKS)
