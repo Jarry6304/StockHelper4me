@@ -3,7 +3,7 @@
 // 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
 //       + m3Spec/cores_overview.md r4
 //
-// 已實作(Phase 17 / v0.26.0 — 2026-05-14):
+// 已實作(P0 Gate 通過 / v1.0.0 — 2026-05-14):
 //   - struct / enum 合約(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
 //   - WaveCore trait + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
 //   - **RuleId 章節編碼**(architecture §9.3)限縮 Ch5_* / Ch9_* / Engineering_* 三組
@@ -44,10 +44,11 @@
 //   - **Stage 12**:cross_timeframe_hints 給 Aggregation Layer 跨 Timeframe 比對(Phase 12)
 //   - **produce_facts()**:每 Scenario 1 條結構性 Fact + 1 條 forest summary
 //
-// 留後續 PR(後續 1.0 release 路徑):
+// 留 P1+ 階段處理(1.0.0 後):
 //   - **Compaction exhaustive 真窮舉**:需 sub-wave 嵌套(5-wave-of-3),architecture §10.1 折衷後留
-//   - **P0 Gate v5+ 校準**:6 個 Divergence EventKind 真實值 user verify(留 v5 production)
-//   - **P0 Gate 六檔實測通過後**:bump 到 1.0.0
+//   - **insufficient_data 警示處理**:Daily warmup 500 vs silver ~1.6y 不匹配,P1 解
+//   - **NeelyDiagnostics.stage_elapsed_ms HashMap serde cosmetic bug**:P0 Gate §4 全 0
+//   - **P1 indicator cores**:trendline_core / support_resistance_core / divergence_core 等新 cores
 //
 // 不外部化 Neely 規則常數(architecture §4.5 / §6.6):Fibonacci 比率、±4%/±5%/±10% 三檔容差、
 // Power Rating 查表全部寫死,不可從 toml 設定。
@@ -114,10 +115,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.26.0",
+        "1.0.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement + post_behavior 8-variant + Scenario 群 2 fields + FlatKind 7-variant + RunningCorrection + StructuralFacts 7-fill)",
+        "Neely Wave Core(P0 Gate 通過 1.0.0 production-ready / NEoWave 完整體系 + Phase 13-19 spec alignment)",
     )
 }
 
@@ -228,8 +229,15 @@ impl WaveCore for NeelyCore {
         // 4 個 classify-time(在 classifier::classify),3 個 post-Stage 7.5
         // (在 lib.rs::compute Stage 7.5 advanced_rules 後)
         // 對齊 spec §StructuralFacts 7 sub-fields 全填)
-        // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.26.0"
+        // 0.26.0 → 1.0.0(P0 Gate 通過 — 2026-05-14:
+        // 六檔(0050/2330/3363/6547/1312)實測 + 全市場 1263 stocks v5 production
+        // verify 通過 spec §10.0 (a)/(b)/(c) 3/4 判定:forest_size 收斂(< 30 龍頭 /
+        // < 10 ETF)/ 拒絕原因全對應 spec §Ch5 章節 / P9-P12 metadata 分布對齊 §13.3。
+        // 校準後 0 常數改動 — Phase 13-19 spec alignment + 全市場 v5 已涵蓋校準需求。
+        // Known acceptable gaps:insufficient_data warning(Daily warmup 500 vs silver 1.6y)+
+        // stage_elapsed_ms HashMap serde cosmetic bug + 6547 silver 缺料 — 均 P1+ 校準項)
+        // 詳見 docs/benchmarks/neely_p0_gate_results_2026-05-14.md
+        "1.0.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -597,7 +605,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.26.0");
+        assert_eq!(core.version(), "1.0.0");
     }
 
     // -------------------------------------------------------------
