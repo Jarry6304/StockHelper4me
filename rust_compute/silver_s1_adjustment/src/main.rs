@@ -226,12 +226,24 @@ async fn resolve_stock_ids(pool: &PgPool, args: &Args) -> Result<Vec<String>> {
     if let Some(s) = &args.stocks {
         return Ok(s.split(',').map(|x| x.trim().to_string()).collect());
     }
+    // 2026-05-14 P1 circular bootstrap fix(對齊 silver/orchestrator._fetch_dirty_fwd_stocks):
+    // dirty queue + Bronze 有但 Silver 沒的 stocks fallback。
+    // 原邏輯只拉 price_daily_fwd dirty=TRUE,新 listing 股票從未進過 fwd 表 →
+    // dirty queue 永遠選不到 → Phase 4 never runs → Silver 永遠空。
     let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT stock_id FROM price_daily_fwd WHERE is_dirty = TRUE ORDER BY stock_id",
+        "SELECT DISTINCT stock_id FROM (
+             SELECT stock_id FROM price_daily_fwd WHERE is_dirty = TRUE
+             UNION
+             SELECT pd.stock_id FROM price_daily pd
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM price_daily_fwd pdf
+                 WHERE pdf.market = pd.market AND pdf.stock_id = pd.stock_id
+             )
+         ) t ORDER BY stock_id",
     )
     .fetch_all(pool)
     .await
-    .context("查詢 price_daily_fwd dirty queue 失敗")?;
+    .context("查詢 price_daily_fwd dirty queue + bootstrap fallback 失敗")?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
@@ -336,8 +348,7 @@ fn derive_simple_event_af(events: &mut [AdjEvent], raw_prices: &[DailyPrice]) {
         if event.event_type == "dividend" {
             let bp_opt = event.before_price.or_else(|| {
                 raw_prices.iter()
-                    .filter(|p| p.date < event.date)
-                    .last()
+                    .rfind(|p| p.date < event.date)
                     .map(|p| p.close)
             });
             if let Some(bp) = bp_opt {
@@ -630,7 +641,7 @@ fn compute_capital_increase_af(raw_prices: &[DailyPrice], event_date: NaiveDate,
     if sub_price <= 0.0 { return None; }
     let sub_rate = detail.get("subscription_rate_raw").and_then(|v| v.as_f64())?;
     if sub_rate <= 0.0 { return None; }
-    let p_pre = raw_prices.iter().filter(|p| p.date < event_date).last()?.close;
+    let p_pre = raw_prices.iter().rfind(|p| p.date < event_date)?.close;
     if p_pre <= 0.0 { return None; }
     let r = sub_rate / 1000.0;
     let after_price = (p_pre + sub_price * r) / (1.0 + r);

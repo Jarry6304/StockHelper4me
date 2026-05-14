@@ -20,7 +20,7 @@ core_registry     = { path = "../../../cores_shared/core_registry" }
 # Wave Core(P0)
 neely_core        = { path = "../../wave/neely_core" }
 
-# Indicator Cores(P1 — 8)
+# Indicator Cores(P1 — 8 + P3 — 7)
 macd_core         = { path = "../../indicator/macd_core" }
 rsi_core          = { path = "../../indicator/rsi_core" }
 kd_core           = { path = "../../indicator/kd_core" }
@@ -29,6 +29,19 @@ ma_core           = { path = "../../indicator/ma_core" }
 bollinger_core    = { path = "../../indicator/bollinger_core" }
 atr_core          = { path = "../../indicator/atr_core" }
 obv_core          = { path = "../../indicator/obv_core" }
+williams_r_core   = { path = "../../indicator/williams_r_core" }
+cci_core          = { path = "../../indicator/cci_core" }
+keltner_core      = { path = "../../indicator/keltner_core" }
+donchian_core     = { path = "../../indicator/donchian_core" }
+vwap_core         = { path = "../../indicator/vwap_core" }
+mfi_core          = { path = "../../indicator/mfi_core" }
+coppock_core      = { path = "../../indicator/coppock_core" }
+ichimoku_core     = { path = "../../indicator/ichimoku_core" }
+
+# Pattern Cores(P2 — 3,結構性指標)
+support_resistance_core     = { path = "../../indicator/support_resistance_core" }
+candlestick_pattern_core    = { path = "../../indicator/candlestick_pattern_core" }
+trendline_core              = { path = "../../indicator/trendline_core" }
 
 # Chip Cores(P2 — 5)
 day_trading_core      = { path = "../../chip/day_trading_core" }

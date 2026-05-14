@@ -1,0 +1,25 @@
+[package]
+name        = "trendline_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Trendline Core(P2,趨勢線偵測,對齊 m3Spec/indicator_cores_pattern.md §5)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fact_schema   = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader  = { path = "../../../cores_shared/ohlcv_loader" }
+core_registry = { path = "../../../cores_shared/core_registry" }
+# 唯一耦合例外:消費 neely_core 的 monowave_series 作為 swing 來源(spec §5.2/§5.7)
+neely_core    = { path = "../../wave/neely_core" }
+anyhow        = { workspace = true }
+chrono        = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+inventory     = "0.3"
+
+[package.metadata.tw_stock]
+depends_on        = ["neely_core"]
+coupling_kind     = "documented_exception"
+coupling_reason   = "swing point detection reuse(spec pattern.md §5.7)"

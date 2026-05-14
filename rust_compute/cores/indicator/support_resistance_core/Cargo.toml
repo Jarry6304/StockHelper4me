@@ -1,0 +1,18 @@
+[package]
+name        = "support_resistance_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Support/Resistance Core(P2,靜態撐壓位識別,對齊 m3Spec/indicator_cores_pattern.md §4)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fact_schema   = { path = "../../../cores_shared/fact_schema" }
+ohlcv_loader  = { path = "../../../cores_shared/ohlcv_loader" }
+core_registry = { path = "../../../cores_shared/core_registry" }
+anyhow        = { workspace = true }
+chrono        = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+inventory     = "0.3"

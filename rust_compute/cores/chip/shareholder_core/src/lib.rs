@@ -148,8 +148,8 @@ impl IndicatorCore for ShareholderCore {
 // 17 持股級距 → 4-level 合成(2026-05-10 user 拍板)
 // ---------------------------------------------------------------------------
 
-/// FinMind 集保中心 17 個 level string(對齊 Bronze `holding_shares_per.holding_shares_level`)
-/// 4-level 邊界:50 張 / 400 張 / 1000 張(對應股數 50,000 / 400,000 / 1,000,000)
+// FinMind 集保中心 17 個 level string(對齊 Bronze `holding_shares_per.holding_shares_level`)
+// 4-level 邊界:50 張 / 400 張 / 1000 張(對應股數 50,000 / 400,000 / 1,000,000)
 
 /// 散戶:≤ 50 張(8 levels)
 const SMALL_LEVELS: &[&str] = &[

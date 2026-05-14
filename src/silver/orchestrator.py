@@ -237,15 +237,35 @@ class SilverOrchestrator:
     def _fetch_dirty_fwd_stocks(self, *, full_rebuild: bool) -> list[str]:
         """從 price_daily_fwd 拉待算 stock_id 清單(PR #20 dirty queue pull)。
 
-        full_rebuild=False:`WHERE is_dirty = TRUE`(走 dirty queue)
-        full_rebuild=True: 全部 DISTINCT stock_id(全市場重算;ignore is_dirty)
+        full_rebuild=False:`WHERE is_dirty = TRUE` UNION 「Bronze 有但 Silver 沒」
+                            的 circular bootstrap miss(2026-05-14 P1 fix)
+        full_rebuild=True: 全部 DISTINCT stock_id from Bronze price_daily(全市場重算)
+
+        **2026-05-14 P1 circular bootstrap fix**(對齊 P0 Gate runbook §6.1.1):
+        原邏輯只拉 `price_daily_fwd.is_dirty=TRUE`,新 listing 的股票從未進過
+        `price_daily_fwd`(dirty queue 永遠選不到)→ Phase 4 never runs → Silver
+        永遠空。本 fix 加 fallback UNION:Bronze 有但 Silver 沒的 stocks 強制加入
+        待算清單,打破 circular bootstrap。
 
         PostgresWriter 走 query() 回 list[dict],抽出 stock_id 欄。
         """
-        sql = (
-            "SELECT DISTINCT stock_id FROM price_daily_fwd"
-            + ("" if full_rebuild else " WHERE is_dirty = TRUE")
-            + " ORDER BY stock_id"
-        )
+        if full_rebuild:
+            sql = "SELECT DISTINCT stock_id FROM price_daily ORDER BY stock_id"
+        else:
+            # dirty queue + circular bootstrap fallback
+            sql = """
+                SELECT DISTINCT stock_id FROM (
+                    -- normal dirty queue
+                    SELECT stock_id FROM price_daily_fwd WHERE is_dirty = TRUE
+                    UNION
+                    -- circular bootstrap miss:Bronze 有但 Silver 沒
+                    SELECT pd.stock_id FROM price_daily pd
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM price_daily_fwd pdf
+                        WHERE pdf.market = pd.market AND pdf.stock_id = pd.stock_id
+                    )
+                ) t
+                ORDER BY stock_id
+            """
         rows = self.db.query(sql)
         return [r["stock_id"] for r in rows]

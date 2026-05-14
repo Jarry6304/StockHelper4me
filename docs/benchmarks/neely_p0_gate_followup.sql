@@ -191,3 +191,99 @@ FROM event_kinds
 GROUP BY source_core, event_kind
 HAVING COUNT(*) > 0
 ORDER BY source_core, events DESC;
+
+
+-- ============================================================================
+-- §8. P0 Gate 六檔限定 Phase 14-17 metadata 驗證(2026-05-14 補完)
+-- ============================================================================
+--
+-- 對齊 docs/benchmarks/neely_p0_gate_runbook.md §8.1-8.5。
+-- 把 v5 全市場(7767 scenarios)的 §E/G query 收斂到 P0 Gate 六檔限定:
+--   0050 / 1312 / 2330 / 3363 / 6547(+ 1 自選)
+-- 對齊 runbook §10 (d) 判定條件:六檔 metadata 填充率對齊 v5 全市場 ±5%。
+
+\echo '=== §8.1 Phase 13 max_retracement + Phase 14 PostBehavior(六檔)==='
+
+SELECT
+    COUNT(*) AS total_scenarios,
+    COUNT(*) FILTER (WHERE s->'max_retracement' IS NOT NULL
+                       AND jsonb_typeof(s->'max_retracement') = 'number') AS with_max_retr,
+    array_agg(DISTINCT s->>'max_retracement') AS max_retr_values,
+    array_agg(DISTINCT CASE
+        WHEN jsonb_typeof(s->'post_pattern_behavior') = 'string'
+            THEN s->>'post_pattern_behavior'
+        WHEN jsonb_typeof(s->'post_pattern_behavior') = 'object'
+            THEN (SELECT key FROM jsonb_each(s->'post_pattern_behavior') LIMIT 1)
+        ELSE NULL
+    END) AS behavior_kinds
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') s
+WHERE core_name = 'neely_core'
+  AND stock_id IN ('0050', '1312', '2330', '3363', '6547');
+
+\echo ''
+\echo '=== §8.2 Phase 15 Scenario 群 2 fields(六檔)==='
+
+SELECT
+    COUNT(*) AS total_scenarios,
+    COUNT(*) FILTER (WHERE s->>'round_state' IS NOT NULL) AS with_round_state,
+    array_agg(DISTINCT s->>'round_state') AS round_states,
+    COUNT(*) FILTER (WHERE jsonb_array_length(s->'monowave_structure_labels') > 0) AS with_mw_labels,
+    COUNT(*) FILTER (WHERE jsonb_array_length(s->'pattern_isolation_anchors') > 0) AS with_anchors,
+    COUNT(*) FILTER (WHERE (s->>'triplexity_detected')::bool = true) AS with_triplexity
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') s
+WHERE core_name = 'neely_core'
+  AND stock_id IN ('0050', '1312', '2330', '3363', '6547');
+
+\echo ''
+\echo '=== §8.3 Phase 16 pattern_type 分布(六檔)==='
+
+SELECT
+    CASE jsonb_typeof(s->'pattern_type')
+        WHEN 'string' THEN s->>'pattern_type'
+        WHEN 'object' THEN (
+            SELECT key || '(' || COALESCE(value->>'sub_kind',
+                                          jsonb_path_query_first(value, '$.sub_kinds[0]')::text,
+                                          '') || ')'
+            FROM jsonb_each(s->'pattern_type') LIMIT 1
+        )
+        ELSE 'unknown'
+    END AS pattern,
+    COUNT(*) AS scenarios,
+    array_agg(DISTINCT stock_id ORDER BY stock_id) AS stocks
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') s
+WHERE core_name = 'neely_core'
+  AND stock_id IN ('0050', '1312', '2330', '3363', '6547')
+GROUP BY 1 ORDER BY 2 DESC;
+
+\echo ''
+\echo '=== §8.4 Phase 17 StructuralFacts 7 sub-fields 填充率(六檔)==='
+
+SELECT
+    COUNT(*) AS total_scenarios,
+    COUNT(*) FILTER (WHERE s->'structural_facts'->'fibonacci_alignment' IS NOT NULL
+                       AND s->'structural_facts'->>'fibonacci_alignment' != 'null') AS fib,
+    COUNT(*) FILTER (WHERE s->'structural_facts'->'alternation' IS NOT NULL
+                       AND s->'structural_facts'->>'alternation' != 'null') AS alt,
+    COUNT(*) FILTER (WHERE s->'structural_facts'->'channeling' IS NOT NULL
+                       AND s->'structural_facts'->>'channeling' != 'null') AS chan,
+    COUNT(*) FILTER (WHERE s->'structural_facts'->'time_relationship' IS NOT NULL
+                       AND s->'structural_facts'->>'time_relationship' != 'null') AS tr,
+    COUNT(*) FILTER (WHERE s->'structural_facts'->'volume_alignment' IS NOT NULL
+                       AND s->'structural_facts'->>'volume_alignment' != 'null') AS vol,
+    COUNT(*) FILTER (WHERE (s->'structural_facts'->>'gap_count')::int > 0) AS gaps_found,
+    COUNT(*) FILTER (WHERE s->'structural_facts'->'overlap_pattern' IS NOT NULL
+                       AND s->'structural_facts'->>'overlap_pattern' != 'null') AS overlap
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') s
+WHERE core_name = 'neely_core'
+  AND stock_id IN ('0050', '1312', '2330', '3363', '6547');
+
+\echo ''
+\echo '=== §8.5 v5 全市場 vs 六檔填充率對照(對齊判定 (d):±5%)==='
+\echo '預期(v5 全市場 baseline):'
+\echo '  fib  77.5% / alt 7.5% / chan 100% / tr 100% / vol 100% / gaps 100% / overlap 22.8%'
+\echo '六檔 (d) 判定通過條件:各 sub-field 比例落入 v5 baseline ±5%'
+

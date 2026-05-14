@@ -171,6 +171,17 @@ fn list_cores() -> Result<()> {
     let _ = bollinger_core::BollingerCore::new();
     let _ = atr_core::AtrCore::new();
     let _ = obv_core::ObvCore::new();
+    let _ = williams_r_core::WilliamsRCore::new();
+    let _ = cci_core::CciCore::new();
+    let _ = keltner_core::KeltnerCore::new();
+    let _ = donchian_core::DonchianCore::new();
+    let _ = vwap_core::VwapCore::new();
+    let _ = mfi_core::MfiCore::new();
+    let _ = coppock_core::CoppockCore::new();
+    let _ = ichimoku_core::IchimokuCore::new();
+    let _ = support_resistance_core::SupportResistanceCore::new();
+    let _ = candlestick_pattern_core::CandlestickPatternCore::new();
+    let _ = trendline_core::TrendlineCore::new();
     let _ = day_trading_core::DayTradingCore::new();
     let _ = institutional_core::InstitutionalCore::new();
     let _ = margin_core::MarginCore::new();
@@ -523,11 +534,14 @@ async fn run_stock_cores(
     }
     }
 
-    // ---- 2-9. Indicator(8)— 共用 OhlcvSeries ----
-    // 8 indicator cores 共用 ohlcv,若 8 個全 disabled 可整段 skip(節省 1 個 query)
+    // ---- 2-9. Indicator(P1 8 + P3 8 + P2 pattern 3 = 19)— 共用 OhlcvSeries ----
+    // 19 cores 共用 ohlcv,若全 disabled 可整段 skip(節省 1 個 query)
     let any_indicator_enabled = [
         "macd_core", "rsi_core", "kd_core", "adx_core",
         "ma_core", "bollinger_core", "atr_core", "obv_core",
+        "williams_r_core", "cci_core", "keltner_core", "donchian_core",
+        "vwap_core", "mfi_core", "coppock_core", "ichimoku_core",
+        "support_resistance_core", "candlestick_pattern_core", "trendline_core",
     ].iter().any(|n| filter.is_enabled(n));
     if any_indicator_enabled {
     let ohlcv_result = match tf {
@@ -637,6 +651,179 @@ async fn run_stock_cores(
                 .await,
             );
             }
+            // ---- P3 indicator cores(williams_r / cci / keltner / donchian / mfi / coppock / ichimoku)----
+            if filter.is_enabled("williams_r_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &williams_r_core::WilliamsRCore::new(),
+                    &ohlcv,
+                    williams_r_core::WilliamsRParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("cci_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &cci_core::CciCore::new(),
+                    &ohlcv,
+                    cci_core::CciParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("keltner_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &keltner_core::KeltnerCore::new(),
+                    &ohlcv,
+                    keltner_core::KeltnerParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("donchian_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &donchian_core::DonchianCore::new(),
+                    &ohlcv,
+                    donchian_core::DonchianParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("mfi_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &mfi_core::MfiCore::new(),
+                    &ohlcv,
+                    mfi_core::MfiParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("coppock_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &coppock_core::CoppockCore::new(),
+                    &ohlcv,
+                    coppock_core::CoppockParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("ichimoku_core") {
+            summary.push(
+                dispatch_indicator(
+                    pool,
+                    &ichimoku_core::IchimokuCore::new(),
+                    &ohlcv,
+                    ichimoku_core::IchimokuParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            // ---- P2 pattern cores(support_resistance / candlestick_pattern)— 共用 ohlcv ----
+            // 走 dispatch_structural(寫 structural_snapshots 而非 indicator_values,
+            // 對齊 m3Spec/indicator_cores_pattern.md §2.4)
+            if filter.is_enabled("support_resistance_core") {
+            summary.push(
+                dispatch_structural(
+                    pool,
+                    &support_resistance_core::SupportResistanceCore::new(),
+                    &ohlcv,
+                    support_resistance_core::SupportResistanceParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            if filter.is_enabled("candlestick_pattern_core") {
+            summary.push(
+                dispatch_structural(
+                    pool,
+                    &candlestick_pattern_core::CandlestickPatternCore::new(),
+                    &ohlcv,
+                    candlestick_pattern_core::CandlestickPatternParams::default(),
+                    write,
+                )
+                .await,
+            );
+            }
+            // ---- trendline_core(P2,唯一耦合例外)— 跑 neely_core 取 monowave_series 餵入 ----
+            // 同樣走 dispatch_structural(P2 pattern cores 寫 structural_snapshots)
+            if filter.is_enabled("trendline_core") {
+            let mut tl_neely_params = neely_core::NeelyCoreParams::default();
+            tl_neely_params.timeframe = tf;
+            match neely_core::NeelyCore::new().compute(&ohlcv, tl_neely_params) {
+                Ok(neely_out) => {
+                    let tl_input = trendline_core::TrendlineInput {
+                        ohlcv: ohlcv.clone(),
+                        monowaves: neely_out.monowave_series.clone(),
+                    };
+                    summary.push(
+                        dispatch_structural(
+                            pool,
+                            &trendline_core::TrendlineCore::new(),
+                            &tl_input,
+                            trendline_core::TrendlineParams::default(),
+                            write,
+                        )
+                        .await,
+                    );
+                }
+                Err(e) => summary.push(loader_err_summary(
+                    "trendline_core",
+                    stock_id,
+                    "neely_monowave",
+                    &e,
+                )),
+            }
+            }
+            // ---- vwap_core(P3,需 anchor_date)— 預設用 series 第一個 bar 的日期 ----
+            // v1.34 Round 5:empty series(如 ETF 沒 Silver fwd 資料)silent skip 不算 error
+            if filter.is_enabled("vwap_core") {
+            let anchor = ohlcv.bars.first().map(|b| b.date);
+            if let Some(anchor_date) = anchor {
+                let mut vwap_params = vwap_core::VwapParams::default();
+                vwap_params.anchor_date = Some(anchor_date);
+                summary.push(
+                    dispatch_indicator(
+                        pool,
+                        &vwap_core::VwapCore::new(),
+                        &ohlcv,
+                        vwap_params,
+                        write,
+                    )
+                    .await,
+                );
+            } else {
+                // empty series → no work,記 status=skipped 不報 err
+                summary.push(CoreRunSummary {
+                    core: "vwap_core".to_string(),
+                    stock_id: stock_id.to_string(),
+                    status: "skipped".to_string(),
+                    events: 0,
+                    iv_written: 0,
+                    fact_written: 0,
+                    elapsed_ms: 0,
+                    error: Some("empty_series:no Silver data for stock".to_string()),
+                });
+            }
+            }
         }
         Err(e) => {
             for name in [
@@ -648,6 +835,17 @@ async fn run_stock_cores(
                 "bollinger_core",
                 "atr_core",
                 "obv_core",
+                "williams_r_core",
+                "cci_core",
+                "keltner_core",
+                "donchian_core",
+                "vwap_core",
+                "mfi_core",
+                "coppock_core",
+                "ichimoku_core",
+                "support_resistance_core",
+                "candlestick_pattern_core",
+                "trendline_core",
             ] {
                 if filter.is_enabled(name) {
                     summary.push(loader_err_summary(name, stock_id, "load_daily", &e));
@@ -891,6 +1089,89 @@ where
                             core = %core_name,
                             stock_id,
                             "write_indicator_value failed: {:#}",
+                            e
+                        ),
+                    }
+                }
+                match write_facts(pool, &facts).await {
+                    Ok(n) => fact_written = n,
+                    Err(e) => tracing::warn!(core = %core_name, "write_facts failed: {:#}", e),
+                }
+            }
+
+            CoreRunSummary {
+                core: core_name,
+                stock_id,
+                status: "ok".to_string(),
+                events: facts.len() as u64,
+                iv_written,
+                fact_written,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                error: None,
+            }
+        }
+        Err(e) => CoreRunSummary::err(&core_name, "", format!("compute failed: {:#}", e), start),
+    }
+}
+
+/// dispatch_structural — 走 IndicatorCore trait,但 Output 寫進 structural_snapshots
+/// 而非 indicator_values(對齊 m3Spec/indicator_cores_pattern.md §2.4)。
+///
+/// 用於 P2 pattern cores(support_resistance / candlestick_pattern / trendline)。
+/// Facts 同 dispatch_indicator 走 write_facts。
+async fn dispatch_structural<C>(
+    pool: &PgPool,
+    core: &C,
+    input: &C::Input,
+    params: C::Params,
+    write: bool,
+) -> CoreRunSummary
+where
+    C: IndicatorCore,
+{
+    let start = Instant::now();
+    let core_name = core.name().to_string();
+    let core_version = core.version().to_string();
+    let hash = params_hash(&params).unwrap_or_default();
+
+    match core.compute(input, params) {
+        Ok(output) => {
+            let facts = core.produce_facts(&output);
+            let snapshot_json = match serde_json::to_value(&output) {
+                Ok(v) => v,
+                Err(e) => {
+                    return CoreRunSummary::err(
+                        &core_name,
+                        "",
+                        format!("serialize output failed: {}", e),
+                        start,
+                    );
+                }
+            };
+            let (stock_id, snapshot_date, timeframe_str) = extract_indicator_meta(&snapshot_json);
+            let tf = parse_timeframe(&timeframe_str).unwrap_or(Timeframe::Daily);
+
+            let mut iv_written = 0u64; // 借用欄位記 snapshot 寫 1 row(對齊 dispatch_neely 慣例)
+            let mut fact_written = 0u64;
+            if write {
+                if !stock_id.is_empty() {
+                    match write_structural_snapshot(
+                        pool,
+                        &stock_id,
+                        snapshot_date,
+                        tf,
+                        &core_name,
+                        &core_version,
+                        &hash,
+                        &snapshot_json,
+                    )
+                    .await
+                    {
+                        Ok(()) => iv_written = 1,
+                        Err(e) => tracing::warn!(
+                            core = %core_name,
+                            stock_id,
+                            "write_structural_snapshot failed: {:#}",
                             e
                         ),
                     }
@@ -1229,7 +1510,15 @@ fn extract_indicator_meta(output_json: &serde_json::Value) -> (String, NaiveDate
         .and_then(|d| d.as_str())
         .map(String::from)
         .or_else(|| nested_last_date(output_json, "series_by_spec"))    // ma_core
-        .or_else(|| nested_last_date(output_json, "series_by_index"));  // taiex_core
+        .or_else(|| nested_last_date(output_json, "series_by_index"))   // taiex_core
+        // P2 pattern cores(support_resistance / candlestick_pattern / trendline)無 series array
+        // 但有 `generated_at: NaiveDate` 欄位作 last_date 來源(對齊 spec §4.4 / §5.5)
+        .or_else(|| {
+            output_json
+                .get("generated_at")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        });
     let last_date_str = last_date_str.as_deref();
 
     let last_date = last_date_str

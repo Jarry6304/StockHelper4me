@@ -189,7 +189,7 @@ mod tests {
                 compaction_paths: num_scenarios,
                 overflow_triggered: false,
                 compaction_timeout: false,
-                stage_elapsed_ms: HashMap::new(),
+                stage_elapsed_us: HashMap::new(),
                 elapsed_ms: 0,
                 peak_memory_mb: 0,
             },

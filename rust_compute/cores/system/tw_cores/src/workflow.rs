@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Workflow toml 最小子集 — 只解析 dispatch 需要的欄位
 /// 其他欄位(`[workflow]` / `[targets]` / `[output]` / `[schedule]`)目前忽略
@@ -35,16 +35,23 @@ pub struct CoreFilter {
 }
 
 impl CoreFilter {
-    /// 全 23 cores enabled(預設 / `--workflow` 未指定時)
+    /// 全 34 cores enabled(預設 / `--workflow` 未指定時)
+    /// 對應 P0 1 + P1 indicator 8 + P3 indicator 8 + P2 pattern 3 + P2 chip 5
+    /// + P2 fundamental 3 + P2 environment 6 = 34
     pub fn all_enabled() -> Self {
         Self { enabled: None }
     }
 
-    /// 從 workflow toml 載入
+    /// 從 workflow toml 載入。
+    ///
+    /// 相對路徑會 walk-up cwd 樹找(對齊 dotenvy 模式),user 從 repo 子目錄(如
+    /// `rust_compute/`)跑 binary 也能找到 `workflows/tw_stock_standard.toml`。
     pub fn from_workflow_toml(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("read workflow toml failed: {}", path.display()))?;
-        Self::from_toml_str(&content).with_context(|| format!("parse workflow toml failed: {}", path.display()))
+        let resolved = resolve_workflow_path(path);
+        let content = std::fs::read_to_string(&resolved)
+            .with_context(|| format!("read workflow toml failed: {}", resolved.display()))?;
+        Self::from_toml_str(&content)
+            .with_context(|| format!("parse workflow toml failed: {}", resolved.display()))
     }
 
     /// 從 toml str 直接解析(unit test + flexibility)
@@ -69,13 +76,39 @@ impl CoreFilter {
         }
     }
 
-    /// enabled cores 數量(僅供 log;None → 23 全跑)
+    /// enabled cores 數量(僅供 log;None → 34 全跑)
     pub fn count_summary(&self) -> String {
         match &self.enabled {
-            None => "all 23 cores enabled (no workflow toml)".to_string(),
+            None => "all 34 cores enabled (no workflow toml)".to_string(),
             Some(set) => format!("{} cores enabled via workflow toml", set.len()),
         }
     }
+}
+
+/// 把相對 workflow 路徑 walk-up cwd 樹解到實際存在的檔案。
+/// 對齊 `dotenvy` 行為:user 從 `repo_root/rust_compute/` 跑 binary,仍可解到
+/// `repo_root/workflows/tw_stock_standard.toml`。
+///
+/// 絕對路徑 / cwd 直接存在的相對路徑 → 不動;否則最多往上 6 層找。找不到回原路徑
+/// (讓上層 read_to_string 報原本的「系統找不到指定的路徑」)。
+fn resolve_workflow_path(path: &Path) -> PathBuf {
+    if path.is_absolute() || path.exists() {
+        return path.to_path_buf();
+    }
+    let mut cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return path.to_path_buf(),
+    };
+    for _ in 0..6 {
+        let candidate = cwd.join(path);
+        if candidate.exists() {
+            return candidate;
+        }
+        if !cwd.pop() {
+            break;
+        }
+    }
+    path.to_path_buf()
 }
 
 #[cfg(test)]
@@ -124,6 +157,25 @@ enabled = true
     fn malformed_toml_returns_error() {
         let result = CoreFilter::from_toml_str("not a valid toml :::");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_path_absolute_returns_unchanged() {
+        // 絕對路徑(即使不存在)也直接回原值,讓 read_to_string 報原本的錯
+        let abs = Path::new("/non/existent/abs.toml");
+        let resolved = resolve_workflow_path(abs);
+        assert_eq!(resolved, abs);
+    }
+
+    #[test]
+    fn resolve_path_existing_relative_returns_unchanged() {
+        // 構造一個臨時檔案在 cwd,relative 路徑直接 hit
+        let tmp = std::env::temp_dir();
+        let probe = tmp.join("__test_workflow_resolve_existing.toml");
+        std::fs::write(&probe, "").unwrap();
+        let resolved = resolve_workflow_path(&probe);
+        assert_eq!(resolved, probe);
+        let _ = std::fs::remove_file(&probe);
     }
 
     #[test]
