@@ -18,14 +18,11 @@
 
 from __future__ import annotations
 
-# 觸發 sys.path 設定(agg / dashboards 可 import)
-from mcp_server import _conn  # noqa: F401
-
+# `from mcp_server import ...` 已透過 __init__.py 觸發 _conn(設 sys.path)
 from fastmcp import FastMCP
 
-# 等 sys.path 設好後再 import tools
-from mcp_server.tools import data as _data_tools  # noqa: E402
-from mcp_server.tools import render as _render_tools  # noqa: E402
+from mcp_server.tools import data as _data_tools
+from mcp_server.tools import render as _render_tools
 
 
 mcp = FastMCP(
