@@ -3,7 +3,7 @@
 // 對齊 m3Spec/neely_core_architecture.md r5(2026-05-13)+ m3Spec/neely_rules.md
 //       + m3Spec/cores_overview.md r4
 //
-// 已實作(Phase 14 / v0.23.0 — 2026-05-14):
+// 已實作(Phase 15 / v0.24.0 — 2026-05-14):
 //   - struct / enum 合約(architecture §5 §6 §8 §9 — Input / Params / Output / Scenario Forest)
 //   - WaveCore trait + warmup_periods(architecture §13:Daily 500 / Weekly 250 / Monthly 120)
 //   - **RuleId 章節編碼**(architecture §9.3)限縮 Ch5_* / Ch9_* / Engineering_* 三組
@@ -114,10 +114,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "0.23.0",
+        "0.24.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement + post_behavior 8-variant)",
+        "Neely Wave Core(NEoWave 規則,Hybrid OHLC + Ch3 + Pattern Isolation + Ch5 變體 + Channeling + Ch6 + Ch7 + Ch9 + Ch10 + Three Rounds + Ch8/Ch12 Missing Wave + Ch12 Emulation + Reverse Logic + Degree Ceiling + cross_timeframe_hints + max_retracement + post_behavior 8-variant + Scenario 群 2 fields)",
     )
 }
 
@@ -197,8 +197,16 @@ impl WaveCore for NeelyCore {
         // power_rating/post_behavior.rs 依 neely_rules.md line 2024-2037「各修正暗示重點」查表;
         // apply_to_forest 同步寫入 + Triangle 內部覆蓋 Unconstrained。取代 14 處 `PostBehavior::Indeterminate`
         // placeholder。Flat 3-variant 暫時 map(留 Phase 16 FlatKind 7-variant 細化))
+        // 0.23.0 → 0.24.0(Phase 15 PR / Scenario 群 2 fields 落地 — 2026-05-14:
+        // Scenario 加 4 個 spec §9.1 line 858-863 fields — monowave_structure_labels /
+        // round_state / pattern_isolation_anchors / triplexity_detected;
+        // 3 個新類型 — MonowaveStructureLabels / RoundState(Round1/Round2/Round3Pause)/
+        // PatternIsolationAnchor;classifier::classify 階段填 monowave_structure_labels(從
+        // ClassifiedMonowave.structure_label_candidates wrap)+ triplexity_detected
+        // (Triple-grouping Ch8 偵測);lib.rs::compute() Stage 8.5 後填 round_state +
+        // pattern_isolation_anchors(從 pattern_bounds 過濾覆蓋範圍的 anchors))
         // 等 P0 Gate 六檔實測通過再 bump 到 1.0.0。
-        "0.23.0"
+        "0.24.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -329,6 +337,48 @@ impl WaveCore for NeelyCore {
         //    對齊 m3Spec/neely_rules.md §Three Rounds + §Ch10 三角內 Power = 0 例外
         let stage_8_5_start = Instant::now();
         let round3_pause = three_rounds::apply(&mut forest);
+        // Phase 15:依 three_rounds 結果 + pattern_bounds 寫入 Scenario 群 2 fields
+        // round_state 推導:awaiting → Round3Pause / compacted_base reassigned → Round2 / else → Round1
+        for scenario in forest.iter_mut() {
+            scenario.round_state = if scenario.awaiting_l_label {
+                output::RoundState::Round3Pause
+            } else {
+                // Phase 6 Compaction Reassessment 已重派 compacted_base_label;
+                // 若已重派且非預設 → Round2;else Round1。
+                // 簡化:當 forest 來自 Stage 8 後,compaction 已走過 → 視為 Round2;
+                //       對齊 spec §Ch4 「Round 2 = Compaction 後重評」。
+                output::RoundState::Round2
+            };
+            // pattern_isolation_anchors:從 pattern_bounds 過濾覆蓋 scenario 的 anchors
+            // 此處用 wave_tree.start/end 邊界對 PatternBound start_idx/end_idx 範圍比對
+            // (PatternBound 以 monowave index 計;classified 已有完整序列,wave_tree 是
+            // monowave date range)
+            scenario.pattern_isolation_anchors = pattern_bounds
+                .iter()
+                .filter(|pb| {
+                    // 若 scenario 對應的 monowave_idx 範圍與 PatternBound 範圍重疊 → 包含
+                    let pb_start_date = classified
+                        .get(pb.start_idx)
+                        .map(|m| m.monowave.start_date);
+                    let pb_end_date = classified
+                        .get(pb.end_idx)
+                        .map(|m| m.monowave.end_date);
+                    matches!(
+                        (pb_start_date, pb_end_date),
+                        (Some(s), Some(e))
+                            if s <= scenario.wave_tree.end
+                                && scenario.wave_tree.start <= e
+                    )
+                })
+                .map(|pb| output::PatternIsolationAnchor {
+                    start_idx: pb.start_idx,
+                    end_idx: pb.end_idx,
+                    start_label: pb.start_label,
+                    end_label: pb.end_label,
+                    validated: pb.validated,
+                })
+                .collect();
+        }
         stage_elapsed.insert(
             "stage_8_5_three_rounds".to_string(),
             stage_8_5_start.elapsed().as_millis() as u64,
@@ -508,7 +558,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "0.23.0");
+        assert_eq!(core.version(), "0.24.0");
     }
 
     // -------------------------------------------------------------

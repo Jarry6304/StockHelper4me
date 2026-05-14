@@ -28,9 +28,9 @@
 
 use crate::candidates::WaveCandidate;
 use crate::output::{
-    compaction_base_label, ComplexityLevel, DiagonalKind, FibZone, NeelyPatternType,
-    PostBehavior, PowerRating, RuleId, Scenario, StructuralFacts, StructureLabel,
-    Trigger, WaveNode, ZigzagKind,
+    compaction_base_label, CombinationKind, ComplexityLevel, DiagonalKind, FibZone,
+    MonowaveStructureLabels, NeelyPatternType, PostBehavior, PowerRating, RoundState,
+    RuleId, Scenario, StructuralFacts, StructureLabel, Trigger, WaveNode, ZigzagKind,
 };
 use crate::monowave::ClassifiedMonowave;
 use crate::validator::ValidationReport;
@@ -74,6 +74,13 @@ pub fn classify(
 
     let compacted_base = compaction_base_label(&pattern_type);
 
+    // Phase 15:Scenario 群 2 fields 從現有 pipeline output 萃取
+    let monowave_structure_labels = build_monowave_structure_labels(candidate, classified);
+    let triplexity_detected = detect_triplexity(&pattern_type);
+    // round_state / pattern_isolation_anchors classifier 階段預設 Round1 / 空 vec —
+    // Stage 8 (three_rounds::apply) 之後由 lib.rs::compute 套 post-classifier 寫入(類似
+    // power_rating::apply_to_forest 模式)。
+
     Some(Scenario {
         id: candidate.id.clone(),
         wave_tree,
@@ -96,11 +103,55 @@ pub fn classify(
         deferred_rules_count: report.deferred.len(),
         invalidation_triggers: Vec::<Trigger>::new(), // Stage 10c triggers 補
         expected_fib_zones: Vec::<FibZone>::new(),    // Stage 10b Fibonacci 補
-        structural_facts: StructuralFacts::default(),  // Stage 5+ 補
+        structural_facts: StructuralFacts::default(),  // Phase 17 補 7 sub-fields
         advisory_findings: Vec::new(),
-            in_triangle_context: false,
-            awaiting_l_label: false,                 // Stage 7.5 advanced_rules 後填
+        in_triangle_context: false,
+        awaiting_l_label: false,                       // Stage 8 three_rounds 後填
+        // Phase 15 新增
+        monowave_structure_labels,
+        round_state: RoundState::Round1,               // Stage 8 三輪邏輯之後 override(Stage 1 結果)
+        pattern_isolation_anchors: Vec::new(),         // lib.rs::compute 從 pattern_bounds 過濾後寫入
+        triplexity_detected,
     })
+}
+
+/// Phase 15:從 ClassifiedMonowave.structure_label_candidates 萃取 monowave_structure_labels。
+///
+/// 對齊 spec §9.1 line 859 — 1:1 對應 candidate.monowave_indices 順序。
+fn build_monowave_structure_labels(
+    candidate: &WaveCandidate,
+    classified: &[ClassifiedMonowave],
+) -> Vec<MonowaveStructureLabels> {
+    candidate
+        .monowave_indices
+        .iter()
+        .enumerate()
+        .map(|(seq_idx, &mw_idx)| MonowaveStructureLabels {
+            monowave_index: seq_idx,
+            labels: classified[mw_idx].structure_label_candidates.clone(),
+        })
+        .collect()
+}
+
+/// Phase 15:從 pattern_type 直接推導 triplexity_detected(spec §9.1 line 863 + Ch8)。
+///
+/// Triplexity = Triple-grouping patterns(spec Ch8 Table A/B):
+///   TripleZigzag / TripleCombination / TripleThree / TripleThreeCombination / TripleThreeRunning
+fn detect_triplexity(pattern: &NeelyPatternType) -> bool {
+    if let NeelyPatternType::Combination { sub_kinds } = pattern {
+        sub_kinds.iter().any(|k| {
+            matches!(
+                k,
+                CombinationKind::TripleZigzag
+                    | CombinationKind::TripleCombination
+                    | CombinationKind::TripleThree
+                    | CombinationKind::TripleThreeCombination
+                    | CombinationKind::TripleThreeRunning
+            )
+        })
+    } else {
+        false
+    }
 }
 
 /// 5-wave classifier:用 Ch5_Overlap_Trending vs Ch5_Overlap_Terminal 兩條規則 fail 模式判別。
@@ -494,5 +545,82 @@ mod tests {
         let _: FlatKind = FlatKind::Regular;
         let _: TriangleKind = TriangleKind::Contracting;
         let _: CombinationKind = CombinationKind::DoubleThree;
+    }
+
+    // ── Phase 15 unit tests ─────────────────────────────────────────────
+
+    #[test]
+    fn detect_triplexity_for_triple_combination() {
+        // TripleZigzag / TripleCombination / TripleThree / TripleThreeCombination /
+        // TripleThreeRunning 都應觸發 triplexity_detected = true
+        for kind in [
+            CombinationKind::TripleZigzag,
+            CombinationKind::TripleCombination,
+            CombinationKind::TripleThree,
+            CombinationKind::TripleThreeCombination,
+            CombinationKind::TripleThreeRunning,
+        ] {
+            let pattern = NeelyPatternType::Combination {
+                sub_kinds: vec![kind],
+            };
+            assert!(
+                detect_triplexity(&pattern),
+                "expected triplexity_detected = true for {:?}",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn detect_triplexity_false_for_double_or_non_combination() {
+        // Double* variants 應不觸發 triplexity
+        let pattern_double = NeelyPatternType::Combination {
+            sub_kinds: vec![CombinationKind::DoubleZigzag],
+        };
+        assert!(!detect_triplexity(&pattern_double));
+
+        // 非 Combination 應不觸發
+        let pattern_impulse = NeelyPatternType::Impulse;
+        assert!(!detect_triplexity(&pattern_impulse));
+
+        let pattern_zigzag = NeelyPatternType::Zigzag {
+            sub_kind: crate::output::ZigzagKind::Triple, // 注意:ZigzagKind::Triple 不是 Triplexity
+        };
+        assert!(!detect_triplexity(&pattern_zigzag));
+    }
+
+    #[test]
+    fn build_monowave_structure_labels_one_to_one() {
+        // 構造 3-wave candidate,每 monowave 預先填 1 個 candidate label,確認 1:1 對應
+        let mut classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 105.0, MonowaveDirection::Down),
+            cmw(105.0, 120.0, MonowaveDirection::Up),
+        ];
+        // 填一些 candidate labels
+        classified[0].structure_label_candidates = vec![crate::output::StructureLabelCandidate {
+            label: crate::output::StructureLabel::Five,
+            certainty: crate::output::Certainty::Primary,
+        }];
+        classified[1].structure_label_candidates = vec![crate::output::StructureLabelCandidate {
+            label: crate::output::StructureLabel::Three,
+            certainty: crate::output::Certainty::Possible,
+        }];
+
+        let candidate = WaveCandidate {
+            id: "c3".to_string(),
+            monowave_indices: vec![0, 1, 2],
+            wave_count: 3,
+            initial_direction: MonowaveDirection::Up,
+        };
+
+        let labels = build_monowave_structure_labels(&candidate, &classified);
+        assert_eq!(labels.len(), 3);
+        assert_eq!(labels[0].monowave_index, 0);
+        assert_eq!(labels[0].labels.len(), 1);
+        assert_eq!(labels[1].monowave_index, 1);
+        assert_eq!(labels[1].labels.len(), 1);
+        assert_eq!(labels[2].monowave_index, 2);
+        assert_eq!(labels[2].labels.len(), 0); // 預設空
     }
 }

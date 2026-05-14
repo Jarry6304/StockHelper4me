@@ -146,6 +146,10 @@ mod tests {
             advisory_findings: Vec::new(),
             in_triangle_context: false,
             awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
         }
     }
 

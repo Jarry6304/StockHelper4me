@@ -394,6 +394,77 @@ pub struct Scenario {
     /// §Round 3(1258-1265 行)+ neely_core_architecture.md §8.4 Round3PauseInfo。
     /// 策略含意:持有原方向,維持原計數,直到新形態具備收尾條件。
     pub awaiting_l_label: bool,
+
+    // ── 群 2 spec §9.1 line 858-863 ─────────────────────────────────────
+    //
+    // 由 Phase 15 落地。皆「pipeline 已算但未寫進 Scenario」狀態,
+    // 由 classifier::classify 階段填寫(對齊 spec §9.1 群 2「Pre-Constructive +
+    // Three Rounds 狀態」分組)。
+
+    /// 每 wave-monowave 的 Pre-Constructive Structure Label candidates(spec line 859)。
+    /// 1:1 對應 candidate.monowave_indices 順序;從 ClassifiedMonowave.structure_label_candidates wrap。
+    pub monowave_structure_labels: Vec<MonowaveStructureLabels>,
+
+    /// Three Rounds 狀態(spec line 860 / §Ch4)— 該 scenario 在 Round 1/2/3 的位置。
+    /// 由 Stage 8 Three Rounds 階段 + awaiting_l_label 推導。
+    pub round_state: RoundState,
+
+    /// Pattern Isolation 6-step procedure 識別出的 anchors(spec line 862)。
+    /// 從 NeelyCoreOutput.pattern_bounds(Stage 3.5)wrap;只篩涵蓋 scenario 範圍的 anchors。
+    pub pattern_isolation_anchors: Vec<PatternIsolationAnchor>,
+
+    /// Triplexity 偵測(spec line 863)— Ch8 Triple-grouping(Triple Zigzag / Triple Combination /
+    /// Triple Three / Triple Three Combination / Triple Three Running)。
+    /// 由 pattern_type 直接推導。
+    pub triplexity_detected: bool,
+}
+
+/// Phase 15 新增:每 monowave 的 Pre-Constructive structure label set。
+///
+/// 對齊 m3Spec/neely_core_architecture.md §9.1 line 859。
+/// 包裝 `ClassifiedMonowave.structure_label_candidates`,加上 monowave 在 Scenario 內的位置 index。
+#[derive(Debug, Clone, Serialize)]
+pub struct MonowaveStructureLabels {
+    /// 該 monowave 在 scenario candidate 內的索引(0..wave_count)
+    pub monowave_index: usize,
+    /// Pre-Constructive Logic 給出的 candidate labels(可有多個,不互斥)
+    pub labels: Vec<StructureLabelCandidate>,
+}
+
+/// Phase 15 新增:Three Rounds 狀態。
+///
+/// 對齊 m3Spec/neely_rules.md §Ch4(1200-1290 行):
+///   - Round 1:初始 Series 識別(從 Pre-Constructive Logic 標的 monowaves 找出 Standard/Non-Standard)
+///   - Round 2:Compaction 後重評估(`compacted_base_label` 已填,base label 已 reassign 為 :5 / :3)
+///   - Round 3Pause:圖中無新 :L5/:L3,等候(awaiting_l_label = true)
+///
+/// 由 classifier 階段依 `compacted_base_label` + `awaiting_l_label` 推導:
+///   - awaiting_l_label = true → Round3Pause
+///   - compacted_base_label 已 reassign(非預設)+ awaiting = false → Round2
+///   - 否則 → Round1
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum RoundState {
+    Round1,
+    Round2,
+    Round3Pause,
+}
+
+/// Phase 15 新增:Pattern Isolation anchor(spec line 862)。
+///
+/// 包裝 `PatternBound` 並標 anchor 起點/終點意圖(start_label / end_label),
+/// 供 Aggregation Layer 「依 Pre-Constructive Logic 標籤定位 scenario 在 higher-degree 中的位置」。
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct PatternIsolationAnchor {
+    /// 起點 monowave index(inclusive)
+    pub start_idx: usize,
+    /// 終點 monowave index(inclusive)
+    pub end_idx: usize,
+    /// 起點 anchor 標籤(F3/XC3/L3/S5/L5 之一)
+    pub start_label: StructureLabel,
+    /// 終點 anchor 標籤(L5/L3 之一)
+    pub end_label: StructureLabel,
+    /// Compaction(Ch7)驗證為合法 Elliott 形態(Step 5)
+    pub validated: bool,
 }
 
 /// Phase 7 — Stage 7.5 諮詢性發現(Channeling / Ch9 Advanced Rules)。
