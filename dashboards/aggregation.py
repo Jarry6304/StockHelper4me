@@ -35,6 +35,7 @@ from agg import as_of_with_ohlc  # noqa: E402
 
 from dashboards.charts import (  # noqa: E402
     candlestick,
+    chip,
     facts_cloud,
     indicators,
     overlays,
@@ -218,7 +219,38 @@ with tab_kline:
 # ──────── Tab 2-6 stub(Phase C-4 ~ C-8 接) ────────
 
 with tab_chip:
-    st.info("💰 Chip Tab 留 Phase C-4(institutional / margin / foreign_holding / day_trading / shareholder)")
+    if not ohlc:
+        st.warning(f"price_daily_fwd 無 {stock_id} 資料")
+    else:
+        chip_fig = chip.build_chip_figure(
+            ohlc,
+            institutional=indicators_dict.get("institutional_core@daily"),
+            margin=indicators_dict.get("margin_core@daily"),
+            foreign_holding=indicators_dict.get("foreign_holding_core@daily"),
+            day_trading=indicators_dict.get("day_trading_core@daily"),
+            shareholder=indicators_dict.get("shareholder_core@weekly"),
+        )
+        # Chip facts markers(institutional/margin/foreign/day_trading/shareholder → 對應 row)
+        chip_facts = [
+            f for f in facts_list
+            if f.get("source_core") in {
+                "institutional_core", "margin_core",
+                "foreign_holding_core", "day_trading_core", "shareholder_core",
+            }
+        ]
+        if chip_facts:
+            chip_row_map = {
+                "institutional_core":  2,
+                "margin_core":         3,
+                "foreign_holding_core": 4,
+                "day_trading_core":    5,
+                "shareholder_core":    5,
+            }
+            facts_cloud.add_facts_to_kline(
+                chip_fig, chip_facts, row_map=chip_row_map, default_row=1,
+            )
+        chip_fig.update_layout(height=900)
+        st.plotly_chart(chip_fig, use_container_width=True)
 
 with tab_fund:
     st.info("📊 Fundamental Tab 留 Phase C-5(revenue / valuation / financial_statement)")
