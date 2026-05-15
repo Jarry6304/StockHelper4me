@@ -1122,6 +1122,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kalman_filter_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kd_core"
 version = "0.1.0"
 dependencies = [
@@ -1249,6 +1263,20 @@ dependencies = [
  "fact_schema",
  "inventory",
  "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "magic_formula_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "fundamental_loader",
+ "inventory",
  "serde",
  "serde_json",
 ]
@@ -2518,10 +2546,12 @@ dependencies = [
  "futures",
  "ichimoku_core",
  "institutional_core",
+ "kalman_filter_core",
  "kd_core",
  "keltner_core",
  "ma_core",
  "macd_core",
+ "magic_formula_core",
  "margin_core",
  "market_margin_core",
  "mfi_core",

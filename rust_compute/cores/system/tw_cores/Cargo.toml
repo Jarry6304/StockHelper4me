@@ -43,6 +43,9 @@ support_resistance_core     = { path = "../../indicator/support_resistance_core"
 candlestick_pattern_core    = { path = "../../indicator/candlestick_pattern_core" }
 trendline_core              = { path = "../../indicator/trendline_core" }
 
+# Statistical / state-space Cores(P3 — v3.4)
+kalman_filter_core          = { path = "../../indicator/kalman_filter_core" }
+
 # Chip Cores(P2 — 5)
 day_trading_core      = { path = "../../chip/day_trading_core" }
 institutional_core    = { path = "../../chip/institutional_core" }
@@ -50,10 +53,11 @@ margin_core           = { path = "../../chip/margin_core" }
 foreign_holding_core  = { path = "../../chip/foreign_holding_core" }
 shareholder_core      = { path = "../../chip/shareholder_core" }
 
-# Fundamental Cores(P2 — 3)
+# Fundamental Cores(P2 — 3 + v3.4 magic_formula)
 revenue_core              = { path = "../../fundamental/revenue_core" }
 valuation_core            = { path = "../../fundamental/valuation_core" }
 financial_statement_core  = { path = "../../fundamental/financial_statement_core" }
+magic_formula_core        = { path = "../../fundamental/magic_formula_core" }
 
 # Environment Cores(P2 — 5)
 taiex_core            = { path = "../../environment/taiex_core" }

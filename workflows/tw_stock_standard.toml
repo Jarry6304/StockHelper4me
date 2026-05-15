@@ -232,6 +232,19 @@ enabled  = true
 priority = "P2"
 
 # ─────────────────────────────────────────────────────────
+# v3.4 cores(MCP toolkit v3 用 — Magic Formula + Kalman Filter)
+# ─────────────────────────────────────────────────────────
+[[cores]]
+name     = "magic_formula_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "kalman_filter_core"
+enabled  = true
+priority = "P3"
+
+# ─────────────────────────────────────────────────────────
 # 寫入策略(對齊 cores_overview §7.1)
 # ─────────────────────────────────────────────────────────
 [output]
