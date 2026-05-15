@@ -1,9 +1,7 @@
 """
 bronze/phase_executor.py
 ------------------------
-Phase 1-6(Bronze 收集)排程引擎。PR #21-A 收尾從 src/phase_executor.py 搬到
-src/bronze/(blueprint §三 結構工 — phase 1-6 屬 bronze,phase 7 屬 silver,
-本檔對齊 src/silver/orchestrator.py 的 Phase 7 排程)。
+Phase 1-6(Bronze 收集)排程引擎。
 
 負責依 Phase 1→6 順序執行各 API 蒐集任務:
 - Phase 1:META(全市場)
@@ -13,26 +11,73 @@ src/bronze/(blueprint §三 結構工 — phase 1-6 屬 bronze,phase 7 屬 silve
 - Phase 5:CHIP / FUNDAMENTAL
 - Phase 6:MACRO
 
-Phase 1 完成後需重新解析股票清單(先雞後蛋問題)。
+v3.3 改動(對齊 plan §規格 4):
+- `_run_api` 從序列 `for stock_id: for segment: ...` 改 `asyncio.gather`
+  並發,搭配 `asyncio.Semaphore(BRONZE_CONCURRENCY)` 限同時 in-flight 任務數
+- RateLimiter 是真正 throttle(5700/hr Sponsor ≈ 1.58/s),Semaphore 防爆
+  連線 / memory
+- v1.36 short-circuit fix 共存:用 `_DatasetErrorTracker` class 持 streak
+  counter + `asyncio.Event` abort signal;**保留** `_DATASET_ERROR_CODES` /
+  `_DATASET_ERROR_STREAK_THRESHOLD` class constants(既有 tests 不破)
+- env knob `BRONZE_CONCURRENCY` 可緊急 dial-down(預設 12)
 
-Imports 不變:本檔仍 import `aggregators` / `api_client` / `config_loader` 等
-src/ root modules — pyproject.toml 的 editable install 把 src/ 加進 sys.path,
-從 src/bronze/ 也能 import src/ root modules 沒問題。
+Phase 1 完成後需重新解析股票清單(先雞後蛋問題)。
 """
 
+import asyncio
 import logging
+import os
+from dataclasses import dataclass, field
 from typing import Callable
 
 from aggregators import apply_aggregation
 from api_client import ALL_MARKET_SENTINEL, APIError, FinMindClient
 from config_loader import ApiConfig, CollectorConfig, StockListConfig
 from date_segmenter import DateSegmenter
-from db import DBWriter   # 改成 type hint 用,實際 instantiate 由呼叫方傳入
+from db import DBWriter
 from field_mapper import FieldMapper
 import stock_resolver
 from sync_tracker import SyncTracker
 
 logger = logging.getLogger("collector.phase_executor")
+
+
+# Spec 4 並發上限:env BRONZE_CONCURRENCY 覆蓋(預設 12)。
+# rollback knob:緊急 disable 並發改 1,行為退回近似序列(asyncio.gather 仍跑但只 1-in-flight)。
+_DEFAULT_BRONZE_CONCURRENCY = 12
+
+
+@dataclass
+class _DatasetErrorTracker:
+    """Spec 4 並發 + v1.36 short-circuit 共存的協作物件。
+
+    在 asyncio.gather 並發場景下,若 dataset 整體被 FinMind 拒絕(403/404/422),
+    100+ tasks 平行起跑時 streak 累計到 5 之前後面 99 個 request 已發出。
+    本 tracker 用 asyncio.Event abort signal:
+      - 每個 task 跑前先 check `aborted.is_set()` → 若是直接 return,不發 request
+      - APIError 後若 status_code ∈ DATASET_ERROR_CODES → increment();超
+        threshold → `aborted.set()`,通知尚未起跑的 task 跳過
+
+    並發安全:streak / lock 在 asyncio 單執行緒下不需顯式 lock(原子 int +=
+    在 Python 仍是 thread-safe;asyncio await 點才會切換 task)。
+    """
+    threshold: int
+    error_codes: frozenset[int]
+    streak: int = 0
+    aborted: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def record_error(self, status_code: int | None) -> None:
+        """APIError 後呼叫。dataset-level error 累計;非 dataset-level reset。"""
+        if status_code in self.error_codes:
+            self.streak += 1
+            if self.streak >= self.threshold:
+                self.aborted.set()
+        else:
+            self.streak = 0
+
+    def record_success(self) -> None:
+        """成功 fetch 後 reset streak。"""
+        self.streak = 0
 
 
 class PhaseExecutor:
@@ -150,12 +195,20 @@ class PhaseExecutor:
     # ---- Short-circuit thresholds for dataset-level errors -----------------
     # 連續 N 次同 dataset 收到 dataset-level error(403 / 404 / 422)→ abort 整個 entry
     # 剩餘 stocks(對齊「FinMind quota / tier / dataset 下架等系統性問題,不該 retry 1700+ 股」場景)
+    # v3.3 保留 class constants(既有 tests 不破),但實際短路邏輯改走 _DatasetErrorTracker。
     _DATASET_ERROR_CODES: frozenset[int] = frozenset({403, 404, 422})
     _DATASET_ERROR_STREAK_THRESHOLD: int = 5
 
     async def _run_api(self, api_config: ApiConfig, mode: str) -> None:
         """
-        執行單一 API 設定的所有股票 × 日期段組合。
+        執行單一 API 設定的所有股票 × 日期段組合(v3.3 並發版)。
+
+        v3.3 改動:
+        - 把單 segment 處理邏輯抽 inner closure `_process_segment`
+        - 蒐集所有 (stock, segment) tasks → `asyncio.gather` 並發
+        - `asyncio.Semaphore(_DEFAULT_BRONZE_CONCURRENCY)` 限同時 in-flight
+        - `_DatasetErrorTracker` 處理 short-circuit + asyncio.Event abort signal
+        - dry_run mode 仍跑 gather,但 _process_segment 內早 return 不發 request
 
         Args:
             api_config: API 設定
@@ -164,32 +217,59 @@ class PhaseExecutor:
         stock_ids = self._resolve_stock_ids(api_config)
         has_post_process = bool(api_config.post_process)
 
-        # Short-circuit:連續 dataset-level error 計數(403/404/422)。
-        # 滿閾值 → log + abort 此 entry 剩餘 stocks(不 reset is_dirty,留下次重試)。
-        dataset_error_streak = 0
+        # env knob:緊急可改 BRONZE_CONCURRENCY=1 退回近似序列
+        concurrency = int(os.getenv("BRONZE_CONCURRENCY", str(_DEFAULT_BRONZE_CONCURRENCY)))
+        sem = asyncio.Semaphore(max(1, concurrency))
 
+        tracker = _DatasetErrorTracker(
+            threshold=self._DATASET_ERROR_STREAK_THRESHOLD,
+            error_codes=self._DATASET_ERROR_CODES,
+        )
+
+        # 預先蒐集 (stock_id, seg_start, seg_end) tasks
+        # date_segmenter.segments 仍是 sync call(查 get_last_sync 走 DB),
+        # 在進入 gather 前一次性算完 — 後續 fetch 才是 IO bound 部分
+        tasks: list[tuple[str, str, str]] = []
         for stock_id in stock_ids:
-            segments = self.date_segmenter.segments(api_config, mode, stock_id)
+            for (seg_start, seg_end) in self.date_segmenter.segments(api_config, mode, stock_id):
+                tasks.append((stock_id, seg_start, seg_end))
 
-            for (seg_start, seg_end) in segments:
-                # 斷點續傳：已完成或空結果的 segment 直接跳過
-                if self.sync_tracker.is_completed(api_config.name, stock_id, seg_start):
-                    logger.info(
-                        f"[Phase {api_config.phase}][{api_config.name}] "
-                        f"Skipped stock={stock_id}, segment={seg_start}~{seg_end} (completed)"
-                    )
-                    continue
+        logger.info(
+            f"[Phase {api_config.phase}][{api_config.name}] "
+            f"Started, total_tasks={len(tasks)}, concurrency={concurrency}"
+        )
 
-                logger.info(
+        async def _process_segment(stock_id: str, seg_start: str, seg_end: str) -> None:
+            """單一 segment 處理(fetch → transform → aggregate → upsert → mark)。
+
+            異常 在內部全 catch(asyncio.gather return_exceptions=False 下,
+            任一 task raise 會 cancel 其餘)。
+            """
+            # short-circuit:abort 後尚未起跑的 task 直接跳過
+            if tracker.aborted.is_set():
+                return
+
+            # 斷點續傳:已完成或空結果直接跳過(v3.3 走 SyncTracker preload cache)
+            if self.sync_tracker.is_completed(api_config.name, stock_id, seg_start):
+                logger.debug(
                     f"[Phase {api_config.phase}][{api_config.name}] "
-                    f"Start stock={stock_id}, segment={seg_start}~{seg_end}"
+                    f"Skipped stock={stock_id}, segment={seg_start}~{seg_end} (completed)"
                 )
+                return
 
-                if self.dry_run:
-                    logger.info("[dry-run] 跳過實際 API 呼叫")
-                    continue
+            if self.dry_run:
+                logger.info(
+                    f"[dry-run][{api_config.name}] stock={stock_id}, "
+                    f"segment={seg_start}~{seg_end}"
+                )
+                return
 
-                # 呼叫 API
+            async with sem:
+                # 進入 critical section 前再 check 一次 abort(若同時 batch 內
+                # 其他 task 觸發 short-circuit,儘可能不再發 API call)
+                if tracker.aborted.is_set():
+                    return
+
                 try:
                     raw_records = await self.client.fetch(
                         api_config, stock_id, seg_start, seg_end
@@ -203,44 +283,39 @@ class PhaseExecutor:
                     self.sync_tracker.mark_failed(
                         api_config.name, stock_id, seg_start, seg_end, str(e)
                     )
+                    tracker.record_error(e.status_code)
+                    if tracker.aborted.is_set():
+                        logger.warning(
+                            f"[Phase {api_config.phase}][{api_config.name}] "
+                            f"連續 {tracker.streak} 次 HTTP {e.status_code} 錯誤,"
+                            f"視為 dataset-level 拒絕(token quota / tier / dataset 下架)。"
+                            f"Abort 此 entry 剩餘 tasks;後續 entries 繼續跑。"
+                            f"診斷:`python scripts/probe_finmind_datasets.py` 看 dataset 權限。"
+                        )
+                    return
+                except Exception as e:
+                    logger.error(
+                        f"非預期錯誤 dataset={api_config.dataset} stock={stock_id} "
+                        f"segment={seg_start}~{seg_end}: {type(e).__name__}: {e}"
+                    )
+                    self.sync_tracker.mark_failed(
+                        api_config.name, stock_id, seg_start, seg_end, str(e)
+                    )
+                    return
 
-                    # Short-circuit:dataset-level error 累計
-                    if e.status_code in self._DATASET_ERROR_CODES:
-                        dataset_error_streak += 1
-                        if dataset_error_streak >= self._DATASET_ERROR_STREAK_THRESHOLD:
-                            logger.warning(
-                                f"[Phase {api_config.phase}][{api_config.name}] "
-                                f"連續 {dataset_error_streak} 次 HTTP {e.status_code} 錯誤,"
-                                f"視為 dataset-level 拒絕(token quota / tier / dataset 下架)。"
-                                f"Abort 此 entry 剩餘 stocks;後續 entries 繼續跑。"
-                                f"診斷:`python scripts/probe_finmind_datasets.py` 看 dataset 權限。"
-                            )
-                            return  # 跳出整個 _run_api,不跑 post_process
-                    else:
-                        # 非 dataset-level error(網路 / 個別股 issue)→ reset streak,
-                        # 繼續對其他 stocks retry
-                        dataset_error_streak = 0
-                    continue
+                tracker.record_success()
 
-                # 成功 → reset streak
-                dataset_error_streak = 0
-
-                # 欄位映射（回傳 rows 與 schema_mismatch 旗標）
+                # 欄位映射(回傳 rows 與 schema_mismatch 旗標)
                 rows, schema_mismatch = self.field_mapper.transform(api_config, raw_records)
-
-                # 若欄位定義與 API 回傳不符，記錄 schema_mismatch（仍繼續入庫）
                 if schema_mismatch:
                     self.sync_tracker.mark_schema_mismatch(
                         api_config.name, stock_id, seg_start, seg_end,
                         record_count=len(rows),
                     )
 
-                # Phase E：聚合策略（pivot / pack）
-                # 在 field_mapper 之後、DB 寫入之前，對需要跨列合併的資料執行聚合
+                # Phase E:聚合策略(pivot / pack)
                 if api_config.aggregation and rows:
                     try:
-                        # institutional 兩個策略需要 trading_dates 過濾掉
-                        # FinMind 週六回的鬼資料；其他策略傳 None 即可
                         td = (
                             self._get_trading_dates()
                             if api_config.aggregation in (
@@ -258,20 +333,29 @@ class PhaseExecutor:
                     except Exception as e:
                         logger.warning(
                             f"[{api_config.name}] aggregation={api_config.aggregation} "
-                            f"失敗，跳過此 segment：{e}"
+                            f"失敗,跳過此 segment:{e}"
                         )
                         self.sync_tracker.mark_failed(
                             api_config.name, stock_id, seg_start, seg_end, str(e)
                         )
-                        continue
+                        return
 
-                # 寫入 DB（merge_strategy 特殊處理）
-                if api_config.merge_strategy == "update_delist_date":
-                    self._merge_delist_date(rows)
-                elif rows:
-                    # PK 從 schema 動態查（DBWriter._table_pks），schema 是 single source of truth
-                    pks = self.db._table_pks(api_config.target_table)
-                    self.db.upsert(api_config.target_table, rows, primary_keys=pks)
+                # 寫入 DB(merge_strategy 特殊處理)
+                try:
+                    if api_config.merge_strategy == "update_delist_date":
+                        self._merge_delist_date(rows)
+                    elif rows:
+                        pks = self.db._table_pks(api_config.target_table)
+                        self.db.upsert(api_config.target_table, rows, primary_keys=pks)
+                except Exception as e:
+                    logger.error(
+                        f"[{api_config.name}] DB 寫入失敗 stock={stock_id} "
+                        f"segment={seg_start}~{seg_end}: {e}"
+                    )
+                    self.sync_tracker.mark_failed(
+                        api_config.name, stock_id, seg_start, seg_end, str(e)
+                    )
+                    return
 
                 # 更新進度
                 status = "empty" if not rows else "completed"
@@ -280,13 +364,22 @@ class PhaseExecutor:
                     status=status, record_count=len(rows),
                 )
 
-                logger.info(
+                logger.debug(
                     f"[Phase {api_config.phase}][{api_config.name}] "
                     f"Done stock={stock_id}, segment={seg_start}~{seg_end}, "
                     f"records={len(rows)}"
                 )
 
-        # Post-process（如 dividend_policy_merge）
+        await asyncio.gather(
+            *(_process_segment(sid, ss, se) for sid, ss, se in tasks),
+            return_exceptions=False,
+        )
+
+        if tracker.aborted.is_set():
+            # short-circuit 觸發 → 不跑 post_process(可能也需重整 streak)
+            return
+
+        # Post-process(如 dividend_policy_merge)
         if has_post_process:
             await self._run_post_process(api_config, stock_ids)
 

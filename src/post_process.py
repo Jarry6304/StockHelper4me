@@ -19,7 +19,6 @@ Phase 2 後處理模組：TaiwanStockDividend 合併邏輯。
 (PR #21 移除 deprecated shim)。
 """
 
-import json
 import logging
 
 from db import DBWriter
@@ -73,190 +72,141 @@ def _recompute_stock_dividend_vf(db: DBWriter, stock_id: str) -> None:
 
 
 # =============================================================================
-# Step 1：修補「權息」混合事件
+# Step 1:修補「權息」混合事件(v3.3 batch SQL,對齊 plan §規格 7)
 # =============================================================================
 
 def _patch_mixed_dividend(db: DBWriter, stock_id: str) -> None:
     """
-    找出 cash_dividend IS NULL 的除權息事件（即「權息」混合事件），
-    從 _dividend_policy_staging 查出明細，補齊 cash_dividend / stock_dividend。
+    找出 cash_dividend IS NULL 的除權息事件(即「權息」混合事件),
+    從 _dividend_policy_staging 查出明細,補齊 cash_dividend / stock_dividend。
+
+    v3.3 改:N+1(每 event 一個 query_one + update)→ 單一 batch UPDATE。
+    對 1700+ 股 × 數年股利政策,從 ~5000 DB round-trip 降到 1 個 SQL。
+
+    對齊 v2.x 公式(同 `_dividend_policy_staging` aggregator 內邏輯):
+      cash_dividend = CashEarningsDistribution + CashStatutorySurplus
+      stock_dividend = (StockEarningsDistribution + StockStatutorySurplus) / 10
 
     Args:
         db:       DBWriter 連線
         stock_id: 股票代碼
     """
-    # 查詢尚未拆分的「權息」混合事件
-    mixed_events = db.query(
-        """
-        SELECT * FROM price_adjustment_events
-        WHERE market = %s AND stock_id = %s AND event_type = 'dividend'
-          AND cash_dividend IS NULL AND stock_dividend IS NULL
-        """,
-        ["TW", stock_id],
-    )
-
-    if not mixed_events:
-        return
-
-    logger.debug(f"{stock_id}: 找到 {len(mixed_events)} 筆待拆分的「權息」混合事件")
-
-    for event in mixed_events:
-        ex_date = event["date"]
-
-        # 從暫存表查對應的股利政策
-        # 注意:detail->>'X' 回傳 TEXT;須 ::date cast 才能跟 ex_date(date 型別)比對
-        # NULLIF 過濾空字串 — 部分 staging 列 detail JSON 把日期欄位寫成 ""
-        # (FinMind 對「未發股利」的政策列回空字串),直接 ''::date 會 raise
-        # invalid input syntax for type date: ""
-        policy = db.query_one(
-            """
-            SELECT * FROM _dividend_policy_staging
-            WHERE market = %s AND stock_id = %s
-              AND (
-                  NULLIF(detail->>'CashExDividendTradingDate', '')::date = %s
-                  OR NULLIF(detail->>'StockExDividendTradingDate', '')::date = %s
-              )
-            """,
-            ["TW", stock_id, ex_date, ex_date],
-        )
-
-        if policy is None:
-            logger.warning(
-                f"{stock_id}: 找不到 ex_date={ex_date} 的股利政策記錄，"
-                f"無法拆分「權息」事件"
-            )
-            continue
-
-        # JSONB 已自動 deserialize 為 dict
-        detail = policy["detail"] if policy["detail"] else {}
-
-        # 計算現金股利（現金股利 + 法定盈餘公積現金）
-        cash_earnings   = _safe_float(detail.get("CashEarningsDistribution", 0))
-        cash_statutory  = _safe_float(detail.get("CashStatutorySurplus", 0))
-        cash_dividend   = cash_earnings + cash_statutory
-
-        # 計算股票股利（每股盈餘轉增資 + 法定盈餘公積轉增資）/ 10（轉換為元/股）
-        stock_earnings  = _safe_float(detail.get("StockEarningsDistribution", 0))
-        stock_statutory = _safe_float(detail.get("StockStatutorySurplus", 0))
-        stock_dividend  = (stock_earnings + stock_statutory) / 10.0
-
-        # 更新 price_adjustment_events
-        db.update(
-            """
-            UPDATE price_adjustment_events
-            SET cash_dividend = %s, stock_dividend = %s
-            WHERE market = 'TW' AND stock_id = %s AND date = %s AND event_type = 'dividend'
-            """,
-            [cash_dividend, stock_dividend, stock_id, ex_date],
-        )
-
+    # NULLIF('','')::numeric → NULL,COALESCE(... , 0) 防 NULL 加總出 NULL
+    sql = """
+        UPDATE price_adjustment_events pae
+           SET cash_dividend  = sub.cash_dividend,
+               stock_dividend = sub.stock_dividend
+          FROM (
+              SELECT
+                  pae.market, pae.stock_id, pae.date, pae.event_type,
+                  (COALESCE(NULLIF(dps.detail->>'CashEarningsDistribution', '')::numeric, 0)
+                   + COALESCE(NULLIF(dps.detail->>'CashStatutorySurplus',  '')::numeric, 0))
+                      AS cash_dividend,
+                  (COALESCE(NULLIF(dps.detail->>'StockEarningsDistribution', '')::numeric, 0)
+                   + COALESCE(NULLIF(dps.detail->>'StockStatutorySurplus',  '')::numeric, 0))
+                  / 10.0 AS stock_dividend
+              FROM price_adjustment_events pae
+              JOIN _dividend_policy_staging dps
+                ON dps.market   = pae.market
+               AND dps.stock_id = pae.stock_id
+               AND (
+                   NULLIF(dps.detail->>'CashExDividendTradingDate',  '')::date = pae.date
+                OR NULLIF(dps.detail->>'StockExDividendTradingDate', '')::date = pae.date
+               )
+             WHERE pae.market = %s
+               AND pae.stock_id = %s
+               AND pae.event_type = 'dividend'
+               AND pae.cash_dividend  IS NULL
+               AND pae.stock_dividend IS NULL
+          ) AS sub
+         WHERE pae.market     = sub.market
+           AND pae.stock_id   = sub.stock_id
+           AND pae.date       = sub.date
+           AND pae.event_type = sub.event_type
+    """
+    affected = db.update(sql, ["TW", stock_id])
+    if affected > 0:
         logger.debug(
-            f"{stock_id} {ex_date}: 「權息」拆分完成 "
-            f"cash={cash_dividend}, stock={stock_dividend}"
+            f"{stock_id}: 「權息」拆分完成,{affected} 筆 event 從 staging 補齊 "
+            f"cash_dividend / stock_dividend"
         )
 
 
 # =============================================================================
-# Step 2：偵測純現增事件
+# Step 2:偵測純現增事件(v3.3 batch SQL,對齊 plan §規格 7)
 # =============================================================================
 
 def _detect_capital_increase(db: DBWriter, stock_id: str) -> None:
     """
-    找出 _dividend_policy_staging 中有現金增資（CashIncreaseSubscriptionRate > 0）
-    但 price_adjustment_events 中無對應日期記錄的情況，
-    將其插入為 capital_increase 事件。
+    找出 _dividend_policy_staging 中有現金增資
+    (CashIncreaseSubscriptionpRrice > 0)但 price_adjustment_events 無對應
+    日期記錄的情況,批次插入為 capital_increase 事件。
 
-    ⚠️ AF 計算完全移交 Rust Phase 4（step 1.5）處理：
-    此時 Phase 3（price_daily）尚未入庫，無法計算 AF。
-    Python 只寫入原始訂閱資料，Rust 在 Phase 4 補算。
+    v3.3 改:N+1(每 ci 一個 query_one + insert)→ 單一 batch
+    INSERT ... SELECT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING。
+
+    ⚠️ AF 計算完全移交 Rust Phase 4 處理(此時 Phase 3 price_daily 尚未入庫,
+    無法計算 AF)。Python 只寫入原始訂閱資料,Rust 在 Phase 4 從
+    detail.subscription_price + raw_prices 反推 AF(在記憶體現算,不寫回 DB)。
 
     Args:
         db:       DBWriter 連線
         stock_id: 股票代碼
     """
-    # 查詢有現金增資的股利政策
-    capital_increases = db.query(
-        """
-        SELECT * FROM _dividend_policy_staging
-        WHERE market = %s AND stock_id = %s
-          AND (detail->>'CashIncreaseSubscriptionpRrice')::numeric > 0
-        """,
-        ["TW", stock_id],
-    )
-
-    for ci in capital_increases:
-        detail = ci["detail"] if ci["detail"] else {}
-
-        # 取得除權日（優先使用股票除權日，其次現金除息日）
-        ex_date = (
-            detail.get("StockExDividendTradingDate")
-            or detail.get("CashExDividendTradingDate")
-        )
-
-        if not ex_date:
-            logger.warning(f"{stock_id}: 現增事件無 ex_date，跳過")
-            continue
-
-        # 檢查 price_adjustment_events 中是否已有對應記錄
-        existing = db.query_one(
-            """
-            SELECT 1 FROM price_adjustment_events
-            WHERE market = %s AND stock_id = %s AND date = %s
-            """,
-            ["TW", stock_id, ex_date],
-        )
-
-        if existing:
-            # 已有記錄（可能是 dividend_result 已涵蓋），不重複插入
-            continue
-
-        # 純現增事件，TaiwanStockDividendResult 中無對應記錄
-        subscription_price = _safe_float(detail.get("CashIncreaseSubscriptionpRrice", 0))
-        subscription_rate  = _safe_float(detail.get("CashIncreaseSubscriptionRate", 0))
-        total_new_shares   = detail.get("TotalNumberOfCashCapitalIncrease")
-        participating_shares = detail.get("ParticipateDistributionOfTotalShares")
-
+    # 取除權日:優先 StockExDividendTradingDate,fallback CashExDividendTradingDate
+    # detail JSON 寫成 status='pending_rust_phase4' 觸發 Rust patch_capital_increase_af
+    sql = """
+        INSERT INTO price_adjustment_events
+            (market, stock_id, date, event_type, before_price, volume_factor, detail)
+        SELECT
+            'TW', %s,
+            COALESCE(
+                NULLIF(dps.detail->>'StockExDividendTradingDate', '')::date,
+                NULLIF(dps.detail->>'CashExDividendTradingDate',  '')::date
+            ) AS ex_date,
+            'capital_increase',
+            NULL,
+            1.0,
+            jsonb_build_object(
+                'subscription_price',          NULLIF(dps.detail->>'CashIncreaseSubscriptionpRrice', '')::numeric,
+                'subscription_rate_raw',       NULLIF(dps.detail->>'CashIncreaseSubscriptionRate',   '')::numeric,
+                'total_new_shares',            dps.detail->>'TotalNumberOfCashCapitalIncrease',
+                'total_participating_shares',  dps.detail->>'ParticipateDistributionOfTotalShares',
+                'source',                      'TaiwanStockDividend',
+                'status',                      'pending_rust_phase4'
+            )
+          FROM _dividend_policy_staging dps
+         WHERE dps.market = 'TW'
+           AND dps.stock_id = %s
+           AND COALESCE(NULLIF(dps.detail->>'CashIncreaseSubscriptionpRrice', '')::numeric, 0) > 0
+           AND COALESCE(
+                NULLIF(dps.detail->>'StockExDividendTradingDate', '')::date,
+                NULLIF(dps.detail->>'CashExDividendTradingDate',  '')::date
+           ) IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM price_adjustment_events pae
+                WHERE pae.market = 'TW'
+                  AND pae.stock_id = dps.stock_id
+                  AND pae.date = COALESCE(
+                        NULLIF(dps.detail->>'StockExDividendTradingDate', '')::date,
+                        NULLIF(dps.detail->>'CashExDividendTradingDate',  '')::date
+                      )
+           )
+         ON CONFLICT DO NOTHING
+    """
+    affected = db.update(sql, [stock_id, stock_id])
+    if affected > 0:
         logger.warning(
-            f"Pure capital increase detected: {stock_id} on {ex_date}, "
-            f"subscription_price={subscription_price}, "
-            f"subscription_rate={subscription_rate}. "
+            f"Pure capital increase detected: stock={stock_id}, "
+            f"inserted {affected} capital_increase events. "
             f"AF deferred to Rust Phase 4 (in-memory)."
-        )
-
-        # 插入暫時記錄。v3.2 PR #17 後 events 表砍 adjustment_factor / after_price /
-        # source 欄,AF 由 Rust patch_capital_increase_af 在記憶體現算
-        # (從 detail.subscription_price + raw_prices 反推),不再 UPDATE 寫回 DB。
-        db.insert(
-            "price_adjustment_events",
-            {
-                "market":            "TW",
-                "stock_id":          stock_id,
-                "date":              ex_date,
-                "event_type":        "capital_increase",
-                "before_price":      None,     # 需從 price_daily 補查(留 Rust 內聯處理)
-                "volume_factor":     1.0,      # capital_increase 預設 vf=1.0
-                "detail":            json.dumps(
-                    {
-                        "subscription_price":          subscription_price,
-                        "subscription_rate_raw":       subscription_rate,
-                        "total_new_shares":            total_new_shares,
-                        "total_participating_shares":  participating_shares,
-                        "source":                      "TaiwanStockDividend",
-                        "status":                      "pending_rust_phase4",
-                    },
-                    ensure_ascii=False,
-                ),
-            },
         )
 
 
 # =============================================================================
 # 工具函式
 # =============================================================================
-
-def _safe_float(value) -> float:
-    """安全地將值轉換為 float，無法轉換時回傳 0.0"""
-    try:
-        return float(value) if value is not None else 0.0
-    except (TypeError, ValueError):
-        return 0.0
+# v3.3:_safe_float / _patch_mixed_dividend 內 Python 端拆分邏輯整段砍 —
+# batch SQL 把計算 inline 進 UPDATE FROM (...) sub。CashEarningsDistribution
+# 等 detail key 走 NULLIF('','')::numeric + COALESCE(... , 0),語意對齊
+# 既有 _safe_float(value or 0)。
