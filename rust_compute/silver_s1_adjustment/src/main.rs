@@ -1,14 +1,18 @@
 //! tw_stock_compute — Phase 4 後復權計算與 K 線聚合 (C5 完整版)
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate};
 use clap::Parser;
+use futures::stream::{self, StreamExt};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use tokio::sync::Mutex;
 
 const EXPECTED_SCHEMA_VERSION: &str = "3.2";
 
@@ -77,84 +81,120 @@ struct Summary {
     elapsed_ms: u128,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct ErrorEntry { stock_id: String, reason: String }
 
 // ─────────────────────────────────────────────
-// 主程式
+// 主程式(v3.3 並行 buffer_unordered)
 // ─────────────────────────────────────────────
+//
+// 並行策略對齊 plan §規格 5:
+//   - worker_threads 從 2 → 8(讓 tokio runtime 真用上多核)
+//   - max_connections 從 1 → 16(每個 in-flight task 一條 conn,留 2× buffer)
+//   - stream::iter + buffer_unordered(8) 平行 process_stock
+//     (8 in-flight tasks,留 max_connections/2 buffer 避免 conn 用光)
+//   - AtomicBool cancel flag + SIGTERM/Ctrl-C handler(unix + windows 兩條 cfg)
+//   - Summary 加 interrupted bool 反映是否被打斷
+//
+// 為何 buffer_unordered 安全:process_stock 每股獨立 transaction
+// (load → compute → DELETE+INSERT fwd → commit),無 cross-stock state,
+// 平行跑 8 個不會踩 race。
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> Result<()> {
     let args = Args::parse();
     let timer = Instant::now();
 
     let pool = PgPoolOptions::new()
-        .max_connections(1)
+        .max_connections(16)
         .acquire_timeout(std::time::Duration::from_secs(10))
         .connect(&args.database_url)
         .await
-        .with_context(|| format!("無法連線到資料庫：{}", mask_url(&args.database_url)))?;
+        .with_context(|| format!("無法連線到資料庫:{}", mask_url(&args.database_url)))?;
 
-    // C5: 啟動時確認 DB schema 版本與程式碼一致
     assert_schema_version(&pool).await?;
 
     let stock_ids = resolve_stock_ids(&pool, &args).await?;
-    let trading_dates = load_trading_dates(&pool).await?;
+    let trading_dates = Arc::new(load_trading_dates(&pool).await?);
 
-    let mut processed  = 0usize;
-    let mut skipped    = 0usize;
-    let mut af_patched = 0usize;
-    let mut errors: Vec<ErrorEntry> = Vec::new();
-    let mut interrupted = false;
+    // Cancellation flag:由 SIGTERM/Ctrl-C handler set;process_stock 在開頭檢查
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_signal = cancelled.clone();
 
-    // C4: signal handler
-    // tokio::select! 的 branch 不支援 #[cfg(...)]，用兩個完整的 cfg 版本分開處理。
-    // 中斷點在「股票與股票之間」，每個股票都在 transaction 內，不會 half-commit。
+    // Counters(per-stock 完成後 increment;race-safe by atomic)
+    let processed  = Arc::new(AtomicUsize::new(0));
+    let skipped    = Arc::new(AtomicUsize::new(0));
+    let af_patched = Arc::new(AtomicUsize::new(0));
+    let errors: Arc<Mutex<Vec<ErrorEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
-    // ── Unix 版（支援 SIGTERM + Ctrl-C）
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm = signal(SignalKind::terminate()).expect("無法註冊 SIGTERM handler");
-
-        'batch: for stock_id in &stock_ids {
+    // Signal handler task:set cancel flag 後 stream 內各 task 自行 check
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("無法註冊 SIGTERM handler");
             tokio::select! {
-                biased;
-                _ = sigterm.recv() => { interrupted = true; break 'batch; }
-                _ = tokio::signal::ctrl_c() => { interrupted = true; break 'batch; }
-                result = process_stock(&pool, stock_id, &trading_dates, &args.mode) => {
-                    match result {
-                        Ok(patched) => { processed += 1; af_patched += patched; }
-                        Err(e) => { errors.push(ErrorEntry { stock_id: stock_id.clone(), reason: e.to_string() }); skipped += 1; }
+                _ = sigterm.recv() => {}
+                _ = tokio::signal::ctrl_c() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+        cancelled_signal.store(true, Ordering::SeqCst);
+    });
+
+    let pool_arc = Arc::new(pool);
+    let mode = Arc::new(args.mode.clone());
+
+    stream::iter(stock_ids.iter().cloned())
+        .map(|sid| {
+            let pool = pool_arc.clone();
+            let trading_dates = trading_dates.clone();
+            let mode = mode.clone();
+            let cancelled = cancelled.clone();
+            let processed = processed.clone();
+            let skipped = skipped.clone();
+            let af_patched = af_patched.clone();
+            let errors = errors.clone();
+            async move {
+                if cancelled.load(Ordering::SeqCst) {
+                    return;
+                }
+                match process_stock(&pool, &sid, &trading_dates, &mode).await {
+                    Ok(patched) => {
+                        processed.fetch_add(1, Ordering::Relaxed);
+                        af_patched.fetch_add(patched, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                        errors.lock().await.push(ErrorEntry {
+                            stock_id: sid.clone(),
+                            reason: e.to_string(),
+                        });
                     }
                 }
             }
-        }
-    }
+        })
+        .buffer_unordered(8)
+        .collect::<Vec<()>>()
+        .await;
 
-    // ── Windows 版（只有 Ctrl-C）
-    #[cfg(not(unix))]
-    {
-        'batch: for stock_id in &stock_ids {
-            tokio::select! {
-                biased;
-                _ = tokio::signal::ctrl_c() => { interrupted = true; break 'batch; }
-                result = process_stock(&pool, stock_id, &trading_dates, &args.mode) => {
-                    match result {
-                        Ok(patched) => { processed += 1; af_patched += patched; }
-                        Err(e) => { errors.push(ErrorEntry { stock_id: stock_id.clone(), reason: e.to_string() }); skipped += 1; }
-                    }
-                }
-            }
-        }
-    }
+    let interrupted = cancelled.load(Ordering::SeqCst);
+    let processed_final  = processed.load(Ordering::Relaxed);
+    let skipped_final    = skipped.load(Ordering::Relaxed);
+    let af_patched_final = af_patched.load(Ordering::Relaxed);
+    let errors_final     = errors.lock().await.clone();
 
-    pool.close().await;
+    pool_arc.close().await;
 
     println!("{}", serde_json::to_string(&Summary {
         schema_version: EXPECTED_SCHEMA_VERSION.to_string(),
-        processed, skipped, errors, af_patched,
+        processed: processed_final,
+        skipped: skipped_final,
+        errors: errors_final,
+        af_patched: af_patched_final,
         interrupted,
         elapsed_ms: timer.elapsed().as_millis(),
     })?);

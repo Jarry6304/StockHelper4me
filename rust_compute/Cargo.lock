@@ -2549,11 +2549,12 @@ dependencies = [
 
 [[package]]
 name = "tw_stock_compute"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "futures",
  "serde",
  "serde_json",
  "sqlx",

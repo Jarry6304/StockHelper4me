@@ -1,6 +1,6 @@
 [package]
 name        = "tw_stock_compute"
-version     = "0.2.0"
+version     = "0.3.0"
 edition     = "2021"
 description = "台股後復權計算與 K 線聚合(Silver S1_adjustment,Postgres + sqlx)"
 
@@ -16,3 +16,5 @@ serde_json = { workspace = true }
 chrono     = { workspace = true }
 clap       = { workspace = true }
 anyhow     = { workspace = true }
+# v3.3 並行(plan §規格 5):stream::iter + buffer_unordered 平行跑 process_stock
+futures    = { workspace = true }

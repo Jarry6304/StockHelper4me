@@ -75,19 +75,26 @@ class ApiConfig:
 
 @dataclass
 class RateLimitConfig:
-    """Rate limit 設定"""
+    """Rate limit 設定。
+
+    v3.3 砍 `min_interval_ms`(對齊 plan §規格 1 + rate_limiter.py 重寫):
+    refill_rate 已是真實 throttle,額外的最小間隔在並發場景下會把吞吐量
+    壓回序列水準。loader 對舊 toml 殘留欄位 silently ignore,不 raise。
+    """
     calls_per_hour: int
     burst_size: int
     cooldown_on_429_sec: int
-    min_interval_ms: int
 
 
 @dataclass
 class RetryConfig:
-    """重試策略設定"""
+    """重試策略設定。
+
+    v3.3 砍 `backoff_base_sec` / `backoff_max_sec`(對齊 plan §規格 6):
+    `api_client.py` 已硬編 `RETRY_BACKOFF_SEC = [60, 300]`,從本 dataclass
+    讀無意義。loader 對舊 toml 殘留欄位 silently ignore。
+    """
     max_attempts: int
-    backoff_base_sec: int
-    backoff_max_sec: int
     retry_on_status: list[int]
 
 
@@ -242,17 +249,17 @@ def _parse_global(raw: dict) -> GlobalConfig:
             "rust_binary_path",
             "rust_compute/target/release/tw_stock_compute",
         ),
+        # v3.3 預設值對齊 Sponsor tier(5700/hr × 0.95 safety margin)。
+        # 舊 toml 殘留 `min_interval_ms` / `backoff_base_sec` / `backoff_max_sec`
+        # 欄位 silently ignore(rl.get / rt.get 自動忽略未引用 key)。
         rate_limit=RateLimitConfig(
-            calls_per_hour      = rl.get("calls_per_hour", 1600),
-            burst_size          = rl.get("burst_size", 5),
+            calls_per_hour      = rl.get("calls_per_hour", 5700),
+            burst_size          = rl.get("burst_size", 10),
             cooldown_on_429_sec = rl.get("cooldown_on_429_sec", 120),
-            min_interval_ms     = rl.get("min_interval_ms", 2250),
         ),
         retry=RetryConfig(
-            max_attempts     = rt.get("max_attempts", 3),
-            backoff_base_sec = rt.get("backoff_base_sec", 5),
-            backoff_max_sec  = rt.get("backoff_max_sec", 60),
-            retry_on_status  = rt.get("retry_on_status", [429, 500, 502, 503, 504]),
+            max_attempts    = rt.get("max_attempts", 3),
+            retry_on_status = rt.get("retry_on_status", [429, 500, 502, 503, 504]),
         ),
     )
 

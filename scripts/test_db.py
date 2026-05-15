@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # 設定連線
 os.environ["DATABASE_URL"] = "postgresql://twstock:twstock@localhost:5432/twstock"
 
-from db import create_writer, PostgresWriter, SqliteWriter, DBWriter, SCHEMA_VERSION
+# v3.3:SqliteWriter 已從 db.py 移除(plan §規格 8);只 import 仍存在的 class
+from db import create_writer, PostgresWriter, DBWriter, SCHEMA_VERSION
 
 
 def test_basic_flow():
@@ -198,29 +199,12 @@ def test_basic_flow():
     print("=" * 60)
 
 
-def test_factory_sqlite_fallback():
-    """測試隱藏 flag 切到 SqliteWriter。"""
-    print("\n" + "=" * 60)
-    print("Test 12: TWSTOCK_USE_SQLITE=1 fallback")
-    print("=" * 60)
-    os.environ["TWSTOCK_USE_SQLITE"] = "1"
-    os.environ["SQLITE_PATH"] = "/tmp/test_fallback.db"
-    db = create_writer()
-    assert isinstance(db, SqliteWriter), f"期望 SqliteWriter,得到 {type(db)}"
-    print(f"  [OK] TWSTOCK_USE_SQLITE=1 切到 SqliteWriter")
-    db.close()
-    # 還原
-    del os.environ["TWSTOCK_USE_SQLITE"]
-    Path("/tmp/test_fallback.db").unlink(missing_ok=True)
-
-
 def test_no_db_url_raises():
-    """測試 DATABASE_URL 未設且非 SQLite 模式時拋錯。"""
+    """測試 DATABASE_URL 未設時拋錯(v3.3 已砍 SQLite fallback)。"""
     print("\n" + "=" * 60)
-    print("Test 13: 缺 DATABASE_URL 拋錯")
+    print("Test 12: 缺 DATABASE_URL 拋錯")
     print("=" * 60)
     saved_url = os.environ.pop("DATABASE_URL", None)
-    saved_sqlite = os.environ.pop("TWSTOCK_USE_SQLITE", None)
     try:
         try:
             create_writer()
@@ -230,14 +214,11 @@ def test_no_db_url_raises():
     finally:
         if saved_url:
             os.environ["DATABASE_URL"] = saved_url
-        if saved_sqlite:
-            os.environ["TWSTOCK_USE_SQLITE"] = saved_sqlite
 
 
 if __name__ == "__main__":
     import logging
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     test_basic_flow()
-    test_factory_sqlite_fallback()
     test_no_db_url_raises()
     print("\n=== ALL DONE ===")

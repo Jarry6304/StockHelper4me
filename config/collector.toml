@@ -35,16 +35,19 @@ backfill_start_date = "2019-01-01"
 rust_binary_path    = "rust_compute/target/release/tw_stock_compute"
 
 [global.rate_limit]
-calls_per_hour      = 1600
-burst_size          = 5
+# v3.3 升 Sponsor tier:FinMind 6000/hr quota × 0.95 safety margin = 5700/hr
+# burst_size 10 對應並發場景更平滑的初始 ramp-up(asyncio.gather + Semaphore(12))
+# min_interval_ms 已砍 — refill_rate 已是真實 throttle,額外間隔在並發下會
+# 把吞吐量壓回序列水準(對齊 plan v3.3 §規格 1)。
+calls_per_hour      = 5700
+burst_size          = 10
 cooldown_on_429_sec = 120
-min_interval_ms     = 2250
 
 [global.retry]
-max_attempts     = 3
-backoff_base_sec = 5
-backoff_max_sec  = 60
-retry_on_status  = [429, 500, 502, 503, 504]
+# v3.3:backoff_base_sec / backoff_max_sec 砍 — api_client.py 已硬編
+# RETRY_BACKOFF_SEC = [60, 300],從本檔讀無意義。
+max_attempts    = 3
+retry_on_status = [429, 500, 502, 503, 504]
 
 [execution]
 mode = "backfill"

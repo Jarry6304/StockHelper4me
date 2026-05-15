@@ -43,8 +43,16 @@ def _retry_wait_sec(attempt: int) -> int:
 
 
 class APIError(Exception):
-    """FinMind API 回傳非預期結果時拋出"""
-    pass
+    """FinMind API 回傳非預期結果時拋出。
+
+    含 `status_code` 屬性(若是 HTTP 錯誤,值為 HTTP status;若是業務錯誤如 FinMind
+    回 msg 但 status=200,值為 None)。供 caller(如 phase_executor short-circuit
+    機制)區分 dataset-level error(403/404/422)vs 個別股可 retry error。
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class FinMindClient:
@@ -141,7 +149,8 @@ class FinMindClient:
                         else:
                             raise APIError(
                                 f"FinMind API error: msg={body.get('msg')}, "
-                                f"dataset={api_config.dataset}, stock={stock_id}"
+                                f"dataset={api_config.dataset}, stock={stock_id}",
+                                status_code=None,
                             )
 
                     # 需要重試的 HTTP 狀態碼
@@ -159,7 +168,10 @@ class FinMindClient:
                         continue
 
                     # 不在重試清單的錯誤，直接拋出
-                    raise APIError(f"HTTP {resp.status}，dataset={api_config.dataset}, stock={stock_id}")
+                    raise APIError(
+                        f"HTTP {resp.status}，dataset={api_config.dataset}, stock={stock_id}",
+                        status_code=resp.status,
+                    )
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 # 網路層錯誤(DNS / connection reset 等),用 RETRY_BACKOFF_SEC 較長 wait 等待恢復
@@ -175,7 +187,8 @@ class FinMindClient:
 
         raise APIError(
             f"達最大重試次數（{self.retry.max_attempts}）。"
-            f"dataset={api_config.dataset}, stock={stock_id}, segment={start}~{end}"
+            f"dataset={api_config.dataset}, stock={stock_id}, segment={start}~{end}",
+            status_code=None,
         )
 
     # =========================================================================
