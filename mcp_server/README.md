@@ -27,10 +27,64 @@ DB 連線從 `.env` 取 `DATABASE_URL`(對齊 collector / silver / agg)。
 
 ---
 
+## 啟動 — 一鍵 wrapper(推薦)
+
+對齊 `scripts/refresh_daily.ps1` 同款結構,wrapper 自動處理 venv / .env / UTF-8 /
+fastmcp sanity check / setup log:
+
+**Windows**(PowerShell):
+```powershell
+# Smoke test(啟動 2 秒後 SIGTERM,只確認 server 起得來)
+.\scripts\start_mcp.ps1 -Smoke
+
+# Production(stdio mode,給 Claude Desktop 接 stdin/stdout)
+.\scripts\start_mcp.ps1
+```
+
+**Linux / macOS**(bash):
+```bash
+./scripts/start_mcp.sh --smoke
+./scripts/start_mcp.sh
+```
+
+Setup logs(venv activate / .env load / fastmcp version / import check)寫到
+`logs/mcp_YYYY-MM-DD.log`,**不會污染 stdout**(MCP stdio 留給 JSON-RPC)。
+
+---
+
 ## Claude Desktop 設定
 
 編 `%APPDATA%\Claude\claude_desktop_config.json`(Windows)或
-`~/Library/Application Support/Claude/claude_desktop_config.json`(macOS):
+`~/Library/Application Support/Claude/claude_desktop_config.json`(macOS)。
+
+**方案 A — 走 wrapper**(推薦,自動處理 venv + .env):
+
+```json
+{
+  "mcpServers": {
+    "stockhelper": {
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", "C:\\path\\to\\StockHelper4me\\scripts\\start_mcp.ps1"
+      ]
+    }
+  }
+}
+```
+
+macOS / Linux:
+```json
+{
+  "mcpServers": {
+    "stockhelper": {
+      "command": "/path/to/StockHelper4me/scripts/start_mcp.sh"
+    }
+  }
+}
+```
+
+**方案 B — 直接呼 python**(需手動處理 cwd + env):
 
 ```json
 {
@@ -47,11 +101,9 @@ DB 連線從 `.env` 取 `DATABASE_URL`(對齊 collector / silver / agg)。
 }
 ```
 
-> `cwd` 必填(指向本 repo 根目錄)— 對話啟動時 Desktop 會 spawn 該 process,
-> 在那 cwd 才能 import `mcp_server`(走 cwd-default-in-sys.path)+ `dashboards`
-> + 載 `.env`。
+方案 A 跟 B 互斥;wrapper(A)推薦,因為 venv 升版 / .env 改路徑時不需動 Desktop config。
 
-重啟 Claude Desktop,左下角 🔌 圖示應出現 `stockhelper`,展開可見 10 個 tools。
+重啟 Claude Desktop,左下角 🔌 圖示應出現 `stockhelper`,展開可見所有 tools。
 
 ---
 
