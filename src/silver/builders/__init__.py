@@ -23,6 +23,7 @@ from . import (
     foreign_holding,
     holding_shares_per,
     institutional,
+    magic_formula_ranked,
     margin,
     market_margin,
     monthly_revenue,
@@ -42,6 +43,7 @@ BUILDERS: dict[str, object] = {
     "day_trading":           day_trading,
     "monthly_revenue":       monthly_revenue,
     "financial_statement":   financial_statement,
+    "magic_formula_ranked":  magic_formula_ranked,    # v3.4(Greenblatt 2005 cross-rank)
     "taiex_index":           taiex_index,
     "us_market_index":       us_market_index,
     "exchange_rate":         exchange_rate,

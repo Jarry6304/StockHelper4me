@@ -62,7 +62,9 @@ PHASE_7A_BUILDERS: list[str] = [
 
 # 7b — 跨表依賴(需先算完 7a 才能跑)
 PHASE_7B_BUILDERS: list[str] = [
-    "financial_statement",  # 需 monthly_revenue 對齊(對齊邏輯留 follow-up)
+    "financial_statement",   # 需 monthly_revenue 對齊(對齊邏輯留 follow-up)
+    "magic_formula_ranked",  # v3.4:跨股 cross-rank,依賴 financial_statement_derived
+                             # + valuation_per_tw + price_daily_fwd + stock_info_ref
     # day_trading 補 day_trading_ratio:需 price_daily.volume(7c 後再算)— follow-up
 ]
 
