@@ -190,6 +190,8 @@ fn list_cores() -> Result<()> {
     let _ = revenue_core::RevenueCore::new();
     let _ = valuation_core::ValuationCore::new();
     let _ = financial_statement_core::FinancialStatementCore::new();
+    let _ = magic_formula_core::MagicFormulaCore::new();    // v3.4
+    let _ = kalman_filter_core::KalmanFilterCore::new();    // v3.4
     let _ = taiex_core::TaiexCore::new();
     let _ = us_market_core::UsMarketCore::new();
     let _ = exchange_rate_core::ExchangeRateCore::new();
@@ -1027,6 +1029,50 @@ async fn run_stock_cores(
             "financial_statement_core",
             stock_id,
             "load_financial_statement",
+            &e,
+        )),
+    }
+    }
+
+    // ---- 18. magic_formula_core(日頻;v3.4)----
+    if filter.is_enabled("magic_formula_core") {
+    match fundamental_loader::load_magic_formula_series(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &magic_formula_core::MagicFormulaCore::new(),
+                &series,
+                magic_formula_core::MagicFormulaParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "magic_formula_core",
+            stock_id,
+            "load_magic_formula_series",
+            &e,
+        )),
+    }
+    }
+
+    // ---- 19. kalman_filter_core(日頻;v3.4)----
+    if filter.is_enabled("kalman_filter_core") {
+    match ohlcv_loader::load_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+        Ok(series) => summary.push(
+            dispatch_indicator(
+                pool,
+                &kalman_filter_core::KalmanFilterCore::new(),
+                &series,
+                kalman_filter_core::KalmanFilterParams::default(),
+                write,
+            )
+            .await,
+        ),
+        Err(e) => summary.push(loader_err_summary(
+            "kalman_filter_core",
+            stock_id,
+            "load_daily",
             &e,
         )),
     }

@@ -107,6 +107,67 @@ pub async fn load_valuation_daily(
 }
 
 // ===========================================================================
+// MagicFormula(v3.4 — Silver `magic_formula_ranked_derived`)
+// ===========================================================================
+//
+// Silver builder 已對全市場跨股 cross-rank;Rust core 純讀 per-stock 序列,
+// 比 (i, i-1) 兩日 is_top_30 變化 → produce EnteredTop30 / ExitedTop30 facts。
+// 對齊 v3.4 plan §Phase A + B(2026-05-15)。
+//
+// Reference:
+//   Greenblatt, J. (2005). *The Little Book That Beats the Market*. Wiley.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MagicFormulaSeries {
+    pub stock_id: String,
+    pub points: Vec<MagicFormulaPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct MagicFormulaPoint {
+    pub date: NaiveDate,
+    pub earnings_yield: Option<f64>,
+    pub roic: Option<f64>,
+    pub ey_rank: Option<i32>,
+    pub roic_rank: Option<i32>,
+    pub combined_rank: Option<i32>,
+    pub universe_size: Option<i32>,
+    pub is_top_30: bool,
+    pub excluded_reason: Option<String>,
+}
+
+pub async fn load_magic_formula_series(
+    pool: &PgPool,
+    stock_id: &str,
+    lookback_days: i32,
+) -> Result<MagicFormulaSeries> {
+    let points: Vec<MagicFormulaPoint> = sqlx::query_as(
+        r#"
+        SELECT date,
+               earnings_yield::float8 AS earnings_yield,
+               roic::float8           AS roic,
+               ey_rank,
+               roic_rank,
+               combined_rank,
+               universe_size,
+               is_top_30,
+               excluded_reason
+        FROM magic_formula_ranked_derived
+        WHERE market = 'TW' AND stock_id = $1
+          AND date >= (CURRENT_DATE - $2::int)
+        ORDER BY date ASC
+        "#,
+    )
+    .bind(stock_id)
+    .bind(lookback_days)
+    .fetch_all(pool)
+    .await
+    .context("load_magic_formula_series query failed")?;
+
+    Ok(MagicFormulaSeries { stock_id: stock_id.to_string(), points })
+}
+
+// ===========================================================================
 // FinancialStatement(季頻;PK 含 type:income / balance / cashflow)
 // ===========================================================================
 

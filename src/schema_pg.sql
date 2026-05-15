@@ -1261,6 +1261,67 @@ CREATE TRIGGER trg_pae_dedup_par_value_split
 
 
 -- =============================================================================
+-- v3.4 Magic Formula(Greenblatt 2005)cross-stock ranking Silver 表
+-- 對齊 alembic y4z5a6b7c8d9
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS magic_formula_ranked_derived (
+    market            TEXT NOT NULL,
+    stock_id          TEXT NOT NULL,
+    date              DATE NOT NULL,
+    ebit_ttm          NUMERIC(20, 2),
+    market_cap        NUMERIC(20, 2),
+    total_debt        NUMERIC(20, 2),
+    cash              NUMERIC(20, 2),
+    enterprise_value  NUMERIC(20, 2),
+    invested_capital  NUMERIC(20, 2),
+    earnings_yield    NUMERIC(10, 6),
+    roic              NUMERIC(10, 6),
+    ey_rank           INTEGER,
+    roic_rank         INTEGER,
+    combined_rank     INTEGER,
+    universe_size     INTEGER,
+    is_top_30         BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason   TEXT,
+    detail            JSONB,
+    is_dirty          BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at          TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mf_top30
+    ON magic_formula_ranked_derived (market, date, combined_rank)
+    WHERE is_top_30 = TRUE;
+
+CREATE INDEX IF NOT EXISTS idx_mf_dirty
+    ON magic_formula_ranked_derived (market, stock_id)
+    WHERE is_dirty = TRUE;
+
+CREATE OR REPLACE FUNCTION trg_mark_magic_formula_dirty()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO magic_formula_ranked_derived
+        (market, stock_id, date, is_dirty, dirty_at)
+    VALUES
+        (NEW.market, NEW.stock_id, NEW.date, TRUE, NOW())
+    ON CONFLICT (market, stock_id, date) DO UPDATE
+      SET is_dirty = TRUE, dirty_at = NOW();
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS mark_magic_formula_dirty_from_fs ON financial_statement;
+CREATE TRIGGER mark_magic_formula_dirty_from_fs
+    AFTER INSERT OR UPDATE ON financial_statement
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_magic_formula_dirty();
+
+DROP TRIGGER IF EXISTS mark_magic_formula_dirty_from_val ON valuation_per_tw;
+CREATE TRIGGER mark_magic_formula_dirty_from_val
+    AFTER INSERT OR UPDATE ON valuation_per_tw
+    FOR EACH ROW EXECUTE FUNCTION trg_mark_magic_formula_dirty();
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 

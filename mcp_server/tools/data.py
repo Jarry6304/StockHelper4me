@@ -239,6 +239,86 @@ def stock_health(
     return compute_stock_health(stock_id, _parse_date(date), lookback_days=lookback_days)
 
 
+def magic_formula_screen(
+    date: str,
+    top_n: int = 30,
+) -> dict[str, Any]:
+    """Greenblatt 2005 Magic Formula 跨股篩選(v3.4 plan §Phase C)。
+
+    內部:讀 magic_formula_ranked_derived(Silver builder 跨股 cross-rank)→
+    JOIN stock_info_ref 拿公司名 / industry → top N + median EY/ROIC + 1 句 narrative。
+    輸出 ~5 KB / ~1250 tokens。
+
+    Universe:排除金融保險 + 公用事業(Greenblatt 2005 §六 原版)。
+    Rank:combined_rank = ey_rank + roic_rank,愈低愈好。
+
+    Args:
+        date:  查詢日 ISO 字串(例 "2026-05-15")
+        top_n: 取 top N(預設 30 對齊 Greenblatt 原版 20-30)
+
+    Returns:
+        {
+          "as_of": "2026-05-15",
+          "ranking_date": "...",         # 實際 ranking 日(≤ as_of 的 latest)
+          "universe_size": 1432,
+          "top_n": 30,
+          "top_stocks": [{"rank": 1, "stock_id": "2330", "name": "...",
+                          "industry": "...", "earnings_yield": 0.082,
+                          "roic": 0.31, "ey_rank": 145, "roic_rank": 12,
+                          "combined_rank": 157}, ...],
+          "stats": {"median_ey": 0.045, "median_roic": 0.08, ...},
+          "narrative": "..."
+        }
+
+    References:
+      - Greenblatt, J. (2005). *The Little Book That Beats the Market*. Wiley.
+      - Larkin (2009). SSRN id=1330551(OOS 1988-2007 valid)
+    """
+    from mcp_server._magic_formula import compute_magic_formula_screen
+
+    return compute_magic_formula_screen(_parse_date(date), top_n=top_n)
+
+
+def kalman_trend(
+    stock_id: str,
+    date: str,
+    lookback_days: int = 180,
+) -> dict[str, Any]:
+    """個股 1-D Kalman trend + 5-class regime(v3.4 plan §Phase C)。
+
+    內部:走 agg.as_of(cores=["kalman_filter_core"]) → indicator_latest 拉
+    smoothed_price / velocity / uncertainty / regime → facts 拉 recent
+    regime transitions → 1 句 narrative。
+    輸出 ~1.5 KB / ~400 tokens。
+
+    Regime 5 類:
+      stable_up / accelerating / sideway / decelerating / stable_down
+
+    Args:
+        stock_id:      股票代號(例 "2330")
+        date:          as_of 查詢日 ISO 字串
+        lookback_days: facts / indicator 期間。預設 180
+
+    Returns:
+        {
+          "stock_id": "2330", "as_of": "...",
+          "current_price": ..., "smoothed_price": ...,
+          "trend_velocity": ..., "uncertainty_band": [lo, hi],
+          "deviation_sigma": ..., "regime": "stable_up",
+          "regime_label": "穩定上漲",
+          "recent_regime_changes": [{"date": "...", "from": "...", "to": "..."}],
+          "narrative": "..."
+        }
+
+    References:
+      - Kalman (1960). Trans. ASME J. Basic Engineering, 82(1), 35-45.
+      - Roncalli (2013). *Lectures on Risk Management*. CRC Press, §11.2.
+    """
+    from mcp_server._kalman import compute_kalman_trend
+
+    return compute_kalman_trend(stock_id, _parse_date(date), lookback_days=lookback_days)
+
+
 def market_context(
     date: str,
     lookback_days: int = 60,
