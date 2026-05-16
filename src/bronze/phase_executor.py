@@ -413,6 +413,18 @@ class PhaseExecutor:
 
         if mode == "incremental":
             dirty_stocks = self._fetch_dirty_fwd_stocks()
+            # v3.4 r2:--stocks 透過 stock_list_cfg.dev_enabled=True 表示「user
+            # 顯式限縮範圍」。dirty queue intersect with self._stock_list 避免
+            # Phase 4 送 1700+ stocks 給 Rust 而 user 只想動 10 檔(對齊
+            # main.py:296 `if args.stocks: stock_list_cfg.dev_enabled = True`)。
+            if self.stock_list_cfg.dev_enabled and self._stock_list:
+                allowed = set(self._stock_list)
+                before = len(dirty_stocks)
+                dirty_stocks = [s for s in dirty_stocks if s in allowed]
+                logger.info(
+                    f"[Phase 4] --stocks filter: dirty queue {before} → {len(dirty_stocks)} "
+                    f"(intersect with {len(allowed)} user-specified stocks)"
+                )
             if not dirty_stocks:
                 logger.info(
                     "[Phase 4] dirty queue 為空(無新除權息事件),"

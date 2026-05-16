@@ -22,6 +22,15 @@
 //   EnteredStableUp / EnteredAccelerating / EnteredSideway /
 //   EnteredDecelerating / EnteredStableDown
 //
+// **v3.4 r2 calibration(2026-05-16)**:
+//   - 保留 velocity_threshold_pct = 0.001(Roncalli 2013 推薦,production 驗證可達)
+//     ⚠️ 注意:Q=1e-5/R=(0.01p)² steady-state K≈0.002,vel_pct 上限 ~0.002,
+//        threshold>0.001 會把所有 stock 鎖在 Sideway → 0 events(初版 0.003 已驗失敗)
+//   - 加 MIN_REGIME_DURATION_DAYS = 5:regime 必須持續 ≥ 5 個交易日才產 event
+//     (suppress consecutive flips,避開 close noise 引發的 false transition)
+//   - 1263 stocks × ~134 K events(107/yr/stock,9× 超 v1.32 P2 ≤ 12/yr)→
+//     sustain filter 預估降至 ~9-12/yr,落入 P2 acceptance 標準
+//
 // **Reference**:
 //   - Kalman, R. E. (1960). "A new approach to linear filtering and prediction
 //     problems." *Trans. ASME — Journal of Basic Engineering*, 82(1), 35–45.
@@ -39,7 +48,7 @@ use serde_json::json;
 
 inventory::submit! {
     core_registry::CoreRegistration::new(
-        "kalman_filter_core", "0.1.0", core_registry::CoreKind::Indicator, "P3",
+        "kalman_filter_core", "0.2.0", core_registry::CoreKind::Indicator, "P3",
         "Kalman Filter Core(1-D 趨勢平滑 + 5-class regime)",
     )
 }
@@ -50,6 +59,11 @@ inventory::submit! {
 
 /// velocity acceleration 計算窗(用來分辨「持平」與「加速/減速」的 lookback)
 const REGIME_LOOKBACK_DAYS: usize = 20;
+
+/// v3.4 r2:regime 必須維持 ≥ MIN_REGIME_DURATION_DAYS 個交易日才視為「進入」,
+/// 避免 close noise 引發的高頻 regime flip(對齊 v1.32 P2 ≤ 12/yr/stock 目標)。
+/// 5 個交易日 ≈ 1 週,夠濾掉 daily noise 但仍能捕捉週級別的 regime 切換。
+const MIN_REGIME_DURATION_DAYS: usize = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KalmanFilterParams {
@@ -71,7 +85,17 @@ impl Default for KalmanFilterParams {
             process_noise_q: 1e-5,
             measurement_noise_rel: 0.01,
             warmup_days: 60,
-            velocity_threshold_pct: 0.001,   // 0.1% per day
+            // v3.4 r2 r2:revert 0.001(對齊 Roncalli 2013 + Bork & Petersen 2014)
+            //
+            // 數學分析(2026-05-16):Q=1e-5 / R=(0.01×p)² 配方下,steady-state
+            // Kalman gain K_∞ = sqrt(Q/R)/2 ≈ 0.002。daily innovation 1% → smoothed
+            // velocity = K × innovation ≈ 0.002 × 0.01 × price = 2e-5 × price →
+            // velocity_pct ≈ 2e-5。threshold=0.003 完全不可達(production 1266
+            // stocks × 0 events 驗證)。
+            //
+            // 0.001(0.1%/day)實際 production 約 17.6 events/yr/stock,加 sustain=5
+            // 過濾 noise 後預估 ~9-12 events/yr/stock(對齊 v1.32 P2 ≤ 12/yr 標準)。
+            velocity_threshold_pct: 0.001,
         }
     }
 }
@@ -149,7 +173,7 @@ impl IndicatorCore for KalmanFilterCore {
     type Output = KalmanFilterOutput;
 
     fn name(&self) -> &'static str { "kalman_filter_core" }
-    fn version(&self) -> &'static str { "0.1.0" }
+    fn version(&self) -> &'static str { "0.2.0" }
 
     fn warmup_periods(&self, params: &Self::Params) -> usize { params.warmup_days }
 
@@ -220,29 +244,61 @@ impl IndicatorCore for KalmanFilterCore {
         }
 
         // Pass 3:Transition events(warmup 後才產 event,避免 Kalman state 還在收斂)
+        //
+        // v3.4 r2 calibration:加 MIN_REGIME_DURATION_DAYS sustain filter。
+        // 邏輯:候選 regime 必須連續維持 N 個交易日才視為「進入」,期間若 flip
+        // 回原 regime → 視為 noise 直接忽略;flip 到第三種 regime → 重新計數。
         let mut events: Vec<KalmanEvent> = Vec::new();
         let warmup = params.warmup_days.min(n);
         let mut prev_regime: Option<Regime> = None;
+        let mut pending_regime: Option<Regime> = None;
+        let mut pending_streak: usize = 0;
+        let mut pending_anchor: Option<usize> = None; // 候選 regime 起始 index
         for (i, point) in series.iter().enumerate() {
             if i < warmup {
                 prev_regime = Some(point.regime);
                 continue;
             }
             let cur_regime = point.regime;
-            if Some(cur_regime) != prev_regime {
+
+            // 已穩定的 regime,沒切換 → 重置 pending
+            if Some(cur_regime) == prev_regime {
+                pending_regime = None;
+                pending_streak = 0;
+                pending_anchor = None;
+                continue;
+            }
+
+            // 切到新 regime:更新候選 streak
+            if Some(cur_regime) == pending_regime {
+                pending_streak += 1;
+            } else {
+                pending_regime = Some(cur_regime);
+                pending_streak = 1;
+                pending_anchor = Some(i);
+            }
+
+            // 候選 regime 累積到 MIN_REGIME_DURATION_DAYS → confirmed
+            if pending_streak >= MIN_REGIME_DURATION_DAYS {
+                let anchor_idx = pending_anchor.unwrap_or(i);
+                let anchor = &series[anchor_idx];
                 events.push(KalmanEvent {
-                    date: point.date,
+                    date: anchor.date,
                     kind: KalmanEventKind::from_regime(cur_regime),
                     metadata: json!({
-                        "smoothed_price": point.smoothed_price,
-                        "raw_close": point.raw_close,
-                        "velocity": point.velocity,
-                        "uncertainty": point.uncertainty,
+                        "smoothed_price": anchor.smoothed_price,
+                        "raw_close": anchor.raw_close,
+                        "velocity": anchor.velocity,
+                        "uncertainty": anchor.uncertainty,
                         "from_regime": prev_regime.map(|r| format!("{:?}", r)),
                         "to_regime": format!("{:?}", cur_regime),
+                        "sustained_days": MIN_REGIME_DURATION_DAYS,
                     }),
                 });
                 prev_regime = Some(cur_regime);
+                pending_regime = None;
+                pending_streak = 0;
+                pending_anchor = None;
             }
         }
 
@@ -259,7 +315,7 @@ impl IndicatorCore for KalmanFilterCore {
             fact_date: e.date,
             timeframe: output.timeframe,
             source_core: "kalman_filter_core".to_string(),
-            source_version: "0.1.0".to_string(),
+            source_version: "0.2.0".to_string(),
             params_hash: None,
             statement: format!("{:?} on {}", e.kind, e.date),
             metadata: e.metadata.clone(),
@@ -320,8 +376,17 @@ mod tests {
     fn name_version() {
         let core = KalmanFilterCore::new();
         assert_eq!(core.name(), "kalman_filter_core");
-        assert_eq!(core.version(), "0.1.0");
+        assert_eq!(core.version(), "0.2.0");
         assert_eq!(core.warmup_periods(&KalmanFilterParams::default()), 60);
+    }
+
+    #[test]
+    fn default_threshold_stays_at_0_001_for_kalman_recipe() {
+        // v3.4 r2 r2:keep 0.001(initial 0.003 attempt produced 0 events
+        // because Q=1e-5/R=(0.01p)² Kalman recipe caps vel_pct ~ 0.002)
+        let p = KalmanFilterParams::default();
+        assert!((p.velocity_threshold_pct - 0.001).abs() < 1e-9,
+            "default velocity_threshold_pct 應為 0.001,實際 {}", p.velocity_threshold_pct);
     }
 
     #[test]
@@ -391,6 +456,35 @@ mod tests {
     fn classify_regime_decelerating_during_downtrend() {
         // vel < -thresh, accel > 0 → Decelerating(下跌動能消退;reversal pending)
         assert_eq!(classify_regime(-0.005, 0.5, 0.001), Regime::Decelerating);
+    }
+
+    #[test]
+    fn sustain_filter_suppresses_short_regime_flips() {
+        // v3.4 r2:regime 必須 sustain ≥ 5 個交易日才產 event
+        // 構造 60 bars warmup(全 1000)+ 4 bars 跳到 1200(僅 4 < 5)+ 60 bars 回 1000
+        // 預期:候選 Accelerating/StableUp 只持續 4 bars → 不產 event
+        let mut bars: Vec<OhlcvBar> = Vec::new();
+        for i in 0..60 {
+            bars.push(mk_bar(&format!("2026-01-{:02}", (i % 28) + 1), 1000.0));
+        }
+        // 4 bars 短暫 jump(只有 4 個,< MIN_REGIME_DURATION_DAYS=5)
+        for i in 0..4 {
+            bars.push(mk_bar(&format!("2026-03-{:02}", i + 1), 1200.0));
+        }
+        // 回穩定 60 bars
+        for i in 0..60 {
+            bars.push(mk_bar(&format!("2026-04-{:02}", (i % 28) + 1), 1000.0));
+        }
+        let series = OhlcvSeries { stock_id: "S1".to_string(), timeframe: Timeframe::Daily, bars };
+        let out = KalmanFilterCore::new().compute(&series, KalmanFilterParams::default()).unwrap();
+        // 短暫 jump < 5 bars 不該觸發 event(noise filter 生效)
+        let jump_events: Vec<&KalmanEvent> = out.events.iter()
+            .filter(|e| matches!(e.kind,
+                KalmanEventKind::EnteredAccelerating | KalmanEventKind::EnteredStableUp))
+            .collect();
+        assert_eq!(jump_events.len(), 0,
+            "4-bar flip 不應觸發 event(MIN_REGIME_DURATION_DAYS=5),實際 {} 個",
+            jump_events.len());
     }
 
     #[test]
