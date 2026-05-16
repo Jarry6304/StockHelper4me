@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。**v3.5 R3 後改 5 層架構**(Bronze / Silver per-stock / **Cross-Stock Cores 新層** / M3 Cores / MCP API)。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + tw_cores monolith 拆 8 module)。schema v3.2 r1(`schema_metadata`),開發分支 `claude/continue-previous-work-xdKrl`,alembic head `x3y4z5a6b7c8`(v3.5 0 migration,純 layer reshape)。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。**v3.5 R3 後改 5 層架構**(Bronze / Silver per-stock / **Cross-Stock Cores 新層** / M3 Cores / MCP API)。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + tw_cores monolith 拆 8 module)。schema v3.2 r1(`schema_metadata`),開發分支 `claude/continue-previous-work-xdKrl`,alembic head `z5a6b7c8d9e0`(v3.10 R6 DROP 3 張 `_legacy_v2`,m2 大重構終結)。
 
 ---
 
@@ -238,7 +238,7 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ⏳ v3.9 partition observation + workflow toml audit(2026-05-16)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit(已落地)**。
+當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ⏳ v3.10 R6 DROP _legacy_v2(2026-05-16)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結:R6 DROP 3 張 _legacy_v2(alembic head z5a6b7c8d9e0)+ collector.toml 27 entries**。
 
 ---
 
@@ -3743,14 +3743,18 @@ psql $env:DATABASE_URL -c "SELECT source_core, COUNT(*) FROM facts GROUP BY 1 OR
 | `fear_greed_index` 是否需 `_derived` 表 | fear_greed_core | 目前直讀 Bronze,§6.2 已登記架構例外 |
 | `financial_statement_derived.detail` JSONB key | financial_statement_core | 英文 key 假設(EPS/Revenue/GrossProfitMargin 等) |
 
-### 5. m2 收尾(R5/R6 觀察期)— 不阻塞 M3
+### 5. m2 收尾(R5/R6 觀察期)— ✅ **v3.10(2026-05-16)完整收尾**
 
-- **R5 觀察期 21~60 天**(2026-05-09 啟動,最早 2026-05-30 進 R6)
-  - Silver builder 持續每日 12/12 OK
-  - api_sync_progress.status='failed' = 0
-  - 3 張 `_legacy_v2` row count 與主名表 ±1%
-- **R6 DROP 3 張 `_legacy_v2`**(永久 DROP,需 backup 後執行)+ 5 個 v2.0
-  `_legacy` entry 從 collector.toml 移除
+- ~~**R5 觀察期 21~60 天**~~ → ✅ user 拍版「直接 DROP」提前結束(2026-05-09 →
+  2026-05-16,7 天觀察期);v3.7+v3.8+v3.9 連續 4 sprint 無觀察到 regression
+- ~~**R6 DROP 3 張 `_legacy_v2`**~~ → ✅ **v3.10 完成**(PR #65):
+  - alembic `z5a6b7c8d9e0_pr_r6_drop_legacy_v2_3_tables.py`
+    DROP `holding_shares_per_legacy_v2` / `financial_statement_legacy_v2` /
+    `monthly_revenue_legacy_v2`(CASCADE,downgrade no-op)
+  - collector.toml 5 個 `*_legacy` entry 全部移除(剩 27 entry)
+  - schema_pg.sql 3 CREATE TABLE + 2 INDEX DDL 移除
+  - check_all_tables.py / inspect_db.py 同步移除 references
+  - verify_pr19c2_silver.py 標 🪦 DEPRECATED(legacy 表已 DROP,verifier 不可執行)
 
 ### 6. nice-to-have(可平行)
 

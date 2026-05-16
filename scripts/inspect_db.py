@@ -60,13 +60,12 @@ TABLE_GROUPS: dict[str, list[str]] = {
         "exchange_rate_derived", "market_margin_maintenance_derived",
         "business_indicator_derived",
     ],
-    "Legacy v2.0(PR #R2 已 rename;PR #R6 後 DROP)": [
+    "Legacy v2.0(部分保留;PR #R6 已 DROP 3 張 _legacy_v2)": [
         "stock_info", "trading_calendar",
         "institutional_daily", "margin_daily", "foreign_holding",
         "day_trading", "valuation_daily", "index_weight_daily",
-        "monthly_revenue_legacy_v2",          # PR #R2 rename
-        "financial_statement_legacy_v2",      # PR #R2 rename
-        "holding_shares_per_legacy_v2",       # PR #R2 rename
+        # PR #R6(2026-05-16):3 張 _legacy_v2 永久 DROP — 主路徑 holding_shares_per /
+        # monthly_revenue / financial_statement 為唯一(PR #R3 後升格自 _tw)
     ],
     "System": [
         "api_sync_progress", "stock_sync_status",
