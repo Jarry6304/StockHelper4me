@@ -55,6 +55,7 @@ fn scenario_to_fact(output: &NeelyCoreOutput, scenario: &Scenario) -> Fact {
         params_hash: None, // PR-7 caller 應填入(neely_core compute() 不知道 Workflow params 全貌)
         statement,
         metadata: json!({
+            "event_kind": "Scenario",  // v3.4 r2 r5
             "scenario_id": scenario.id,
             "pattern_type": pattern_label,
             "power_rating": power_label,
@@ -86,6 +87,7 @@ fn forest_summary_fact(output: &NeelyCoreOutput) -> Fact {
         params_hash: None,
         statement,
         metadata: json!({
+            "event_kind": "ForestSummary",  // v3.4 r2 r5
             "kind": "forest_summary",
             "forest_size": output.scenario_forest.len(),
             "monowave_count": output.monowave_series.len(),

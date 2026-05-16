@@ -274,7 +274,7 @@ impl IndicatorCore for KalmanFilterCore {
             source_version: "0.2.0".to_string(),
             params_hash: None,
             statement: format!("{:?} on {}", e.kind, e.date),
-            metadata: e.metadata.clone(),
+            metadata: fact_schema::with_event_kind(e.metadata.clone(), &e.kind),
         }).collect()
     }
 }

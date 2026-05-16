@@ -245,7 +245,7 @@ impl IndicatorCore for WilliamsRCore {
                 source_version: "0.1.0".to_string(),
                 params_hash: None,
                 statement: format!("Williams %R {:?} on {}: value={:.2}", e.kind, e.date, e.value),
-                metadata: e.metadata.clone(),
+                metadata: fact_schema::with_event_kind(e.metadata.clone(), &e.kind),
             })
             .collect()
     }

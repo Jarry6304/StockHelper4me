@@ -268,7 +268,7 @@ impl IndicatorCore for TaiexCore {
             params_hash: None,
             statement: format!("{} {:?} on {}: value={:.2}",
                 e.index_code.label().to_uppercase(), e.kind, e.date, e.value),
-            metadata: e.metadata.clone(),
+            metadata: fact_schema::with_event_kind(e.metadata.clone(), &e.kind),
         }).collect()
     }
 }

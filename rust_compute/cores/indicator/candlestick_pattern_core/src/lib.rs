@@ -490,6 +490,8 @@ impl IndicatorCore for CandlestickPatternCore {
                     p.pattern_kind, p.date, p.trend_context, p.strength_metric
                 ),
                 metadata: json!({
+                    // v3.4 r2 r5:per-EventKind 統計用 event_kind 欄
+                    "event_kind": format!("{:?}", p.pattern_kind),
                     "pattern": format!("{:?}", p.pattern_kind),
                     "bar_count": p.bar_count,
                     "trend_context": format!("{:?}", p.trend_context),
