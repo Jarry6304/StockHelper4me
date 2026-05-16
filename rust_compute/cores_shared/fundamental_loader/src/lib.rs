@@ -190,12 +190,15 @@ pub async fn load_financial_statement(
     lookback_quarters: i32,
 ) -> Result<FinancialStatementSeries> {
     // 季頻 ~91 天/季
+    // detail IS NOT NULL:PR #20 trigger 可能對未公告季度寫 stub row(detail=NULL),
+    // 排除避免 sqlx FromRow 對 NULL detail 解析失敗(v3.4 r2 hotfix 2026-05-16)
     let points: Vec<FinancialStatementRaw> = sqlx::query_as(
         r#"
         SELECT date, type, detail
         FROM financial_statement_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - ($2::int * 91))
+          AND detail IS NOT NULL
         ORDER BY date ASC, type ASC
         "#,
     )

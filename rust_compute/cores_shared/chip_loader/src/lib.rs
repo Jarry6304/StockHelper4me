@@ -266,12 +266,15 @@ pub async fn load_holding_shares_per(
     stock_id: &str,
     lookback_days: i32,
 ) -> Result<HoldingSharesPerSeries> {
+    // detail IS NOT NULL:PR #20 trigger 可能對部分股寫 stub row(detail=NULL),
+    // 排除避免 sqlx FromRow 對 NULL detail 解析失敗(v3.4 r2 hotfix 2026-05-16)
     let points: Vec<HoldingSharesPerRaw> = sqlx::query_as(
         r#"
         SELECT date, detail
         FROM holding_shares_per_derived
         WHERE stock_id = $1
           AND date >= (CURRENT_DATE - $2::int)
+          AND detail IS NOT NULL
         ORDER BY date ASC
         "#,
     )

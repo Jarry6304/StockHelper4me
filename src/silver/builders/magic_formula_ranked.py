@@ -121,11 +121,14 @@ def _fetch_latest_financials(
         params = list(stock_ids)
 
     # Pass 1:每股最近 4 季 income(取 EBIT)
+    # detail IS NOT NULL filter:PR #20 trigger 可能對未公告季度寫 stub row,
+    # 排除避免 latest 季拿到 NULL detail(對齊 v3.4 r2 hotfix 2026-05-16)
     income_rows = db.query(
         f"""
         SELECT stock_id, date, detail
           FROM financial_statement_derived
          WHERE market = 'TW' AND type = 'income' {where}
+           AND detail IS NOT NULL
          ORDER BY stock_id, date DESC
         """,
         params if params else None,
@@ -140,6 +143,7 @@ def _fetch_latest_financials(
         SELECT DISTINCT ON (stock_id) stock_id, date, detail
           FROM financial_statement_derived
          WHERE market = 'TW' AND type = 'balance' {where}
+           AND detail IS NOT NULL
          ORDER BY stock_id, date DESC
         """,
         params if params else None,
