@@ -30,7 +30,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable
 
-from aggregators import apply_aggregation
+from bronze.aggregators import apply_aggregation
 from api_client import ALL_MARKET_SENTINEL, APIError, FinMindClient
 from config_loader import ApiConfig, CollectorConfig, StockListConfig
 from date_segmenter import DateSegmenter
