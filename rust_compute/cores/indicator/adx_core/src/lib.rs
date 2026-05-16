@@ -6,6 +6,10 @@
 //                                       "New Concepts in Technical Trading Systems".
 //                                       Ch. 21 — 25 趨勢成形 / 50 強趨勢 / 75+ 罕見極強
 //   ADX period 14:Wilder (1978) 原版
+//
+// **v3.11 Round 7 calibration(2026-05-16)**:production 1266 stocks 跑出
+// AdxPeak 41.14/yr/stock(4× 噪音);trend 持續期內 ADX 反覆波動 → 多個 5-bar
+// local max 互相觸發。加 MIN_ADX_PEAK_SPACING_BARS = 20(~1 個月),預期 → ~12/yr。
 
 
 use anyhow::Result;
@@ -44,6 +48,11 @@ pub struct AdxPoint { pub date: NaiveDate, pub adx: f64, pub plus_di: f64, pub m
 pub struct AdxEvent { pub date: NaiveDate, pub kind: AdxEventKind, pub value: f64, pub metadata: serde_json::Value }
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum AdxEventKind { StrongTrendStart, VeryStrongTrend, BullishDiCross, BearishDiCross, AdxPeak, UptrendStrength }
+
+/// v3.11 Round 7:AdxPeak 最小間距(bars)。對齊 v1.34 PR cross spacing 同款設計
+/// (KD/MA/MACD cross 5-15 bars);ADX peak 是中期 trend reversal proxy,1 個月
+/// (~20 trading days)是 trend cycle 合理下限。
+const MIN_ADX_PEAK_SPACING_BARS: usize = 20;
 
 pub struct AdxCore;
 impl AdxCore { pub fn new() -> Self { AdxCore } }
@@ -125,6 +134,8 @@ impl IndicatorCore for AdxCore {
             }
         }
         // ADX peak detection(連續 5 根降後,前一峰標 peak)
+        // v3.11 Round 7:加 MIN_ADX_PEAK_SPACING_BARS 防 trend 持續期內反覆觸發
+        let mut last_peak_idx: Option<usize> = None;
         for i in 5..series.len() {
             let cur = series[i].adx;
             let win_max = series[i - 5..i].iter().map(|s| s.adx).fold(f64::NEG_INFINITY, f64::max);
@@ -132,8 +143,14 @@ impl IndicatorCore for AdxCore {
                 // 找 peak idx
                 if let Some(peak_idx) = series[i - 5..i].iter().position(|s| (s.adx - win_max).abs() < 1e-9).map(|p| p + i - 5) {
                     if peak_idx == i - 5 {
+                        if let Some(last) = last_peak_idx {
+                            if peak_idx - last < MIN_ADX_PEAK_SPACING_BARS {
+                                continue;
+                            }
+                        }
                         events.push(AdxEvent { date: series[peak_idx].date, kind: AdxEventKind::AdxPeak, value: win_max,
                             metadata: json!({"event": "adx_peak", "value": win_max}) });
+                        last_peak_idx = Some(peak_idx);
                     }
                 }
             }
@@ -154,10 +171,62 @@ impl IndicatorCore for AdxCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ohlcv_loader::OhlcvBar;
+
     #[test]
     fn name_warmup() {
         let core = AdxCore::new();
         assert_eq!(core.name(), "adx_core");
         assert_eq!(core.warmup_periods(&AdxParams::default()), 14 * 6);
+    }
+
+    /// v3.11 Round 7 regression:同股短期內反覆出現 ADX peak,加 spacing 後第 2 個
+    /// peak 若距前一 peak < MIN_ADX_PEAK_SPACING_BARS 應被擋下。
+    #[test]
+    fn adx_peak_spacing_blocks_close_peaks() {
+        let core = AdxCore::new();
+        // 構造 200 bar 序列,人為注入兩個 ADX peak 距離很近(< 20 bars)
+        // 用 zigzag 走勢讓 ADX 在 ~30 上下擺動;手動驗證觸發 spacing
+        let mut bars: Vec<OhlcvBar> = Vec::new();
+        let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let mut price = 100.0;
+        let mut direction = 1.0;
+        for i in 0..200 {
+            // 每 10 bar 反向 → 多個 local ADX peak
+            if i % 10 == 0 {
+                direction = -direction;
+            }
+            price += direction * 0.5;
+            bars.push(OhlcvBar {
+                date: base + chrono::Duration::days(i),
+                open: price,
+                high: price + 1.0,
+                low: price - 1.0,
+                close: price,
+                volume: Some(1000),
+            });
+        }
+        let input = OhlcvSeries {
+            stock_id: "TEST".to_string(),
+            timeframe: Timeframe::Daily,
+            bars,
+        };
+        let out = core.compute(&input, AdxParams::default()).unwrap();
+        let peak_dates: Vec<NaiveDate> = out
+            .events
+            .iter()
+            .filter(|e| e.kind == AdxEventKind::AdxPeak)
+            .map(|e| e.date)
+            .collect();
+        // 驗證:相鄰 peak 距離全部 >= MIN_ADX_PEAK_SPACING_BARS
+        for w in peak_dates.windows(2) {
+            let gap = (w[1] - w[0]).num_days() as usize;
+            assert!(
+                gap >= MIN_ADX_PEAK_SPACING_BARS,
+                "鄰近 AdxPeak gap = {} 應 >= {}",
+                gap,
+                MIN_ADX_PEAK_SPACING_BARS
+            );
+        }
     }
 }
