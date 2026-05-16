@@ -31,18 +31,25 @@ logger = logging.getLogger("collector.silver._common")
 
 @runtime_checkable
 class SilverBuilder(Protocol):
-    """
-    Silver builder 共通介面契約(blueprint §三 Silver builder 入口/出口契約)。
+    """Silver per-stock builder 契約(blueprint §三 + v3.5 R2 收緊)。
 
-    執行流程(由 orchestrator 呼叫):
-      1. select_dirty_pks() → 取得 (market, stock_id, date_range) 清單
-      2. 從對應 Bronze SELECT raw + 必要 ref 表 join
-      3. 計算 derived 欄位(per spec)
-      4. UPSERT 到 *_derived(同 transaction reset is_dirty/dirty_at)
+    契約:輸入 stock_id 清單(None = 全市場),讀對應 Bronze + 必要 ref 表,
+    輸出 Silver `*_derived` 表 row(以 (market, stock_id, date) 或同 PK shape 為主)。
+
+    **per-stock 邊界**:builder 內 SELECT 必須以 stock_id 為迭代基準。需要全市場
+    aggregation 的 case(e.g. valuation.market_value_weight 分母 SUM 全市場
+    close × total_issued)允許 helper 查詢不過濾 stock_ids,但**輸出仍是
+    per-stock keyed**。需要輸出 cross-stock 排名 / 分群 / 相關性的 builder
+    歸 `src/cross_cores/`(v3.5 R3 新層),禁止再往這裡塞。
+
+    執行流程:
+      1. select_dirty_pks() / fetch_bronze() → 取得 raw
+      2. 計算 derived 欄位(per spec)
+      3. upsert_silver() → UPSERT(同時 reset is_dirty/dirty_at)
     """
 
     NAME: str                # builder 唯一識別,e.g. "institutional"
-    SILVER_TABLE: str        # 目標 Silver 表
+    SILVER_TABLE: str        # 目標 Silver 表(`*_derived`)
     BRONZE_TABLES: list[str] # 來源 Bronze 表(可多張)
 
     def run(
