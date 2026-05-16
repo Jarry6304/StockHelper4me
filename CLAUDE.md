@@ -242,6 +242,155 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.10 — PR #R6 m2 大重構終結:永久 DROP 3 張 _legacy_v2(2026-05-16)
+
+接 v3.9 後 user 拍版「直接 DROP」提前結束 R5 觀察期(2026-05-09 啟動 → 2026-05-16
+僅 7 天觀察)。v3.7+v3.8+v3.9 連續 4 sprint 無 regression,**m2 大重構正式終結**。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl` PR #65)
+
+| 檔 | 動作 |
+|---|---|
+| `alembic/versions/2026_05_16_z5a6b7c8d9e0_pr_r6_drop_legacy_v2_3_tables.py`(新)| DROP 3 張 `_legacy_v2` CASCADE,downgrade no-op(spec plan §六 destructive)|
+| `config/collector.toml` | 32 → 27 api entries(移 5 `*_legacy`)|
+| `src/schema_pg.sql` | 移 3 CREATE TABLE + 2 INDEX DDL,保留歷史 comments |
+| `scripts/check_all_tables.py` + `scripts/inspect_db.py` | 同步移 references |
+| `scripts/verify_pr19c2_silver.py` | 標 🪦 DEPRECATED(legacy 表已 DROP,不可執行)|
+
+### 落地後狀態(m2 大重構終結)
+
+- **alembic head**:`x3y4z5a6b7c8` → **`z5a6b7c8d9e0`**
+- **0** 張 v2.0 `*_legacy_v2` 表
+- **27** collector.toml entries(主路徑唯一,v3.2 r1 PR sequencing 全部終結)
+
+### 風險
+
+🟡 **destructive**:
+- 0 alembic 可 rollback;`alembic upgrade head` 後永久 DROP
+- 建議事先 backup:`pg_dump -t holding_shares_per_legacy_v2 -t financial_statement_legacy_v2 -t monthly_revenue_legacy_v2`
+- 既有 silver builders 不讀 `_legacy_v2`(全部走主名 + Bronze),pipeline 不受影響
+- api_sync_progress 殘留 5 個 `*_legacy` api_name 的 row(歷史 backfill 紀錄),無害
+
+---
+
+## v3.9 — structural_snapshots partition observation + Workflow toml dispatch audit(2026-05-16)
+
+接 v3.8 後動工兩 task。
+
+### Task 2:Workflow toml dispatch — ✅ audit 揭露已落地
+
+`rust_compute/cores/system/tw_cores/src/workflow.rs::CoreFilter` 完整實作(v1.29 PR-9b
+commit `615a8eb`):
+- `from_workflow_toml` + walk-up cwd resolve(對齊 dotenvy 模式)
+- 35 cores 全部接 `filter.is_enabled(...)` check(`run_stock_cores.rs` + `run_environment.rs`)
+- 7 unit test
+- `--workflow workflows/tw_stock_standard.toml` CLI flag 已 wired in `main.rs`
+
+CLAUDE.md §1b PR-9b 進階四項全標 ✅ 已落地(workflow toml / sqlx pool / dirty queue;
+ErasedCore trait wrapper 不做)。
+
+### Task 3:structural_snapshots partition 評估 — 結論「不需要」
+
+純研究 doc `docs/structural_snapshots_partition_observation.md`(150 行):
+
+| 評估 | 數據 |
+|---|---|
+| Production 規模 | 1263 stocks × 4 core_names ≈ 5052 rows/day |
+| 年增長 | ~1.27 M rows/year |
+| 5 年累積上限 | ~6.4 M rows(遠低於 partition 必要門檻 10M)|
+| 主查詢 latency | < 5 ms(index seek `idx_structural_snapshots_stock_date_desc`)|
+
+3 種策略全評估:RANGE / LIST partition pruning miss;HASH 為 future expand 候選但
+目前不值得做。**預警閾值表**記錄完整(p95 > 100 ms / total > 10M / batch > 5 min /
+disk > 50 GB),觸發時再重啟評估。
+
+### 落地
+
+- 0 alembic / 0 Rust code / 0 collector.toml / 0 test 變動
+- 既有 420 cargo tests + 39 agg tests 不破
+
+---
+
+## v3.8 — Aggregation Layer per-timeframe lookback fold-forward(2026-05-16)
+
+接 v3.7 後動工「立即可動工 — agg API 對齊 spec §4.2」。
+
+### 範圍(1 commit / PR #63)
+
+對齊 `m3Spec/aggregation_layer.md §4.2`「預設 lookback」表:
+- daily facts:`lookback_days` 預設 90 天
+- monthly fact(revenue / business_indicator):3 個發布週期 → `lookback_days_monthly=90`
+- quarterly fact(financial_statement):2 季 → `lookback_days_quarterly=180`
+
+**`src/agg/query.py`**:
+- `as_of()` + `as_of_with_ohlc()` 加兩參數 `lookback_days_monthly` / `lookback_days_quarterly`
+- 新 helper `_filter_by_timeframe_lookback`(SQL fetch_facts 用 `max(三個 lookback)`
+  寬撈,per-row 過濾在 Python 層 dispatch)
+- unknown / None timeframe 視同 daily(安全 default)
+- fact_date None 保留(避免 silently drop)
+
+**`src/agg/_types.py`**:`QueryMetadata` 加 2 field(reproducibility 保留兩 cutoff)。
+
+**`m3Spec/aggregation_layer.md`**:r2 → r3 修訂摘要 + §2.2 API surface 反寫。
+
+**`tests/agg/`**:新 `test_timeframe_lookback.py` 7 case + `test_validation.py` +2 case。
+
+### 落地驗證
+
+- `pytest tests/agg/` ✅ **39 passed**(從 30 → 39,+9 新 case)
+- 既有 caller 簽章 100% 相容(只傳 daily 仍走原路徑)
+- 0 alembic / 0 Rust / 0 collector.toml
+
+---
+
+## v3.7 — spec_pending doc cleanup + exhaustive compaction 真窮舉(2026-05-16)
+
+接 v3.6 後 user 問「spec-blocked 目前還缺文件??」。研究揭露 **spec 不缺文件**,
+標的「spec-blocked」全部過時。本 PR 切 2 個 commit:
+
+### Phase A — Doc cleanup(0 code)
+
+對齊實際 code 狀態,標的「spec-blocked」全部過時(v3.5 + v3.6 已收尾):
+
+**`docs/m3_cores_spec_pending.md §1.1`**:標題從「22 條全 deferred」→「✅ 已實作」,
+表格 6 行全部標 ✅ + 對應 `validator/*.rs` file:line:
+- R4-R7 ✅ `core_rules.rs:213-380`
+- F1-F2 ✅ `flat_rules.rs:36-105`
+- Z1-Z2 ✅ `zigzag_rules.rs:36-118`(r5 收斂 2 條;原 Z1-Z4 stale)
+- T1-T3 ✅ `triangle_rules.rs:50-178`(r5 收斂 3 條;原 T1-T10 stale)
+- W1-W2 ✅ `wave_rules.rs:46-201`
+
+**§1.3**:標題從「留 PR-3c/4b/5b/6b(spec-blocked)」→「Code follow-up(spec 不缺)」。
+PR-3c / PR-4b Diagonal / R3 exception / PR-6b Power Rating + Fib 全標 ✅ 已實作。
+
+**`CLAUDE.md §2`** reframe:從「等 user m3Spec/ 寫最新 spec 後做(spec-blocked)」改
+「Code follow-up + production calibration」。
+
+### Phase B — exhaustive compaction 真窮舉(Rust)
+
+對齊 `m3Spec/neely_rules.md §Three Rounds`(line 1198-1256)Round 1-2 流程。
+
+**新檔 `compaction/three_rounds.rs`**(~360 行):
+- `aggregate_one_level(scenarios)` — Figure 4-3 五大序列比對 + Similarity & Balance 過濾
+- 5-pattern Trending Impulse / Triangle + 3-pattern Zigzag / Flat aggregation
+- Power Rating / Max Retracement / PostBehavior 對新生 scenario 重算(對齊 spec Ch10)
+
+**改 `compaction/exhaustive.rs`** 從 pass-through → 遞迴 aggregation:
+- Level 0: 原 scenarios(對齊 v2.0 既有行為)
+- Level 1-4: 對前 level 跑 `three_rounds::aggregate_one_level`
+- `MAX_COMPACTION_LEVELS = 4`(對齊 Subminuette → Primary degree 階層)
+- 收斂條件:next level 為空 (Round 3 暫停) or hit MAX_COMPACTION_LEVELS
+
+V3 follow-up(spec §Three Rounds 動作 B):邊界波 m(+1)/m(-1) 重評,需要部分 Stage 3-4 rerun。
+
+### 落地驗證
+
+- `cargo test --release --workspace` ✅ **420 passed / 0 failed**(從 408 → 420,+12 Phase B test)
+- compaction tests 21/21:exhaustive 7 + three_rounds 7 + beam_search 3 + mod 4
+- 0 alembic / 0 Python / 0 collector.toml
+
+---
+
 ## v3.6 — Neely RuleId enum 補完:53 spec-only variants 全進 Rust(2026-05-16)
 
 接 v3.5 merged main 後,user 拍版反向 r5「prematurely declare 未實際 dispatch 的 RuleId
