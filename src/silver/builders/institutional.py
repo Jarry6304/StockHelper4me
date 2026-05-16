@@ -78,24 +78,43 @@ def _pivot(
     trading_dates: set[str],
     gov_bank_lookup: dict[tuple, int],
 ) -> list[dict[str, Any]]:
-    """Bronze 多 row → Silver 1 寬 row,LEFT JOIN gov_bank by (market, stock_id, date)。"""
+    """Bronze 多 row → Silver 1 寬 row。
+
+    v3.14.1:對齊 v1.26 B fix(margin/market_margin 同 pattern):**先 seed
+    所有 gov_bank-only keys 成 empty agg**,再用 institutional Bronze 覆蓋。
+    這樣 gov_bank Bronze 涵蓋的 (stock,date) 即使 institutional 沒料(FinMind
+    institutional 比 gov_bank 慢幾天 / 退市 / 假日),Silver 仍生 row 且
+    gov_bank_net 從 lookup 填。
+    """
     if trading_dates:
         bronze_rows = filter_to_trading_days(bronze_rows, trading_dates, label=NAME)
 
     grouped: dict[tuple, dict[str, Any]] = {}
+
+    def _empty_agg(market: Any, stock_id: Any, dt: Any, key: tuple) -> dict[str, Any]:
+        agg = {"market": market, "stock_id": stock_id, "date": dt}
+        for buy_col, sell_col in INVESTOR_TYPE_MAP.values():
+            agg[buy_col]  = None
+            agg[sell_col] = None
+        agg["gov_bank_net"] = gov_bank_lookup.get(key)
+        return agg
+
+    # Seed:gov_bank-only keys(institutional Bronze 沒料的日子)先生 empty agg
+    # safety:trading_dates 為空時 bypass filter,否則只 seed 真實交易日
+    for key in gov_bank_lookup:
+        market, stock_id, dt = key
+        if trading_dates and dt not in trading_dates:
+            continue
+        if key not in grouped:
+            grouped[key] = _empty_agg(market, stock_id, dt, key)
+
+    # institutional Bronze 覆蓋:對應 (stock, date) 有料 → 填法人 buy/sell 欄
     for row in bronze_rows:
         key = (row.get("market"), row.get("stock_id"), row.get("date"))
         if key not in grouped:
-            agg = {
-                "market":   row.get("market"),
-                "stock_id": row.get("stock_id"),
-                "date":     row.get("date"),
-            }
-            for buy_col, sell_col in INVESTOR_TYPE_MAP.values():
-                agg[buy_col]  = None
-                agg[sell_col] = None
-            agg["gov_bank_net"] = gov_bank_lookup.get(key)   # LEFT JOIN
-            grouped[key] = agg
+            grouped[key] = _empty_agg(
+                row.get("market"), row.get("stock_id"), row.get("date"), key,
+            )
 
         inv_type = row.get("investor_type", "")
         cols = INVESTOR_TYPE_MAP.get(inv_type)
