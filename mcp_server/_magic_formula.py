@@ -18,7 +18,10 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from mcp_server._conn import get_connection
+from agg._db import (
+    fetch_cross_stock_ranked,
+    get_connection,
+)  # v3.5 R5 C12+C13:connection single entry + cross-stock helper
 
 
 def compute_magic_formula_screen(
@@ -28,6 +31,9 @@ def compute_magic_formula_screen(
     database_url: str | None = None,
 ) -> dict[str, Any]:
     """跑 Magic Formula top-N 篩選。
+
+    v3.5 R5 C13:cross-stock 邏輯走 `agg._db.fetch_cross_stock_ranked` 通用 helper;
+    universe_size + stats 仍是 magic_formula 特有的 percentile 統計,留在本 file。
 
     Args:
         as_of:        查詢日(回 ≤ as_of 的最新 ranking date 之 top N)
@@ -54,22 +60,21 @@ def compute_magic_formula_screen(
     """
     conn = get_connection(database_url)
     try:
-        with conn.cursor() as cur:
-            # 1. 找 ≤ as_of 的最新 ranking date
-            cur.execute(
-                """
-                SELECT MAX(date) AS d FROM magic_formula_ranked_derived
-                 WHERE market = 'TW' AND date <= %s
-                """,
-                [as_of],
-            )
-            row = cur.fetchone()
-            ranking_date = row["d"] if row else None
-            if ranking_date is None:
-                return _empty_result(as_of, top_n,
-                    reason="no_magic_formula_data <= as_of")
+        # 1+3. 用通用 helper 拉 latest ranking_date + top N rows(LEFT JOIN stock_info_ref)
+        ranking_date, rows = fetch_cross_stock_ranked(
+            conn,
+            source_table="magic_formula_ranked_derived",
+            as_of=as_of,
+            top_n=top_n,
+            rank_col="combined_rank",
+            is_top_col="is_top_30",
+        )
+        if ranking_date is None:
+            return _empty_result(as_of, top_n,
+                reason="no_magic_formula_data <= as_of")
 
-            # 2. universe_size + stats(median EY / ROIC for eligible stocks)
+        # 2. universe_size + stats(median EY / ROIC for eligible stocks) — MF 特有
+        with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT
@@ -83,28 +88,9 @@ def compute_magic_formula_screen(
                 [ranking_date],
             )
             stats_row = cur.fetchone() or {}
-            universe_size = stats_row.get("universe_size", 0)
-            median_ey   = float(stats_row.get("median_ey") or 0.0)
-            median_roic = float(stats_row.get("median_roic") or 0.0)
-
-            # 3. Top N rows JOIN stock_info_ref 拿 name + industry
-            cur.execute(
-                """
-                SELECT
-                    mf.stock_id, mf.earnings_yield::float8 AS earnings_yield,
-                    mf.roic::float8 AS roic,
-                    mf.ey_rank, mf.roic_rank, mf.combined_rank,
-                    s.stock_name, s.industry_category
-                FROM magic_formula_ranked_derived mf
-                LEFT JOIN stock_info_ref s
-                    ON s.market = mf.market AND s.stock_id = mf.stock_id
-                WHERE mf.market = 'TW' AND mf.date = %s AND mf.is_top_30 = TRUE
-                ORDER BY mf.combined_rank ASC
-                LIMIT %s
-                """,
-                [ranking_date, top_n],
-            )
-            rows = cur.fetchall()
+        universe_size = stats_row.get("universe_size", 0)
+        median_ey   = float(stats_row.get("median_ey") or 0.0)
+        median_roic = float(stats_row.get("median_roic") or 0.0)
     finally:
         conn.close()
 

@@ -21,8 +21,18 @@ Transport: stdio(本機 process)。Phase 2 再 lift 同套 tools 到 HTTP transp
 (function 留在 `mcp_server.tools.data`,LLM 不可見)。
 """
 
-# 首次 import mcp_server(或其子模組)就觸發 sys.path 設定,讓 `from agg import ...`
-# 能正常解析(無論 import 進入點是 server.py 還是 tools.data 直接被 caller import)。
-from mcp_server import _conn as _conn  # noqa: F401
+# v3.5 R5 C12:連線 single entry 全走 agg._db.get_connection,DELETE mcp_server/_conn.py
+# 對齊 dashboards/aggregation.py 同一 sys.path 模式 — 確保從 repo root 跑
+# `python -m mcp_server` 時 src/(放 agg/ silver/ bronze/ cross_cores/)+ repo root
+# (放 dashboards/)都在 sys.path。
+import sys as _sys
+from pathlib import Path as _Path
+
+_REPO_ROOT = _Path(__file__).resolve().parent.parent
+_SRC_ROOT = _REPO_ROOT / "src"
+if str(_SRC_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_SRC_ROOT))
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
 
 __version__ = "0.2.0"
