@@ -23,7 +23,6 @@ from . import (
     foreign_holding,
     holding_shares_per,
     institutional,
-    magic_formula_ranked,
     margin,
     market_margin,
     monthly_revenue,
@@ -43,11 +42,11 @@ BUILDERS: dict[str, object] = {
     "day_trading":           day_trading,
     "monthly_revenue":       monthly_revenue,
     "financial_statement":   financial_statement,
-    "magic_formula_ranked":  magic_formula_ranked,    # v3.4(Greenblatt 2005);v3.5 R3 搬 cross_cores/
     "taiex_index":           taiex_index,
     "us_market_index":       us_market_index,
     "exchange_rate":         exchange_rate,
     "market_margin":         market_margin,
     "business_indicator":    business_indicator,
     # price_limit_merge_events 不在這裡;Rust 計算走 rust_bridge,Phase 7c
+    # magic_formula_ranked:v3.5 R3 搬到 cross_cores/(per-stock 契約違規)
 }

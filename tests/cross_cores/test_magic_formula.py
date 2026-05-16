@@ -1,6 +1,7 @@
-"""Tests for src/silver/builders/magic_formula_ranked.py(Greenblatt 2005)。
+"""Tests for src/cross_cores/magic_formula.py(Greenblatt 2005)。
 
 對齊 plan §Phase A Silver 動工(2026-05-15)。
+v3.5 R3 搬到 cross_cores/(原 silver/builders/magic_formula_ranked.py)。
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ class TestUniverseFilter:
     """Greenblatt 2005 §六:排除金融保險 + 公用事業。"""
 
     def test_excludes_financial_industries(self):
-        from silver.builders.magic_formula_ranked import _fetch_universe_filter
+        from cross_cores.magic_formula import _fetch_universe_filter
 
         db = MagicMock()
         db.query.return_value = [
@@ -52,7 +53,7 @@ class TestUniverseFilter:
 
     def test_empty_industry_not_excluded(self):
         """industry_category 為 NULL / 空字串 → 不過濾(留 in universe)。"""
-        from silver.builders.magic_formula_ranked import _fetch_universe_filter
+        from cross_cores.magic_formula import _fetch_universe_filter
 
         db = MagicMock()
         db.query.return_value = [
@@ -68,26 +69,26 @@ class TestDetailGet:
     """detail JSONB fallback chain 對齊 financial_statement_core 中文 IFRS key。"""
 
     def test_full_width_paren_key_chain(self):
-        from silver.builders.magic_formula_ranked import _detail_get, EBIT_KEYS
+        from cross_cores.magic_formula import _detail_get, EBIT_KEYS
 
         # 全形括號 key(實際 user production data 命名)
         detail = {"營業利益（損失）": "1234567"}
         assert _detail_get(detail, EBIT_KEYS) == 1234567.0
 
     def test_half_width_paren_fallback(self):
-        from silver.builders.magic_formula_ranked import _detail_get, EBIT_KEYS
+        from cross_cores.magic_formula import _detail_get, EBIT_KEYS
 
         detail = {"營業利益(損失)": 999}
         assert _detail_get(detail, EBIT_KEYS) == 999.0
 
     def test_english_fallback(self):
-        from silver.builders.magic_formula_ranked import _detail_get, EBIT_KEYS
+        from cross_cores.magic_formula import _detail_get, EBIT_KEYS
 
         detail = {"OperatingProfit": 555}
         assert _detail_get(detail, EBIT_KEYS) == 555.0
 
     def test_missing_key_returns_none(self):
-        from silver.builders.magic_formula_ranked import _detail_get, EBIT_KEYS
+        from cross_cores.magic_formula import _detail_get, EBIT_KEYS
 
         assert _detail_get({}, EBIT_KEYS) is None
         assert _detail_get({"foo": 1}, EBIT_KEYS) is None
@@ -98,7 +99,7 @@ class TestBuildRankRowsForDate:
 
     def test_top_30_selected_correctly(self):
         """排前 30 的 stocks 標 is_top_30=True。"""
-        from silver.builders.magic_formula_ranked import _build_rank_rows_for_date
+        from cross_cores.magic_formula import _build_rank_rows_for_date
 
         # 40 個 eligible stocks,各自不同 EY / ROIC,top 30 應被標
         universe_filter = {f"S{i:04d}": None for i in range(1, 41)}
@@ -133,7 +134,7 @@ class TestBuildRankRowsForDate:
 
     def test_excluded_industry_no_rank(self):
         """金融股 row 寫入但 rank / metrics 都 NULL,is_top_30=False。"""
-        from silver.builders.magic_formula_ranked import _build_rank_rows_for_date
+        from cross_cores.magic_formula import _build_rank_rows_for_date
 
         universe_filter = {
             "2330": None,            # 半導體
@@ -158,7 +159,7 @@ class TestBuildRankRowsForDate:
 
     def test_negative_ebit_disqualified(self):
         """虧損股(EBIT < 0)不進 rank。"""
-        from silver.builders.magic_formula_ranked import _build_rank_rows_for_date
+        from cross_cores.magic_formula import _build_rank_rows_for_date
 
         universe_filter = {"S1": None, "S2": None}
         financials = {
@@ -177,7 +178,7 @@ class TestBuildRankRowsForDate:
 
     def test_no_market_cap_excluded(self):
         """缺市值的 stock 標 no_market_cap。"""
-        from silver.builders.magic_formula_ranked import _build_rank_rows_for_date
+        from cross_cores.magic_formula import _build_rank_rows_for_date
 
         universe_filter = {"S1": None}
         financials = {"S1": {"ebit_ttm": 1000, "total_assets": 5000, "total_liab": 2000, "cash": 100}}
@@ -188,7 +189,7 @@ class TestBuildRankRowsForDate:
 
     def test_no_ebit_data_propagated(self):
         """財報資料不足(financials dict 帶 excluded_reason)→ row excluded。"""
-        from silver.builders.magic_formula_ranked import _build_rank_rows_for_date
+        from cross_cores.magic_formula import _build_rank_rows_for_date
 
         universe_filter = {"S1": None}
         financials = {"S1": {"excluded_reason": "no_ebit_data"}}
