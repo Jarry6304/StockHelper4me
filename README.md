@@ -84,27 +84,41 @@ StockHelper4me/
 │   ├── collector.toml                # 39 個 [[api]] entry(38 enabled)+ rate limit
 │   └── stock_list.toml               # dev mode 股票清單
 ├── src/
-│   ├── main.py                       # CLI(collector / silver / status / validate)
-│   ├── bronze/
-│   │   └── phase_executor.py         # Bronze 排程(Phase 1-6)+ Rust 7c 派工
+│   ├── main.py                       # CLI(collector / silver / cross_cores / status / validate)
+│   ├── bronze/                          # v3.5 R1 拆解
+│   │   ├── phase_executor.py         # Bronze 排程(Phase 1-6,orchestration only)+ Rust 7c 派工
+│   │   ├── segment_runner.py         # 單 segment fetch → transform → upsert(v3.5 R1 C3 抽)
+│   │   ├── aggregators/              # pivot/pack 4 個(v3.5 R1 C2 從 aggregators.py 拆 package)
+│   │   ├── post_process_dividend.py  # dividend_policy → events 拆分(v3.5 R1 C1 從 src/post_process.py 搬)
+│   │   └── _common.py                # filter_to_trading_days helper
 │   ├── silver/
 │   │   ├── orchestrator.py           # Silver 排程(7a/7b/7c)
 │   │   ├── _common.py                # fetch_bronze / upsert_silver / get_trading_dates
-│   │   └── builders/                 # 13 個 builder(institutional / margin / ... / financial)
+│   │   └── builders/                 # 13 個 per-stock builder(v3.5 R3 後 magic_formula 搬走)
+│   ├── cross_cores/                    # v3.5 R3 新層:Layer 2.5 Cross-Stock Cores
+│   │   ├── _base.py                  # CrossStockBuilder Protocol
+│   │   ├── orchestrator.py           # Phase 8 排程
+│   │   └── magic_formula.py          # Greenblatt 2005 cross-rank(從 silver/builders/ 搬)
 │   ├── api_client.py                 # FinMind aiohttp v4 client + rate limit
 │   ├── rate_limiter.py               # token bucket(1600/h, 2250ms, 429 cooldown 120s)
 │   ├── sync_tracker.py               # api_sync_progress 5-status 斷點續傳
 │   ├── date_segmenter.py             # backfill 段切割
 │   ├── field_mapper.py               # API → schema 映射 + detail JSONB pack
-│   ├── aggregators.py                # pivot/pack 4 個(institutional / financial / 等)
-│   ├── post_process.py               # dividend_policy → events 拆分
 │   ├── db.py                         # DBWriter + PostgresWriter
 │   ├── rust_bridge.py                # subprocess 派 Rust binary
 │   ├── stock_resolver.py             # stock 清單解析
 │   └── schema_pg.sql                 # 完整 schema DDL(給 fresh DB init)
 ├── rust_compute/                     # Rust binary 專案
-│   ├── Cargo.toml
-│   └── src/main.rs                   # tw_market_core 後復權 + 週/月聚合 + dirty queue self-pull
+│   ├── Cargo.toml                    # workspace virtual root
+│   └── cores/system/tw_cores/src/    # M3 cores monolithic binary(v3.5 R4 C8 拆 8 module)
+│       ├── main.rs                   # entrypoint + run-all
+│       ├── cli.rs                    # Cli + Command struct
+│       ├── dispatcher.rs             # dispatch_indicator/structural/neely
+│       ├── writers.rs                # PG IO helpers
+│       ├── run_environment.rs        # 6 environment cores
+│       ├── run_stock_cores.rs        # 17 stock-level cores
+│       ├── summary.rs                # CoreRunSummary + print_summary
+│       └── helpers.rs                # parse_timeframe + extract_indicator_meta
 ├── scripts/                          # verifier / inspect / reverse-pivot 工具
 ├── docs/
 │   └── api_pipeline_reference.md     # entry × table × code 索引(配套本檔)

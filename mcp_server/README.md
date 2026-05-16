@@ -239,3 +239,8 @@ python -m mcp_server
 - Aggregation layer:`m3Spec/aggregation_layer.md` r1 + `src/agg/`
 - Plotly figure builders:`dashboards/charts/`(Phase C 落地)
 - Streamlit demo:`dashboards/aggregation.py`(同套 charts/ 的 web UI)
+- **v3.5 R5 refactor**(plan `/root/.claude/plans/hashed-foraging-pixel.md` §R5):
+  - 連線 single entry = `agg._db.get_connection()`(DELETE `mcp_server/_conn.py`)
+  - cross-stock helper = `agg._db.fetch_cross_stock_ranked()`(給 `_magic_formula` 與
+    未來 cross-stock cores 共用,對齊 cross_cores Layer 2.5 設計)
+  - `mcp_server/__init__.py` 加 inline sys.path 設定(原 `_conn.py` 職責內化)

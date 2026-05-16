@@ -1,13 +1,13 @@
 # API Pipeline Reference
 
-**版本**:v3.2 r1(alembic head `u0v1w2x3y4z5` / 2026-05-09 v1.26 nice-to-haves merged)
+**版本**:v3.5(alembic head `x3y4z5a6b7c8` 不變 / 2026-05-16 v3.5 5 層架構重構 merged)
 **用途**:配合 `m2Spec/layered_schema_post_refactor.md`(spec)看 — spec 是 schema 規範,本檔是 **collector.toml entry × code path × 現行狀態**索引
-**結構**:對齊 spec §三/§四/§六/§七/§八 + 補充 code 索引 / 加 entry 流程
+**結構**:對齊 spec §三/§四/§六/§七/§八 + 補充 code 索引 / 加 entry 流程 + v3.5 R3 Layer 2.5
 
 > **Spec 為主、本檔為輔**:任何 schema/PK/欄位細節以 spec 為準。本檔重點:
 > 1. 哪個 [[api]] entry 寫入哪張 Bronze 表
 > 2. 對應 code 檔/函式入口
-> 3. 現行 v1.26 狀態(R3 升格主名 / R4 entry _legacy 後綴 / Rust dirty queue self-pull / margin UNION)
+> 3. 現行 v3.5 狀態(Layer 2.5 Cross-Stock Cores 新層 / bronze/ Layer 1 拆解 / tw_cores monolith 拆 8 module / MCP 連線 single entry)
 
 ---
 
@@ -29,17 +29,21 @@
 
 ---
 
-## 1. 兩層架構總覽
+## 1. 五層架構總覽(v3.5 R3 後)
 
-### 1.1 兩層定位(對齊 spec §1.5)
+### 1.1 五層定位(對齊 spec §1.5 + v3.5 plan §Target Architecture)
 
 | 層 | 責任 | 寫入時機 | 主要 module |
 |---|---|---|---|
-| **Bronze** | FinMind raw 直入 + 事件登錄(無計算) | collector backfill / incremental | `src/bronze/phase_executor.py` + `api_client.py` + `field_mapper.py` |
-| **Silver(進階計算)** | 後復權 / 跨表 join / pivot / pack / 衍生欄(複雜計算) | orchestrator dirty queue pull(PR #20 trigger 觸發) | `src/silver/orchestrator.py` + `silver/builders/*.py` + Rust binary |
-| (M3 / Cores) | 規則 / 算式套用(只讀 Silver,不算復權)| (未動工) | `m3Spec/`(預留) |
+| **Bronze**(Layer 1) | FinMind raw 直入 + 事件登錄(無計算) | collector backfill / incremental | `src/bronze/phase_executor.py` + `src/bronze/segment_runner.py` + `src/bronze/aggregators/` + `src/bronze/post_process_dividend.py` |
+| **Silver per-stock**(Layer 2) | 後復權 / 跨表 join / pivot / pack / 衍生欄(per-stock 計算) | orchestrator dirty queue pull(PR #20 trigger 觸發) | `src/silver/orchestrator.py` + `silver/builders/*.py` + Rust S1 |
+| **Cross-Stock Cores**(Layer 2.5,v3.5 R3 新)| 跨股 ranking / 分群 / 相關性 / sector | `cross_cores phase 8` 排程(不走 dirty queue,全市場重算 latest)| `src/cross_cores/orchestrator.py` + `cross_cores/magic_formula.py` |
+| **M3 Cores**(Layer 3) | 規則 / 算式套用(per-stock compute → facts / indicator_values)| `tw_cores run-all`(Rust binary)| `rust_compute/cores/system/tw_cores/`(v3.5 R4 拆 8 module)+ 各 core crate |
+| **MCP / API 對外**(Layer 4) | LLM / dashboard 對外 read-only 查詢 | on-demand(MCP tool call / Streamlit reload)| `src/agg/` + `mcp_server/` + `dashboards/` |
 
-**強約束**(spec §1.5):「在 Silver 層判斷 Wave 結構、在 Cores 層做後復權」視為設計錯誤。
+**強約束**(spec §1.5 + v3.5 audit):
+- per-stock vs cross-stock 邊界:per-stock 輸入 `stock_id`,cross-stock 輸入 `date`(全市場 universe)。不可混淆(Magic Formula v3.5 R3 從 silver/builders 搬到 cross_cores/)。
+- Layer 4 連線 single entry = `agg._db.get_connection()`(v3.5 R5 C12 刪掉 mcp_server/_conn.py)。
 
 ### 1.2 整體架構圖(spec §二)
 
@@ -120,7 +124,7 @@
 |---|---|---|---|
 | `price_adjustment_events` | 4 entry 共寫:`dividend_result`(dividend) / `capital_reduction` / `split_price` / `par_value_change`,加 `dividend_policy` 經 post_process | `field_mapper.computed_fields = ["volume_factor", "cash_dividend", "stock_dividend"]`;`field_mapper._compute_dividend_fields()` 從 detail 拆 | → **4 fwd 表整檔 dirty**(`trg_mark_fwd_silver_dirty` UPDATE 全段歷史 SET is_dirty=TRUE) |
 | `stock_suspension_events` | `stock_suspension` | TaiwanStockSuspended;`field_mapper`(`date → suspension_date`)| 無(M3 prev_trading_day 用,未動工) |
-| `_dividend_policy_staging` | `dividend_policy` | 21 個 PascalCase 全 pack 進 detail JSONB → **`post_process="dividend_policy_merge"`** 觸發 `post_process.dividend_policy_merge(db, stock_id)`(`src/post_process.py`),拆權息事件入 `price_adjustment_events` + 偵測純現增 | 無(staging 後不留) |
+| `_dividend_policy_staging` | `dividend_policy` | 21 個 PascalCase 全 pack 進 detail JSONB → **`post_process="dividend_policy_merge"`** 觸發 `dividend_policy_merge(db, stock_id)`(`src/bronze/post_process_dividend.py`,v3.5 R1 C1 從 `src/post_process.py` 搬),拆權息事件入 `price_adjustment_events` + 偵測純現增 | 無(staging 後不留) |
 
 ### 2.4 B3_price_raw(spec §3.4,2 張)
 
@@ -243,6 +247,36 @@
 
 ---
 
+## 3.5b Cross-Stock Cores 層(v3.5 R3 新層,Layer 2.5)
+
+> Per-stock Silver builder 與 cross-stock 邏輯的契約對立(audit Layer 1+2 痛點 4)。
+> Silver per-stock 輸入 stock_id,本層輸入 date(全市場 universe)。
+
+| 表 | builder file | 上游 | 邏輯 |
+|---|---|---|---|
+| `magic_formula_ranked_derived` | `src/cross_cores/magic_formula.py` | `financial_statement_derived` + `valuation_per_tw` + `price_daily_fwd` + `foreign_investor_share_tw` + `stock_info_ref` | Greenblatt 2005 EBIT/EV + ROIC cross-rank + top 30 篩選 |
+
+**CLI**:
+```bash
+python src/main.py cross_cores phase 8                            # 全跑
+python src/main.py cross_cores phase 8 --builder magic_formula    # 指定 builder
+python src/main.py cross_cores phase 8 --full-rebuild             # 重算 lookback
+python src/main.py cross_cores phase 8 --lookback-days 60         # 覆蓋預設
+```
+
+**`cross_cores/_base.py`** `CrossStockBuilder` Protocol:輸入 `target_date` + 全市場 universe → emit cross-stock ranked / clustered output(對比 PerStockBuilder 輸入 `stock_id`)。
+
+**`cross_cores/orchestrator.py`** `CrossStockOrchestrator.run()`:不走 dirty queue(全市場永遠重算 latest date 即可,~5s for MF)。
+
+**refresh chain 中位置**(`scripts/refresh_daily.ps1` / `python src/main.py refresh`):
+```
+Bronze incremental → Silver 7c → Silver 7a → Silver 7b → Phase 8 Cross-Stock → M3 cores
+```
+
+未來成員(留 follow-up):pairs_trading / sector_rotation / correlation_matrix。
+
+---
+
 ## 4. 系統表
 
 > Cores 層**不應引用**這些表(spec §五)。
@@ -291,15 +325,16 @@ CLI: python src/main.py {backfill,incremental} [--stocks ...]
   └─→ rust_bridge.run_phase4 → tw_stock_compute binary
 ```
 
-**aggregators**(`src/aggregators.py`):
+**aggregators**(v3.5 R1 C2 拆 `bronze/aggregators/` package):
 
-| function | 用途 | 對應 entry |
-|---|---|---|
-| `pivot_institutional` | 5 類法人 1 row × 10 col | `institutional_daily` |
-| `pivot_institutional_market` | 全市場 pivot | `institutional_market` |
-| `pack_holding_shares` | 多 level → detail JSONB pack | `holding_shares_per_legacy` |
-| `pack_financial` | 中→英 origin_name → detail JSONB | `financial_*_legacy` 三 entry |
-| `_filter_to_trading_days` | 過濾 FinMind 週六鬼資料 | `pivot_institutional` 內呼叫 |
+| module | function | 用途 | 對應 entry |
+|---|---|---|---|
+| `bronze/aggregators/pivot_institutional.py` | `aggregate_institutional` | 5 類法人 1 row × 10 col | `institutional_daily` |
+| 同 | `aggregate_institutional_market` | 全市場 pivot | `institutional_market` |
+| `bronze/aggregators/pack_holding_shares.py` | `aggregate_holding_shares` | 多 level → detail JSONB pack | `holding_shares_per_legacy` |
+| `bronze/aggregators/pack_financial.py` | `aggregate_financial` | 中→英 origin_name → detail JSONB | `financial_*_legacy` 三 entry |
+| `bronze/_common.py` | `filter_to_trading_days` | 過濾 FinMind 週六鬼資料 | aggregator 內呼叫 |
+| `bronze/aggregators/__init__.py` | `apply_aggregation` | dispatcher 入口 | 統一 strategy 分派 |
 
 ---
 
@@ -539,9 +574,11 @@ R6 後另起退場 PR(編號 #R7+)DROP 6 張舊表 + 對應 collector.toml entry
 | `src/sync_tracker.py` | api_sync_progress 5-status 追蹤 | `is_completed / mark_progress / mark_failed / mark_schema_mismatch / mark_empty / get_last_sync` |
 | `src/date_segmenter.py` | segment 計算 | `DateSegmenter.segments(api_config, mode, stock_id)` |
 | `src/field_mapper.py` | API → schema 映射 + detail JSONB pack | `FieldMapper.transform(api_config, raw_records) → (rows, schema_mismatch)` |
-| `src/aggregators.py` | pivot/pack 4 個 + filter | `apply_aggregation(name, rows, db, **opts)` |
+| `src/bronze/aggregators/` | pivot/pack 4 個 + dispatcher | `apply_aggregation(name, rows, **opts)`(v3.5 R1 C2 拆 package) |
+| `src/bronze/_common.py` | trading-day filter helper | `filter_to_trading_days(rows, trading_dates, label)` |
+| `src/bronze/segment_runner.py` | 單 segment fetch→transform→upsert | `_SegmentRunner.run(stock_id, seg_start, seg_end)`(v3.5 R1 C3 抽) |
 | `src/db.py` | DBWriter + PostgresWriter | `upsert / upsert_with_strategy / query / query_one / table_pks` |
-| `src/post_process.py` | dividend_policy → events 拆分 | `dividend_policy_merge(db, stock_id)` |
+| `src/bronze/post_process_dividend.py` | dividend_policy → events 拆分 | `dividend_policy_merge(db, stock_id)`(v3.5 R1 C1 從 src/post_process.py 搬) |
 | `src/rust_bridge.py` | subprocess 派 Rust binary | `RustBridge.run_phase4(stock_ids, mode)` / `_check_binary_freshness`(v1.26 起 lazy) |
 
 ### 10.3 Silver builders(13 個 + helpers)

@@ -2,9 +2,16 @@
 
 > **版本**: v1.2  
 > **日期**: 2026-04-15  
-> **定位**: 資料蒐集程式的實作規格（補完 `tw_stock_architecture_review_v1.1` §五的執行細節）  
-> **語言**: Python 3.11+（Collector 本體）+ Rust binary（Phase 4 計算層）  
-> **依賴文件**: `tw_stock_architecture_review_v1.1.md`（Schema v2.3、欄位映射、後復權算法）
+> **定位**: 資料蒐集程式的實作規格(補完 `tw_stock_architecture_review_v1.1` §五的執行細節)  
+> **語言**: Python 3.11+(Collector 本體)+ Rust binary(Phase 4 計算層)  
+> **依賴文件**: `tw_stock_architecture_review_v1.1.md`(Schema v2.3、欄位映射、後復權算法)
+>
+> **⚠️ v3.5 R1 後的模組路徑變更**(2026-05-16,本檔仍記錄 v1.2 原始設計):
+> - `src/phase_executor.py` → `src/bronze/phase_executor.py`(orchestration only)
+> - `src/aggregators.py` → `src/bronze/aggregators/` package(4 module)
+> - `src/post_process.py` → `src/bronze/post_process_dividend.py`
+> - 新加 `src/bronze/segment_runner.py`(從 phase_executor._run_api 抽 `_SegmentRunner`)
+> - 完整當前模組地圖見 `CLAUDE.md` §模組地圖 + `docs/api_pipeline_reference.md`
 
 ---
 

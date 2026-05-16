@@ -561,10 +561,13 @@ python src/main.py backfill --stocks 2330
 | `src/date_segmenter.py` | segment 切分邏輯 |
 | `src/field_mapper.py` | rename / detail / computed_fields / schema validation |
 | `src/sync_tracker.py` | api_sync_progress 斷點續傳追蹤 |
-| `src/post_process.py` | dividend_policy_merge 後處理 |
-| `src/db.py` | DBWriter（Postgres + SQLite fallback）|
+| `src/bronze/post_process_dividend.py` | dividend_policy_merge 後處理(v3.5 R1 C1 從 src/post_process.py 搬) |
+| `src/bronze/aggregators/` | pivot/pack 4 個(v3.5 R1 C2 從 src/aggregators.py 拆 package) |
+| `src/bronze/segment_runner.py` | 單 segment fetch→transform→upsert(v3.5 R1 C3 從 phase_executor._run_api 抽) |
+| `src/db.py` | DBWriter（Postgres + SQLite fallback)|
 | `src/rust_bridge.py` | Phase 4 Rust binary 橋接 |
-| `rust_compute/src/main.rs` | Rust 後復權 + 週/月 K 聚合 |
+| `rust_compute/silver_s1_adjustment/src/main.rs` | Rust 後復權 + 週/月 K 聚合(tw_stock_compute binary)|
+| `rust_compute/cores/system/tw_cores/src/main.rs` | M3 cores monolithic binary(v3.5 R4 C8 拆 8 module)|
 | `scripts/check_all_tables.py` | 22 張表筆數體檢 |
 | `scripts/drop_table.py` | 刪表 + 連帶刪 api_sync_progress |
 | `docs/schema_reference.md` | 以表為單位的 schema 對照（搭配本文件閱讀）|
