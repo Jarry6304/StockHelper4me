@@ -338,19 +338,6 @@ detail_fields = ["_remaining_shares", "_remain_ratio", "_upper_limit_ratio", "_c
 notes        = "外資持股"
 
 [[api]]
-name         = "holding_shares_per_legacy"
-dataset      = "TaiwanStockHoldingSharesPer"
-param_mode   = "per_stock"
-target_table = "holding_shares_per_legacy_v2"
-phase        = 5
-enabled      = true
-is_backer    = true
-segment_days = 365
-field_rename = {}
-aggregation  = "pack_holding_shares"
-notes        = "股權分散表 v2.0 legacy(PR #R4 entry name 加 _legacy 後綴;v3 主路徑走 holding_shares_per_v3 → holding_shares_per)"
-
-[[api]]
 name         = "valuation_daily"
 dataset      = "TaiwanStockPER"
 param_mode   = "per_stock"
@@ -388,64 +375,9 @@ field_rename = {"weight_per" = "weight", "rank" = "_rank", "stock_name" = "_stoc
 detail_fields = ["_rank", "_stock_name", "_index_type"]
 notes        = "指數成分權重"
 
-[[api]]
-name         = "monthly_revenue_legacy"
-dataset      = "TaiwanStockMonthRevenue"
-param_mode   = "per_stock"
-target_table = "monthly_revenue_legacy_v2"
-phase        = 5
-enabled      = true
-is_backer    = true
-segment_days = 0
-field_rename = {"revenue_month" = "revenue_mom", "revenue_year" = "revenue_yoy", "country" = "_country", "create_time" = "_create_time"}
-detail_fields = ["_country", "_create_time"]
-notes        = "月營收 v2.0 legacy(PR #R4 entry name 加 _legacy 後綴;v3 主路徑走 monthly_revenue_v3 → monthly_revenue)"
-
-[[api]]
-name         = "financial_income_legacy"
-dataset      = "TaiwanStockFinancialStatements"
-param_mode   = "per_stock"
-target_table = "financial_statement_legacy_v2"
-phase        = 5
-enabled      = true
-is_backer    = true
-segment_days = 0
-field_rename = {}
-aggregation  = "pack_financial"
-stmt_type    = "income"
-notes        = "損益表 v2.0 legacy(PR #R4 entry name 加 _legacy 後綴;v3 主路徑走 financial_income_v3 → financial_statement)"
-
-[[api]]
-name         = "financial_balance_legacy"
-dataset      = "TaiwanStockBalanceSheet"
-param_mode   = "per_stock"
-target_table = "financial_statement_legacy_v2"
-phase        = 5
-enabled      = true
-is_backer    = true
-segment_days = 0
-field_rename = {}
-aggregation  = "pack_financial"
-stmt_type    = "balance"
-notes        = "資產負債表 v2.0 legacy(PR #R4 entry name 加 _legacy 後綴;v3 主路徑走 financial_balance_v3 → financial_statement)"
-
-[[api]]
-name         = "financial_cashflow_legacy"
-dataset      = "TaiwanStockCashFlowsStatement"
-param_mode   = "per_stock"
-target_table = "financial_statement_legacy_v2"
-phase        = 5
-enabled      = true
-is_backer    = true
-segment_days = 0
-field_rename = {}
-aggregation  = "pack_financial"
-stmt_type    = "cashflow"
-notes        = "現金流量表 v2.0 legacy(PR #R4 entry name 加 _legacy 後綴;v3 主路徑走 financial_cashflow_v3 → financial_statement)"
-
-
 # =============================================================================
 # v3.2 PR #18.5 Bronze refetch dual-write entries(blueprint §八.1 Option A)
+# 注意:PR #R6(2026-05-16)後 v2.0 `_legacy` entries 全部移除,本段以下為主路徑 v3 唯一路徑
 # =============================================================================
 # 5 個 entry 對映 PR #18.5 alembic l1m2n3o4p5q6 落地的 3 張 Bronze raw 表。
 # 與上方 v2.0 entries 並存(dual-write window T0~T0+21 per blueprint §八.2),

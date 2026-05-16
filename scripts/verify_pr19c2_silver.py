@@ -1,7 +1,20 @@
 """
-verify_pr19c2_silver.py
-=======================
-PR #19c-2 3 個依賴 PR #18.5 Bronze 的 Silver builder round-trip 驗證。
+verify_pr19c2_silver.py — 🪦 DEPRECATED(PR #R6 2026-05-16 後)
+=============================================================
+⚠️ **不可執行**:本 verifier 對 3 張 `_legacy_v2` 表逐 PK 比對,
+但 PR #R6 已永久 DROP `holding_shares_per_legacy_v2` /
+`financial_statement_legacy_v2` / `monthly_revenue_legacy_v2`。
+
+執行本 script 會直接踩 `relation does not exist` error。
+
+保留本檔僅作為 PR #19c-2 R5 觀察期(2026-05-09 → 2026-05-16)的審計紀錄。
+若未來需要對 Silver 3 builder 跑 round-trip 驗證,須改寫對 Bronze 主名表
+(`holding_shares_per` / `monthly_revenue` / `financial_statement` — PR #R3 升格)
+做反向比對,而非走 v2.0 legacy path。
+
+---
+
+PR #19c-2 3 個依賴 PR #18.5 Bronze 的 Silver builder round-trip 驗證(歷史紀錄)。
 
 驗證模式對齊 verify_pr19b_silver.py(對 v2.0 legacy_v2 表逐 PK 比對),因為 3 張表
 v2.0 路徑與 v3.2 Silver 都做相同 pack/rename,輸出應該等值(±1% SLO 內)。

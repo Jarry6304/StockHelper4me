@@ -29,12 +29,10 @@ TABLES_TO_CHECK = [
     "institutional_daily",
     "margin_daily",
     "foreign_holding",
-    "holding_shares_per_legacy_v2",      # PR #R2 rename(原 holding_shares_per)
     "valuation_daily",
     "day_trading",
     "index_weight_daily",
-    "monthly_revenue_legacy_v2",         # PR #R2 rename(原 monthly_revenue)
-    "financial_statement_legacy_v2",     # PR #R2 rename(原 financial_statement)
+    # PR #R6(2026-05-16):3 張 _legacy_v2 永久 DROP — holding_shares_per / monthly_revenue / financial_statement 為主路徑
     # Phase 6
     "market_index_us",
     "exchange_rate",

@@ -362,16 +362,7 @@ CREATE TABLE IF NOT EXISTS foreign_holding (
 );
 
 
--- 股權分散表(v2.0 legacy;PR #R2 rename `_legacy_v2` 進入觀察期,PR #R6 後 DROP)
--- 主路徑改走 holding_shares_per(PR #R3 後升格,PR #18.5 原 _tw);本表保留 21~60 天作 verifier 對照
-CREATE TABLE IF NOT EXISTS holding_shares_per_legacy_v2 (
-    market          TEXT NOT NULL,
-    stock_id        TEXT NOT NULL,
-    date            DATE NOT NULL,
-    detail          JSONB,                 -- 各級距持股人數與張數
-    source          TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date)
-);
+-- (PR #R6 2026-05-16:holding_shares_per_legacy_v2 永久 DROP;主路徑 holding_shares_per 為唯一)
 
 
 -- 本益比 / 殖利率 / 淨值比
@@ -412,41 +403,8 @@ CREATE TABLE IF NOT EXISTS index_weight_daily (
 );
 
 
--- 月營收(v2.0 legacy;PR #R2 rename `_legacy_v2`,PR #R6 後 DROP)
--- 主路徑改走 monthly_revenue(PR #R3 後升格,PR #18.5 原 _tw)
-CREATE TABLE IF NOT EXISTS monthly_revenue_legacy_v2 (
-    market          TEXT NOT NULL,
-    stock_id        TEXT NOT NULL,
-    date            DATE NOT NULL,         -- FinMind 用當月 1 號代表該月
-    revenue         NUMERIC(20, 2),        -- 元為單位,十億級
-    revenue_mom     NUMERIC(10, 4),        -- 月增百分比
-    revenue_yoy     NUMERIC(10, 4),        -- 年增百分比
-    detail          JSONB,
-    source          TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date)
-);
-
-
--- 財務報表(損益 / 資產負債 / 現金流共用;v2.0 legacy)
--- PR #R2 rename `_legacy_v2`,PR #R6 後 DROP;主路徑改走 financial_statement(PR #R3 後升格,PR #18.5 原 _tw)
-CREATE TABLE IF NOT EXISTS financial_statement_legacy_v2 (
-    market          TEXT NOT NULL,
-    stock_id        TEXT NOT NULL,
-    date            DATE NOT NULL,         -- 會計期間結束日
-    type            TEXT NOT NULL,         -- income | balance | cashflow
-    detail          JSONB,                 -- 各會計科目值,key 為 PascalCase 原文
-    source          TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date, type),
-    CONSTRAINT chk_fin_type CHECK (type IN ('income', 'balance', 'cashflow'))
-);
-
--- 利於以 type 過濾(PR #R2 rename idx_financial_type_date → _legacy)
-CREATE INDEX IF NOT EXISTS idx_financial_legacy_type_date
-    ON financial_statement_legacy_v2 (type, date DESC);
-
--- 利於 detail JSON 查特定科目(GIN index for JSONB;PR #R2 rename _legacy)
-CREATE INDEX IF NOT EXISTS idx_financial_legacy_detail_gin
-    ON financial_statement_legacy_v2 USING GIN (detail jsonb_path_ops);
+-- (PR #R6 2026-05-16:monthly_revenue_legacy_v2 + financial_statement_legacy_v2 永久 DROP)
+-- 主路徑:monthly_revenue / financial_statement 為唯一(PR #R3 後升格自 _tw)
 
 
 -- =============================================================================
@@ -564,7 +522,9 @@ CREATE INDEX IF NOT EXISTS idx_api_progress_status
 -- v3.2 PR #18 Bronze reverse-pivot 表(blueprint §六 #11 / §十 PR #5)
 -- =============================================================================
 -- 5 張 Bronze raw 表,從 v2.0 pivot/pack 表反推。Coexist with legacy v2.0 表;
--- _legacy_v2 rename 留到 T0+21(blueprint §八.2)。
+-- 註:PR #R6(2026-05-16)已永久 DROP 3 張 *_legacy_v2(holding_shares_per /
+-- financial_statement / monthly_revenue);其他 2 張 legacy(institutional_daily /
+-- margin_daily 等)仍保留為 verify_pr19b 對照基準。
 -- 與 alembic migration j9k0l1m2n3o4 保持同步;與 scripts/_reverse_pivot_lib.py
 -- 的 SPECS 對齊欄名(SPECS 是 single source of truth)。
 
@@ -928,9 +888,9 @@ CREATE INDEX IF NOT EXISTS idx_price_monthly_fwd_dirty
 -- =============================================================================
 -- 因 detail JSONB unpack 不可逆(level taxonomy 未知 / 中→英 origin_name 對應丟失 /
 -- FinMind 月營收 1 row/股/月),3 張表走 Option A 從 FinMind 全量重抓 raw bytes
--- (~30-40h calendar-time)。Coexist with v2.0 表(已於 PR #R2 rename
--- holding_shares_per_legacy_v2 / financial_statement_legacy_v2 /
--- monthly_revenue_legacy_v2);PR #R6 後 DROP _legacy_v2。
+-- (~30-40h calendar-time)。原 v2.0 *_legacy_v2 表已於 PR #R6(2026-05-16)永久 DROP,
+-- 本 PR #18.5 主路徑現為唯一(holding_shares_per_tw / financial_statement_tw /
+-- monthly_revenue_tw,PR #R3 升格自 _tw 後)。
 -- 對應 alembic l1m2n3o4p5q6(原 _tw)+ s8t9u0v1w2x3(legacy_v2 rename)+
 --      t9u0v1w2x3y4(PR #R3 升格去 _tw 後綴 → 主名)+ collector.toml dual-write entries。
 
