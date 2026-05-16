@@ -12,8 +12,16 @@
 use crate::output::{
     NeelyPatternType, NeelyCoreOutput, PowerRating, Scenario,
 };
-use fact_schema::Fact;
+use fact_schema::{with_event_kind, Fact};
 use serde_json::json;
+
+/// 對齊 v3.5 R4 C11:用 fact_schema::with_event_kind helper 注入 event_kind
+/// 至 metadata,跟其他 34 cores 統一(v3.4 r2 r5 helper)。
+#[derive(Debug)]
+enum NeelyFactKind {
+    Scenario,
+    ForestSummary,
+}
 
 /// 從 NeelyCoreOutput 萃取機械式 Fact list。
 ///
@@ -46,6 +54,16 @@ fn scenario_to_fact(output: &NeelyCoreOutput, scenario: &Scenario) -> Fact {
         scenario.deferred_rules_count,
     );
 
+    let metadata = json!({
+        "scenario_id": scenario.id,
+        "pattern_type": pattern_label,
+        "power_rating": power_label,
+        "complexity_level": format!("{:?}", scenario.complexity_level),
+        "rules_passed_count": scenario.rules_passed_count,
+        "deferred_rules_count": scenario.deferred_rules_count,
+        "invalidation_triggers_count": scenario.invalidation_triggers.len(),
+        "expected_fib_zones_count": scenario.expected_fib_zones.len(),
+    });
     Fact {
         stock_id: output.stock_id.clone(),
         fact_date: output.data_range.end,
@@ -54,17 +72,7 @@ fn scenario_to_fact(output: &NeelyCoreOutput, scenario: &Scenario) -> Fact {
         source_version: "0.21.0".to_string(),
         params_hash: None, // PR-7 caller 應填入(neely_core compute() 不知道 Workflow params 全貌)
         statement,
-        metadata: json!({
-            "event_kind": "Scenario",  // v3.4 r2 r5
-            "scenario_id": scenario.id,
-            "pattern_type": pattern_label,
-            "power_rating": power_label,
-            "complexity_level": format!("{:?}", scenario.complexity_level),
-            "rules_passed_count": scenario.rules_passed_count,
-            "deferred_rules_count": scenario.deferred_rules_count,
-            "invalidation_triggers_count": scenario.invalidation_triggers.len(),
-            "expected_fib_zones_count": scenario.expected_fib_zones.len(),
-        }),
+        metadata: with_event_kind(metadata, &NeelyFactKind::Scenario),
     }
 }
 
@@ -78,6 +86,16 @@ fn forest_summary_fact(output: &NeelyCoreOutput) -> Fact {
         output.diagnostics.validator_reject_count,
     );
 
+    let metadata = json!({
+        "kind": "forest_summary",
+        "forest_size": output.scenario_forest.len(),
+        "monowave_count": output.monowave_series.len(),
+        "candidate_count": output.diagnostics.candidate_count,
+        "validator_pass_count": output.diagnostics.validator_pass_count,
+        "validator_reject_count": output.diagnostics.validator_reject_count,
+        "overflow_triggered": output.diagnostics.overflow_triggered,
+        "compaction_paths": output.diagnostics.compaction_paths,
+    });
     Fact {
         stock_id: output.stock_id.clone(),
         fact_date: output.data_range.end,
@@ -86,17 +104,7 @@ fn forest_summary_fact(output: &NeelyCoreOutput) -> Fact {
         source_version: "0.21.0".to_string(),
         params_hash: None,
         statement,
-        metadata: json!({
-            "event_kind": "ForestSummary",  // v3.4 r2 r5
-            "kind": "forest_summary",
-            "forest_size": output.scenario_forest.len(),
-            "monowave_count": output.monowave_series.len(),
-            "candidate_count": output.diagnostics.candidate_count,
-            "validator_pass_count": output.diagnostics.validator_pass_count,
-            "validator_reject_count": output.diagnostics.validator_reject_count,
-            "overflow_triggered": output.diagnostics.overflow_triggered,
-            "compaction_paths": output.diagnostics.compaction_paths,
-        }),
+        metadata: with_event_kind(metadata, &NeelyFactKind::ForestSummary),
     }
 }
 

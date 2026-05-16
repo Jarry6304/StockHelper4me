@@ -26,7 +26,7 @@
 //   - 保留 velocity_threshold_pct = 0.001(Roncalli 2013 推薦,production 驗證可達)
 //     ⚠️ 注意:Q=1e-5/R=(0.01p)² steady-state K≈0.002,vel_pct 上限 ~0.002,
 //        threshold>0.001 會把所有 stock 鎖在 Sideway → 0 events(初版 0.003 已驗失敗)
-//   - 加 MIN_REGIME_DURATION_DAYS = 5:regime 必須持續 ≥ 5 個交易日才產 event
+//   - 加 min_regime_duration_days(預設 5):regime 必須持續 ≥ 5 個交易日才產 event
 //     (suppress consecutive flips,避開 close noise 引發的 false transition)
 //   - 1263 stocks × ~134 K events(107/yr/stock,9× 超 v1.32 P2 ≤ 12/yr)→
 //     sustain filter 預估降至 ~9-12/yr,落入 P2 acceptance 標準
@@ -60,10 +60,10 @@ inventory::submit! {
 /// velocity acceleration 計算窗(用來分辨「持平」與「加速/減速」的 lookback)
 const REGIME_LOOKBACK_DAYS: usize = 20;
 
-/// v3.4 r2:regime 必須維持 ≥ MIN_REGIME_DURATION_DAYS 個交易日才視為「進入」,
-/// 避免 close noise 引發的高頻 regime flip(對齊 v1.32 P2 ≤ 12/yr/stock 目標)。
-/// 5 個交易日 ≈ 1 週,夠濾掉 daily noise 但仍能捕捉週級別的 regime 切換。
-const MIN_REGIME_DURATION_DAYS: usize = 5;
+/// v3.5 R4 C11 default:對齊 audit Layer 3 痛點 12 — const 改 Params field 給 caller override。
+/// 維持 5 個交易日(≈ 1 週)default,避免 close noise 引發的高頻 regime flip
+/// (對齊 v1.32 P2 ≤ 12/yr/stock 目標 + v3.4 r2 calibration 結果)。
+const MIN_REGIME_DURATION_DAYS_DEFAULT: usize = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KalmanFilterParams {
@@ -76,6 +76,11 @@ pub struct KalmanFilterParams {
     pub warmup_days: usize,
     /// velocity / smoothed_price 比例閾值(0.001 = 0.1%/day)— 分辨 stable vs sideway
     pub velocity_threshold_pct: f64,
+    /// v3.5 R4 C11:regime 必須維持 ≥ min_regime_duration_days 個交易日才視為「進入」,
+    /// 避免 close noise 引發的高頻 regime flip(對齊 v1.32 P2 ≤ 12/yr/stock 目標)。
+    /// 預設 5 個交易日(≈ 1 週)。caller 可調(monthly tf 建議升 2-3,
+    /// intraday tf 建議降到 1-2)。
+    pub min_regime_duration_days: usize,
 }
 
 impl Default for KalmanFilterParams {
@@ -96,6 +101,7 @@ impl Default for KalmanFilterParams {
             // 0.001(0.1%/day)實際 production 約 17.6 events/yr/stock,加 sustain=5
             // 過濾 noise 後預估 ~9-12 events/yr/stock(對齊 v1.32 P2 ≤ 12/yr 標準)。
             velocity_threshold_pct: 0.001,
+            min_regime_duration_days: MIN_REGIME_DURATION_DAYS_DEFAULT,
         }
     }
 }
@@ -249,13 +255,13 @@ impl IndicatorCore for KalmanFilterCore {
         // 揭露 production 0 events 後分析:vel_pct 在 threshold 邊界 oscillate 每
         // 1-3 bars,從來不會連 5 bars 同 regime。改 **run-length 合併**:
         //   1. 把 regime series 切成 runs(連續同 regime 段)
-        //   2. Length < MIN_REGIME_DURATION_DAYS 的 run 併入前一個 run(視為 noise)
+        //   2. Length < min_regime_duration_days 的 run 併入前一個 run(視為 noise)
         //   3. 在 merged runs 上偵測 transition
         // 預期:134K → ~10-30K events(對齊 v1.32 P2 ≤ 12/yr/stock 標準)。
         let events = detect_events_run_length(
             &series,
             params.warmup_days.min(n),
-            MIN_REGIME_DURATION_DAYS,
+            params.min_regime_duration_days,
         );
 
         Ok(KalmanFilterOutput {
@@ -503,7 +509,7 @@ mod tests {
 
     #[test]
     fn run_length_filter_absorbs_short_runs() {
-        // v3.4 r2 r3:short runs(< MIN_REGIME_DURATION_DAYS=5)併入前一段。
+        // v3.4 r2 r3:short runs(< min_regime_duration_days=5)併入前一段。
         // 構造合成 regime sequence,測試 detect_events_run_length:
         //   Sideway × 10 → StableUp × 3 → Sideway × 10
         //   預期:StableUp(3) 併入前 Sideway,merged 結果 = Sideway(23)
