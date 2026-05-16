@@ -12,9 +12,10 @@ Pivot 邏輯:對 (market, stock_id, date) 把 Bronze 多 row(每 investor_type �
 Investment_Trust, Dealer, Dealer_Hedging})。
 
 gov_bank_net(per spec §2.6.2)八大行庫淨買賣:
-- 來源 government_bank_buy_sell_tw Bronze(PR #21-B 落地;FinMind dataset
-  TaiwanStockGovernmentBankBuySell)
-- gov_bank_net = buy - sell;buy / sell 任一 NULL → gov_bank_net = NULL
+- 來源 government_bank_buy_sell_tw Bronze(v3.14 alembic a6b7c8d9e0f1 後加
+  bank_name 維度:8 行庫每股每日各 1 row + buy/sell/buy_amount/sell_amount)
+- gov_bank_net = SUM(buy) - SUM(sell) GROUP BY (market, stock_id, date)
+  (跨 8 行庫 net 股數;NULL 視同 0,對齊 SQL SUM 行為)
 - LEFT JOIN 模式:institutional Bronze 主表;gov_bank Bronze 缺對應 (stock,date)
   時 gov_bank_net = NULL,不影響其他 stocks/dates 的 pivot
 
@@ -52,29 +53,30 @@ INVESTOR_TYPE_MAP: dict[str, tuple[str, str]] = {
 }
 
 
-def _gov_bank_net(buy: Any, sell: Any) -> int | None:
-    """buy - sell;任一 NULL → None(per spec §2.6.2「buy/sell 二擇一,留 net」
-    邊界處理:資料完整時才算 net,任一缺失就視為無法判斷)。"""
-    if buy is None or sell is None:
-        return None
-    return int(buy) - int(sell)
-
-
 def _build_gov_bank_lookup(
     bronze_rows: list[dict[str, Any]],
-) -> dict[tuple, int | None]:
-    """{(market, stock_id, date): gov_bank_net}。"""
-    out: dict[tuple, int | None] = {}
+) -> dict[tuple, int]:
+    """v3.14:Bronze 多 row(8 行庫各 1)→ SUM net by (market, stock_id, date)。
+    NULL 視同 0(對齊 SQL SUM 行為)。回傳 `{(market, stock_id, date): net_shares}`。
+    """
+    sums: dict[tuple, dict[str, int]] = {}
     for row in bronze_rows:
         key = (row.get("market"), row.get("stock_id"), row.get("date"))
-        out[key] = _gov_bank_net(row.get("buy"), row.get("sell"))
-    return out
+        if key not in sums:
+            sums[key] = {"buy": 0, "sell": 0}
+        buy  = row.get("buy")
+        sell = row.get("sell")
+        if buy is not None:
+            sums[key]["buy"] += int(buy)
+        if sell is not None:
+            sums[key]["sell"] += int(sell)
+    return {k: v["buy"] - v["sell"] for k, v in sums.items()}
 
 
 def _pivot(
     bronze_rows: list[dict[str, Any]],
     trading_dates: set[str],
-    gov_bank_lookup: dict[tuple, int | None],
+    gov_bank_lookup: dict[tuple, int],
 ) -> list[dict[str, Any]]:
     """Bronze 多 row → Silver 1 寬 row,LEFT JOIN gov_bank by (market, stock_id, date)。"""
     if trading_dates:

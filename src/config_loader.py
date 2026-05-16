@@ -19,11 +19,13 @@ logger = logging.getLogger("collector.config_loader")
 
 # 合法的 param_mode 值
 VALID_PARAM_MODES = {
-    "all_market",       # 不需 data_id；start_date (+ end_date)
-    "all_market_no_id", # 同上，語意明示「無 data_id」
-    "per_stock",        # data_id + start_date + end_date
-    "per_stock_no_end", # data_id + start_date（無 end_date）
-    "per_stock_fixed",  # 同 per_stock 但 data_id 來自 fixed_ids，不走 stock_list
+    "all_market",        # 不需 data_id；start_date (+ end_date)
+    "all_market_no_id",  # 同上，語意明示「無 data_id」
+    "all_market_no_end", # v3.14:不送 data_id 也不送 end_date(用於 FinMind 限制
+                         # 「only one day data」的 dataset,e.g. gov_bank,每日 1 req)
+    "per_stock",         # data_id + start_date + end_date
+    "per_stock_no_end",  # data_id + start_date（無 end_date）
+    "per_stock_fixed",   # 同 per_stock 但 data_id 來自 fixed_ids，不走 stock_list
 }
 
 # Phase 0：trading_calendar 預載入（其他 Phase 的 trading_dates 過濾依賴此表）
