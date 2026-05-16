@@ -345,7 +345,7 @@ fn event_to_fact(output: &ShareholderOutput, e: &ShareholderEvent) -> Fact {
         source_version: "0.1.0".to_string(),
         params_hash: None,
         statement,
-        metadata: e.metadata.clone(),
+        metadata: fact_schema::with_event_kind(e.metadata.clone(), &e.kind),
     }
 }
 

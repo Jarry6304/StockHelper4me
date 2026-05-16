@@ -26,7 +26,7 @@
 //   - 保留 velocity_threshold_pct = 0.001(Roncalli 2013 推薦,production 驗證可達)
 //     ⚠️ 注意:Q=1e-5/R=(0.01p)² steady-state K≈0.002,vel_pct 上限 ~0.002,
 //        threshold>0.001 會把所有 stock 鎖在 Sideway → 0 events(初版 0.003 已驗失敗)
-//   - 加 MIN_REGIME_DURATION_DAYS = 5:regime 必須持續 ≥ 5 個交易日才產 event
+//   - 加 min_regime_duration_days(預設 5):regime 必須持續 ≥ 5 個交易日才產 event
 //     (suppress consecutive flips,避開 close noise 引發的 false transition)
 //   - 1263 stocks × ~134 K events(107/yr/stock,9× 超 v1.32 P2 ≤ 12/yr)→
 //     sustain filter 預估降至 ~9-12/yr,落入 P2 acceptance 標準
@@ -60,10 +60,10 @@ inventory::submit! {
 /// velocity acceleration 計算窗(用來分辨「持平」與「加速/減速」的 lookback)
 const REGIME_LOOKBACK_DAYS: usize = 20;
 
-/// v3.4 r2:regime 必須維持 ≥ MIN_REGIME_DURATION_DAYS 個交易日才視為「進入」,
-/// 避免 close noise 引發的高頻 regime flip(對齊 v1.32 P2 ≤ 12/yr/stock 目標)。
-/// 5 個交易日 ≈ 1 週,夠濾掉 daily noise 但仍能捕捉週級別的 regime 切換。
-const MIN_REGIME_DURATION_DAYS: usize = 5;
+/// v3.5 R4 C11 default:對齊 audit Layer 3 痛點 12 — const 改 Params field 給 caller override。
+/// 維持 5 個交易日(≈ 1 週)default,避免 close noise 引發的高頻 regime flip
+/// (對齊 v1.32 P2 ≤ 12/yr/stock 目標 + v3.4 r2 calibration 結果)。
+const MIN_REGIME_DURATION_DAYS_DEFAULT: usize = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KalmanFilterParams {
@@ -76,6 +76,11 @@ pub struct KalmanFilterParams {
     pub warmup_days: usize,
     /// velocity / smoothed_price 比例閾值(0.001 = 0.1%/day)— 分辨 stable vs sideway
     pub velocity_threshold_pct: f64,
+    /// v3.5 R4 C11:regime 必須維持 ≥ min_regime_duration_days 個交易日才視為「進入」,
+    /// 避免 close noise 引發的高頻 regime flip(對齊 v1.32 P2 ≤ 12/yr/stock 目標)。
+    /// 預設 5 個交易日(≈ 1 週)。caller 可調(monthly tf 建議升 2-3,
+    /// intraday tf 建議降到 1-2)。
+    pub min_regime_duration_days: usize,
 }
 
 impl Default for KalmanFilterParams {
@@ -96,6 +101,7 @@ impl Default for KalmanFilterParams {
             // 0.001(0.1%/day)實際 production 約 17.6 events/yr/stock,加 sustain=5
             // 過濾 noise 後預估 ~9-12 events/yr/stock(對齊 v1.32 P2 ≤ 12/yr 標準)。
             velocity_threshold_pct: 0.001,
+            min_regime_duration_days: MIN_REGIME_DURATION_DAYS_DEFAULT,
         }
     }
 }
@@ -245,62 +251,18 @@ impl IndicatorCore for KalmanFilterCore {
 
         // Pass 3:Transition events(warmup 後才產 event,避免 Kalman state 還在收斂)
         //
-        // v3.4 r2 calibration:加 MIN_REGIME_DURATION_DAYS sustain filter。
-        // 邏輯:候選 regime 必須連續維持 N 個交易日才視為「進入」,期間若 flip
-        // 回原 regime → 視為 noise 直接忽略;flip 到第三種 regime → 重新計數。
-        let mut events: Vec<KalmanEvent> = Vec::new();
-        let warmup = params.warmup_days.min(n);
-        let mut prev_regime: Option<Regime> = None;
-        let mut pending_regime: Option<Regime> = None;
-        let mut pending_streak: usize = 0;
-        let mut pending_anchor: Option<usize> = None; // 候選 regime 起始 index
-        for (i, point) in series.iter().enumerate() {
-            if i < warmup {
-                prev_regime = Some(point.regime);
-                continue;
-            }
-            let cur_regime = point.regime;
-
-            // 已穩定的 regime,沒切換 → 重置 pending
-            if Some(cur_regime) == prev_regime {
-                pending_regime = None;
-                pending_streak = 0;
-                pending_anchor = None;
-                continue;
-            }
-
-            // 切到新 regime:更新候選 streak
-            if Some(cur_regime) == pending_regime {
-                pending_streak += 1;
-            } else {
-                pending_regime = Some(cur_regime);
-                pending_streak = 1;
-                pending_anchor = Some(i);
-            }
-
-            // 候選 regime 累積到 MIN_REGIME_DURATION_DAYS → confirmed
-            if pending_streak >= MIN_REGIME_DURATION_DAYS {
-                let anchor_idx = pending_anchor.unwrap_or(i);
-                let anchor = &series[anchor_idx];
-                events.push(KalmanEvent {
-                    date: anchor.date,
-                    kind: KalmanEventKind::from_regime(cur_regime),
-                    metadata: json!({
-                        "smoothed_price": anchor.smoothed_price,
-                        "raw_close": anchor.raw_close,
-                        "velocity": anchor.velocity,
-                        "uncertainty": anchor.uncertainty,
-                        "from_regime": prev_regime.map(|r| format!("{:?}", r)),
-                        "to_regime": format!("{:?}", cur_regime),
-                        "sustained_days": MIN_REGIME_DURATION_DAYS,
-                    }),
-                });
-                prev_regime = Some(cur_regime);
-                pending_regime = None;
-                pending_streak = 0;
-                pending_anchor = None;
-            }
-        }
+        // v3.4 r2 r3 calibration(2026-05-16):consecutive-bars sustain filter 失敗。
+        // 揭露 production 0 events 後分析:vel_pct 在 threshold 邊界 oscillate 每
+        // 1-3 bars,從來不會連 5 bars 同 regime。改 **run-length 合併**:
+        //   1. 把 regime series 切成 runs(連續同 regime 段)
+        //   2. Length < min_regime_duration_days 的 run 併入前一個 run(視為 noise)
+        //   3. 在 merged runs 上偵測 transition
+        // 預期:134K → ~10-30K events(對齊 v1.32 P2 ≤ 12/yr/stock 標準)。
+        let events = detect_events_run_length(
+            &series,
+            params.warmup_days.min(n),
+            params.min_regime_duration_days,
+        );
 
         Ok(KalmanFilterOutput {
             stock_id: input.stock_id.clone(),
@@ -318,14 +280,99 @@ impl IndicatorCore for KalmanFilterCore {
             source_version: "0.2.0".to_string(),
             params_hash: None,
             statement: format!("{:?} on {}", e.kind, e.date),
-            metadata: e.metadata.clone(),
+            metadata: fact_schema::with_event_kind(e.metadata.clone(), &e.kind),
         }).collect()
     }
 }
 
 // ---------------------------------------------------------------------------
+// Event detection — run-length 合併 noise filter(v3.4 r2 r3)
+// ---------------------------------------------------------------------------
+
+/// 把 series.regime 序列轉成 transition events。
+///
+/// 演算法:
+///   1. 從 `warmup` 起切 runs:`(start_idx, regime, length)` triples
+///   2. Length < `min_run_len` 的 run 視為 noise,併入前一個 run
+///      (沒前一個 run → 保留;corner case 第一段就 < min 罕見也無害)
+///   3. 在 merged runs 上偵測 transition:相鄰 run regime 不同時 emit event
+fn detect_events_run_length(
+    series: &[KalmanPoint],
+    warmup: usize,
+    min_run_len: usize,
+) -> Vec<KalmanEvent> {
+    let n = series.len();
+    if warmup >= n {
+        return Vec::new();
+    }
+
+    // Pass A:切原始 runs
+    let mut runs: Vec<(usize, Regime, usize)> = Vec::new();
+    let mut start = warmup;
+    let mut cur = series[warmup].regime;
+    for i in (warmup + 1)..n {
+        if series[i].regime != cur {
+            runs.push((start, cur, i - start));
+            start = i;
+            cur = series[i].regime;
+        }
+    }
+    runs.push((start, cur, n - start));
+
+    // Pass B:合併 short runs 進前一段(noise filter)
+    let mut merged: Vec<(usize, Regime, usize)> = Vec::new();
+    for (st, reg, len) in runs {
+        if len < min_run_len {
+            if let Some(last) = merged.last_mut() {
+                // 將 short run 併入前一 run:延長 length,不改 regime / start
+                last.2 += len;
+                continue;
+            }
+            // 第一段就 < min:無前可併,保留(罕見 edge case)
+        }
+        merged.push((st, reg, len));
+    }
+
+    // Pass C:在 merged runs 上偵測 regime transition
+    let mut events: Vec<KalmanEvent> = Vec::new();
+    let mut prev_regime: Option<Regime> = None;
+    for (st, reg, len) in merged {
+        if Some(reg) != prev_regime {
+            // 第一個 run 也產 event(從 None 進入該 regime)
+            let anchor = &series[st];
+            events.push(KalmanEvent {
+                date: anchor.date,
+                kind: KalmanEventKind::from_regime(reg),
+                metadata: json!({
+                    "smoothed_price": anchor.smoothed_price,
+                    "raw_close": anchor.raw_close,
+                    "velocity": anchor.velocity,
+                    "uncertainty": anchor.uncertainty,
+                    "from_regime": prev_regime.map(|r| format!("{:?}", r)),
+                    "to_regime": format!("{:?}", reg),
+                    "run_length": len,
+                }),
+            });
+            prev_regime = Some(reg);
+        }
+    }
+    events
+}
+
+// ---------------------------------------------------------------------------
 // Regime classifier(out of trait,易測試)
 // ---------------------------------------------------------------------------
+
+/// |accel| < ACCEL_STABLE_EPS → 視為 stable(對齊 spec §4「|accel| 小 → Stable*」)。
+///
+/// v3.4 r2 r4(2026-05-16):原本「`else { StableUp/Down }`」只在 `accel == 0.0`
+/// 精確相等才觸發,浮點實際從不命中 → production 34593 events 中 StableUp = 0,
+/// 上下行對映不對稱(StableDown 在 `accel ≤ 0` 涵蓋,StableUp 只在 accel==0
+/// 涵蓋)。改用 ACCEL_STABLE_EPS,讓 |accel| < EPS 走 Stable*,二側對稱。
+///
+/// EPS = 0.01:對 Kalman smoothed velocity 是 1 cent / day(price scale 100 NTD
+/// 下 ≈ 0.01% 加速度),足夠濾掉浮點 noise 而仍能區分有意義的 accel/decel。
+const ACCEL_STABLE_EPS: f64 = 0.01;
 
 /// 5-class regime(對齊 user 拍版 2026-05-15)。
 ///
@@ -337,18 +384,20 @@ pub fn classify_regime(vel_pct: f64, accel: f64, threshold: f64) -> Regime {
         return Regime::Sideway;
     }
     if vel_pct > 0.0 {
-        // 上漲:accel > 0 → 加速;accel < 0 → 減速(StableUp 中性視為 stable);
-        if accel > 0.0 {
-            Regime::Accelerating
-        } else if accel < 0.0 {
-            Regime::Decelerating
-        } else {
+        // 上漲:|accel| < EPS → StableUp;accel > 0 → 加速;accel < 0 → 減速
+        if accel.abs() < ACCEL_STABLE_EPS {
             Regime::StableUp
+        } else if accel > 0.0 {
+            Regime::Accelerating
+        } else {
+            Regime::Decelerating
         }
     } else {
-        // 下跌:accel < 0 → 加速下跌(視為 StableDown 同類但仍標 StableDown);
-        //       accel > 0 → 動能消退(Decelerating;reversal pending)
-        if accel > 0.0 {
+        // 下跌:|accel| < EPS → StableDown;accel > 0 → 動能消退(reversal pending);
+        //       accel < 0 → 加速下跌(視為 StableDown 連動性 → 仍標 StableDown)
+        if accel.abs() < ACCEL_STABLE_EPS {
+            Regime::StableDown
+        } else if accel > 0.0 {
             Regime::Decelerating
         } else {
             Regime::StableDown
@@ -459,32 +508,57 @@ mod tests {
     }
 
     #[test]
-    fn sustain_filter_suppresses_short_regime_flips() {
-        // v3.4 r2:regime 必須 sustain ≥ 5 個交易日才產 event
-        // 構造 60 bars warmup(全 1000)+ 4 bars 跳到 1200(僅 4 < 5)+ 60 bars 回 1000
-        // 預期:候選 Accelerating/StableUp 只持續 4 bars → 不產 event
-        let mut bars: Vec<OhlcvBar> = Vec::new();
-        for i in 0..60 {
-            bars.push(mk_bar(&format!("2026-01-{:02}", (i % 28) + 1), 1000.0));
-        }
-        // 4 bars 短暫 jump(只有 4 個,< MIN_REGIME_DURATION_DAYS=5)
-        for i in 0..4 {
-            bars.push(mk_bar(&format!("2026-03-{:02}", i + 1), 1200.0));
-        }
-        // 回穩定 60 bars
-        for i in 0..60 {
-            bars.push(mk_bar(&format!("2026-04-{:02}", (i % 28) + 1), 1000.0));
-        }
-        let series = OhlcvSeries { stock_id: "S1".to_string(), timeframe: Timeframe::Daily, bars };
-        let out = KalmanFilterCore::new().compute(&series, KalmanFilterParams::default()).unwrap();
-        // 短暫 jump < 5 bars 不該觸發 event(noise filter 生效)
-        let jump_events: Vec<&KalmanEvent> = out.events.iter()
-            .filter(|e| matches!(e.kind,
-                KalmanEventKind::EnteredAccelerating | KalmanEventKind::EnteredStableUp))
-            .collect();
-        assert_eq!(jump_events.len(), 0,
-            "4-bar flip 不應觸發 event(MIN_REGIME_DURATION_DAYS=5),實際 {} 個",
-            jump_events.len());
+    fn run_length_filter_absorbs_short_runs() {
+        // v3.4 r2 r3:short runs(< min_regime_duration_days=5)併入前一段。
+        // 構造合成 regime sequence,測試 detect_events_run_length:
+        //   Sideway × 10 → StableUp × 3 → Sideway × 10
+        //   預期:StableUp(3) 併入前 Sideway,merged 結果 = Sideway(23)
+        //   final transitions = 1 個(EnteredSideway 起始,from None)
+        let nd = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let mk = |i: i64, r: Regime| KalmanPoint {
+            date: nd("2026-01-01") + chrono::Duration::days(i),
+            raw_close: 100.0,
+            smoothed_price: 100.0,
+            uncertainty: 0.1,
+            velocity: 0.0,
+            regime: r,
+        };
+        let mut series = Vec::new();
+        for i in 0..10 { series.push(mk(i, Regime::Sideway)); }
+        for i in 10..13 { series.push(mk(i, Regime::StableUp)); }   // 3 bars,< 5
+        for i in 13..23 { series.push(mk(i, Regime::Sideway)); }
+
+        let events = detect_events_run_length(&series, 0, 5);
+        // 預期:StableUp(3) 短 run 被併入前 Sideway,只剩 1 段 Sideway → 1 event
+        assert_eq!(events.len(), 1,
+            "3-bar StableUp 短 run 應被吸收,只剩 1 個 transition,實際 {}", events.len());
+        assert_eq!(events[0].kind, KalmanEventKind::EnteredSideway);
+    }
+
+    #[test]
+    fn run_length_filter_emits_long_run_transition() {
+        // 構造:Sideway × 10 → StableUp × 10 → Sideway × 10
+        //   兩段都 ≥ 5,merged = 3 段 → 3 transitions(Sideway / StableUp / Sideway)
+        let nd = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let mk = |i: i64, r: Regime| KalmanPoint {
+            date: nd("2026-01-01") + chrono::Duration::days(i),
+            raw_close: 100.0,
+            smoothed_price: 100.0,
+            uncertainty: 0.1,
+            velocity: 0.0,
+            regime: r,
+        };
+        let mut series = Vec::new();
+        for i in 0..10 { series.push(mk(i, Regime::Sideway)); }
+        for i in 10..20 { series.push(mk(i, Regime::StableUp)); }
+        for i in 20..30 { series.push(mk(i, Regime::Sideway)); }
+
+        let events = detect_events_run_length(&series, 0, 5);
+        assert_eq!(events.len(), 3,
+            "3 段長 run 應產 3 transitions,實際 {}", events.len());
+        assert_eq!(events[0].kind, KalmanEventKind::EnteredSideway);
+        assert_eq!(events[1].kind, KalmanEventKind::EnteredStableUp);
+        assert_eq!(events[2].kind, KalmanEventKind::EnteredSideway);
     }
 
     #[test]

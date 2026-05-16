@@ -245,7 +245,7 @@ impl IndicatorCore for VwapCore {
                 source_version: "0.1.0".to_string(),
                 params_hash: None,
                 statement: format!("VWAP {:?} on {}", e.kind, e.date),
-                metadata: e.metadata.clone(),
+                metadata: fact_schema::with_event_kind(e.metadata.clone(), &e.kind),
             })
             .collect()
     }

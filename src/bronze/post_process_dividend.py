@@ -1,29 +1,31 @@
 """
-post_process.py
-----------------
-Phase 2 後處理模組：TaiwanStockDividend 合併邏輯。
+bronze/post_process_dividend.py
+-------------------------------
+Phase 2 Bronze 後處理:TaiwanStockDividend 合併邏輯。
 
-執行時機：Phase 2 中 dividend_result 與 dividend_policy 都完成後執行。
+執行時機:Phase 2 中 dividend_result 與 dividend_policy 都完成後執行。
 
-職責：
+職責:
   1. 修補「權息」混合事件的 cash_dividend / stock_dividend 拆分
-     （field_mapper 在遇到「權息」時設為 NULL，此處補齊）
-  2. 偵測純現增事件（TaiwanStockDividendResult 無對應記錄的情況），
-     寫入 price_adjustment_events，AF 計算延後至 Rust Phase 4（記憶體版,
-     v3.2 PR #17 後不再 UPDATE 寫回 events 表）
+     (field_mapper 在遇到「權息」時設為 NULL,此處補齊)
+  2. 偵測純現增事件(TaiwanStockDividendResult 無對應記錄),
+     寫入 price_adjustment_events,AF 計算延後至 Rust Phase 4(記憶體版,
+     v3.2 PR #17 後不再 UPDATE 寫回 events 表)
   3. 修正 stock_dividend 事件的 volume_factor(P1-17 補丁)
 
 §5.6 短期補丁 `invalidate_fwd_cache` 由 DB trigger `trg_mark_fwd_silver_dirty`
 (PR #20 / alembic n3o4p5q6r7s8)接管;Phase 7c orchestrator 從
 `price_daily_fwd.is_dirty=TRUE` pull 清單派 Rust。Python 端不再有對應函式
 (PR #21 移除 deprecated shim)。
+
+v3.5 PR #R1:從 src/post_process.py 搬家到 bronze/,歸位 Layer 1。
 """
 
 import logging
 
 from db import DBWriter
 
-logger = logging.getLogger("collector.post_process")
+logger = logging.getLogger("collector.bronze.post_process_dividend")
 
 
 def dividend_policy_merge(db: DBWriter, stock_id: str) -> None:

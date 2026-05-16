@@ -358,6 +358,7 @@ impl IndicatorCore for SupportResistanceCore {
                     level.price, level.touch_count, level.first_seen, level.last_seen
                 ),
                 metadata: json!({
+                    "event_kind": "Support",  // v3.4 r2 r5
                     "kind": "support",
                     "price": level.price,
                     "touch_count": level.touch_count,
@@ -377,6 +378,7 @@ impl IndicatorCore for SupportResistanceCore {
                     level.price, level.touch_count, level.first_seen, level.last_seen
                 ),
                 metadata: json!({
+                    "event_kind": "Resistance",  // v3.4 r2 r5
                     "kind": "resistance",
                     "price": level.price,
                     "touch_count": level.touch_count,
@@ -392,7 +394,7 @@ impl IndicatorCore for SupportResistanceCore {
                 source_version: "0.1.0".to_string(),
                 params_hash: None,
                 statement: format!("SR {:?} at {:.2} on {}", ev.kind, ev.price, ev.date),
-                metadata: ev.metadata.clone(),
+                metadata: fact_schema::with_event_kind(ev.metadata.clone(), &ev.kind),
             });
         }
         facts

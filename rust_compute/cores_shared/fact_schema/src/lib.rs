@@ -71,6 +71,38 @@ pub struct Fact {
 }
 
 // ---------------------------------------------------------------------------
+// metadata 注入工具(v3.4 r2 r5)
+// ---------------------------------------------------------------------------
+
+/// 把 EventKind 名稱注入到 metadata 物件的 `event_kind` 欄,給 SQL per-EventKind
+/// 觸發率統計用(對齊 v1.32 P2 ≤ 12/yr/stock 標準)。
+///
+/// 用法:`metadata: fact_schema::with_event_kind(e.metadata.clone(), &e.kind)`
+/// 其中 `e.kind` 是 `#[derive(Debug)]` 的 EventKind enum,Debug 印 variant 名稱。
+///
+/// 注意:
+/// - metadata 是 Object 時 inplace insert(原 keys 保留)
+/// - metadata 是 Null / 非 Object 時包成 `{"event_kind": "..."}`(覆蓋)
+/// - key collision 時 `event_kind` 覆寫舊值(罕見;core 端先注入後不該再覆蓋)
+pub fn with_event_kind<K: std::fmt::Debug>(
+    mut metadata: serde_json::Value,
+    kind: &K,
+) -> serde_json::Value {
+    let kind_str = format!("{:?}", kind);
+    match metadata {
+        serde_json::Value::Object(ref mut obj) => {
+            obj.insert("event_kind".to_string(), serde_json::Value::String(kind_str));
+            metadata
+        }
+        _ => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("event_kind".to_string(), serde_json::Value::String(kind_str));
+            serde_json::Value::Object(obj)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IndicatorCore trait
 // ---------------------------------------------------------------------------
 
@@ -180,5 +212,36 @@ mod tests {
         assert_eq!(Timeframe::Daily.as_str(), "daily");
         let s = serde_json::to_string(&Timeframe::Weekly).unwrap();
         assert_eq!(s, "\"weekly\"");
+    }
+
+    #[derive(Debug)]
+    #[allow(dead_code)]
+    enum DummyKind {
+        GoldenCross,
+        EnteredOverbought,
+    }
+
+    #[test]
+    fn with_event_kind_inserts_into_object_metadata() {
+        let md = serde_json::json!({"value": 42.5, "z": -1.0});
+        let out = with_event_kind(md, &DummyKind::GoldenCross);
+        assert_eq!(out["event_kind"], "GoldenCross");
+        assert_eq!(out["value"], 42.5);
+        assert_eq!(out["z"], -1.0);
+    }
+
+    #[test]
+    fn with_event_kind_wraps_null_metadata() {
+        let md = serde_json::Value::Null;
+        let out = with_event_kind(md, &DummyKind::EnteredOverbought);
+        assert_eq!(out["event_kind"], "EnteredOverbought");
+        assert!(out.is_object());
+    }
+
+    #[test]
+    fn with_event_kind_overwrites_existing_key() {
+        let md = serde_json::json!({"event_kind": "Old"});
+        let out = with_event_kind(md, &DummyKind::GoldenCross);
+        assert_eq!(out["event_kind"], "GoldenCross");
     }
 }

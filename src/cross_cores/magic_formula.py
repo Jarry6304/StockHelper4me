@@ -1,7 +1,14 @@
 """
-silver/builders/magic_formula_ranked.py
-========================================
-Magic Formula(Greenblatt 2005)Bronze → Silver derived。
+cross_cores/magic_formula.py
+============================
+Magic Formula(Greenblatt 2005)cross-stock ranking。
+
+v3.5 R3 從 `silver/builders/magic_formula_ranked.py` 搬家,歸位 Layer 2.5
+Cross-Stock Cores 新層。原因:cross-rank 輸出 ranks / is_top_30 需要全市場
+universe context,違反 SilverBuilder per-stock 契約(audit Layer 1+2 痛點 4)。
+
+DB 表名仍是 `magic_formula_ranked_derived`(不改 schema,0 alembic migration);
+只是 builder 歸位到 cross_cores/。
 
 對齊 m3Spec/magic_formula_core.md(v3.4 plan 同 PR 加)。
 公式:
@@ -31,21 +38,25 @@ import logging
 import time
 from typing import Any
 
-from .._common import upsert_silver
+from silver._common import upsert_silver
 
 
-logger = logging.getLogger("collector.silver.builders.magic_formula_ranked")
+logger = logging.getLogger("collector.cross_cores.magic_formula")
 
 
-NAME          = "magic_formula_ranked"
-SILVER_TABLE  = "magic_formula_ranked_derived"
-BRONZE_TABLES = [
+NAME            = "magic_formula"
+OUTPUT_TABLE    = "magic_formula_ranked_derived"   # 表名不改(0 alembic)
+UPSTREAM_TABLES = [
     "financial_statement_derived",     # 既算過的 Silver(7b 依賴);Bronze 上游 financial_statement
     "valuation_per_tw",                # 估值(備用)
     "price_daily_fwd",                 # close 對最新交易日
     "foreign_investor_share_tw",       # total_issued(同 valuation_core market_value_weight 慣例)
     "stock_info_ref",                  # universe filter
 ]
+
+# Back-compat aliases for older callers(v3.5 R3 過渡期保留)
+SILVER_TABLE  = OUTPUT_TABLE
+BRONZE_TABLES = UPSTREAM_TABLES
 
 
 # Greenblatt 2005 §六:排除金融保險 + 公用事業。
@@ -402,7 +413,7 @@ def run(
         all_rows.extend(per_date_rows)
 
     written = upsert_silver(
-        db, SILVER_TABLE, all_rows,
+        db, OUTPUT_TABLE, all_rows,
         pk_cols=["market", "stock_id", "date"],
     )
 

@@ -423,6 +423,8 @@ impl IndicatorCore for TrendlineCore {
                     tl.direction, tl.start_date, tl.last_valid_date, tl.status, touch_total
                 ),
                 metadata: json!({
+                    // v3.4 r2 r5:per-EventKind 統計用 event_kind 欄(對齊 SQL 查詢)
+                    "event_kind": format!("Trendline{:?}", tl.kind),
                     "direction": format!("{:?}", tl.direction),
                     "kind": format!("{:?}", tl.kind),
                     "status": format!("{:?}", tl.status),
@@ -441,7 +443,7 @@ impl IndicatorCore for TrendlineCore {
                 source_version: "0.1.0".to_string(),
                 params_hash: None,
                 statement: format!("Trendline {:?} ({}) on {}", ev.kind, ev.trendline_id, ev.date),
-                metadata: ev.metadata.clone(),
+                metadata: fact_schema::with_event_kind(ev.metadata.clone(), &ev.kind),
             });
         }
         facts

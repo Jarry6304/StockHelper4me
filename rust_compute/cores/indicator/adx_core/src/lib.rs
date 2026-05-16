@@ -146,7 +146,7 @@ impl IndicatorCore for AdxCore {
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
             source_core: "adx_core".to_string(), source_version: "0.1.0".to_string(),
             params_hash: None, statement: format!("ADX {:?} on {}: value={:.2}", e.kind, e.date, e.value),
-            metadata: e.metadata.clone(),
+            metadata: fact_schema::with_event_kind(e.metadata.clone(), &e.kind),
         }).collect()
     }
 }

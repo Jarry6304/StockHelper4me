@@ -352,7 +352,7 @@ fn event_to_fact(output: &DayTradingOutput, event: &DayTradingEvent) -> Fact {
         source_version: "0.1.0".to_string(),
         params_hash: None,
         statement,
-        metadata: event.metadata.clone(),
+        metadata: fact_schema::with_event_kind(event.metadata.clone(), &event.kind),
     }
 }
 

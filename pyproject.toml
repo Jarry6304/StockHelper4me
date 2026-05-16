@@ -56,7 +56,7 @@ package-dir = {"" = "src", "mcp_server" = "mcp_server"}
 
 [tool.setuptools.packages.find]
 where   = ["src", "."]
-include = ["silver*", "bronze*", "agg*", "mcp_server*"]
+include = ["silver*", "bronze*", "cross_cores*", "agg*", "mcp_server*"]
 
 # Pytest sys.path:repo root(讓 mcp_server / dashboards 可直接 import)+ src/
 # (對齊 editable .pth 但 fallback,sandbox 沒裝 .pth 時也 work)

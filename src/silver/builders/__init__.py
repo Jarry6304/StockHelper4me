@@ -1,14 +1,14 @@
 """
 silver/builders/__init__.py
 ============================
-14 個 Silver `*_derived` builder 註冊入口。
+Silver `*_derived` per-stock builder 註冊入口(v3.5 R2 收緊 per-stock 邊界)。
 
-PR #19a 落地 14 個 stub(本目錄下),全都 raise NotImplementedError。
-PR #19b 補 5 個簡單 builder 邏輯(Bronze 已 PR #18 落地的 5 張)。
-PR #19c 補剩 9 個 builder + orchestrator 真實邏輯。
+v3.5 R2:`SilverBuilder` Protocol 加 per-stock 契約明文(see silver/_common.py)。
+v3.5 R3:magic_formula_ranked 搬出到 `src/cross_cores/`(違反 per-stock 契約,
+        屬於 cross-stock 排名;CrossStockBuilder ABC 接管)。
 
-註冊規則:每個 builder 模組 expose 一個 BUILDER 變數(SilverBuilder protocol),
-orchestrator 透過 `BUILDERS[name]` 拿。
+註冊規則:每個 builder 模組 expose 模組級 NAME / SILVER_TABLE / BRONZE_TABLES /
+run() 接口(對齊 SilverBuilder protocol),orchestrator 透過 `BUILDERS[name]` 拿。
 
 對映 spec §2.3 14 張 Silver 表(price_limit_merge_events 走 Rust 不在這裡):
 """
@@ -23,7 +23,6 @@ from . import (
     foreign_holding,
     holding_shares_per,
     institutional,
-    magic_formula_ranked,
     margin,
     market_margin,
     monthly_revenue,
@@ -43,11 +42,11 @@ BUILDERS: dict[str, object] = {
     "day_trading":           day_trading,
     "monthly_revenue":       monthly_revenue,
     "financial_statement":   financial_statement,
-    "magic_formula_ranked":  magic_formula_ranked,    # v3.4(Greenblatt 2005 cross-rank)
     "taiex_index":           taiex_index,
     "us_market_index":       us_market_index,
     "exchange_rate":         exchange_rate,
     "market_margin":         market_margin,
     "business_indicator":    business_indicator,
     # price_limit_merge_events 不在這裡;Rust 計算走 rust_bridge,Phase 7c
+    # magic_formula_ranked:v3.5 R3 搬到 cross_cores/(per-stock 契約違規)
 }

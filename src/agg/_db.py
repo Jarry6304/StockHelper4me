@@ -158,6 +158,85 @@ def fetch_ohlc(
         return cur.fetchall()
 
 
+def fetch_cross_stock_ranked(
+    conn,
+    *,
+    source_table: str,
+    as_of,
+    top_n: int = 30,
+    rank_col: str = "combined_rank",
+    is_top_col: str = "is_top_30",
+    extra_cols: list[str] | None = None,
+) -> tuple[Any | None, list[dict[str, Any]]]:
+    """v3.5 R5 C13:cross-stock ranked 結果通用 fetcher。
+
+    給 cross_cores/ Layer 2.5 各 builder 的對應 MCP / dashboard tool 用
+    (magic_formula / 未來 pairs_trading / sector_rotation 都用同一個 helper)。
+
+    Args:
+        source_table:  cross-stock derived 表名(e.g. "magic_formula_ranked_derived")
+        as_of:         上界(包含);先找 latest ranking_date ≤ as_of
+        top_n:         取 top N rank rows
+        rank_col:      排名欄名(預設 "combined_rank")
+        is_top_col:    top-N 旗標欄名(預設 "is_top_30")
+        extra_cols:    額外要 SELECT 的欄位(預設 None = 全選 *)
+
+    Returns:
+        (ranking_date, rows):若無資料則 (None, [])
+    """
+    # 1. latest ranking_date ≤ as_of
+    sql_date = f"""
+        SELECT MAX(date) AS d FROM {source_table}
+         WHERE market = 'TW' AND date <= %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_date, [as_of])
+        row = cur.fetchone()
+    ranking_date = row["d"] if row else None
+    if ranking_date is None:
+        return None, []
+
+    # 2. top N rows(LEFT JOIN stock_info_ref 取 name + industry)
+    select_cols = "t.*" if not extra_cols else ", ".join(f"t.{c}" for c in extra_cols)
+    sql_top = f"""
+        SELECT {select_cols},
+               s.stock_name, s.industry_category
+        FROM {source_table} t
+        LEFT JOIN stock_info_ref s
+            ON s.market = t.market AND s.stock_id = t.stock_id
+        WHERE t.market = 'TW' AND t.date = %s AND t.{is_top_col} = TRUE
+        ORDER BY t.{rank_col} ASC
+        LIMIT %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_top, [ranking_date, top_n])
+        rows = cur.fetchall()
+    return ranking_date, rows
+
+
+def fetch_stock_info_ref(
+    conn,
+    stock_ids: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """v3.5 R5 C13:取 stock_info_ref name + industry,key by stock_id。
+
+    給 cross-stock cores / dashboards 共用(避免每處自寫 SELECT)。
+    若 stock_ids 為 None 一次取全市場(~1700 rows)。
+    """
+    if stock_ids is not None and not stock_ids:
+        return {}
+    sql = "SELECT stock_id, stock_name, industry_category FROM stock_info_ref WHERE market = 'TW'"
+    params: list[Any] = []
+    if stock_ids:
+        placeholders = ",".join(["%s"] * len(stock_ids))
+        sql += f" AND stock_id IN ({placeholders})"
+        params.extend(stock_ids)
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {r["stock_id"]: r for r in rows}
+
+
 def fetch_structural_latest(
     conn,
     *,

@@ -187,6 +187,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="忽略 dirty queue,全表重算(目前唯一支援的模式)",
     )
 
+    # ── cross_cores 子命令(Phase 8 跨股 Cross-Stock Cores,v3.5 R3 新層)
+    cross_parser = subparsers.add_parser(
+        "cross_cores",
+        help="Cross-Stock Cores 計算(Phase 8;magic_formula 等跨股 ranking)",
+    )
+    cross_subparsers = cross_parser.add_subparsers(dest="cross_command", required=True)
+
+    cross_phase_parser = cross_subparsers.add_parser(
+        "phase",
+        help="跑指定 cross-stock phase(目前只有 8)",
+    )
+    cross_phase_parser.add_argument(
+        "phase_name",
+        choices=["8"],
+        metavar="PHASE",
+        help="Cross-Stock phase:8(全跑所有 cross-stock cores)",
+    )
+    cross_phase_parser.add_argument(
+        "--builder",
+        help="只跑指定 cross-stock builder(預設全跑,逗號分隔)",
+    )
+    cross_phase_parser.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help="重算 lookback window 全部 dates(預設只算 latest 1 day)",
+    )
+    cross_phase_parser.add_argument(
+        "--lookback-days",
+        type=int,
+        help="full_rebuild 時往回幾天(預設由 builder 決定,magic_formula = 30)",
+    )
+
     # ── refresh 子命令(一鍵手動更新最新資料,以防沒 scheduler)
     refresh_parser = subparsers.add_parser(
         "refresh",
@@ -254,6 +286,11 @@ def main() -> None:
     # silver 指令(Phase 7 dirty-driven 計算層)
     if args.command == "silver":
         asyncio.run(_run_silver(args, config))
+        return
+
+    # cross_cores 指令(Phase 8 跨股 Cross-Stock Cores,v3.5 R3 新層)
+    if args.command == "cross_cores":
+        asyncio.run(_run_cross_cores(args, config))
         return
 
     # refresh 指令(一鍵手動更新最新資料)
@@ -438,6 +475,71 @@ async def _run_silver(args, config) -> None:
 
 
 # =============================================================================
+# 子命令:cross_cores phase 8(Cross-Stock Cores,v3.5 R3 新層)
+# =============================================================================
+
+async def _run_cross_cores(args, config) -> None:
+    """跑 Cross-Stock Cores Phase 8(目前只有 magic_formula)。
+
+    跟 Silver 對比:
+      - Silver per-stock builder 走 silver/orchestrator
+      - Cross-Stock builder 走 cross_cores/orchestrator(輸入 universe + date)
+
+    不走 dirty queue(全市場永遠 cross-rank latest date)。
+    """
+    from cross_cores.orchestrator import CrossStockOrchestrator
+
+    start_time = time.monotonic()
+    builders = (
+        [b.strip() for b in args.builder.split(",")] if args.builder else None
+    )
+
+    db = create_writer()
+    db.init_schema()
+
+    try:
+        orch = CrossStockOrchestrator(db=db)
+        logger.info(
+            f"Cross-Stock Cores started. phase=8, builders={builders or 'all'}, "
+            f"full_rebuild={args.full_rebuild}"
+        )
+        result = await orch.run(
+            builders     = builders,
+            full_rebuild = args.full_rebuild,
+            lookback_days= args.lookback_days,
+        )
+
+        # 印 status table
+        print()
+        print("=" * 70)
+        print(f"Cross-Stock Cores phase 8 結果")
+        print("=" * 70)
+        print(f"{'builder':<22} {'status':<10} {'read':>8} {'wrote':>8} {'ms':>8}")
+        print("-" * 60)
+        for name, r in result["results"].items():
+            status = r.get("status", "?")
+            rd = r.get("rows_read", "-")
+            wr = r.get("rows_written", "-")
+            ms = r.get("elapsed_ms", "-")
+            print(f"{name:<22} {status:<10} {str(rd):>8} {str(wr):>8} {str(ms):>8}")
+        ok = sum(1 for r in result["results"].values() if r.get("status") == "ok")
+        fl = sum(1 for r in result["results"].values() if r.get("status") == "failed")
+        total = len(result["results"])
+        print("-" * 60)
+        print(f"TOTAL: {ok}/{total} OK, {fl} failed")
+        print()
+
+    except Exception as e:
+        logger.error(f"Cross-Stock Cores aborted. phase=8, reason={e}")
+        raise
+    finally:
+        db.close()
+
+    elapsed = int(time.monotonic() - start_time)
+    logger.info(f"Cross-Stock Cores finished. phase=8, elapsed={elapsed}s")
+
+
+# =============================================================================
 # 子命令:refresh(一鍵手動更新最新資料)
 # =============================================================================
 
@@ -471,7 +573,8 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
     def _record(step: str, status: str, t0: float) -> None:
         step_results.append((step, status, time.monotonic() - t0))
 
-    total_steps = 5 if not args.skip_cores else 4
+    # Steps: Bronze + Silver 7c/7a/7b + Cross-Stock 8 + M3 cores = 6 max
+    total_steps = 6 if not args.skip_cores else 5
     if args.skip_bronze:
         total_steps -= 1
     cur = 0
@@ -521,7 +624,30 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
             logger.error(f"[Refresh] Silver {phase_name} 失敗: {e}")
             _record(f"silver_{phase_name}", "failed", t0)
 
-    # Step 5: M3 Cores(可選)
+    # Step 5: Cross-Stock Cores Phase 8(v3.5 R3)
+    cur += 1
+    _log_step(cur, total_steps, "Cross-Stock Cores Phase 8 (magic_formula)")
+    t0 = time.monotonic()
+    try:
+        cross_args = _argparse.Namespace(
+            command="cross_cores",
+            cross_command="phase",
+            phase_name="8",
+            builder=None,
+            full_rebuild=False,
+            lookback_days=None,
+            stocks=stocks,
+            verbose=args.verbose,
+            config=args.config,
+            stock_list=args.stock_list,
+        )
+        await _run_cross_cores(cross_args, config)
+        _record("cross_cores_phase8", "ok", t0)
+    except Exception as e:
+        logger.error(f"[Refresh] Cross-Stock phase 8 失敗: {e}")
+        _record("cross_cores_phase8", "failed", t0)
+
+    # Step 6: M3 Cores(可選)
     if not args.skip_cores:
         cur += 1
         binary_dir = Path(config.global_cfg.rust_binary_path).parent
