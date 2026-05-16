@@ -1414,6 +1414,14 @@ async fn write_structural_snapshot(
 /// = 巨大 IO overhead);batch INSERT 降至 N stocks × N batches round-trip。
 /// 8000 row / batch 上限對齊 PG 65535 placeholder 限制(這裡 8 array bind 沒有
 /// placeholder 限制,但保留 8000 conservative,避免單筆 query 過大)。
+///
+/// **回傳語意 — 對齊 v3.4 r2 user FAQ(2026-05-16)**:
+///   `Ok(n)` 為 **新插入** 的 row 數(`ON CONFLICT DO NOTHING` 跳過 dedup row,
+///   不計入 `rows_affected`)。第二次 run 同一份 facts → `n=0` 不代表「沒產出
+///   facts」,而是「facts 已存在 facts 表內」(由 uq_facts_dedup unique index
+///   `(stock_id, fact_date, timeframe, source_core, COALESCE(params_hash,''), md5(statement))`
+///   保證 idempotent)。對 run-all 摘要顯示的 `facts_new` 欄為「本輪新增」,
+///   若想看 core 累計 facts → 查 `SELECT COUNT(*) FROM facts WHERE source_core=...`。
 async fn write_facts(pool: &PgPool, facts: &[Fact]) -> Result<u64> {
     if facts.is_empty() {
         return Ok(0);
@@ -1646,7 +1654,8 @@ fn print_summary(summary: &[CoreRunSummary], total_elapsed: std::time::Duration,
     }
 
     println!();
-    println!("{:<28} {:>6} {:>6} {:>9} {:>10} {:>10} {:>10}", "core", "ok", "err", "events", "iv_rows", "facts", "elapsed_s");
+    println!("{:<28} {:>6} {:>6} {:>9} {:>10} {:>10} {:>10}",
+        "core", "ok", "err", "events", "iv_rows", "facts_new", "elapsed_s");
     println!("{}", "-".repeat(86));
     for (core, (ok, err, events, iv, facts, ms)) in &by_core {
         println!(
@@ -1660,6 +1669,9 @@ fn print_summary(summary: &[CoreRunSummary], total_elapsed: std::time::Duration,
             *ms as f64 / 1000.0
         );
     }
+    // v3.4 r2:`facts_new` 為本輪新增(rows_affected from INSERT ... ON CONFLICT
+    // DO NOTHING);第二次 run 同 facts → facts_new=0 但 facts 表仍有 row。
+    // 查 core 累計 facts → SELECT COUNT(*) FROM facts WHERE source_core=...
 
     let errs: Vec<&CoreRunSummary> = summary.iter().filter(|r| r.status != "ok").collect();
     if !errs.is_empty() {
