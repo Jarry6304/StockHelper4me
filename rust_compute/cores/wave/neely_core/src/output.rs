@@ -789,7 +789,50 @@ pub struct FibZone {
 /// - Hash 不需要(無 HashMap/HashSet 用 RuleId 當 key)
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[allow(non_camel_case_types)] // r5 章節編碼採 `Ch5_Essential` 風格(architecture §9.3)
+#[allow(dead_code)] // r6 (v3.6):Ch3/Ch4/Ch6/Ch7/Ch8/Ch10/Ch11/Ch12 variants 由 domain-specific structs 提供結果,RuleId 變體本身未 dispatch 構造,純章節追溯參照
 pub enum RuleId {
+    // === Ch3 Pre-Constructive Rules of Logic(v3.6 補完)===
+    /// Ch3 Pre-Constructive Rule 1-7 完整 if-else 條件樹
+    /// neely_rules.md §348-1063 行(Pre-Constructive Logic 完整對照表)
+    ///
+    /// - `rule`:1-7(對應 Pre-Constructive Rules 1-7)
+    /// - `condition`:'a'-'f'(各 Rule 的 Condition 編碼,例 Rule 5 Cond 5b)
+    /// - `category`:'i'/'ii'/'iii'(僅 Rule 4 有 sub-category)
+    /// - `sub_rule_index`:同 Condition 內的多條子規則編號
+    Ch3_PreConstructive {
+        rule: u8,
+        condition: char,
+        category: Option<char>,
+        sub_rule_index: Option<u8>,
+    },
+    /// Ch3 Rule of Proportion — Directional(neely_rules.md §Rule of Proportion 243-250 行)
+    Ch3_Proportion_Directional,
+    /// Ch3 Rule of Proportion — Non-Directional(neely_rules.md §Rule of Proportion 243-250 行)
+    Ch3_Proportion_NonDirectional,
+    /// Ch3 Rule of Neutrality Aspect 1 — 個股 |magnitude| < ATR × multiplier(neely_rules.md §Rule of Neutrality 251-258 行)
+    Ch3_Neutrality_Aspect1,
+    /// Ch3 Rule of Neutrality Aspect 2 — 加權指數 |magnitude| / start_price < % threshold
+    Ch3_Neutrality_Aspect2,
+    /// Ch3 Pattern Isolation Step 1-6(neely_rules.md §Pattern Isolation Procedures 1064-1120 行)
+    Ch3_PatternIsolation_Step(u8),
+    /// Ch3 Special Circumstances(neely_rules.md §Special Circumstances 1121-1124 行):
+    /// Compacted 超出自身起點 → 標 :3
+    Ch3_SpecialCircumstances,
+
+    // === Ch4 Intermediary Observations(v3.6 補完)===
+    /// Ch4 Rule of Similarity & Balance — Price 軸(neely_rules.md §Rule of Similarity & Balance 1189-1197 行)
+    Ch4_SimilarityBalance_Price,
+    /// Ch4 Rule of Similarity & Balance — Time 軸(neely_rules.md §Rule of Similarity & Balance 1189-1197 行)
+    Ch4_SimilarityBalance_Time,
+    /// Ch4 Three Rounds Round 1 — Series(neely_rules.md §Three Rounds 1198-1282 行)
+    Ch4_Round1_Series,
+    /// Ch4 Three Rounds Round 2 — Compaction(neely_rules.md §Three Rounds 1198-1282 行)
+    Ch4_Round2_Compaction,
+    /// Ch4 Three Rounds Round 3 — Pause(neely_rules.md §Three Rounds 1198-1282 行)
+    Ch4_Round3_Pause,
+    /// Ch4 Zigzag DETOUR Test(neely_rules.md §Zigzag DETOUR Test 1283-1288 行)
+    Ch4_ZigzagDetour,
+
     // === Ch5 Central Considerations(Essential Construction Rules + Channeling + 變體規則)===
     /// Ch5 Essential Construction Rules R1-R7(neely_rules.md §Impulsion 1291-1300 行)
     /// - R1 必須有 5 個相鄰段
@@ -845,6 +888,56 @@ pub enum RuleId {
     /// Ch5 Channeling B-D trendline(Triangle 通道,b→d 連線)
     Ch5_Channeling_BD,
 
+    /// Ch5 Extension Rule(v3.6 補完;neely_rules.md §Extension Rule 1302-1308 行)
+    /// 試金石:1/3/5 中必有一段為「延伸段」(≥ 161.8% × 較短的另兩段最大值)
+    Ch5_Extension,
+    /// Ch5 Extension Exception 1 — 1st 段為最長例外(neely_rules.md §Extension Rule)
+    Ch5_Extension_Exception1,
+    /// Ch5 Extension Exception 2 — 3rd 段最長但 < 161.8% × 1st 段例外
+    Ch5_Extension_Exception2,
+
+    // === Ch6 Post-Constructive Rules(v3.6 補完)===
+    /// Ch6 Impulse 兩階段確認 — Stage 1(neely_rules.md §1765-1775 行)
+    Ch6_Impulse_Stage1,
+    /// Ch6 Impulse 兩階段確認 — Stage 2(依延伸段位置不同)
+    Ch6_Impulse_Stage2 { extension: ImpulseExtension },
+    /// Ch6 Correction(b 較小)— Stage 1(neely_rules.md §1777-1800 行)
+    Ch6_Correction_BSmall_Stage1,
+    /// Ch6 Correction(b 較小)— Stage 2
+    Ch6_Correction_BSmall_Stage2,
+    /// Ch6 Correction(b 較大)— Stage 1
+    Ch6_Correction_BLarge_Stage1,
+    /// Ch6 Correction(b 較大)— Stage 2
+    Ch6_Correction_BLarge_Stage2,
+    /// Ch6 Triangle Contracting — Stage 1(neely_rules.md §1777-1800 行)
+    Ch6_Triangle_Contracting_Stage1,
+    /// Ch6 Triangle Contracting — Stage 2
+    Ch6_Triangle_Contracting_Stage2,
+    /// Ch6 Triangle Expanding 非確認(neely_rules.md §1777-1800 行)
+    Ch6_Triangle_Expanding_NonConfirmation,
+
+    // === Ch7 Conclusions(v3.6 補完)===
+    /// Ch7 Compaction Reassessment — 壓縮後重新評估(neely_rules.md §1803-1814 行)
+    Ch7_Compaction_Reassessment,
+    /// Ch7 Complexity Rule — 差距 ≤ 1 級篩選(neely_rules.md §Complexity Rule 1819-1825 行)
+    Ch7_Complexity_Difference,
+    /// Ch7 Triplexity 偵測(neely_rules.md §Wave 完整定義 1837-1839 行)
+    Ch7_Triplexity,
+
+    // === Ch8 Complex Polywaves(v3.6 補完)===
+    /// Ch8 Non-Standard Polywave 條件 1 — 中介修正 < 61.8%(neely_rules.md §1856-1907 行)
+    Ch8_NonStandard_Cond1,
+    /// Ch8 Non-Standard Polywave 條件 2 — 中段 ≥ 161.8%
+    Ch8_NonStandard_Cond2,
+    /// Ch8 X-Wave 內部結構規則(Complex Polywave 必含 X-wave)
+    Ch8_XWave_InternalStructure,
+    /// Ch8 大型 X-Wave 不可為 Zigzag(neely_rules.md §1856-1907 行)
+    Ch8_LargeXWave_NoZigzag,
+    /// Ch8 Extension vs Subdivision 獨立性(neely_rules.md §Extensions vs. Subdivisions 1919-1924 行)
+    Ch8_ExtensionSubdivision_Independence,
+    /// Ch8 Multiwave 建構規則(neely_rules.md §Multiwave 建構 1908-1911 行)
+    Ch8_Multiwave_Construction,
+
     // === Ch9 Advanced Rules(Phase 7 PR)===
     /// Ch9 Trendline Touchpoints Rule(spec 1957-1961 行):
     /// 5+ 點觸線 → 該段不可能是 Impulse
@@ -864,6 +957,52 @@ pub enum RuleId {
     Ch9_Exception_Aspect2 { triggered_new_rule: String },
     /// Ch9 Structure Integrity(spec 1992-1994 行):已壓縮確認的結構不可隨意修改
     Ch9_StructureIntegrity,
+
+    // === Ch10 Advanced Logic Rules(v3.6 補完)===
+    /// Ch10 Power Rating 查表(neely_rules.md §Pattern Implications & Power Ratings 2004-2023 行)
+    Ch10_PowerRating_Lookup,
+    /// Ch10 Max Retracement 查表(±N 級對映回測比例)
+    Ch10_MaxRetracement_Lookup,
+    /// Ch10 Triangle / Terminal Power Override(neely_rules.md §Triangles — Implications 2039-2050 行)
+    Ch10_TriangleTerminal_PowerOverride,
+
+    // === Ch11 Advanced Progress Label Application(v3.6 補完)===
+    /// Ch11 Trending Impulse Wave-by-Wave 變體規則
+    /// neely_rules.md §Trending Impulse 2071-2137 行;依 extension 位置(1st/3rd/5th/none)+ wave 編號分流
+    Ch11_Impulse_WaveByWave { ext: ImpulseExtension, wave: WaveNumber },
+    /// Ch11 Terminal Impulse(原 Diagonal Triangle)Wave-by-Wave 變體規則
+    /// neely_rules.md §Terminal Impulse 2138-2190 行
+    Ch11_Terminal_WaveByWave { ext: ImpulseExtension, wave: WaveNumber },
+    /// Ch11 Flat 變體 wave-a/b/c 規則(neely_rules.md §Corrective — Flat 全部變體 2191-2322 行)
+    Ch11_Flat_Variant_Rules { variant: FlatVariant, wave: WaveAbc },
+    /// Ch11 Zigzag Wave-by-Wave 進階規則(neely_rules.md §Zigzag — wave 進階規則 2323-2345 行)
+    Ch11_Zigzag_WaveByWave { wave: WaveAbc },
+    /// Ch11 Triangle 變體 wave-a/b/c/d/e 完整規則
+    /// neely_rules.md §Triangle — 各變體 2346-2485 行
+    Ch11_Triangle_Variant_Rules { variant: TriangleVariant, wave: TriangleWave },
+
+    // === Ch12 Advanced Neely Extensions(v3.6 補完)===
+    /// Ch12 Channeling — Running Double Three 偵測(neely_rules.md §Channeling 2488-2518 行)
+    Ch12_Channeling_RunningDoubleThree,
+    /// Ch12 Channeling — Triangle Early Warning(neely_rules.md §Channeling 2488-2518 行)
+    Ch12_Channeling_TriangleEarlyWarning,
+    /// Ch12 Channeling — Terminal Early Warning(neely_rules.md §Channeling 2488-2518 行)
+    Ch12_Channeling_TerminalEarlyWarning,
+    /// Ch12 Fibonacci Internal — 段內 Fib 比例(neely_rules.md §12 Fibonacci section)
+    Ch12_Fibonacci_Internal,
+    /// Ch12 Fibonacci External — 段外 Fib 投影(neely_rules.md §12 Fibonacci section)
+    Ch12_Fibonacci_External,
+    /// Ch12 Waterfall Effect(neely_rules.md §12 強波後續加速效應)
+    Ch12_WaterfallEffect,
+    /// Ch12 Missing Wave — 最少資料點要求(neely_rules.md §12 Missing Wave section)
+    Ch12_MissingWave_MinDataPoints,
+    /// Ch12 Emulation — 形態偽裝(視覺 X 但結構 Y;對齊 EmulationKind enum)
+    /// neely_rules.md §12 Emulation section
+    Ch12_Emulation { kind: EmulationKind },
+    /// Ch12 Reverse Logic — 反向邏輯偵測(neely_rules.md §12 Reverse Logic section)
+    Ch12_ReverseLogic,
+    /// Ch12 Localized Changes — 局部結構變動(neely_rules.md §12 Localized Changes section)
+    Ch12_LocalizedChanges,
 
     // === 工程護欄(非 Neely 規則,獨立列出 — architecture §9.3 末段)===
     /// 資料量不足(< warmup_periods)→ Stage 1 階段失敗
@@ -895,6 +1034,96 @@ pub enum ExceptionSituation {
     TerminalW5OrC,
     /// C:進入或離開 Contracting/Expanding Triangle 的位置
     TriangleEntryExit,
+}
+
+// ---------------------------------------------------------------------------
+// v3.6 Ch6 / Ch11 supporting enums(2026-05-16)
+// ---------------------------------------------------------------------------
+// 對齊 m3Spec/neely_core_architecture.md §9.3 r6 — 補完 53 spec-only RuleId
+// variants 進 enum;以下 5 個 supporting enum 為 RuleId 內含欄位用。
+// 不被 dispatch 構造 → 加 #[allow(dead_code)]。
+// ---------------------------------------------------------------------------
+
+/// Ch6 / Ch11 Impulse 延伸段位置(對映 neely_rules.md §Extension Rule 1302-1308 行)。
+/// 用於 `RuleId::Ch6_Impulse_Stage2` / `Ch11_Impulse_WaveByWave` /
+/// `Ch11_Terminal_WaveByWave` 區分依延伸段位置(1st / 3rd / 5th / none)的不同變體規則。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
+pub enum ImpulseExtension {
+    /// 1st 段延伸(W1 ≥ 161.8% × max(W3, W5))
+    First,
+    /// 3rd 段延伸(W3 ≥ 161.8% × max(W1, W5))— 最常見
+    Third,
+    /// 5th 段延伸(W5 ≥ 161.8% × max(W1, W3))
+    Fifth,
+    /// 無明顯延伸(三段比例接近 — 罕見但可能)
+    NonExtended,
+}
+
+/// Ch11 Flat / Zigzag 的 a/b/c 三段標籤。
+/// 用於 `RuleId::Ch11_Flat_Variant_Rules` / `Ch11_Zigzag_WaveByWave` 指定變體規則對應的 wave。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
+pub enum WaveAbc {
+    A,
+    B,
+    C,
+}
+
+/// Ch11 Triangle 的 a/b/c/d/e 五段標籤。
+/// 用於 `RuleId::Ch11_Triangle_Variant_Rules` 指定 Triangle 變體規則對應的 wave。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
+pub enum TriangleWave {
+    A,
+    B,
+    C,
+    D,
+    E,
+}
+
+/// Ch11 Flat 全部變體(neely_rules.md §Corrective — Flat 全部變體 2191-2322 行)。
+/// 用於 `RuleId::Ch11_Flat_Variant_Rules` 區分各 Flat 變體規則。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
+pub enum FlatVariant {
+    /// Common Flat — b ≈ a,c ≈ a
+    Common,
+    /// Elongated Flat — c 顯著長於 a
+    Elongated,
+    /// Irregular Flat — b > a,c > b
+    Irregular,
+    /// Strong-B Flat — b 強於 a 但未達 Irregular
+    StrongB,
+    /// C-Failure Flat — c 未達 38.2% × b
+    CFailure,
+    /// B-Failure Flat — b 未達 38.2% × a
+    BFailure,
+    /// Irregular Failure — Irregular + C-Failure 雙條件
+    IrregularFailure,
+    /// Double Flat — 連續兩個 Flat 由 X-wave 連結
+    DoubleFlat,
+    /// Running Correction — c 未回到 a 終點(極強趨勢)
+    RunningCorrection,
+}
+
+/// Ch11 Triangle 全部變體(neely_rules.md §Triangle — 各變體 2346-2485 行)。
+/// 用於 `RuleId::Ch11_Triangle_Variant_Rules` 區分 9 種 Triangle 變體規則。
+///
+/// 三種型態(Horizontal / Irregular / Running)× 三種類型(Limiting / Non-Limiting / Expanding)
+/// = 9 變體。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
+pub enum TriangleVariant {
+    HorizontalLimiting,
+    IrregularLimiting,
+    RunningLimiting,
+    HorizontalNonLimiting,
+    IrregularNonLimiting,
+    RunningNonLimiting,
+    HorizontalExpanding,
+    IrregularExpanding,
+    RunningExpanding,
 }
 
 /// Ch7 Compaction Reassessment 對應的 base label。
@@ -1034,4 +1263,73 @@ pub struct DetourAnnotation {
     pub candidate_id: String,
     /// 若 detour 後 5-wave Trending Impulse 結構成立,提供替代 monowave_indices(共 5 個)
     pub impulse_alternative: Option<Vec<usize>>,
+}
+
+// ---------------------------------------------------------------------------
+// v3.6 RuleId enum 補完驗證 — serde JSON shape sanity check
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod ruleid_v36_tests {
+    use super::*;
+
+    /// 對 Ch3 / Ch4 / Ch6 / Ch7 / Ch8 / Ch10 / Ch11 / Ch12 各 1 個 sample
+    /// variant 序列化驗證 — 確認 v3.6 補進去的 53 variants 全部可被 serde 處理。
+    /// 對應 plan v3.6 §Verify step。
+    #[test]
+    fn v36_new_variants_serialize() {
+        let cases: Vec<RuleId> = vec![
+            // Ch3
+            RuleId::Ch3_PreConstructive {
+                rule: 5,
+                condition: 'b',
+                category: None,
+                sub_rule_index: Some(1),
+            },
+            RuleId::Ch3_PatternIsolation_Step(3),
+            // Ch4
+            RuleId::Ch4_SimilarityBalance_Price,
+            RuleId::Ch4_Round1_Series,
+            // Ch5 新加
+            RuleId::Ch5_Extension,
+            RuleId::Ch5_Extension_Exception1,
+            // Ch6
+            RuleId::Ch6_Impulse_Stage1,
+            RuleId::Ch6_Impulse_Stage2 {
+                extension: ImpulseExtension::Third,
+            },
+            // Ch7
+            RuleId::Ch7_Compaction_Reassessment,
+            RuleId::Ch7_Triplexity,
+            // Ch8
+            RuleId::Ch8_NonStandard_Cond1,
+            RuleId::Ch8_XWave_InternalStructure,
+            // Ch10
+            RuleId::Ch10_PowerRating_Lookup,
+            // Ch11
+            RuleId::Ch11_Impulse_WaveByWave {
+                ext: ImpulseExtension::Third,
+                wave: WaveNumber::W3,
+            },
+            RuleId::Ch11_Flat_Variant_Rules {
+                variant: FlatVariant::Irregular,
+                wave: WaveAbc::B,
+            },
+            RuleId::Ch11_Triangle_Variant_Rules {
+                variant: TriangleVariant::HorizontalLimiting,
+                wave: TriangleWave::C,
+            },
+            // Ch12
+            RuleId::Ch12_Channeling_RunningDoubleThree,
+            RuleId::Ch12_Emulation {
+                kind: EmulationKind::DiagonalAsImpulse,
+            },
+            RuleId::Ch12_LocalizedChanges,
+        ];
+        for rid in &cases {
+            let json = serde_json::to_string(rid).expect("RuleId variant should serialize");
+            // sanity:JSON 非空 + 含 "Ch" prefix
+            assert!(json.contains("\"Ch"), "expected chapter prefix, got: {json}");
+        }
+    }
 }
