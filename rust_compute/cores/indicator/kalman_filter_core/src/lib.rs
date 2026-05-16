@@ -357,6 +357,17 @@ fn detect_events_run_length(
 // Regime classifier(out of trait,易測試)
 // ---------------------------------------------------------------------------
 
+/// |accel| < ACCEL_STABLE_EPS → 視為 stable(對齊 spec §4「|accel| 小 → Stable*」)。
+///
+/// v3.4 r2 r4(2026-05-16):原本「`else { StableUp/Down }`」只在 `accel == 0.0`
+/// 精確相等才觸發,浮點實際從不命中 → production 34593 events 中 StableUp = 0,
+/// 上下行對映不對稱(StableDown 在 `accel ≤ 0` 涵蓋,StableUp 只在 accel==0
+/// 涵蓋)。改用 ACCEL_STABLE_EPS,讓 |accel| < EPS 走 Stable*,二側對稱。
+///
+/// EPS = 0.01:對 Kalman smoothed velocity 是 1 cent / day(price scale 100 NTD
+/// 下 ≈ 0.01% 加速度),足夠濾掉浮點 noise 而仍能區分有意義的 accel/decel。
+const ACCEL_STABLE_EPS: f64 = 0.01;
+
 /// 5-class regime(對齊 user 拍版 2026-05-15)。
 ///
 /// vel_pct:smoothed velocity / smoothed_price(±, 0.001=0.1%/day)
@@ -367,18 +378,20 @@ pub fn classify_regime(vel_pct: f64, accel: f64, threshold: f64) -> Regime {
         return Regime::Sideway;
     }
     if vel_pct > 0.0 {
-        // 上漲:accel > 0 → 加速;accel < 0 → 減速(StableUp 中性視為 stable);
-        if accel > 0.0 {
-            Regime::Accelerating
-        } else if accel < 0.0 {
-            Regime::Decelerating
-        } else {
+        // 上漲:|accel| < EPS → StableUp;accel > 0 → 加速;accel < 0 → 減速
+        if accel.abs() < ACCEL_STABLE_EPS {
             Regime::StableUp
+        } else if accel > 0.0 {
+            Regime::Accelerating
+        } else {
+            Regime::Decelerating
         }
     } else {
-        // 下跌:accel < 0 → 加速下跌(視為 StableDown 同類但仍標 StableDown);
-        //       accel > 0 → 動能消退(Decelerating;reversal pending)
-        if accel > 0.0 {
+        // 下跌:|accel| < EPS → StableDown;accel > 0 → 動能消退(reversal pending);
+        //       accel < 0 → 加速下跌(視為 StableDown 連動性 → 仍標 StableDown)
+        if accel.abs() < ACCEL_STABLE_EPS {
+            Regime::StableDown
+        } else if accel > 0.0 {
             Regime::Decelerating
         } else {
             Regime::StableDown
