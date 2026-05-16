@@ -184,29 +184,65 @@ def _fetch_latest_financials(
 def _fetch_market_caps_for_date(
     db: Any, target_date: Any, stock_ids: list[str] | None,
 ) -> dict[str, float]:
-    """對特定 date,每股的市值 = close × total_issued(LEFT JOIN 對齊
-    valuation_core market_value_weight pattern)。"""
-    where = ""
-    params: list[Any] = [target_date]
+    """對特定 date,每股的市值 = close(target_date) × shares(latest fis ≤ target_date in 60d window)。
+
+    Issued shares 變化非常慢(年/季級),fis 有日延後(FinMind foreign holding
+    通常 t+5~10 lag)時,用 latest available fis row 反推 market_cap。對齊
+    Magic Formula 概念(原 Greenblatt 用 same-date snapshot 但 issued shares
+    near-constant,fallback 不偏離語意)。
+
+    v3.4 r2 hotfix(2026-05-16):fis lookback 60 days,解 latest 8 days
+    no_market_cap 問題。
+    """
+    where_close = ""
+    params_close: list[Any] = [target_date]
+    where_fis = ""
+    params_fis: list[Any] = [target_date, target_date]
     if stock_ids:
         ph = ",".join(["%s"] * len(stock_ids))
-        where = f"AND pd.stock_id IN ({ph})"
-        params.extend(stock_ids)
-    rows = db.query(
+        where_close = f"AND pd.stock_id IN ({ph})"
+        params_close.extend(stock_ids)
+        where_fis = f"AND stock_id IN ({ph})"
+        params_fis.extend(stock_ids)
+
+    # Pass 1:每股 latest 60-day fis(取最近 1 個非 NULL total_issued)
+    fis_rows = db.query(
         f"""
-        SELECT pd.stock_id, (pd.close * fis.total_issued)::float8 AS mv
-          FROM price_daily_fwd pd
-          LEFT JOIN foreign_investor_share_tw fis
-            ON pd.market = fis.market AND pd.stock_id = fis.stock_id AND pd.date = fis.date
-         WHERE pd.market = 'TW' AND pd.date = %s {where}
+        SELECT DISTINCT ON (stock_id) stock_id,
+               total_issued::float8 AS total_issued
+          FROM foreign_investor_share_tw
+         WHERE market = 'TW' AND date <= %s
+           AND date >= (%s::date - INTERVAL '60 days')
+           AND total_issued IS NOT NULL
+           {where_fis}
+         ORDER BY stock_id, date DESC
         """,
-        params,
+        params_fis,
+    )
+    fis_by_stock: dict[str, float] = {r["stock_id"]: r["total_issued"] for r in fis_rows}
+
+    # Pass 2:target_date 的 close × fallback shares
+    close_rows = db.query(
+        f"""
+        SELECT pd.stock_id, pd.close::float8 AS close
+          FROM price_daily_fwd pd
+         WHERE pd.market = 'TW' AND pd.date = %s
+           {where_close}
+        """,
+        params_close,
     )
     out: dict[str, float] = {}
-    for r in rows:
-        mv = r.get("mv")
-        if mv is not None and float(mv) > 0:
-            out[r["stock_id"]] = float(mv)
+    for r in close_rows:
+        sid = r["stock_id"]
+        shares = fis_by_stock.get(sid)
+        if shares is None or shares <= 0:
+            continue
+        close = r.get("close")
+        if close is None:
+            continue
+        mv = float(close) * float(shares)
+        if mv > 0:
+            out[sid] = mv
     return out
 
 
