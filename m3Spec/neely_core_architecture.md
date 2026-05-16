@@ -12,6 +12,26 @@
 
 ---
 
+## r6 修訂摘要(2026-05-16,Neely RuleId enum 補完)
+
+- **§9.3 RuleId enum 從 28 → 81 variants**:user 拍版反向 r5 設計決策,把
+  spec-only 53 個 variants(Ch3 / Ch4 / Ch5 漏的 Extension / Ch6 / Ch7 / Ch8 /
+  Ch10 / Ch11 / Ch12)補進 `rust_compute/cores/wave/neely_core/src/output.rs::RuleId`
+  enum。**dispatch 仍限縮 Ch5_*/Ch9_*/Engineering_* 三組**(domain-specific
+  structs 如 `EmulationSuspect` / `PowerRating` / `StructureLabel` 仍為事實來源);
+  新增 variants 為 type-level 章節追溯,標 `#[allow(dead_code)]`。
+- **加 5 個 supporting enums**:`ImpulseExtension`(First/Third/Fifth/NonExtended)
+  / `WaveAbc`(A/B/C)/ `TriangleWave`(A/B/C/D/E)/ `FlatVariant`(9 variants)
+  / `TriangleVariant`(9 variants:Horizontal/Irregular/Running × Limiting/NonLimiting/Expanding)。
+- **trade-off**:違反 r5「prematurely declare 未實際 dispatch 的 RuleId 不該做」原則,
+  user 拍版收下「SQL 按章節統計拒絕原因更容易」+「未來新增 dispatch 時 enum 已就位」
+  收益。仍與 domain-specific structs 並存(EmulationKind 同時被 Ch12_Emulation 與
+  EmulationSuspect 使用 — single source of truth 模糊風險已記錄)。
+- **驗證**:`cargo test --release --workspace` 408 passed / 0 failed(新加
+  `ruleid_v36_tests::v36_new_variants_serialize` 對 19 個 sample variant 驗 serde JSON shape)。
+
+---
+
 ## r5 修訂摘要(2026-05-13,規則層 / 架構層分離)
 
 > **背景**:r4 嘗試在單一文件中同時描述「Neely 規則」與「v2.0 工程架構」,造成兩大病徵:
@@ -930,7 +950,18 @@ pub enum PostBehavior {
 
 [Gap 1.2 群 4 = a]
 
-> **r5 範圍說明**(v0.20.0 落地時新增,2026-05-13):
+> **r6 補完說明**(v3.6,2026-05-16):
+>
+> **76 variants 全部已落地 Rust enum** `output.rs::RuleId`(28 既有 dispatch +
+> 53 spec-only 章節追溯)。`dispatch` 範圍**不變**:`RuleRejection.rule_id` 實際
+> 只會出現 Ch5_*/Ch9_*/Engineering_* 三組;其他章節 variants 標 `#[allow(dead_code)]`,
+> 用於章節追溯文件與未來潛在 dispatch 擴充就位。
+>
+> **設計反向 r5**(對齊 user 拍版):r5 原則「prematurely declare 未實際 dispatch
+> 的 RuleId 不該做」收下,改為「全 76 variants 落地,以章節追溯為主」+「dispatch
+> 仍守 3 組約束」。trade-off 已記錄於 §r6 修訂摘要。
+>
+> **r5 原始說明**(2026-05-13,保留歷史):
 >
 > 本節列出完整 76 個 RuleId variants 作為**文件追溯參照**。實作體系實際 dispatch
 > 進 `RuleRejection.rule_id` 的 variants **限縮為三組**:
@@ -962,8 +993,8 @@ pub enum PostBehavior {
 > declare 未實際 dispatch 的 RuleId 不該做)。下方完整 RuleId 清單保留作為:
 >
 >   1. 章節追溯文件 — 看哪條規則對應哪個 Neely 書頁
->   2. P0 Gate 後若 production SQL 需「按 Chapter 統計拒絕原因」,可批量補 missing
->      variants 進 Rust enum(目前 56 個 spec-only variants 在 code 不存在)
+>   2. ~~P0 Gate 後若 production SQL 需「按 Chapter 統計拒絕原因」,可批量補 missing
+>      variants 進 Rust enum~~ **(v3.6 已完成 53 variants 補完;見 §r6 修訂摘要)**
 
 ```rust
 /// Rule 編碼採 Neely 章節對應,而非自編序號

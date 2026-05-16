@@ -238,7 +238,69 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表搬 docs/claude_history.md) → #M3-1 ~ #M3-9a ✅ 22 cores 全部落地 → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer Phase B-D 全套 merge main(2026-05-13)→ #PR #51 ⏳ neely Phase 13-19 v1.0.x + P3/P2 indicator cores batch + Round 5/6 calibration + agg layer 補強 → **v3.5 5 層架構重構 ⏳ branch `claude/continue-previous-work-xdKrl` 累積 8 commits 待 merge**(2026-05-16)**`。**M3 Cores 35 crates / 407 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP)落地,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位(Bronze / Silver / Cross-Stock 新層 / M3 Cores / MCP)**。
+當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ⏳ v3.6 Neely RuleId enum 補完(2026-05-16)`。**M3 Cores 35 crates / 408 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地)**。
+
+---
+
+## v3.6 — Neely RuleId enum 補完:53 spec-only variants 全進 Rust(2026-05-16)
+
+接 v3.5 merged main 後,user 拍版反向 r5「prematurely declare 未實際 dispatch 的 RuleId
+不該做」原則,把 spec §9.3 列的 76 variants 全部補進 Rust enum。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+`rust_compute/cores/wave/neely_core/src/output.rs::RuleId` enum 從 28 → **81 variants**:
+- **Ch3 Pre-Constructive(7)**:`Ch3_PreConstructive { rule, condition, category, sub_rule_index }` / `Ch3_Proportion_*` / `Ch3_Neutrality_*` / `Ch3_PatternIsolation_Step(u8)` / `Ch3_SpecialCircumstances`
+- **Ch4 Intermediary(6)**:`Ch4_SimilarityBalance_*` / `Ch4_Round{1,2,3}_*` / `Ch4_ZigzagDetour`
+- **Ch5 漏的 Extension(3)**:`Ch5_Extension` + `Extension_Exception{1,2}`
+- **Ch6 Post-Constructive(9)**:`Ch6_Impulse_Stage{1,2}` / `Ch6_Correction_B{Small,Large}_Stage{1,2}` / `Ch6_Triangle_Contracting_Stage{1,2}` / `Ch6_Triangle_Expanding_NonConfirmation`
+- **Ch7 Conclusions(3)**:`Ch7_Compaction_Reassessment` / `Ch7_Complexity_Difference` / `Ch7_Triplexity`
+- **Ch8 Complex Polywaves(6)**:`Ch8_NonStandard_Cond{1,2}` / `Ch8_XWave_*` / `Ch8_LargeXWave_NoZigzag` / `Ch8_ExtensionSubdivision_Independence` / `Ch8_Multiwave_Construction`
+- **Ch10 Advanced Logic(3)**:`Ch10_PowerRating_Lookup` / `Ch10_MaxRetracement_Lookup` / `Ch10_TriangleTerminal_PowerOverride`
+- **Ch11 Wave-by-Wave(5)**:`Ch11_Impulse/Terminal_WaveByWave { ext, wave }` / `Ch11_Flat_Variant_Rules { variant, wave }` / `Ch11_Zigzag_WaveByWave { wave }` / `Ch11_Triangle_Variant_Rules { variant, wave }`
+- **Ch12 Advanced Extensions(11)**:`Ch12_Channeling_*` ×3 / `Ch12_Fibonacci_*` ×2 / `Ch12_WaterfallEffect` / `Ch12_MissingWave_MinDataPoints` / `Ch12_Emulation { kind: EmulationKind }` / `Ch12_ReverseLogic` / `Ch12_LocalizedChanges`
+
+加 5 個 supporting enums:`ImpulseExtension`(First/Third/Fifth/NonExtended)/ `WaveAbc`(A/B/C)
+/ `TriangleWave`(A-E)/ `FlatVariant`(9 variants)/ `TriangleVariant`(9 variants:
+Horizontal/Irregular/Running × Limiting/NonLimiting/Expanding)。
+
+### Dispatch 範圍**不變**(設計約束)
+
+實際 emit 進 `RuleRejection.rule_id` 的 variants 仍限 Ch5_*/Ch9_*/Engineering_*
+三組;新增 variants 全標 `#[allow(dead_code)]`,純 type-level 章節追溯。
+spec `m3Spec/neely_core_architecture.md §9.3 r6` 同步更新文字明文這設計。
+
+### Trade-off(user 拍版收下)
+
+- ✅ SQL 按章節統計拒絕原因更容易(`metadata->>'rule_id' LIKE 'Ch6%' GROUP BY chapter`)
+- ✅ 編輯器 import RuleId 可看到完整章節範圍
+- ✅ 未來 dispatch 擴充時 enum variant 已就位
+- ⚠️ 違反 cores_overview §十四「禁止抽象」(spec §9.3 r5 原則反向 — r6 已記錄)
+- ⚠️ 與 domain-specific structs(EmulationSuspect / PowerRating / StructureLabel)並存 — single source of truth 模糊風險
+
+### 驗證(本 session 沙箱)
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo build --release -p tw_cores` ✅ 0 warnings(下游 dep 編譯通)
+- `cargo test --release --workspace` **408 passed / 0 failed**(+1:`v36_new_variants_serialize` 對 19 個 sample variant 驗 serde JSON shape)
+
+### 受影響檔案(3)
+
+| 路徑 | 行數變動 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/output.rs` | +172 行(53 RuleId variants + 5 supporting enums + 1 unit test) |
+| `m3Spec/neely_core_architecture.md` | +18 行(r6 修訂摘要 + §9.3 r5 文字 update) |
+| `CLAUDE.md` | +50 行(v3.6 段) |
+
+### 風險
+
+🟢 低:
+- 純 enum 擴充,0 dispatch 邏輯改變
+- 既有 28 variants + 對應 validator 5 個檔 0 改動
+- domain-specific structs 0 改動
+- production output `diagnostics.rejections` JSON shape 不變
+- 0 alembic / 0 Python / 0 collector.toml
+- Rollback:單 commit `git revert`
 
 ---
 
