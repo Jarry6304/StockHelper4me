@@ -20,6 +20,7 @@ use fact_schema::{Fact, IndicatorCore, Timeframe};
 use neely_core::output::{Monowave, MonowaveDirection, OhlcvSeries};
 use serde::Serialize;
 use serde_json::json;
+use std::collections::HashMap;
 
 inventory::submit! {
     core_registry::CoreRegistration::new(
@@ -189,10 +190,15 @@ fn find_trendlines(
         .map(|p| (p.0, p.1))
         .collect();
 
-    // 把日期轉成「相對 bar 索引」,計算 slope
-    let date_to_idx = |d: NaiveDate| -> Option<usize> {
-        bars.iter().position(|b| b.date == d)
-    };
+    // 把日期轉成「相對 bar 索引」(O(1) lookup;v3.11 Round 7 把 O(n) linear scan
+    // 改 HashMap pre-build,find_trendlines 整體 O(n³) → O(n²),預期 1266 stocks
+    // wall time 2734s → 數百秒級別)
+    let date_to_idx_map: HashMap<NaiveDate, usize> = bars
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.date, i))
+        .collect();
+    let date_to_idx = |d: NaiveDate| -> Option<usize> { date_to_idx_map.get(&d).copied() };
 
     let extract_trendlines = |pts: &[(NaiveDate, f64)], kind: TrendlineKind| -> Vec<Trendline> {
         let mut out: Vec<Trendline> = Vec::new();

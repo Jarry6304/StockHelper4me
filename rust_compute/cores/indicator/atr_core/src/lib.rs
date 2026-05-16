@@ -6,6 +6,11 @@
 //             Systems". Trend Research. Ch. 21 — 原作者選 14 對應 ~2 週 cycle
 //   atr_pct 公式 = ATR / close × 100:Wilder 原版「normalised volatility」
 //   1y lookback / 14d expansion 50%:無明確學術出處,14d 對齊 Wilder ATR period=14 語意一致
+//
+// **v3.11 Round 7 calibration(2026-05-16)**:production 1266 stocks 跑出
+// VolatilityExpansion 15.13/yr/stock。原 level trigger 在 expansion zone 內
+// 連續多日反覆觸發。改 edge trigger(對齊 day_trading_core RatioExtreme 同款
+// 設計,Brown & Warner 1985:事件 = 狀態轉換),預期 → ~5/yr。
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -104,14 +109,18 @@ impl IndicatorCore for AtrCore {
             }
         }
         // Volatility expansion(N 天內 atr_pct 增 +50%)
+        // v3.11 Round 7:edge trigger,僅在 ratio 從 < threshold 轉 >= threshold 觸發
         if series.len() > EXPANSION_LOOKBACK {
+            let mut was_expanded = false;
             for i in EXPANSION_LOOKBACK..series.len() {
                 let prev = series[i - EXPANSION_LOOKBACK].atr_pct;
                 let cur = series[i].atr_pct;
-                if prev > 0.0 && (cur - prev) / prev >= EXPANSION_THRESHOLD {
+                let is_expanded = prev > 0.0 && (cur - prev) / prev >= EXPANSION_THRESHOLD;
+                if is_expanded && !was_expanded {
                     events.push(AtrEvent { date: series[i].date, kind: AtrEventKind::VolatilityExpansion, value: (cur - prev) / prev * 100.0,
                         metadata: json!({"event": "volatility_expansion", "from": prev, "to": cur, "days": EXPANSION_LOOKBACK}) });
                 }
+                was_expanded = is_expanded;
             }
         }
         Ok(AtrOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, series, events })
@@ -130,10 +139,61 @@ impl IndicatorCore for AtrCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ohlcv_loader::OhlcvBar;
+
     #[test]
     fn name_warmup() {
         let core = AtrCore::new();
         assert_eq!(core.name(), "atr_core");
         assert_eq!(core.warmup_periods(&AtrParams::default()), 56);
+    }
+
+    /// v3.11 Round 7 regression:VolatilityExpansion 改 edge trigger 後,連續多日
+    /// 都滿足 expansion 條件不該重複觸發,僅 zone entry 觸發一次。
+    #[test]
+    fn volatility_expansion_edge_trigger_fires_once_per_zone_entry() {
+        let core = AtrCore::new();
+        let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let mut bars: Vec<OhlcvBar> = Vec::new();
+        // 前 20 bar 低波動(high-low=0.5)
+        for i in 0..20 {
+            bars.push(OhlcvBar {
+                date: base + chrono::Duration::days(i),
+                open: 100.0,
+                high: 100.25,
+                low: 99.75,
+                close: 100.0,
+                volume: Some(1000),
+            });
+        }
+        // 後 30 bar 持續高波動(high-low=3.0,ATR 會大幅上升,然後維持高位)
+        for i in 20..50 {
+            bars.push(OhlcvBar {
+                date: base + chrono::Duration::days(i),
+                open: 100.0,
+                high: 101.5,
+                low: 98.5,
+                close: 100.0,
+                volume: Some(1000),
+            });
+        }
+        let input = OhlcvSeries {
+            stock_id: "TEST".to_string(),
+            timeframe: Timeframe::Daily,
+            bars,
+        };
+        let out = core.compute(&input, AtrParams::default()).unwrap();
+        let expansions: Vec<_> = out
+            .events
+            .iter()
+            .filter(|e| e.kind == AtrEventKind::VolatilityExpansion)
+            .collect();
+        // edge trigger:只在第 1 次跨進 expansion zone 觸發
+        assert_eq!(
+            expansions.len(),
+            1,
+            "VolatilityExpansion 應 edge trigger 僅 1 次,實際 = {:?}",
+            expansions.iter().map(|e| e.date).collect::<Vec<_>>()
+        );
     }
 }

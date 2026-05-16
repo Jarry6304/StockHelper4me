@@ -66,6 +66,14 @@ impl Default for MarginParams {
 /// 145% 為融資維持率實務預警線(對齊 market_margin_core 同 const)
 const MAINTENANCE_LOW_THRESHOLD: f64 = 145.0;
 
+/// v3.11 Round 7 calibration(2026-05-16):MarginSurge/Crash/ShortSqueeze/ShortBuildUp
+/// 4 個 day-over-day pct event 加最小間距。production 1266 stocks 跑出 13-24/yr,
+/// 個股密集事件期(法人連續進出)內每天 day-over-day pct 大於 threshold → 反覆觸發。
+/// 加 MIN_MARGIN_EVENT_SPACING_BARS = 20(~1 個月),預期 → ~6-10/yr。
+/// 對齊 adx_core MIN_ADX_PEAK_SPACING_BARS 同款設計 / Brown & Warner 1985 事件研究
+/// 「事件期內連續 trigger 應 dedup 為一事件群組」。
+const MIN_MARGIN_EVENT_SPACING_BARS: usize = 20;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MarginOutput {
     pub stock_id: String,
@@ -183,37 +191,62 @@ fn detect_events(series: &[MarginPoint], params: &MarginParams) -> Vec<MarginEve
     // historical_high 追蹤(2026-05-11):series 內 short_to_margin_ratio 累計最高值,
     // 用於 EnteredShortRatioExtremeHigh event metadata 的 historical_high 標籤
     let mut max_short_ratio_so_far: f64 = 0.0;
-    for p in series {
-        // Day-over-day(既有,無需改)
+    // v3.11 Round 7:per-EventKind 最後觸發 idx,enforce MIN_MARGIN_EVENT_SPACING_BARS
+    let mut last_margin_surge_idx: Option<usize> = None;
+    let mut last_margin_crash_idx: Option<usize> = None;
+    let mut last_short_squeeze_idx: Option<usize> = None;
+    let mut last_short_build_up_idx: Option<usize> = None;
+    for (i, p) in series.iter().enumerate() {
+        // Day-over-day(v3.11 Round 7:加 spacing)
         if p.margin_change_pct >= params.margin_change_pct_threshold {
-            events.push(MarginEvent {
-                date: p.date,
-                kind: MarginEventKind::MarginSurge,
-                value: p.margin_change_pct,
-                metadata: json!({ "change_pct": p.margin_change_pct, "balance": p.margin_balance }),
-            });
+            let ok = last_margin_surge_idx
+                .map_or(true, |last| i - last >= MIN_MARGIN_EVENT_SPACING_BARS);
+            if ok {
+                events.push(MarginEvent {
+                    date: p.date,
+                    kind: MarginEventKind::MarginSurge,
+                    value: p.margin_change_pct,
+                    metadata: json!({ "change_pct": p.margin_change_pct, "balance": p.margin_balance }),
+                });
+                last_margin_surge_idx = Some(i);
+            }
         } else if p.margin_change_pct <= -params.margin_change_pct_threshold {
-            events.push(MarginEvent {
-                date: p.date,
-                kind: MarginEventKind::MarginCrash,
-                value: p.margin_change_pct,
-                metadata: json!({ "change_pct": p.margin_change_pct, "balance": p.margin_balance }),
-            });
+            let ok = last_margin_crash_idx
+                .map_or(true, |last| i - last >= MIN_MARGIN_EVENT_SPACING_BARS);
+            if ok {
+                events.push(MarginEvent {
+                    date: p.date,
+                    kind: MarginEventKind::MarginCrash,
+                    value: p.margin_change_pct,
+                    metadata: json!({ "change_pct": p.margin_change_pct, "balance": p.margin_balance }),
+                });
+                last_margin_crash_idx = Some(i);
+            }
         }
         if p.short_change_pct <= -params.short_change_pct_threshold {
-            events.push(MarginEvent {
-                date: p.date,
-                kind: MarginEventKind::ShortSqueeze,
-                value: p.short_change_pct,
-                metadata: json!({ "change_pct": p.short_change_pct, "balance": p.short_balance }),
-            });
+            let ok = last_short_squeeze_idx
+                .map_or(true, |last| i - last >= MIN_MARGIN_EVENT_SPACING_BARS);
+            if ok {
+                events.push(MarginEvent {
+                    date: p.date,
+                    kind: MarginEventKind::ShortSqueeze,
+                    value: p.short_change_pct,
+                    metadata: json!({ "change_pct": p.short_change_pct, "balance": p.short_balance }),
+                });
+                last_short_squeeze_idx = Some(i);
+            }
         } else if p.short_change_pct >= params.short_change_pct_threshold {
-            events.push(MarginEvent {
-                date: p.date,
-                kind: MarginEventKind::ShortBuildUp,
-                value: p.short_change_pct,
-                metadata: json!({ "change_pct": p.short_change_pct, "balance": p.short_balance }),
-            });
+            let ok = last_short_build_up_idx
+                .map_or(true, |last| i - last >= MIN_MARGIN_EVENT_SPACING_BARS);
+            if ok {
+                events.push(MarginEvent {
+                    date: p.date,
+                    kind: MarginEventKind::ShortBuildUp,
+                    value: p.short_change_pct,
+                    metadata: json!({ "change_pct": p.short_change_pct, "balance": p.short_balance }),
+                });
+                last_short_build_up_idx = Some(i);
+            }
         }
         // ShortRatio zone(transition pattern,Round 4)
         let cur_short_ratio_extreme_high = p.short_to_margin_ratio >= params.short_to_margin_ratio_high;
@@ -421,6 +454,37 @@ mod tests {
         assert!(stmt0.ends_with("(historical high)"), "statement: {}", stmt0);
         let stmt1 = event_to_fact(&out, entered[1]).statement;
         assert!(!stmt1.ends_with("(historical high)"), "statement: {}", stmt1);
+    }
+
+    /// v3.11 Round 7 regression(2026-05-16):day-over-day MarginSurge spacing。
+    /// 連續 3 天 +6% margin_balance 應只觸發 1 次 MarginSurge(spacing 20 bars)。
+    #[test]
+    fn margin_surge_spacing_blocks_consecutive_days() {
+        // 4 個連續 +6% day(margin balance 1000 → 1060 → 1124 → 1192 → 1264)
+        let series = MarginDailySeries {
+            stock_id: "2330".to_string(),
+            points: vec![
+                raw("2026-04-21", 1000, 0),
+                raw("2026-04-22", 1060, 0),
+                raw("2026-04-23", 1124, 0),
+                raw("2026-04-24", 1192, 0),
+                raw("2026-04-25", 1264, 0),
+            ],
+        };
+        let out = MarginCore::new()
+            .compute(&series, MarginParams::default())
+            .unwrap();
+        let surges: Vec<_> = out
+            .events
+            .iter()
+            .filter(|e| e.kind == MarginEventKind::MarginSurge)
+            .collect();
+        assert_eq!(
+            surges.len(),
+            1,
+            "4 連續 surge day 應只觸發 1 次(spacing=20 bars 內 dedup),實際 = {:?}",
+            surges.iter().map(|e| e.date).collect::<Vec<_>>()
+        );
     }
 
     /// Regression(2026-05-09 dev DB):假日 / Bronze 未收齊 row(margin_balance / short_balance NULL)

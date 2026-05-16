@@ -52,6 +52,12 @@ pub struct DayTradingParams {
 /// 連續高/低當沖比的最小天數(對齊 spec §7.5 streak EventKind;§7.3 Params 未列,寫死 const)
 const STREAK_MIN_DAYS: usize = 3;
 
+/// v3.11 Round 7 calibration(2026-05-16):RatioExtremeHigh/Low edge trigger 後仍
+/// 13.59 / 13.04/yr,主因「進 zone → 短期 exit → 再進」造成 1 個月內多次 fire。
+/// 加 re-entry 最小冷卻間距 = 20 bars(~1 個月),預期 → ~6/yr。
+/// 對齊 margin_core MIN_MARGIN_EVENT_SPACING_BARS / adx_core MIN_ADX_PEAK_SPACING_BARS 同款設計。
+const MIN_RATIO_RE_ENTRY_SPACING_BARS: usize = 20;
+
 impl Default for DayTradingParams {
     fn default() -> Self {
         Self {
@@ -213,39 +219,55 @@ fn detect_events(series: &[DayTradingPoint], params: &DayTradingParams) -> Vec<D
     // RatioExtremeHigh / Low — edge trigger: fire only on zone entry, not on every bar in zone.
     // Production data 校準(2026-05-12): level trigger 版 ~31/yr 🔴。edge trigger 後預期 2–5/yr 🟢。
     // Verification: scripts/p2_calibration_data.sql §2 (day_trading_core / RatioExtremeHigh|Low)。
-    // Reference: Sheingold (1978) "Analog-Digital Conversion Notes" — edge trigger vs level trigger；
+    // Reference: Sheingold (1978) "Analog-Digital Conversion Notes" — edge trigger vs level trigger;
     //            Brown & Warner (1985) JFE 14(1):3-31 — 事件 = 狀態轉換,連續停留不構成新事件。
+    //
+    // v3.11 Round 7(2026-05-16):edge trigger 後 production 仍 13/yr(短期 in/out
+    // 反覆觸發)。加 re-entry 最小冷卻 MIN_RATIO_RE_ENTRY_SPACING_BARS,exit 後須等
+    // N bars 才允許 re-entry,預期 → ~6/yr。
     let mut was_extreme_high = false;
     let mut was_extreme_low = false;
+    let mut last_high_idx: Option<usize> = None;
+    let mut last_low_idx: Option<usize> = None;
     for (i, p) in series.iter().enumerate() {
         let is_extreme_high = p.day_trade_ratio >= params.ratio_high_threshold;
         let is_extreme_low = p.day_trade_ratio > 0.0 && p.day_trade_ratio <= params.ratio_low_threshold;
 
         if is_extreme_high && !was_extreme_high {
-            let historical_high = series[..i]
-                .iter()
-                .all(|prev| p.day_trade_ratio > prev.day_trade_ratio);
-            events.push(DayTradingEvent {
-                date: p.date,
-                kind: DayTradingEventKind::RatioExtremeHigh,
-                value: p.day_trade_ratio,
-                metadata: json!({
-                    "ratio": p.day_trade_ratio,
-                    "threshold": params.ratio_high_threshold,
-                    "historical_high": historical_high,
-                }),
-            });
+            let spacing_ok = last_high_idx
+                .map_or(true, |last| i - last >= MIN_RATIO_RE_ENTRY_SPACING_BARS);
+            if spacing_ok {
+                let historical_high = series[..i]
+                    .iter()
+                    .all(|prev| p.day_trade_ratio > prev.day_trade_ratio);
+                events.push(DayTradingEvent {
+                    date: p.date,
+                    kind: DayTradingEventKind::RatioExtremeHigh,
+                    value: p.day_trade_ratio,
+                    metadata: json!({
+                        "ratio": p.day_trade_ratio,
+                        "threshold": params.ratio_high_threshold,
+                        "historical_high": historical_high,
+                    }),
+                });
+                last_high_idx = Some(i);
+            }
         } else if is_extreme_low && !was_extreme_low {
-            // ratio == 0 多半是缺資料 / 無交易,不算 extreme low
-            events.push(DayTradingEvent {
-                date: p.date,
-                kind: DayTradingEventKind::RatioExtremeLow,
-                value: p.day_trade_ratio,
-                metadata: json!({
-                    "ratio": p.day_trade_ratio,
-                    "threshold": params.ratio_low_threshold,
-                }),
-            });
+            let spacing_ok = last_low_idx
+                .map_or(true, |last| i - last >= MIN_RATIO_RE_ENTRY_SPACING_BARS);
+            if spacing_ok {
+                // ratio == 0 多半是缺資料 / 無交易,不算 extreme low
+                events.push(DayTradingEvent {
+                    date: p.date,
+                    kind: DayTradingEventKind::RatioExtremeLow,
+                    value: p.day_trade_ratio,
+                    metadata: json!({
+                        "ratio": p.day_trade_ratio,
+                        "threshold": params.ratio_low_threshold,
+                    }),
+                });
+                last_low_idx = Some(i);
+            }
         }
         was_extreme_high = is_extreme_high;
         was_extreme_low = is_extreme_low;
@@ -480,13 +502,44 @@ mod tests {
 
     #[test]
     fn extreme_high_edge_trigger_fires_only_on_zone_entry() {
-        // 3 days in extreme zone → 1 event on entry; exit then re-enter → 2nd event
+        // v3.11 Round 7:加 MIN_RATIO_RE_ENTRY_SPACING_BARS=20 後,re-entry 須隔
+        // 至少 20 bars 才算新事件。本 test 構造 30 bar 跨度涵蓋 entry → exit →
+        // (gap 25 bars)→ re-entry。
+        let mut points: Vec<(String, f64)> = Vec::new();
+        let base = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        for i in 0..30 {
+            let date = base + chrono::Duration::days(i);
+            let ratio = match i {
+                0..=2 => 35.0,  // i=0 entry 觸發 → fires
+                3 => 20.0,      // i=3 exit zone
+                4..=24 => 15.0, // 維持 normal
+                25..=29 => 32.0, // i=25 re-entry(距 last_high_idx=0 共 25 bars >= 20)→ fires
+                _ => 15.0,
+            };
+            points.push((date.format("%Y-%m-%d").to_string(), ratio));
+        }
+        let series_raw: Vec<(&str, f64)> = points.iter().map(|(d, r)| (d.as_str(), *r)).collect();
+        let series = make_series(&series_raw);
+        let core = DayTradingCore::new();
+        let out = core.compute(&series, DayTradingParams::default()).unwrap();
+        let extremes: Vec<_> = out
+            .events
+            .iter()
+            .filter(|e| e.kind == DayTradingEventKind::RatioExtremeHigh)
+            .collect();
+        assert_eq!(extremes.len(), 2, "entry(i=0)+ re-entry(i=25,距 25 bars 過 spacing)= 2 fires");
+    }
+
+    #[test]
+    fn extreme_high_re_entry_blocked_within_spacing_window() {
+        // v3.11 Round 7:exit 後快速 re-entry(在 spacing window 內)應被擋下。
+        // 構造 10 bar:entry → exit → re-entry(距 4 bars < 20)→ 不該 fire 第 2 次
         let series = make_series(&[
-            ("2026-04-22", 35.0), // entry → fires
-            ("2026-04-23", 36.0), // stays in zone → no fire
-            ("2026-04-24", 33.0), // stays in zone → no fire
-            ("2026-04-25", 20.0), // exits zone
-            ("2026-04-26", 32.0), // re-entry → fires again
+            ("2026-04-01", 35.0), // entry → fires
+            ("2026-04-02", 36.0),
+            ("2026-04-03", 20.0), // exit
+            ("2026-04-04", 32.0), // re-entry 但距 last=0 僅 3 bars → blocked
+            ("2026-04-05", 33.0),
         ]);
         let core = DayTradingCore::new();
         let out = core.compute(&series, DayTradingParams::default()).unwrap();
@@ -495,7 +548,7 @@ mod tests {
             .iter()
             .filter(|e| e.kind == DayTradingEventKind::RatioExtremeHigh)
             .collect();
-        assert_eq!(extremes.len(), 2, "entry + re-entry = 2 fires, not 5");
+        assert_eq!(extremes.len(), 1, "re-entry 距 entry 僅 3 bars < 20 應被擋下");
     }
 
     #[test]
