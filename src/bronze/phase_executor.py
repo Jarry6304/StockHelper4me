@@ -476,7 +476,7 @@ class PhaseExecutor:
             stock_ids:  要處理的股票清單
         """
         if api_config.post_process == "dividend_policy_merge":
-            from post_process import dividend_policy_merge
+            from bronze.post_process_dividend import dividend_policy_merge
             logger.info(f"[post_process] dividend_policy_merge: {len(stock_ids)} 檔")
             for stock_id in stock_ids:
                 if stock_id == ALL_MARKET_SENTINEL:
