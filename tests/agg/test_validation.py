@@ -26,3 +26,11 @@ class TestInputValidation:
         # 明確空 list 容易誤殺;None 才走 all-cores
         with pytest.raises(ValueError, match="cores 不可為空 list"):
             as_of("2330", date(2026, 5, 1), cores=[])
+
+    def test_negative_lookback_monthly_raises(self):
+        with pytest.raises(ValueError, match="lookback_days_monthly 不可為負"):
+            as_of("2330", date(2026, 5, 1), lookback_days_monthly=-1)
+
+    def test_negative_lookback_quarterly_raises(self):
+        with pytest.raises(ValueError, match="lookback_days_quarterly 不可為負"):
+            as_of("2330", date(2026, 5, 1), lookback_days_quarterly=-1)

@@ -1,4 +1,13 @@
-# Aggregation Layer 規格 r2
+# Aggregation Layer 規格 r3
+
+> **r3 修訂摘要**(v3.7,2026-05-16):per-timeframe lookback fold-forward 落地
+>
+> `as_of()` 新增 `lookback_days_monthly` / `lookback_days_quarterly` 兩參數,
+> 對齊 §4.2 預設 lookback 表(daily 90 / monthly 90 = 3 發布週期 / quarterly 180 = 2 季)。
+> SQL 撈 max(三個 lookback),per-row 過濾在 Python 層 `_filter_by_timeframe_lookback`。
+> `QueryMetadata` 加 2 新 field(reproducibility 保留兩 cutoff)。
+> 既有預設行為**完全相容**(只填 daily 仍走原路徑)。
+> 落地驗證:`tests/agg/` 39 passed,新加 7 個 `test_timeframe_lookback.py` + 2 個 validation。
 
 > **狀態**:r2(2026-05-14 更新 — Phase B-2 / B-3 / C / D 全套落地反寫)
 > **層級**:System Core(對齊 `cores_overview.md` §8.6)
@@ -58,7 +67,7 @@
 
 Python lib 永遠是基礎層;FastAPI / Streamlit / GUI 都是 thin wrapper。
 
-### 2.2 對外 API surface(r2 反寫 — 實際 `src/agg/`)
+### 2.2 對外 API surface(r3 反寫 — v3.7 per-timeframe lookback 落地)
 
 ```python
 # src/agg/query.py(r2 實作版)
@@ -67,12 +76,15 @@ from dataclasses import dataclass
 from agg import as_of, find_facts_today, as_of_with_ohlc, health_check
 
 # 主入口 — 對齊 r1 設計,簽章微調(stock_id positional / database_url 可選 / conn 可選)
+# r3(v3.7,2026-05-16):per-timeframe lookback fold-forward — daily / monthly / quarterly 三個 cutoff 分流
 def as_of(
     stock_id: str,
     as_of: date,
     *,
     cores: list[str] | None = None,
-    lookback_days: int = 90,
+    lookback_days: int = 90,                # daily / weekly / unset facts cutoff(預設 90 天)
+    lookback_days_monthly: int = 90,        # monthly facts cutoff(預設 90 = 3 個發布週期,對齊 §4.2)
+    lookback_days_quarterly: int = 180,     # quarterly facts cutoff(預設 180 = 2 季,對齊 §4.2)
     include_market: bool = True,
     timeframes: list[str] | None = None,
     database_url: str | None = None,

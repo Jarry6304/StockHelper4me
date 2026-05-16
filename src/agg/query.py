@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from agg._db import (
@@ -38,6 +38,8 @@ def as_of(
     *,
     cores: list[str] | None = None,
     lookback_days: int = 90,
+    lookback_days_monthly: int = 90,
+    lookback_days_quarterly: int = 180,
     include_market: bool = True,
     timeframes: list[str] | None = None,
     database_url: str | None = None,
@@ -49,7 +51,9 @@ def as_of(
         stock_id: 股票代號(例 "2330",或保留字 "_index_taiex_")
         as_of: 查詢日(回測 / 即時都用同一介面)
         cores: 限制 source_core 範圍。None = 全部 23 cores
-        lookback_days: facts 期間。預設 90 天
+        lookback_days: daily facts 期間。預設 90 天(對齊 spec §4.2)
+        lookback_days_monthly: monthly facts 期間。預設 90 天 = 3 個發布週期(spec §4.2)
+        lookback_days_quarterly: quarterly facts 期間。預設 180 天 = 2 季(spec §4.2)
         include_market: 是否並排 market-level facts(5 個保留字 stock_id)
         timeframes: 限制 indicator timeframe。None = 全部
         database_url: PG 連線字串。None 走 .env / 環境變數
@@ -67,25 +71,43 @@ def as_of(
         raise ValueError("stock_id 不可為空字串")
     if lookback_days < 0:
         raise ValueError(f"lookback_days 不可為負(got {lookback_days})")
+    if lookback_days_monthly < 0:
+        raise ValueError(
+            f"lookback_days_monthly 不可為負(got {lookback_days_monthly})"
+        )
+    if lookback_days_quarterly < 0:
+        raise ValueError(
+            f"lookback_days_quarterly 不可為負(got {lookback_days_quarterly})"
+        )
     if cores is not None and len(cores) == 0:
         # 明確傳空 list 容易誤殺整次查詢,raise 比 silently 回空 snapshot 安全
         raise ValueError("cores 不可為空 list;若要查全部請傳 None")
+
+    # SQL 撈 max(三個 lookback);per-timeframe 過濾在 Python 層做(對齊 fetch_facts API 不需動)
+    max_lookback = max(lookback_days, lookback_days_monthly, lookback_days_quarterly)
 
     owns_conn = conn is None
     if owns_conn:
         conn = get_connection(database_url)
 
     try:
-        # 1. 個股 facts(直接拉 + look-ahead 過濾)
+        # 1. 個股 facts(直接拉 + look-ahead 過濾 + per-timeframe lookback fold-forward)
         raw_facts = fetch_facts(
             conn,
             stock_ids=[stock_id],
             as_of=as_of,
-            lookback_days=lookback_days,
+            lookback_days=max_lookback,
             cores=cores,
         )
         visible_facts = filter_visible(raw_facts, as_of)
-        facts = [_to_fact_row(r) for r in visible_facts]
+        timeframe_filtered = _filter_by_timeframe_lookback(
+            visible_facts,
+            as_of,
+            lookback_daily=lookback_days,
+            lookback_monthly=lookback_days_monthly,
+            lookback_quarterly=lookback_days_quarterly,
+        )
+        facts = [_to_fact_row(r) for r in timeframe_filtered]
 
         # 2. 個股 indicator_values 最新一筆 per (core, timeframe)
         indicator_rows = fetch_indicator_latest(
@@ -113,22 +135,32 @@ def as_of(
             key = _indicator_key(r["core_name"], r["timeframe"])
             structural[key] = _to_structural_row(r)
 
-        # 4. market-level facts(5 保留字 stock_id 並排;_market.fetch_market_facts 內建 look-ahead filter)
+        # 4. market-level facts(5 保留字 stock_id 並排;_market.fetch_market_facts 內建 look-ahead filter
+        #    + per-timeframe lookback fold-forward 對齊 spec §4.2)
         market: dict[str, list[FactRow]] = {}
         if include_market:
             visible_market = fetch_market_facts(
                 conn,
                 as_of=as_of,
-                lookback_days=lookback_days,
+                lookback_days=max_lookback,
                 cores=cores,
             )
             for sid, sid_facts in visible_market.items():
-                market[sid] = [_to_fact_row(r) for r in sid_facts]
+                filtered = _filter_by_timeframe_lookback(
+                    sid_facts,
+                    as_of,
+                    lookback_daily=lookback_days,
+                    lookback_monthly=lookback_days_monthly,
+                    lookback_quarterly=lookback_days_quarterly,
+                )
+                market[sid] = [_to_fact_row(r) for r in filtered]
 
         metadata = QueryMetadata(
             stock_id=stock_id,
             as_of=as_of,
             lookback_days=lookback_days,
+            lookback_days_monthly=lookback_days_monthly,
+            lookback_days_quarterly=lookback_days_quarterly,
             cores=list(cores) if cores else None,
             include_market=include_market,
             timeframes=list(timeframes) if timeframes else None,
@@ -150,6 +182,42 @@ def as_of(
 # ────────────────────────────────────────────────────────────
 # Row converters
 # ────────────────────────────────────────────────────────────
+
+def _filter_by_timeframe_lookback(
+    rows: list[dict[str, Any]],
+    as_of_date: date,
+    *,
+    lookback_daily: int,
+    lookback_monthly: int,
+    lookback_quarterly: int,
+) -> list[dict[str, Any]]:
+    """Per-timeframe lookback fold-forward 過濾(對齊 spec §4.2 + §5.3)。
+
+    fetch_facts 用 max(三個 lookback)寬撈;本層按 row.timeframe 套各自 cutoff:
+      - daily/weekly/<unset> → lookback_daily(預設 90)
+      - monthly → lookback_monthly(預設 90 = 3 個發布週期)
+      - quarterly → lookback_quarterly(預設 180 = 2 季)
+
+    fact_date < cutoff 的 row drop。空 timeframe 視為 daily(安全 default)。
+    """
+    cutoff_daily = as_of_date - timedelta(days=lookback_daily)
+    cutoff_monthly = as_of_date - timedelta(days=lookback_monthly)
+    cutoff_quarterly = as_of_date - timedelta(days=lookback_quarterly)
+
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        tf = (r.get("timeframe") or "daily").lower()
+        if tf == "monthly":
+            cutoff = cutoff_monthly
+        elif tf == "quarterly":
+            cutoff = cutoff_quarterly
+        else:
+            cutoff = cutoff_daily
+        fact_d = r.get("fact_date")
+        if fact_d is None or fact_d >= cutoff:
+            result.append(r)
+    return result
+
 
 def _to_fact_row(r: dict[str, Any]) -> FactRow:
     return FactRow(
@@ -204,6 +272,8 @@ def as_of_with_ohlc(
     *,
     cores: list[str] | None = None,
     lookback_days: int = 90,
+    lookback_days_monthly: int = 90,
+    lookback_days_quarterly: int = 180,
     include_market: bool = True,
     timeframes: list[str] | None = None,
     database_url: str | None = None,
@@ -212,6 +282,7 @@ def as_of_with_ohlc(
     """組合 as_of() + fetch_ohlc(),dashboards 一次撈完所需資料。
 
     舊 as_of() 簽章不動;本函式只是便利 wrapper。
+    OHLC `lookback_days` 用 daily lookback(月 / 季 lookback 只影響 facts 過濾)。
 
     Returns:
         (snapshot, ohlc_rows)
@@ -225,6 +296,8 @@ def as_of_with_ohlc(
             as_of_date,
             cores=cores,
             lookback_days=lookback_days,
+            lookback_days_monthly=lookback_days_monthly,
+            lookback_days_quarterly=lookback_days_quarterly,
             include_market=include_market,
             timeframes=timeframes,
             conn=conn,

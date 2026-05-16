@@ -73,7 +73,13 @@ class StructuralRow:
 
 @dataclass(slots=True)
 class QueryMetadata:
-    """query 參數記錄(供 debug + reproducibility)。"""
+    """query 參數記錄(供 debug + reproducibility)。
+
+    對齊 spec §4.2 per-timeframe lookback fold-forward:
+      - lookback_days:daily / weekly facts(預設 90)
+      - lookback_days_monthly:monthly facts(預設 90 = 3 個發布週期)
+      - lookback_days_quarterly:quarterly facts(預設 180 = 2 季)
+    """
 
     stock_id: str
     as_of: date
@@ -81,6 +87,8 @@ class QueryMetadata:
     cores: list[str] | None  # None = all
     include_market: bool
     timeframes: list[str] | None  # None = all
+    lookback_days_monthly: int = 90
+    lookback_days_quarterly: int = 180
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
