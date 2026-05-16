@@ -184,7 +184,13 @@ async def main() -> int:
             if d["status"] == 403 and "ip" in d.get("body", "").lower():
                 print("[CRASH] IP banned, abort probe loop", file=sys.stderr)
                 break
-            if d["status"] in (400, 422):
+            # fallback no-data_id 條件:400/422(param 拒絕)or 200 OK 但 0 rows
+            # (可能 dataset 是 market-level,帶 data_id 被 silently filter 成空)
+            needs_fallback = (
+                d["status"] in (400, 422)
+                or (d["status"] == 200 and d["rows"] == 0)
+            )
+            if needs_fallback:
                 await asyncio.sleep(RATE_LIMIT_SEC)
                 d2 = await probe(session, token, dataset, with_data_id=False)
                 print(f"           {_fmt(d2, dataset + ' (no data_id)')}")
