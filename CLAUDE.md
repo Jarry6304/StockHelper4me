@@ -238,7 +238,7 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ⏳ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉(2026-05-16)`。**M3 Cores 35 crates / 408 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 spec-blocked reframe(spec 不缺,純 code follow-up)+ exhaustive compaction 真窮舉**。
+當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ⏳ v3.9 partition observation + workflow toml audit(2026-05-16)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit(已落地)**。
 
 ---
 
@@ -3646,12 +3646,14 @@ agg layer 補強。merge 後 branch close。
 - **Phase B-4 FastAPI thin wrap**(估 ~2-3h):`agg_api/main.py` + Pydantic
   schemas + `/as_of/{stock_id}` + `/health_check` endpoint;不含 auth /
   rate limit / deploy(屬 Phase B-5 網站工程,獨立規格)
-- **per-timeframe lookback fold-forward**(估 ~1h):`as_of()` 加
-  `lookback_days_monthly` / `lookback_days_quarterly` 可選參數,自動對齊
-  spec §4.2(monthly 3 個發布週期 / quarterly 2 季);目前一律 90 天
-- **structural_snapshots schema partition observation**:1700 stocks × 30
-  cores × 1 snapshot/day 持續累積,若 query lag > 100ms 考慮 monthly
-  partition
+- ~~**per-timeframe lookback fold-forward**~~ → ✅ **v3.8 落地**(PR #63,
+  `as_of()` 加 `lookback_days_monthly` / `lookback_days_quarterly` 參數 +
+  `_filter_by_timeframe_lookback` helper + spec r3)
+- ~~**structural_snapshots schema partition observation**~~ → ✅ **v3.9 完成**
+  (`docs/structural_snapshots_partition_observation.md`)。結論:🟢 目前
+  **不需要** partition;5 年內最多 ~6.4M rows 遠低於門檻;主 query
+  `WHERE stock_id = ?` 走 index seek ~5 ms。預警閾值(p95 > 100 ms /
+  total > 10M rows / daily batch > 5min / disk > 50GB)觸發時再評估
 
 ### 1. 立即可動工(無 blocker)— 收尾 M3 後階段
 
@@ -3676,16 +3678,17 @@ psql $env:DATABASE_URL -c "SELECT source_core, COUNT(*) FROM facts GROUP BY 1 OR
 .\target\release\tw_cores.exe run-all --write
 ```
 
-**1b. PR-9b 工程進階**(估 ~1.5 天,可拆 sub-PR):
-- **Workflow toml dispatch**:讀 `workflows/tw_stock_standard.toml` 動態決定
-  跑哪些 cores(目前 hardcoded 全 22 cores)
-- **sqlx pool 並行**:`max_connections=2` → 16,per-stock task spawn,
-  ~10x 加速(目前串列預估 30 分鐘 → 並行 ~3 分鐘)
-- **incremental dirty queue**:只跑 `is_dirty=TRUE` stock(對齊 silver
-  orchestrator pattern,目前全跑)
-- **ErasedCore trait wrapper**(可選):若 Workflow toml dispatch 要動態
-  dispatch,需設計 `Box<dyn ErasedCore>` 包 trait associated types。對齊 V2
-  禁止抽象原則,**先看實際需求再決定要不要抽**
+**1b. PR-9b 工程進階**(✅ **全部已落地**;v3.9 audit 確認):
+- ~~**Workflow toml dispatch**~~ → ✅ **已落地**(`tw_cores/src/workflow.rs`)
+  `CoreFilter::from_workflow_toml` + walk-up cwd resolve + 35 cores 全部接
+  `filter.is_enabled()` check;`--workflow workflows/tw_stock_standard.toml` 用法
+- ~~**sqlx pool 並行**~~ → ✅ **已落地**(v1.29 PR-9b commit 615a8eb):
+  `for_each_concurrent` 並行 Stage B per-stock(default 32);production 1263 stocks
+  從 3666s → 535s(7× 加速)
+- ~~**incremental dirty queue**~~ → ✅ **已落地**(`tw_cores run-all --dirty`)
+  對齊 `silver/orchestrator.py:_fetch_dirty_fwd_stocks` pattern
+- ~~**ErasedCore trait wrapper**~~ → 🟡 不做(對齊 cores_overview §十四「禁止抽象」,
+  V2 不規劃;workflow filter 用 hardcoded match arm + `is_enabled()` check 即可)
 
 **1c. RSI Failure Swing**(估 ~半天):
 - spec §4.6 四步全成立才產出(RSI 進超買 → 退出 → 折返但未再進 → 跌破前低)
