@@ -26,6 +26,7 @@ use std::time::Instant;
 
 pub mod beam_search;
 pub mod exhaustive;
+pub mod three_rounds;
 
 /// Compaction 結果。
 #[derive(Debug, Clone, Default)]

@@ -238,7 +238,7 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ⏳ v3.6 Neely RuleId enum 補完(2026-05-16)`。**M3 Cores 35 crates / 408 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地)**。
+當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ⏳ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉(2026-05-16)`。**M3 Cores 35 crates / 408 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 spec-blocked reframe(spec 不缺,純 code follow-up)+ exhaustive compaction 真窮舉**。
 
 ---
 
@@ -3691,15 +3691,20 @@ psql $env:DATABASE_URL -c "SELECT source_core, COUNT(*) FROM facts GROUP BY 1 OR
 - spec §4.6 四步全成立才產出(RSI 進超買 → 退出 → 折返但未再進 → 跌破前低)
 - 框架 `RsiEventKind::FailureSwing` 已存在,只需補 detect 邏輯
 
-### 2. 等 user m3Spec/ 寫最新 spec 後做(spec-blocked)
+### 2. Code follow-up + production calibration(**v3.7 update — spec 不缺**)
 
-**2a. neely_core 規則完整化**:
-- PR-3c:Stage 4 R4-R7 + F1-F2 + Z1-Z4 + T1-T10 + W1-W2 共 22 條 Deferred 規則
-- PR-4b:Diagonal Leading vs Ending sub_kind 區分
-- PR-5b:exhaustive compaction 真正窮舉合法 paths(目前 pass-through)
-- PR-6b:Power Rating 完整 Neely 書頁查表 + Fibonacci 接 monowave price
+> **v3.7(2026-05-16)reframe**:原 §2「等 user m3Spec/ 寫最新 spec 後做(spec-blocked)」段
+> 大幅清理 — neely R4-R7 / F1-F2 / Z1-Z2 / T1-T3 / W1-W2 / Diagonal Leading/Ending / R3 Diagonal
+> exception / Power Rating 查表 / Fibonacci 接 monowave 全部已實作。spec_pending.md §1.1+§1.3
+> 同步 v3.7。本段現只剩 **production data calibration**(spec 不缺,純校準) — 對齊
+> `m3Spec/neely_core_architecture.md` 與 `m3Spec/neely_rules.md` 既有規格。
 
-**2b. Indicator/Chip/Fundamental/Environment 各規則閾值校準**:
+**2a. exhaustive compaction 真窮舉**(v3.7 Phase B 動工):
+- spec `m3Spec/neely_rules.md §Three Rounds` line 1198-1256 已完整描述 Round 1-3 流程
+- code `compaction/exhaustive.rs` 目前 pass-through,需依 spec 跑 Figure 4-3 五大序列 + Similarity & Balance 過濾 + 邊界波 retracement reevaluation
+- **spec 不缺**,屬純 Rust 工程跟進
+
+**2b. Indicator/Chip/Fundamental/Environment 各規則閾值校準**(production data driven):
 - 各 core 內 `// TODO` / `best-guess` 註解標的常數
 - `financial_statement_core.detail` JSONB key 命名(目前英文 best-guess)
 - ATR/Bollinger/OBV lookback 常數(1y / 6m / 20-day)

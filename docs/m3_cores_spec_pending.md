@@ -36,20 +36,22 @@
 
 ## 1. Wave Core(neely_core)— P0 Gate
 
-### 1.1 Stage 4 Validator 22 條規則(全 deferred,等 user 寫定書頁追溯)
+### 1.1 Stage 4 Validator 規則(✅ 已實作,v3.7 對齊 r5 spec 計數)
 
-| 規則 ID | 模組 | 範圍 |
+> **v3.7 update**(2026-05-16):本 §1.1 + §1.3 大幅清理。原文標的 22 條全 deferred 已過時 —
+> R4-R7 / F1-F2 / Z1-Z2 / T1-T3 / W1-W2 全部已實作於 `validator/*.rs`,計數對齊 r5 spec
+> (`m3Spec/neely_core_architecture.md §9.3`)而非 r4 舊版(r4 T1-T10 / Z1-Z4 在 r5 收斂為
+> 3 Triangle + 2 Zigzag variants;對齊 RuleId enum 既有 dispatch 範圍 Ch5_*/Ch9_*/Engineering_*)。
+
+| 規則 ID | 模組 | 狀態 |
 |---|---|---|
-| **R4 / R5 / R6 / R7** | `validator/core_rules.rs` | 4 條 core impulse rules |
-| **F1 / F2** | `validator/flat_rules.rs` | 2 條 Flat 形態 |
-| **Z1 / Z2 / Z3 / Z4** | `validator/zigzag_rules.rs` | 4 條 Zigzag 形態 |
-| **T1 ~ T10** | `validator/triangle_rules.rs` | 10 條 Triangle 形態 |
-| **W1 / W2** | `validator/wave_rules.rs` | 2 條 wave-level |
+| R4 / R5 / R6 / R7 | `validator/core_rules.rs:213-380` | ✅ 已實作 |
+| F1 / F2(Flat_Min_BRatio / Flat_Min_CRatio)| `validator/flat_rules.rs:36-105` | ✅ 已實作(r5 收斂 2 條,對齊既有計數) |
+| Z1 / Z2(Zigzag_Max_BRetracement / C_TriangleException)| `validator/zigzag_rules.rs:36-118` | ✅ 已實作(r5 收斂 2 條,原 Z1-Z4 計數 stale) |
+| T1 / T2 / T3(Triangle_BRange / LegContraction / LegEquality_5Pct)| `validator/triangle_rules.rs:50-178` | ✅ 已實作(r5 收斂 3 條,原 T1-T10 計數 stale) |
+| W1 / W2(Equality / Alternation)| `validator/wave_rules.rs:46-201` | ✅ 已實作 |
 
-**user 需在 m3Spec/neely_core.md 寫定每條的**:
-- 具體 magnitude / duration / fib ratio 門檻
-- ±4% 容差(對齊 spec §4.4)是否所有規則一致
-- Neely 書頁追溯(`neely_page` 欄目前是「P0 Gate 校準時補」)
+best-guess 閾值校準仍屬 P0 Gate 範圍(production data driven),非 spec 缺。
 
 ### 1.2 寫死常數(對齊 spec §4.4 / §6.6)— 等 user 拍版
 
@@ -64,13 +66,20 @@
 | `compaction_timeout_secs` | 60 | `config.rs` | Stage 8 timeout |
 | `BeamSearchFallback.k` | 100 | `compaction/mod.rs` | Forest 過大時 fallback |
 
-### 1.3 留 PR-3c / PR-4b / PR-5b / PR-6b(spec-blocked)
+### 1.3 Code follow-up(spec 不缺;v3.7 reframe)
 
-- **PR-3c**:Stage 4 R4-R7 + F/Z/T/W 22 條完整實作(等 §1.1 寫定)
-- **PR-4b**:Diagonal Leading vs Ending sub_kind 區分(spec §10.3)
-- **PR-4b**:R3 Diagonal exception(目前 strict Impulse,Diagonal 允許 W4 重疊 W1)
-- **PR-5b**:exhaustive compaction 真正窮舉合法 paths(目前 pass-through)
-- **PR-6b**:Power Rating 完整 Neely 書頁查表 + Fibonacci 接 monowave price
+> **v3.7 update**(2026-05-16):原 PR-3c / PR-4b / PR-6b 全部已實作,本 §1.3 reframe 為
+> 純 code follow-up。**spec 全部已齊** — `m3Spec/neely_core_architecture.md` + `m3Spec/neely_rules.md`
+> 對映完整。
+
+- ~~**PR-3c**:Stage 4 R4-R7 + F/Z/T/W 22 條完整實作~~ → ✅ 已實作(見 §1.1)
+- ~~**PR-4b**:Diagonal Leading vs Ending sub_kind 區分~~ → ✅ 已實作(`classifier/mod.rs:243-269` + `output.rs:560-563`)
+- ~~**PR-4b**:R3 Diagonal exception~~ → ✅ 已實作(Stage 6 Post-Validator)
+- **PR-5b**:exhaustive compaction 真正窮舉合法 paths(目前 pass-through)— **spec 已齊**
+  (`m3Spec/neely_rules.md §Three Rounds` line 1198-1256 詳述 Round 1-3 + 邊界波 retracement
+  reevaluation),v3.7 Phase B 動工
+- ~~**PR-6b**:Power Rating 完整 Neely 書頁查表 + Fibonacci 接 monowave price~~ → ✅ 已實作
+  (`power_rating/{mod,table,max_retracement,post_behavior}.rs` 892 行 + `fibonacci/projection.rs`)
 
 ### 1.4 P0 Gate 五檔實測校準清單
 
