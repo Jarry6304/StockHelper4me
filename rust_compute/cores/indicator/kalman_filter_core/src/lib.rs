@@ -23,11 +23,13 @@
 //   EnteredDecelerating / EnteredStableDown
 //
 // **v3.4 r2 calibration(2026-05-16)**:
-//   - velocity_threshold_pct 0.001 → 0.003(0.1% → 0.3%/day)
+//   - 保留 velocity_threshold_pct = 0.001(Roncalli 2013 推薦,production 驗證可達)
+//     ⚠️ 注意:Q=1e-5/R=(0.01p)² steady-state K≈0.002,vel_pct 上限 ~0.002,
+//        threshold>0.001 會把所有 stock 鎖在 Sideway → 0 events(初版 0.003 已驗失敗)
 //   - 加 MIN_REGIME_DURATION_DAYS = 5:regime 必須持續 ≥ 5 個交易日才產 event
 //     (suppress consecutive flips,避開 close noise 引發的 false transition)
 //   - 1263 stocks × ~134 K events(107/yr/stock,9× 超 v1.32 P2 ≤ 12/yr)→
-//     預估降至 ~12-15/yr,落入 P2 acceptance 標準
+//     sustain filter 預估降至 ~9-12/yr,落入 P2 acceptance 標準
 //
 // **Reference**:
 //   - Kalman, R. E. (1960). "A new approach to linear filtering and prediction
@@ -83,9 +85,17 @@ impl Default for KalmanFilterParams {
             process_noise_q: 1e-5,
             measurement_noise_rel: 0.01,
             warmup_days: 60,
-            // v3.4 r2:0.001 → 0.003(0.1% → 0.3%/day),濾掉日常 close noise
-            // 引發的 sideway flip(production 1263 stocks × 107/yr/stock noise)
-            velocity_threshold_pct: 0.003,
+            // v3.4 r2 r2:revert 0.001(對齊 Roncalli 2013 + Bork & Petersen 2014)
+            //
+            // 數學分析(2026-05-16):Q=1e-5 / R=(0.01×p)² 配方下,steady-state
+            // Kalman gain K_∞ = sqrt(Q/R)/2 ≈ 0.002。daily innovation 1% → smoothed
+            // velocity = K × innovation ≈ 0.002 × 0.01 × price = 2e-5 × price →
+            // velocity_pct ≈ 2e-5。threshold=0.003 完全不可達(production 1266
+            // stocks × 0 events 驗證)。
+            //
+            // 0.001(0.1%/day)實際 production 約 17.6 events/yr/stock,加 sustain=5
+            // 過濾 noise 後預估 ~9-12 events/yr/stock(對齊 v1.32 P2 ≤ 12/yr 標準)。
+            velocity_threshold_pct: 0.001,
         }
     }
 }
@@ -371,11 +381,12 @@ mod tests {
     }
 
     #[test]
-    fn default_threshold_calibrated_to_0_003() {
-        // v3.4 r2 calibration:0.001 → 0.003
+    fn default_threshold_stays_at_0_001_for_kalman_recipe() {
+        // v3.4 r2 r2:keep 0.001(initial 0.003 attempt produced 0 events
+        // because Q=1e-5/R=(0.01p)² Kalman recipe caps vel_pct ~ 0.002)
         let p = KalmanFilterParams::default();
-        assert!((p.velocity_threshold_pct - 0.003).abs() < 1e-9,
-            "default velocity_threshold_pct 應為 0.003,實際 {}", p.velocity_threshold_pct);
+        assert!((p.velocity_threshold_pct - 0.001).abs() < 1e-9,
+            "default velocity_threshold_pct 應為 0.001,實際 {}", p.velocity_threshold_pct);
     }
 
     #[test]
