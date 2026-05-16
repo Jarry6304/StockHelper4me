@@ -1124,15 +1124,20 @@ CREATE TRIGGER mark_fwd_dirty_on_event
 -- 對映 alembic p5q6r7s8t9u0;補 5 個衍生欄(institutional.gov_bank_net /
 -- market_margin.total_*_balance × 2 / margin.sbl_short_sales_* × 3)的 Bronze 來源。
 
--- 八大行庫買賣超(per stock per day,假設 FinMind 回 aggregate 1 row;
--- 若實際 per-bank 多 row,需補 bank_name 進 PK)
+-- 八大行庫買賣超 — v3.14(2026-05-16,alembic a6b7c8d9e0f1)揭露 FinMind 真實
+-- schema:8 大行庫每股每日各 1 row(`bank_name` 維度),帶 buy/sell(股數)+
+-- buy_amount/sell_amount(NTD 金額)。Silver `institutional_daily_derived.gov_bank_net`
+-- 端做 SUM(buy)-SUM(sell) GROUP BY stock_id,date(行庫間 net)。
 CREATE TABLE IF NOT EXISTS government_bank_buy_sell_tw (
-    market    TEXT NOT NULL,
-    stock_id  TEXT NOT NULL,
-    date      DATE NOT NULL,
-    buy       BIGINT,
-    sell      BIGINT,
-    PRIMARY KEY (market, stock_id, date)
+    market       TEXT NOT NULL,
+    stock_id     TEXT NOT NULL,
+    date         DATE NOT NULL,
+    bank_name    TEXT NOT NULL,
+    buy          BIGINT,
+    sell         BIGINT,
+    buy_amount   NUMERIC,
+    sell_amount  NUMERIC,
+    PRIMARY KEY (market, stock_id, date, bank_name)
 );
 CREATE INDEX IF NOT EXISTS idx_gov_bank_buy_sell_tw_stock_date_desc
     ON government_bank_buy_sell_tw (stock_id, date DESC);

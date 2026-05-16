@@ -380,7 +380,7 @@ class PhaseExecutor:
         Returns:
             要迭代的股票代碼清單
         """
-        if api_config.param_mode in ("all_market", "all_market_no_id"):
+        if api_config.param_mode in ("all_market", "all_market_no_id", "all_market_no_end"):
             return [ALL_MARKET_SENTINEL]
 
         # fixed_ids 為主要欄位名，fixed_stock_ids 為舊版相容

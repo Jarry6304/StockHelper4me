@@ -206,11 +206,15 @@ class FinMindClient:
         依 param_mode 組裝 FinMind v4 HTTP API 查詢參數。
 
         param_mode 說明：
-          all_market       → dataset + start_date + end_date（無 data_id）
-          all_market_no_id → 同上，語意明示「無 data_id」
-          per_stock        → dataset + data_id + start_date + end_date
-          per_stock_no_end → dataset + data_id + start_date（無 end_date）
-          per_stock_fixed  → 同 per_stock，但 data_id 來自 fixed_ids（如 SPY、TAIEX）
+          all_market        → dataset + start_date + end_date（無 data_id）
+          all_market_no_id  → 同上，語意明示「無 data_id」
+          all_market_no_end → dataset + start_date（無 data_id 也無 end_date)
+                              v3.14:FinMind 對 size-too-large dataset(e.g.
+                              gov_bank)的限制,「only send one day data, so
+                              end_date parameter need be none」
+          per_stock         → dataset + data_id + start_date + end_date
+          per_stock_no_end  → dataset + data_id + start_date（無 end_date）
+          per_stock_fixed   → 同 per_stock，但 data_id 來自 fixed_ids（如 SPY、TAIEX）
 
         ⚠️ FinMind v4 HTTP API 統一使用 data_id 作為股票識別參數。
            SDK 函式參數 stock_id 為 Pythonic 命名，內部會 mapping 到 data_id 才送出。
