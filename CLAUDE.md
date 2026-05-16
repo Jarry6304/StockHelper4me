@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。**v3.5 R3 後改 5 層架構**(Bronze / Silver per-stock / **Cross-Stock Cores 新層** / M3 Cores / MCP API)。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + tw_cores monolith 拆 8 module)。schema v3.2 r1(`schema_metadata`),開發分支 `claude/continue-previous-work-xdKrl`,alembic head `z5a6b7c8d9e0`(v3.10 R6 DROP 3 張 `_legacy_v2`,m2 大重構終結)。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。**v3.5 R3 後改 5 層架構**(Bronze / Silver per-stock / **Cross-Stock Cores 新層** / M3 Cores / MCP API)。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + tw_cores monolith 拆 8 module)。schema v3.2 r1(`schema_metadata`),開發分支 `claude/continue-previous-work-xdKrl`,alembic head **`a6b7c8d9e0f1`**(v3.14 gov_bank Bronze 加 bank_name 維度)。collector.toml 34 entries 全 enabled(v3.14 gov_bank 開,FinMind sponsor tier)。
 
 ---
 
@@ -238,7 +238,167 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ⏳ v3.10 R6 DROP _legacy_v2(2026-05-16)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結:R6 DROP 3 張 _legacy_v2(alembic head z5a6b7c8d9e0)+ collector.toml 27 entries**。
+當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v3.14 — gov_bank pipeline 收尾 + Round 7 calibration 達標 verify(2026-05-17)
+
+接 v3.11 Round 7 production run 後 user 升 FinMind sponsor tier 動 gov_bank
+pipeline,同 session 走完 v3.11 → v3.14.1 6 commits + Round 7 efficacy verify。
+
+### gov_bank pipeline 收尾(v3.12 → v3.14.1)
+
+**v3.12 commit `2eb8b01`** — collector.toml enable `government_bank_buy_sell_v3`
+(原 v1.21-G smoke test 揭露 backer tier 不夠 → enabled=false 暫關)+ 新 script
+`scripts/probe_finmind_sponsor_unused.py` 探 sponsor tier 內 unused dataset。
+
+**v3.13 commit `37756bf`** — 第一輪修(後來 revert):
+- 誤信 FinMind 官方 `llms.txt` 把 dataset 名拼成 `Taiwanstock...`(lowercase s)
+  → 結果 422 enum 拒絕,真實名是 `TaiwanStock...`(大寫 S)— doc typo
+- probe script 兩 bug 修:`/datalist` 用錯(該 endpoint 回某 dataset 的 data_id
+  清單,非 dataset catalog,CLAUDE.md v1.20 §B 早記過)→ 改走 **422 enum parser**
+  (送 invalid dataset → /data 回 422 → regex 解 allowed enum);+ Windows
+  cp950 console UnicodeEncodeError 修(`sys.stdout.reconfigure(encoding="utf-8")`
+  + ASCII 標籤 `[OK]/[WARN]/[LOCK]/[BAN]/[FAIL]/[CRASH]` 取代 emoji)
+
+**v3.13.1 commit `71e0ec6`** — revert lowercase 's' + probe script extended
+fallback(200 OK 但 0 rows 也 retry no-data_id,對齊 GoldPrice case 揭露的
+「macro datasets 不接 data_id」pattern)。
+
+**v3.14 commit `ca3057d`** — gov_bank 真實 schema 揭露 + 修法:
+- User 跑 Option B curl smoke 確認 FinMind 規則:
+  - 不接 `data_id`(回 400 `parameter data_id don't provide on ... dataset`)
+  - 不接 `end_date`(回 400 `size is too large, we only send one day data,
+    end_date parameter need be none`)
+  - 一日回 ~11906 row × 2312 stocks,**8 大行庫每股每日各 1 row**
+  - row schema:`date / stock_id / bank_name(兆豐/第一/...)/ buy / sell /
+    buy_amount / sell_amount(NTD 金額)`
+- 5 個檔同步落地:
+  - `src/config_loader.py`:VALID_PARAM_MODES 加 **`all_market_no_end`**
+  - `src/api_client.py:_build_params`:對 all_market_no_end 不送 data_id
+    也不送 end_date(自然走 per_stock_modes / end_date_modes 排除集合外)
+  - `src/bronze/phase_executor.py:_resolve_stock_iter`:all_market_no_end 同
+    all_market 回 `[ALL_MARKET_SENTINEL]`
+  - **alembic `a6b7c8d9e0f1`**:Bronze `government_bank_buy_sell_tw` ADD COLUMN
+    `bank_name TEXT NOT NULL` + `buy_amount NUMERIC` + `sell_amount NUMERIC`;
+    DROP 舊 PK `(market, stock_id, date)` ADD 新 PK `(market, stock_id, date,
+    bank_name)`;動態查 conname 對齊 v1.30 hotfix pattern
+  - `src/schema_pg.sql`:CREATE TABLE 對齊 fresh-init schema
+  - `src/silver/builders/institutional.py`:`_build_gov_bank_lookup` 改 SUM by
+    `(market, stock_id, date)` 聚合 8 行庫;`net = SUM(buy) - SUM(sell)` 股數,
+    NULL 視同 0 對齊 SQL SUM 行為
+  - `config/collector.toml`:gov_bank entry `param_mode=all_market_no_end +
+    segment_days=1`(每日 1 req,5 年 backfill ~1825 reqs ≈ 12 分鐘 @ 6000/h)
+
+**v3.14.1 commit `3b4e3cc`** — institutional builder UNION fix(對齊 v1.26 B
+margin/market_margin 修法 pattern):
+- User 全市場 full-rebuild 揭露 fill_pct=40.38%(預期 ~69%)
+- root cause:PR #20 trigger 對 gov_bank Bronze upsert 寫 stub row 進 Silver,
+  但舊 `_pivot` 只 iterate institutional Bronze keys → stub row 完全沒被 touch
+  → gov_bank-only dates 的 stub gov_bank_net 永遠 NULL
+- 修法:`_pivot` 先 seed 所有 `gov_bank_lookup` keys 成 empty agg(法人欄 NULL,
+  gov_bank_net 從 lookup 填),再用 institutional Bronze 覆蓋對應 (stock,date)
+  的法人欄。三種 case 都正確:intersection / institutional-only / gov_bank-only
+- safety:trading_dates 為空 bypass,否則只 seed 真實交易日
+
+### Production 收尾(user 本機 2026-05-17 跑完)
+
+| 階段 | Wall time | 規模 / 結果 |
+|---|---|---|
+| Bronze gov_bank 全市場 backfill(`segment_days=1` 全自動 daily req)| 70 分鐘 / 4244s | 13,391,008 rows / 2816 stocks / 8 banks / 2021-06-30 ~ 2026-05-15 |
+| incremental phase 5(補其他 chip Bronze 到 latest)| 3 小時 / 11080s | 14 entries × 1351 stocks 串列;institutional FinMind 自身停 2026-04-29(非 collector bug)|
+| Silver phase 7a full-rebuild(v3.14.1 UNION 修法後)| 14 分鐘 / 838s | institutional 3.06M rows / **gov_bank_net fill_pct = 80.74%**(剩 19% NULL 是 2019-2021/6 pre-gov-bank-Bronze 真實 NULL)|
+| M3 cores `tw_cores run-all --write` | 10 分鐘 / 604s | 1266/1266 stocks 全綠,12 vwap empty(known);**institutional_core facts_new=15996**(其他 35 cores 0,params_hash 沒動 → dedup)|
+
+### Round 7 calibration efficacy verify ✅✅
+
+新 `scripts/verify_event_kind_rate.sql` 3 sections 設計:
+- Section 1:per-stock cores(distinct_stocks > 5)events/stock/year ≤ 12 標準
+- Section 2:market-level cores(distinct_stocks ≤ 5)events/year(per-stock 不適用)
+- Section 3:Round 7 5 cores(adx/atr/day_trading/margin/trendline)專屬驗
+
+verify 結果:
+- **Round 7 5 cores → 0 row 超標** ✅ — v3.11 commit `8b1bb15` 的工沒白做
+- Section 1 全 cores 揭露 Round 8 candidate(下個 session 動):
+  - `institutional / LargeTransaction` 23.49/yr(v1.32 修法目標 6-12,production 後仍超)
+  - `foreign_holding / HoldingMilestoneLow` 15.46/yr(微超)
+  - `foreign_holding / SignificantSingleDayChange` 12.88/yr(微超)
+- Accepted baselines(v1.32 拍版,不動):
+  - `institutional / DivergenceWithinInstitution` 58.41/yr(對齊「68.18 accepted」)
+- 修原 SQL bug(對 market-level cores 用 per-stock-year metric 自然超標)→ Section 2
+  分開列,不混淆
+
+### gov_bank_net **infrastructure done but no downstream signal yet**
+
+`rust_compute/cores/` grep 0 個地方真正消費 `gov_bank_net`(institutional_core
+只 default `None` 在 struct 構造)。M3 cores 跑後 `institutional_core facts_new=15996`
+是其他原因(可能 Silver UPSERT 改 1.2M row 觸發 statement_md5 微差),**不是
+gov_bank_net 生新 EventKind**。
+
+要 gov_bank_net 真正出 actionable signal,要新增 EventKind variant(e.g.
+`GovBankAccumulation` / `GovBankDistribution`)+ 規格,屬於 future Core spec
+writing,不在當前 backlog。
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:**`a6b7c8d9e0f1`**(gov_bank Bronze 新 schema 落地)
+- collector.toml:34 entries 全 enabled(gov_bank `param_mode=all_market_no_end +
+  segment_days=1`)
+- Bronze gov_bank:13.39M rows / 2816 stocks / 2021-06-30 ~ 2026-05-15
+- Silver institutional `gov_bank_net` fill_pct:**80.74%**(2.47M / 3.06M)
+- M3 cores 35 crates,本 session 0 Rust 邏輯改,只動 Python + alembic + schema
+- Round 7 calibration:**5 cores 全部 EventKind ≤ 12/yr/stock 達標** ✅
+- 新工具:`scripts/verify_event_kind_rate.sql` 3-section per-EventKind rate verify
+
+### 風險
+
+🟢 低:
+- Bronze backfill 已 70 分鐘跑完無 error
+- alembic `a6b7c8d9e0f1` 對既有 0-row 表加欄 + 換 PK 全綠
+- Silver full-rebuild 14 分鐘無 error;institutional v3.14.1 UNION 修法 sandbox
+  + production 雙驗
+- M3 cores run-all 604s,1266/1266 全綠 + 12 vwap empty(既知 limitation)
+- 0 Rust workspace 改動,既有 cargo test 不受影響
+- Rollback:每 commit `git revert` 即可;alembic downgrade 反向(動態查 conname)
+
+### 下次 session 動工候選(Round 8 + gov_bank signal)
+
+1. **Round 8 calibration**(對齊 v1.34 / v1.35 pattern):
+   - `institutional / LargeTransaction` 23 → 6-12 目標(可能 edge trigger 已落,
+     需 production data 重看 threshold)
+   - `foreign_holding / HoldingMilestoneLow` 15 → 8-12(MIN_MILESTONE_SPACING tighten?)
+   - `foreign_holding / SignificantSingleDayChange` 12.88 → 10-12(z-score threshold 微調)
+2. **gov_bank_net Core 消費**:
+   - 新增 EventKind variant `GovBankAccumulation / GovBankDistribution`,
+     `institutional_core` 或新 `gov_bank_core` 讀 Silver `gov_bank_net` 出 signal
+   - 需要先在 m3Spec/chip_cores.md(或新 doc)寫規格 — best-guess 不動
+3. **probe_finmind_sponsor_unused.py 跑全 catalog**:目前只 `--max 5`,user 想找
+   未用 dataset 候選可跑 `--max 0`(估 ~3-5 分鐘對 60 unused datasets,跑前先等
+   IP ban 解確認)
+
+---
+
+## v3.11 — Round 7 calibration 5 cores tighten + trendline_core perf(2026-05-16)
+
+接 v3.10 m2 大重構終結後動工 Round 7。對齊 v1.34 / v1.35 calibration pattern,
+本 session 對 5 個 cores 再 tighten + trendline_core 額外 perf 優化。
+
+詳見 commit `8b1bb15`(本段為 v3.14 doc-only update 時補寫,原 session 未及時
+寫 CLAUDE.md 章節)。
+
+### 動工範圍(commit `8b1bb15`)
+
+- `adx_core`:DI Cross spacing tighten
+- `atr_core`:Expansion spacing tighten
+- `day_trading_core`:RatioExtreme spacing tighten
+- `margin_core`:HighRatio/LowRatio spacing tighten
+- `trendline_core`:Touch spacing tighten + perf 優化(reduce O(N²) → O(N log N))
+
+### Production verify(v3.14 同 session 確認)
+
+`scripts/verify_event_kind_rate.sql` Section 3 對 5 cores 跑出 **0 row** —
+全部 EventKind 落 ≤ 12/yr/stock 達標。Round 7 calibration 工不白做 ✅
 
 ---
 
@@ -3699,6 +3859,8 @@ distinct stock_id,0 dirty → skip Rust dispatch 完整省 ~6 分鐘。對齊
 | `scripts/reverse_pivot_margin.py` 🆕 v1.10 | margin_daily → margin_purchase_short_sale_tw(6 stored + 8 detail unpack) | `python scripts/reverse_pivot_margin.py` |
 | `scripts/reverse_pivot_foreign_holding.py` 🆕 v1.10 | foreign_holding → foreign_investor_share_tw(2 stored + 9 detail unpack) | `python scripts/reverse_pivot_foreign_holding.py` |
 | `scripts/verify_pr18_bronze.py` 🆕 v1.10 | PR #18 5 張 Bronze 反推聚合驗證,印 status table。push 前必跑 5/5 OK | `python scripts/verify_pr18_bronze.py` |
+| `scripts/probe_finmind_sponsor_unused.py` 🆕 v3.13 | 從 422 enum parser 拉 FinMind 全 catalog → diff vs collector.toml unused → probe 看 row+sample;ASCII labels(cp950 console OK)| `python scripts/probe_finmind_sponsor_unused.py --max 5` |
+| `scripts/verify_event_kind_rate.sql` 🆕 v3.14 | per-EventKind 觸發率 verify(對齊 v1.32 ≤ 12/yr/stock 標準),3 sections:per-stock cores / market-level cores(events/yr 評估)/ Round-specific verify | `psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql` |
 
 ---
 
