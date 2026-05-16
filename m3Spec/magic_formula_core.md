@@ -1,9 +1,9 @@
 # Magic Formula Core 規格(神奇公式 — Greenblatt 2005)
 
-> **版本**:r1(v3.4 上線時立稿,2026-05-15)
+> **版本**:r2(v3.5 R3 把 Silver builder 搬到 cross_cores/,2026-05-16)
 > **位置**:`rust_compute/cores/fundamental/magic_formula_core/`
-> **上游 Silver**:`magic_formula_ranked_derived`(由 Python Silver builder
-> `magic_formula_ranked.py` 跨股 cross-rank 後寫入)
+> **上游 cross-stock**:`magic_formula_ranked_derived`(由 v3.5 R3 後的 Python
+> Cross-Stock Cores builder `src/cross_cores/magic_formula.py` 跨股 cross-rank 後寫入)
 > **優先級**:P2(對齊 fundamental cores group)
 
 ## 一、本文件範圍
@@ -12,9 +12,12 @@
 EventKind、計算策略,以及與其他 fundamental cores 的並排原則。
 
 **不在本文件**:
-- 跨股 ranking SQL 邏輯(屬 Silver builder,見 `src/silver/builders/magic_formula_ranked.py`)
-- universe filter 規則(industry_category keyword 過濾,亦屬 Silver builder)
-- MCP tool `magic_formula_screen` wrapper 細節(屬 `mcp_server/_magic_formula.py`)
+- 跨股 ranking SQL 邏輯(**v3.5 R3 後屬 Cross-Stock Cores Layer 2.5**,見
+  `src/cross_cores/magic_formula.py`;原 `silver/builders/magic_formula_ranked.py`
+  已搬離以對齊 per-stock 契約)
+- universe filter 規則(industry_category keyword 過濾,亦屬 Cross-Stock builder)
+- MCP tool `magic_formula_screen` wrapper 細節(屬 `mcp_server/_magic_formula.py`;
+  v3.5 R5 C13 後 SQL 走 `agg._db.fetch_cross_stock_ranked` 通用 helper)
 
 ## 二、定位
 

@@ -1,7 +1,7 @@
 # Cores 總綱:共同規範
 
-> **版本**:v2.0 抽出版 r4
-> **日期**:2026-05-12
+> **版本**:v2.0 抽出版 r5(v3.5 5 層架構重構附帶)
+> **日期**:2026-05-16
 > **基準**:`neo_pipeline_v2_architecture_decisions_r3.md`
 > **適用範圍**:所有 Core(Wave Cores / Indicator Cores / Chip Cores / Fundamental Cores / Environment Cores / System Cores)
 > **架構原則**:本文件遵循 README「架構原則:計算 / 規則分層」—— Cores 層只做規則 / 算式套用,複雜計算歸 Silver 層。
@@ -19,6 +19,23 @@
 > Neely Core 規格另立 spec(`neely_core.md`),不在本系列文件範圍。
 
 ---
+
+## r5 修訂摘要(2026-05-16,v3.5 5 層架構重構附帶)
+
+- **新增 Layer 2.5「Cross-Stock Cores」**(對齊 v3.5 R3):Cores 層**仍是 per-stock
+  compute**(輸入 stock_id → 寫 facts / indicator_values / structural_snapshots);
+  跨股 cross-rank / 分群 / 相關性歸新層 `src/cross_cores/`(Layer 2.5,在 Silver
+  per-stock 與 M3 Cores 之間)。Magic Formula 因屬 cross-rank(輸入 date 取
+  全市場 universe → 寫 `*_ranked_derived`),已從 `silver/builders/magic_formula_ranked.py`
+  搬到 `src/cross_cores/magic_formula.py`。對應 Rust binary `magic_formula_core`
+  trait 不變,仍 consume Silver-like cross-stock derived 表(spec 細節見
+  `m3Spec/magic_formula_core.md` r2)。
+- **tw_cores monolith 拆 8 module**(v3.5 R4 C8):`rust_compute/cores/system/tw_cores/`
+  從 1693 行 monolith 拆 main.rs / cli.rs / dispatcher.rs / writers.rs /
+  run_environment.rs / run_stock_cores.rs / summary.rs / helpers.rs。對 §五
+  Monolithic Binary 部署模型零影響(仍單一 binary,inventory 自動註冊)。
+- **kalman_filter_core `MIN_REGIME_DURATION_DAYS` const → params field**(v3.5 R4 C11):
+  對齊 §3.2 Params 約束(常數值應透過 Params 暴露給 caller override)。
 
 ## r4 修訂摘要(2026-05-12)
 

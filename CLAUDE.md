@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概要
 
-`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17，採 4 層 Medallion 架構（Bronze raw / Reference / Silver derived / M3 Cores）。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 全市場全核 dispatch)。schema v3.2 r1（`schema_metadata`），開發分支 `claude/implement-m3-cores-nD3Fh`，alembic head `w2x3y4z5a6b7_m3_cores_three_tables`（2026-05-09，PR-7;v1.29 M3 PR-9a 純 Rust 動工 0 alembic)。
+`tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。**v3.5 R3 後改 5 層架構**(Bronze / Silver per-stock / **Cross-Stock Cores 新層** / M3 Cores / MCP API)。Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + tw_cores monolith 拆 8 module)。schema v3.2 r1(`schema_metadata`),開發分支 `claude/continue-previous-work-xdKrl`,alembic head `x3y4z5a6b7c8`(v3.5 0 migration,純 layer reshape)。
 
 ---
 
@@ -38,7 +38,7 @@ python src/main.py phase 4                               # 只跑單一 Phase(0-
 python src/main.py --verbose backfill --stocks 2330 --dry-run   # debug
 ```
 
-### Silver 計算（Phase 7 dirty-driven）
+### Silver 計算(Phase 7 dirty-driven)
 
 ```bash
 python src/main.py silver phase 7a [--stocks 2330] [--full-rebuild]   # 12 個獨立 builder
@@ -48,16 +48,28 @@ python src/main.py silver phase 7c [--stocks 2330]                    # tw_marke
 
 `--full-rebuild` 目前是唯一支援的模式;dirty queue pull 留 PR #20+。
 
+### Cross-Stock Cores 計算(Phase 8,v3.5 R3 新層 Layer 2.5)
+
+```bash
+python src/main.py cross_cores phase 8                            # 全跑(目前只有 magic_formula)
+python src/main.py cross_cores phase 8 --builder magic_formula    # 指定 builder
+python src/main.py cross_cores phase 8 --full-rebuild             # 重算 lookback 全部 dates
+python src/main.py cross_cores phase 8 --lookback-days 60         # 覆蓋預設 30
+```
+
+跑 cross-stock ranking(Greenblatt 2005 Magic Formula 等),寫 `*_ranked_derived`
+表。不走 dirty queue(全市場永遠重算 latest date)。
+
 ### 一鍵手動更新最新(`refresh` 子命令,v1.35.1 加)
 
 ```bash
-python src/main.py refresh                              # Bronze incremental → Silver 7c/7a/7b → M3 cores run-all --dirty
+python src/main.py refresh                              # Bronze incremental → Silver 7c/7a/7b → Cross-Stock Phase 8 → M3 cores run-all --dirty
 python src/main.py refresh --stocks 2330                # 限縮股票範圍
 python src/main.py refresh --skip-cores                 # 跳過 M3 cores(無 Rust binary 時)
 python src/main.py refresh --skip-bronze                # 跳過 Bronze(只跑 Silver+Cores,已手動跑過 incremental 時)
 ```
 
-`refresh` 串完整 chain:**Bronze incremental → Silver phase 7c → 7a → 7b → tw_cores run-all --write --dirty**。對應 user「沒有 cron / Task Scheduler 自動排程,但想一鍵拉到最新」場景。每段獨立 exception handling,前段失敗不阻擋後段(對齊 cores_overview §7.5 dirty 契約)。
+`refresh` 串完整 chain(v3.5 R3 加 Phase 8):**Bronze incremental → Silver phase 7c → 7a → 7b → Cross-Stock Phase 8 → tw_cores run-all --write --dirty**。對應 user「沒有 cron / Task Scheduler 自動排程,但想一鍵拉到最新」場景。每段獨立 exception handling,前段失敗不阻擋後段(對齊 cores_overview §7.5 dirty 契約)。
 
 ### Windows Task Scheduler 自動排程(v1.35.1 加)
 
@@ -107,14 +119,16 @@ pytest scripts/test_db.py -v          # 單檔
 
 ## 架構
 
-### Medallion 層級（v3.2 r1）
+### 5 層架構(v3.5 R3 後 — 原 4 層 Medallion + Layer 2.5 Cross-Stock Cores 新層)
 
 | 層 | 內容 | 寫入 path | 主要 module |
 |---|---|---|---|
-| Bronze | FinMind raw 資料(8 張 `*_tw` 表 + 5 個 PR #18.5 dual-write entries) | Phase 1-6 collector | `phase_executor.py` + `field_mapper.py` + `aggregators.py` |
+| Bronze(Layer 1) | FinMind raw 資料(8 張 `*_tw` 表 + 5 個 PR #18.5 dual-write entries) | Phase 1-6 collector | `bronze/phase_executor.py` + `bronze/segment_runner.py` + `bronze/aggregators/` + `field_mapper.py` |
 | Reference | `stock_info_ref` / `trading_date_ref` 等不變維度 | Phase 1 | 同上 |
-| Silver | 14 張 `*_derived`(13 個 Python builder + `price_limit_merge_events` Rust)+ 4 張 `price_*_fwd`(Rust) | Phase 7a/7b/7c dirty-driven | `silver/orchestrator.py` + `silver/builders/*.py` + Rust |
-| M3 | Cores 層(Wave / Indicator / Chip / Fundamental / Environment / System)— 規格 `m3Spec/chip_cores.md` user 已寫,其他 cores 暫 ref `m2Spec/oldm2Spec/` r2;v1.28 PR-1~PR-batch 落地 Rust workspace(23 crate)+ `neely_core` Stage 1-10 partial(P0)+ 8 P1 indicator cores + 5 P2 chip cores + 3 P2 fundamental cores + 5 P2 environment cores + inventory CoreRegistration(22 cores 全註冊)+ alembic 三表 + ohlcv/chip/fundamental/environment 4 個 loaders 接 PG | Rust binary `tw_cores` | `rust_compute/cores/` + `rust_compute/cores_shared/` |
+| Silver per-stock(Layer 2) | 13 張 `*_derived` Python builder + `price_limit_merge_events` Rust + 4 張 `price_*_fwd`(Rust)(v3.5 R3 後 magic_formula_ranked 搬離) | Phase 7a/7b/7c dirty-driven | `silver/orchestrator.py` + `silver/builders/*.py` + Rust S1 |
+| **Cross-Stock Cores(Layer 2.5,v3.5 R3 新)** | 跨股 ranking / 分群 / 相關性(目前 1 個:`magic_formula_ranked_derived`)| `cross_cores phase 8` 排程(全市場重算 latest)| `cross_cores/orchestrator.py` + `cross_cores/magic_formula.py` |
+| M3 Cores(Layer 3) | Wave / Indicator / Chip / Fundamental / Environment / System — Rust workspace 35 crates + `neely_core` v1.0.1 P0 Gate 通過 + 8 P1 + 8 P3 indicator + 3 P2 pattern + 5 P2 chip + 3 P2 fundamental + 6 P2 environment + Magic Formula + Kalman = 35 cores(v3.5 R4 C8 tw_cores monolith 拆 8 module) | Rust binary `tw_cores run-all` | `rust_compute/cores/` + `rust_compute/cores_shared/` |
+| MCP / API 對外(Layer 4) | LLM tools(5 個)+ Streamlit dashboards + Aggregation Layer | on-demand | `agg/` + `mcp_server/` + `dashboards/`(v3.5 R5 連線 single entry = `agg._db.get_connection`) |
 
 ### Phase 1-6（Bronze 收集）
 
@@ -130,7 +144,7 @@ Phase 6  MACRO         SPY / VIX / 匯率 / 業務指標
 
 Phase 1 完成後會 `_refresh_stock_list()`（先雞後蛋）。`api_sync_progress.status` 5 種：`pending / completed / failed / empty / schema_mismatch`（CHECK 由 alembic `a1b2c3d4e5f6` 落下）。
 
-### Phase 7（Silver 計算）
+### Phase 7(Silver per-stock 計算)
 
 ```
 Phase 7a  12 個獨立 builder           — 串列(PostgresWriter 單 connection,thread-safety 限制)
@@ -138,33 +152,55 @@ Phase 7b  跨表依賴 builder             — financial_statement(對齊 monthl
 Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_events(走 rust_bridge)
 ```
 
-`SilverOrchestrator.run(phases, stock_ids, full_rebuild)` 行為：
-- `NotImplementedError` → `status="skipped"`，不中斷其他 builder
-- 一般 `Exception` → `status="failed"` + reason，**也不中斷**（對齊 `cores_overview §7.5` dirty 契約：失敗 builder 不 reset `is_dirty`，留下次重試）
+`SilverOrchestrator.run(phases, stock_ids, full_rebuild)` 行為:
+- `NotImplementedError` → `status="skipped"`,不中斷其他 builder
+- 一般 `Exception` → `status="failed"` + reason,**也不中斷**(對齊 `cores_overview §7.5` dirty 契約:失敗 builder 不 reset `is_dirty`,留下次重試)
 
-### 模組地圖（`src/`）
+### Phase 8(Cross-Stock Cores,v3.5 R3 新層 Layer 2.5)
+
+```
+Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全市場 universe)
+           ├─ magic_formula           — Greenblatt 2005 EBIT/EV + ROIC cross-rank(目前唯一成員)
+           └─ (future) pairs_trading / sector_rotation / correlation_matrix
+```
+
+`CrossStockOrchestrator.run(builders, target_date, full_rebuild, lookback_days)`:
+- 不走 dirty queue(全市場永遠重算 latest date 即可,~5s for MF)
+- per-builder Exception 標 `status="failed"` 不中斷其他
+- refresh chain 中位置:Bronze → 7c → 7a → 7b → **Phase 8** → M3 cores
+
+### 模組地圖(`src/`,v3.5 R1+R3+R5 後)
 
 | 模組 | 職責 |
 |---|---|
-| `main.py` | CLI（argparse subparsers + asyncio dispatch；`_run_collector` vs `_run_silver` 分流） |
-| `config_loader.py` | TOML 解析 + validation（規則 5 要求 `volume_factor`） |
-| `phase_executor.py` | Phase 1-6 排程；mode 從 CLI runtime 傳入（不從 `config.execution.mode` 讀） |
-| `api_client.py` + `rate_limiter.py` | aiohttp FinMind client + token bucket（含 429 cooldown） |
-| `field_mapper.py` | API → schema 映射 + detail JSONB pack；回 `(rows, schema_mismatch)` tuple |
-| `db.py` | `DBWriter` Protocol + `PostgresWriter`（生產）/ `SqliteWriter`（過渡，`TWSTOCK_USE_SQLITE=1`） |
-| `aggregators.py` | Phase 5/6 聚合：法人 pivot、財報 pack、`_filter_to_trading_days()` |
-| `post_process.py` | 除權息事件衍生（`_recompute_stock_dividend_vf` SQL 修 P1-17）+ Phase 4 staleness 短期補丁 |
-| `rust_bridge.py` | 派 Phase 4/7c 給 Rust binary；assert `schema_version="3.2"` |
-| `silver/orchestrator.py` + `silver/builders/` | Phase 7 dirty-driven Silver 計算（13 builders） |
-| `silver/_common.py` | builder 共用：`fetch_bronze` / `upsert_silver` / `reset_dirty` / `get_trading_dates` |
-| `bronze/dirty_marker.py` | Bronze→Silver dirty 標記 API surface（PR #20 trigger 上線後 deprecated） |
+| `main.py` | CLI(argparse subparsers + asyncio dispatch;`_run_collector` / `_run_silver` / `_run_cross_cores` / `_run_refresh` 分流) |
+| `config_loader.py` | TOML 解析 + validation(規則 5 要求 `volume_factor`) |
+| `bronze/phase_executor.py` | Phase 1-6 排程(**orchestration only**;v3.5 R1 C3 後 segment IO 拆出);mode 從 CLI runtime 傳入(不從 `config.execution.mode` 讀) |
+| `bronze/segment_runner.py` | 單 segment fetch → transform → aggregate → upsert → mark progress 完整流程(v3.5 R1 C3 從 phase_executor._run_api 抽) |
+| `bronze/aggregators/` | Phase 5/6 聚合 package:`pivot_institutional.py` / `pack_financial.py` / `pack_holding_shares.py` + `__init__.py` dispatcher(v3.5 R1 C2 從 src/aggregators.py 拆) |
+| `bronze/post_process_dividend.py` | 除權息事件衍生 + dividend_policy_merge(`_recompute_stock_dividend_vf` SQL 修 P1-17;v3.5 R1 C1 從 src/post_process.py 搬) |
+| `bronze/_common.py` | `filter_to_trading_days` 共用 helper(過 FinMind 週六鬼資料) |
+| `api_client.py` + `rate_limiter.py` | aiohttp FinMind client + token bucket(含 429 cooldown) |
+| `field_mapper.py` | API → schema 映射 + detail JSONB pack;回 `(rows, schema_mismatch)` tuple |
+| `db.py` | `DBWriter` Protocol + `PostgresWriter`(生產)/ `SqliteWriter`(過渡,`TWSTOCK_USE_SQLITE=1`) |
+| `rust_bridge.py` | 派 Phase 4/7c 給 Rust binary;assert `schema_version="3.2"` |
+| `silver/orchestrator.py` + `silver/builders/` | Phase 7 dirty-driven Silver per-stock 計算(**13 builders**,v3.5 R3 後 magic_formula 搬離) |
+| `silver/_common.py` | builder 共用:`SilverBuilder` Protocol(v3.5 R2 收緊 per-stock 邊界明文)+ `fetch_bronze` / `upsert_silver` / `reset_dirty` / `get_trading_dates` |
+| `cross_cores/` (v3.5 R3 新層 Layer 2.5) | Cross-Stock Cores 跨股 ranking;`_base.py` `CrossStockBuilder` Protocol + `orchestrator.py` Phase 8 排程 + `magic_formula.py`(首例,從 silver/builders/ 搬) |
+| `agg/` | Aggregation Layer:`query.py` `as_of()` read-only API + `_db.py` PG single entry(v3.5 R5 C12 加 `fetch_cross_stock_ranked` + `fetch_stock_info_ref` helpers) |
 
-### Rust（`rust_compute/`，sqlx + Postgres）
+### Rust(`rust_compute/`,sqlx + Postgres)
 
-- Binary `tw_stock_compute`，入口 `src/main.rs`，呼叫端 `src/rust_bridge.py`
-- 後復權迴圈核心：**先 push 再更新 multiplier**（除息日當日 raw 已是除息後，不可再乘該日 AF）
-- 拆兩個 multiplier（v1.8）：`price_multiplier`（從 AF）+ `volume_multiplier`（從 vf）
-- Phase 4 永遠全量重算（multiplier 倒推，partial 邏輯上錯）；Python `_mode` 對 Rust 端是 no-op
+- Workspace virtual root,35 crates(v3.5 後)
+- **Binary 1**:`tw_stock_compute`,入口 `rust_compute/silver_s1_adjustment/src/main.rs`,呼叫端 `src/rust_bridge.py`
+  - Silver S1 後復權 + 週/月 K 聚合(Phase 4/7c)
+  - 迴圈核心:**先 push 再更新 multiplier**(除息日當日 raw 已是除息後,不可再乘該日 AF)
+  - 拆兩個 multiplier(v1.8):`price_multiplier`(從 AF)+ `volume_multiplier`(從 vf)
+  - Phase 4 永遠全量重算(multiplier 倒推,partial 邏輯上錯);Python `_mode` 對 Rust 端是 no-op
+- **Binary 2**:`tw_cores`,入口 `rust_compute/cores/system/tw_cores/src/main.rs`(v3.5 R4 C8 拆 8 module)
+  - M3 Cores Monolithic Binary;`run-all` subcommand 全市場 × 全 cores production run
+  - 拆 main.rs / cli.rs / dispatcher.rs / writers.rs / run_environment.rs / run_stock_cores.rs / summary.rs / helpers.rs
+  - `dispatch_indicator` / `dispatch_structural` / `dispatch_neely` 三函式保留(對齊 §十四「禁止抽象」,V3 才考慮 generic dispatcher)
 
 ---
 
@@ -202,7 +238,91 @@ Phase 7c  tw_market_core Rust 系列    — price_*_fwd + price_limit_merge_even
 | `docs/claude_history.md` | v1.4 → v1.7 歷史細節（已從本文件搬出） |
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
-當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表搬 docs/claude_history.md) → #M3-1 ~ #M3-9a ✅ 22 cores 全部落地 → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer Phase B-D 全套 merge main(2026-05-13)→ #PR #51 ⏳ neely Phase 13-19 v1.0.x + P3/P2 indicator cores batch + Round 5/6 calibration + agg layer 補強(累積 22+ commits,user 待 merge)`。**M3 Cores 35 crates / 384 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP)落地,neely Core v1.0.1 P0 Gate 通過**。
+當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup,完整列表搬 docs/claude_history.md) → #M3-1 ~ #M3-9a ✅ 22 cores 全部落地 → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer Phase B-D 全套 merge main(2026-05-13)→ #PR #51 ⏳ neely Phase 13-19 v1.0.x + P3/P2 indicator cores batch + Round 5/6 calibration + agg layer 補強 → **v3.5 5 層架構重構 ⏳ branch `claude/continue-previous-work-xdKrl` 累積 8 commits 待 merge**(2026-05-16)**`。**M3 Cores 35 crates / 407 tests / 0 failed / 1263 stocks × 34 cores production-ready,Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP)落地,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位(Bronze / Silver / Cross-Stock 新層 / M3 Cores / MCP)**。
+
+---
+
+## v3.5 — 5 層架構大型重構:單一職責歸位 + 新增 Layer 2.5 Cross-Stock Cores(2026-05-16)
+
+接 v1.35 收尾後,user 拍版審計四層耦合與單一職責問題。並行派 3 個 Explore agent
+全市場 audit,揭露 **17 個熱點**(Layer 1+2 八個 / Layer 3 七個 / Layer 4 二個)。
+User 拍版「4 層全做 + 新增 Layer 2.5(Cross-Stock Cores)+ 立即動工」,本 session
+推完 8 個 commits 對齊 plan v3.5(`/root/.claude/plans/hashed-foraging-pixel.md`)。
+
+### 範圍 5 個 phase(8 commits / branch `claude/continue-previous-work-xdKrl`)
+
+| Phase | Commit | 範圍 |
+|---|---|---|
+| **R1** Bronze | `41fcdc2` C1 | `git mv src/post_process.py → src/bronze/post_process_dividend.py`(Bronze 後處理歸位 Layer 1)|
+| | `f228076` C2 | `src/aggregators.py` 拆 `src/bronze/aggregators/` package(4 module:pivot_institutional / pack_financial / pack_holding_shares / dispatcher) |
+| | `ad0ac51` C3 | `phase_executor._run_api` 600 行拆 `_SegmentRunner` class(orchestration vs single-segment IO 分離),phase_executor 577 → 432 行 |
+| **R2** Silver | `37f597e` C4+C5 | `SilverBuilder` Protocol 加 per-stock 邊界明文(避免大規模 module→class 重構風險);14 builder 全部已走 `upsert_silver` helper 統一(grep 驗) |
+| **R3** Cross-Stock(新層 Layer 2.5)| `2c8d33e` C6+C7 | 新 `src/cross_cores/` 套件(_base.py / orchestrator.py / magic_formula.py);`magic_formula_ranked` 從 `silver/builders/` 搬走(per-stock 契約違規);`python src/main.py cross_cores phase 8` CLI;`scripts/refresh_daily.ps1` 加 Phase 8 step |
+| **R4** M3 Cores | `cb1bc21` C8 | `rust_compute/cores/system/tw_cores/src/main.rs` 1693 行 monolith 拆 8 個 module(main.rs 1693 → 297 行 + cli.rs / dispatcher.rs / writers.rs / run_environment.rs / run_stock_cores.rs / summary.rs / helpers.rs) |
+| | `6de8144` C11 | `neely_core/facts.rs` event_kind 改用 `fact_schema::with_event_kind` helper(對齊 34 cores);`kalman_filter_core` `MIN_REGIME_DURATION_DAYS` const 抽 `KalmanFilterParams.min_regime_duration_days` field |
+| **R5** MCP | `57816d6` C12+C13 | DELETE `mcp_server/_conn.py`(連線 single entry = `agg._db.get_connection`);新加 `agg._db.fetch_cross_stock_ranked` + `fetch_stock_info_ref` 共用 helper;`mcp_server/_magic_formula.py` cross-stock SQL 改走 helper |
+
+### 5 層架構(v3.5 後 final state)
+
+```
+Layer 1: Bronze 收集(FinMind → raw 表)
+  PhaseExecutor(orchestration only)+ _SegmentRunner + ApiClient/RateLimiter/SyncTracker
+  bronze/aggregators/(pivot/pack 4 module)+ bronze/post_process_dividend.py
+
+Layer 2: Silver 計算(per-stock 獨立)
+  SilverOrchestrator(7a/7b 排程)+ 13 builder + Rust S1(silver_s1_adjustment 後復權)
+
+Layer 2.5: Cross-Stock Cores(v3.5 R3 新層,跨股 ranking)
+  CrossStockOrchestrator(Phase 8 排程)+ magic_formula(首例)
+  未來:pairs_trading / sector_rotation / correlation_matrix
+
+Layer 3: M3 Cores(per-stock compute → facts)
+  tw_cores binary(v3.5 R4 拆 8 module)+ 36 cores + cores_shared/
+
+Layer 4: MCP / API 對外
+  agg.query.as_of()(read-only)+ agg._db(SINGLE connection entry)+ MCP 5 tools + dashboards
+```
+
+### 關鍵設計決策(對齊 cores_overview §四 + §十四 + user 拍版)
+
+1. **新增 Layer 2.5**(user 拍版 2026-05-16):跟 PerStockBuilder 契約乾淨切割
+2. **不抽 ErasedCore trait wrapper**(cores_overview §十四 V2 不規劃):tw_cores
+   拆 module 但保留 36 個 hardcoded match arm,新增 core 改 3 處(文件化即可)
+3. **連線 single entry = agg._db**(audit Layer 4 痛點 17):MCP / dashboards /
+   cross_cores 都從 agg._db.get_connection() 取
+4. **PerStockBuilder / CrossStockBuilder ABC 文件化**(不抽 class):既有 module
+   pattern 保留,只加 Protocol 邊界明文(避免大規模 module→class 重構)
+5. **C9 generic dispatcher / C10 loader_common / financial_statement 中文 key
+   crate 抽出 defer V3**:對齊 §十四「禁止抽象」
+
+### 驗證(本 session 沙箱)
+
+- **Python tests**:`pytest tests/` 109 passed / 1 skipped(fastmcp 缺) ✅
+- **Rust tests**:`cargo test --release --workspace` **407 passed / 0 failed** ✅
+- **`tw_cores list-cores`**:35 cores 完整對齊 ✅
+- **`tw_cores run-all --help`**:9 args 完整對齊 ✅
+- **`python src/main.py cross_cores phase 8 --help`**:CLI 對齊 ✅
+- 0 alembic / 0 collector.toml(純 layer reshape)
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`x3y4z5a6b7c8`(不變,本 session 0 migration)
+- Rust workspace:35 crates / **407 tests passed / 0 failed**
+- agg tests:30 passed + mcp_server data tests 9 passed
+- Production state:1263 stocks × 34 cores / 4 structural_snapshots core_names / ~10M facts
+- 5 層架構全部歸位 ✅;Magic Formula 從 silver 違規搬出 ✅
+- 下次 session 動工選項:
+  - **user merge 本 branch 8 commits 到 main**(blocking,user 端)
+  - **B-4 FastAPI thin wrap** / per-timeframe lookback fold-forward / structural_snapshots schema partition observation
+  - **C9 generic dispatcher**(若 Workflow toml dispatch 需要動態 dispatch,V3 才考慮)
+  - **C10 loader_common**(4 loaders SQL cast 模式抽 helper,V3)
+
+### 風險
+
+🟢 低:
+- 純 layer reshape(0 alembic / 0 Rust 邏輯 / 0 collector.toml)
+- 行為零改變,既有 verifier(verify_pr18 / 19b / 19c / 20)0 break
+- Rollback:每 phase 獨立 commit,任意 phase 失敗可單獨 `git revert`
 
 ---
 
