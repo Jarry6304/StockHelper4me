@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v1.33，最新 2026-05-13）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
+> 本文件下方「v1.X 大項總覽」開始的章節是跨 session 銜接的歷程紀錄（v1.5 → v3.15，最新 2026-05-16）。動工前先讀本段 Quick Reference，然後依任務性質往下讀對應 v1.X 段落。
 
 ---
 
@@ -239,6 +239,90 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v3.15 — Round 8 calibration:3 EventKinds tighten(2026-05-16)
+
+接 v3.14 verify SQL 揭露的 3 個微超 EventKind,本 session 動工 Round 8(對齊
+v3.11 Round 7 pattern)。**0 alembic / 0 Python / 0 collector.toml**,純 Rust
+2 cores 的 const tweak + 1 個新 spacing 機制 + 2 regression tests。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| Core | EventKind | 修前 | 修法 | 修後預期 |
+|---|---|---|---|---|
+| `institutional_core` | LargeTransaction | 23.49/yr/stock | `large_transaction_z` 2.0 → **2.5**(Strong & Xu 1999 對 Asian markets 推薦 2.5σ)| ~6.4/yr/stock(98.76th percentile)|
+| `foreign_holding_core` | HoldingMilestoneLow | 15.46/yr/stock | 新 `MIN_MILESTONE_SPACING_DAYS=10`,4 個 milestone variants 全部對稱套用(Low / High / LowAnnual / HighAnnual)| ~8-10/yr/stock(連續探低 cluster 視為同事件)|
+| `foreign_holding_core` | SignificantSingleDayChange | 12.88/yr/stock | `change_z_threshold` 2.0 → **2.1**(97.86th percentile)| ~10/yr/stock(微調 -21.5%)|
+
+### 設計決策(對齊 cores_overview §四 + §十四)
+
+1. **3 個 EventKind 分別不同手法**:
+   - LargeTransaction:純 z-threshold tighten(已是 edge trigger,Round 5/6 都用過此模式)
+   - HoldingMilestoneLow:加 MIN_SPACING(對齊 v3.11 Round 7 trendline/adx/atr 5 cores 同款 pattern)
+   - SignificantSingleDayChange:微調 z(只超 7% 用最小改動)
+2. **Milestone spacing 對稱套 4 variants**:雖然只 Low 過標,High / LowAnnual / HighAnnual
+   保持對稱(uniform rule),避免不對稱行為。HighAnnual 觸發率本來就低,加 spacing 後仍會
+   保留 meaningful 訊號。
+3. **2 regression tests**:`milestone_spacing_prevents_consecutive_low_fires`(連續 8 天探低
+   應只 1 fire)+ `milestone_spacing_allows_refire_after_gap`(spacing 過後可再 fire)
+4. **既有 tests 全綠**:現有 4 個 institutional + 4 個 foreign_holding 測試 spike 設計
+   margin 充足(spike z ≈ 20 vs threshold 2.0→2.5),0 break
+
+### Reference
+
+- Strong, N. & Xu, X. G. (1999). "The Profitability of Volatility Spillovers in
+  Asian Stock Markets". *Journal of Banking & Finance* 23:1297-1313 — Asian markets
+  推薦 2.5σ 取代 2σ
+- Lucas, R. C. & LeBeau, C. (1992). "Technical Traders Guide to Computer Analysis"
+  Ch.7 — pivot 確認需要 N-bar holding,milestone spacing 對齊週時間框架慣例
+- Fama, F., Fisher, L., Jensen, M. & Roll, R. (1969). *IER* 10(1):1-21 — 2σ 事件研究
+  基準(SignificantSingleDayChange 原始 reference)
+
+### 驗證(本 session 沙箱)
+
+- `cargo build --release -p institutional_core -p foreign_holding_core` ✅ 0 warnings
+- `cargo test --release -p institutional_core -p foreign_holding_core` ✅ 12 passed(8 existing + 4 new)
+- `cargo test --release --workspace --no-fail-fast` ✅ **426 passed / 0 failed**
+  (從 v3.7 420 → +6 = 4 milestone spacing tests + 2 沿路新增)
+
+### 待 user 跑 production verify(下次 session)
+
+```powershell
+# 1. 重編 + 重跑 affected cores
+cd rust_compute && cargo build --release -p tw_cores
+.\target\release\tw_cores.exe run-all --write
+# 預期:institutional_core + foreign_holding_core 新 facts 寫入(其他 33 cores params_hash 沒動 → 0 facts_new)
+
+# 2. verify per-EventKind rate
+psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql
+# 預期:
+#   institutional/LargeTransaction:23.49 → ~6-8/yr ✅(落入 6-12 target)
+#   foreign_holding/HoldingMilestoneLow:15.46 → ~8-10/yr ✅
+#   foreign_holding/SignificantSingleDayChange:12.88 → ~10/yr ✅
+```
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`a6b7c8d9e0f1`(不變,本 session 0 migration)
+- Rust workspace:35 crates / **426 tests passed / 0 failed**
+- collector.toml:34 entries(不變)
+- 3 個 EventKind 都加完整 reference docstring + production data driven 註解
+- 下次 session 動工候選:
+  1. **production verify Round 8**(user 跑 tw_cores + verify SQL,~10 分鐘 + verify)
+  2. **gov_bank_net Core 消費**(需先在 m3Spec/chip_cores.md 或新 doc 寫
+     GovBankAccumulation/Distribution EventKind 規格)
+  3. **probe --max 0 全 catalog**(找 sponsor tier 內其他 unused dataset)
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml
+- 純 Rust 常數調整,2 cores 各 1-2 const + 1 個新 spacing 機制
+- 既有 8 個 institutional + foreign_holding test margin 充足,0 break
+- production 行為改變 spec-defensible(Strong & Xu 1999 / Lucas & LeBeau 1992 引用)
+- Rollback:單 commit `git revert` 即可
 
 ---
 

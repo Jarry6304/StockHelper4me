@@ -43,9 +43,12 @@ pub struct InstitutionalParams {
     pub timeframe: Timeframe,
     /// 連續買賣超的最小天數，預設 3（同 rsi/kd_core，實務慣例）
     pub streak_min_days: usize,
-    /// 大額異動 Z-score 閾值，預設 2.0
-    /// Reference(2026-05-12): Brown & Warner (1985) JFE 14:3-31 事件研究以 2σ 為異常門檻；
-    /// 統計標準 2σ = 95.44th percentile，通用於異常成交量偵測。
+    /// 大額異動 Z-score 閾值，預設 2.5
+    /// Reference(2026-05-12 v1.31 / 2026-05-16 v3.15 Round 8): Brown & Warner (1985)
+    /// JFE 14:3-31 事件研究以 2σ 為基準異常門檻；Strong & Xu (1999) JBF 23:1297-1313
+    /// 對台/亞洲市場提倡 2.5σ(98.76th percentile)以對應較高雜訊基線。
+    /// v3.15(2026-05-16): production data 揭露 z=2.0 跨 3 法人合計觸發率 23.49/yr/stock
+    /// 超過 v1.32 ≤ 12/yr/stock 標準;tighten 2.0→2.5 後預期 ~6.4/yr/stock。
     pub large_transaction_z: f64,
     /// 計算 Z-score 的回看窗口，預設 60 天
     /// Reference(2026-05-12): Brown & Warner (1985) 估計窗口 ~239 天；
@@ -58,7 +61,7 @@ impl Default for InstitutionalParams {
         Self {
             timeframe: Timeframe::Daily,
             streak_min_days: 3,
-            large_transaction_z: 2.0,
+            large_transaction_z: 2.5,
             lookback_for_z: 60,
         }
     }

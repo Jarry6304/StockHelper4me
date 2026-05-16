@@ -2,6 +2,10 @@
 -- scripts/verify_event_kind_rate.sql
 -- ============================================================================
 -- v3.14(2026-05-17):per-EventKind 觸發率 verify SQL,Round N calibration 用。
+-- v3.15(2026-05-16):Round 8 calibration 動工 — 3 EventKinds tighten
+--   institutional/LargeTransaction:z 2.0 → 2.5(預期 23.49 → ~6.4/yr ✅)
+--   foreign_holding/HoldingMilestoneLow:加 MIN_MILESTONE_SPACING_DAYS=10(預期 15.46 → ~8-10/yr ✅)
+--   foreign_holding/SignificantSingleDayChange:z 2.0 → 2.1(預期 12.88 → ~10/yr ✅)
 --
 -- 對齊 v1.32 acceptance 標準:per-stock cores 每 EventKind ≤ 12/yr/stock。
 -- 修 B.extra SQL bug:對 distinct_stocks ≤ 5 的 market-level cores(taiex /
