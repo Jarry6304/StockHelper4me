@@ -2,8 +2,8 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 35 crates + Aggregation Layer)。
 
-**版本**:v3.10(alembic head `z5a6b7c8d9e0` / 2026-05-16)
-**狀態**:**m2 大重構正式終結** ✅,M3 Cores 35 crates production-ready,Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP),Neely Core v1.0.1 P0 Gate 通過,RuleId enum 76 spec variants 全落地,exhaustive compaction 真窮舉,workflow toml dispatch 35 cores
+**版本**:v3.18(alembic head `a6b7c8d9e0f1` / 2026-05-17)
+**狀態**:**Round 7 + Round 8 calibration session 完整結算** ☕(2026-05-17 production verify 全綠);m2 大重構正式終結 ✅;M3 Cores 35 crates production-ready;Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP);Neely Core v1.0.1 P0 Gate 通過;Rust workspace **426 tests passed / 0 failed**;1266 stocks × 35 cores / wall time ~10 min / facts ~10M+
 
 ---
 
@@ -13,7 +13,7 @@
 
 | 文件 | 用途 |
 |---|---|
-| **`CLAUDE.md`** | v1.X → v3.10 跨 session 歷程紀錄(改 schema / 加 entry 前必看「關鍵架構決策」+ 最新 v3.X 段)|
+| **`CLAUDE.md`** | v1.35 → v3.18 跨 session 歷程紀錄(改 schema / 加 entry 前必看「關鍵架構決策」+ 最新 v3.X 段;v1.5 ~ v1.34 已歸檔 `docs/claude_history.md`)|
 | **`m2Spec/layered_schema_post_refactor.md`** | Bronze + Silver schema 規範(主要 spec)|
 | **`m3Spec/`** | M3 Cores 層 spec(13 份,涵蓋 indicator / pattern / chip / fundamental / environment / neely / agg layer)|
 |   `m3Spec/neely_core_architecture.md` | Neely Wave Core(P0)架構,r6(v3.6 RuleId enum 76 variants)|
@@ -23,7 +23,7 @@
 | `docs/api_pipeline_reference.md` | collector.toml entry × Bronze schema × code path 索引 |
 | `docs/m3_cores_spec_pending.md` | Cores 落地進度 + 9 阻塞拍版紀錄 |
 | `docs/structural_snapshots_partition_observation.md` | v3.9 partition 評估結論(暫不需要)|
-| `docs/claude_history.md` | v1.4 → v1.9.1 詳細歷史(主檔已搬出)|
+| `docs/claude_history.md` | v1.4 → v1.34 詳細歷史(主檔已搬出 m2 PR sequencing + M3 PR-1~9a + P1/P2/P3 cores batch + Round 1-4 calibration + Aggregation Layer 落地)|
 
 ---
 
@@ -164,7 +164,7 @@ cp .env.example .env
 
 # 3. pip install + alembic upgrade head 落 schema
 pip install -e .                      # editable install,src/silver / src/bronze / src/agg 全部 importable
-alembic upgrade head                  # → z5a6b7c8d9e0(v3.10 R6 DROP _legacy_v2 後)
+alembic upgrade head                  # → a6b7c8d9e0f1(v3.14 gov_bank Bronze 加 bank_name 維度)
 ```
 
 ### 4.2 編 Rust workspace(雙 binary)
@@ -286,7 +286,7 @@ options:
 | 層 | 數量 | 例 |
 |---|---|---|
 | Reference | 2 | `trading_date_ref` / `stock_info_ref` |
-| Bronze raw | ~28 | `price_daily` / `price_adjustment_events` / `institutional_investors_tw` / `financial_statement`(R3 主名)/ `monthly_revenue` |
+| Bronze raw | ~28 | `price_daily` / `price_adjustment_events` / `institutional_investors_tw` / `financial_statement`(R3 主名)/ `monthly_revenue` / `government_bank_buy_sell_tw`(v3.14 加 bank_name 維度)|
 | Silver derived(per-stock)| 13 | 12 `*_derived` + 4 fwd 表 + `price_limit_merge_events`(Rust)|
 | Cross-Stock Cores(Layer 2.5)| 1 | `magic_formula_ranked_derived`(v3.5 R3 新層,從 Silver 搬出)|
 | M3 Cores(Layer 3)| 3 | `facts` / `indicator_values` / `structural_snapshots`(35 cores 寫入)|
@@ -328,7 +328,7 @@ PR #50 Aggregation Layer Phase B-D 全套
 PR #51 Round 5/6 calibration(11 cores per-EventKind ≤ 12/yr)
 ```
 
-### v3.5 → v3.10(2026-05-16,本批 5 PR)
+### v3.5 → v3.10(2026-05-16)
 
 ```
 PR #59 / #60 v3.5 5 層架構單一職責歸位(9 commits 拆 module + 4 cores trait 對齊)
@@ -337,6 +337,26 @@ PR #62 v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉(Round 1-2
 PR #63 v3.8 agg per-timeframe lookback(daily 90 / monthly 90 / quarterly 180)
 PR #64 v3.9 partition observation(暫不需要)+ workflow toml audit(已落地)
 PR #65 v3.10 R6 永久 DROP 3 張 _legacy_v2(m2 大重構終結 ✅,alembic head z5a6b7c8d9e0)
+```
+
+### v3.11 → v3.18(2026-05-17,Round 7 + Round 8 calibration)
+
+```
+v3.11 Round 7 calibration 5 cores tighten(adx/atr/day_trading/margin/trendline)
+      + trendline_core O(N²) → O(N log N) perf 優化
+v3.12-v3.14 gov_bank pipeline 收尾:
+      - probe FinMind sponsor tier(`scripts/probe_finmind_sponsor_unused.py`)
+      - 新 param_mode `all_market_no_end`(gov_bank 不接 data_id / end_date)
+      - alembic a6b7c8d9e0f1:gov_bank Bronze 加 bank_name 維度
+      - Bronze 13.39M rows / 8 行庫 / 2021-06-30 → 2026-05-15
+      - institutional builder UNION fix(gov_bank-only dates 也填 stub)
+      - Silver gov_bank_net fill 80.74%
+      - Round 7 verify SQL 3 sections / 5 cores 0 row 達標 ✅
+v3.15-v3.18 Round 8 calibration 四輪(sp=10 → 5 → 3 → 2,LargeTransaction accepted):
+      - foreign_holding milestone 4 variants 一致 ~65% retention(cluster=1.9 收斂)
+      - LargeTransaction 14.16/yr accepted baseline(fat-tail Lo 2001)
+      - production verify 4/4 milestone in band:
+        Low 10.06 / High 7.90 / LowAnn 5.10 / HighAnn 3.74
 ```
 
 ---
@@ -348,7 +368,7 @@ PR #65 v3.10 R6 永久 DROP 3 張 _legacy_v2(m2 大重構終結 ✅,alembic head
 pytest tests/agg/                       # 39 passed / 1 skipped(pandas 未裝)
 pytest tests/                           # 全套 unit test
 
-# Rust workspace tests(35 crates / 420 passed / 0 failed)
+# Rust workspace tests(35 crates / 426 passed / 0 failed)
 cd rust_compute && cargo test --release --workspace
 ```
 
@@ -358,6 +378,15 @@ python scripts/verify_pr18_bronze.py        # 5 張 Bronze 反推 round-trip
 python scripts/verify_pr19b_silver.py       # 5 個簡單 builder 對 v2.0 legacy 等值
 python scripts/verify_pr19c_silver.py       # 5 個 market-level builder
 python scripts/verify_pr20_triggers.py      # 15 個 trigger 整合測試
+```
+
+production calibration verify(v3.14 加,4 sections 分流):
+```bash
+psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql
+# Section 1: per-stock cores ≤ 12 events/stock/year
+# Section 2: market-level cores events/year(distinct_stocks ≤ 5)
+# Section 3: Round 7 verify(adx/atr/day_trading/margin/trendline)— 0 row = 達標
+# Section 4: foreign_holding milestone 4 variants 顯式 + target band 對照(Round 8.3 verify 用)
 ```
 
 ---
