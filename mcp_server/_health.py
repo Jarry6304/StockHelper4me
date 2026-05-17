@@ -289,7 +289,9 @@ def _score_dim(facts: list[dict], cores: frozenset[str], as_of: date) -> int:
     for f in facts:
         if f.get("source_core") not in cores:
             continue
-        kind = (f.get("metadata") or {}).get("kind") or _extract_kind_from_statement(f.get("statement", ""))
+        kind = (f.get("metadata") or {}).get("event_kind") \
+            or (f.get("metadata") or {}).get("kind") \
+            or _extract_kind_from_statement(f.get("statement", ""))
         sign = _kind_sign(kind)
         if sign == 0:
             continue
@@ -313,7 +315,9 @@ def _dim_meta(facts: list[dict], cores: frozenset[str]) -> dict[str, str]:
     for f in facts:
         if f.get("source_core") not in cores:
             continue
-        kind = (f.get("metadata") or {}).get("kind") or _extract_kind_from_statement(f.get("statement", ""))
+        kind = (f.get("metadata") or {}).get("event_kind") \
+            or (f.get("metadata") or {}).get("kind") \
+            or _extract_kind_from_statement(f.get("statement", ""))
         sign = _kind_sign(kind)
         if sign > 0:
             bullish_count += 1
@@ -338,7 +342,9 @@ def _top_signals(facts: list[dict], as_of: date, *, limit: int = 5) -> list[dict
     """跨 cores 按 weight × decay 排序取 top-N(只回 sign != 0 的 facts)。"""
     weighted: list[tuple[float, dict]] = []
     for f in facts:
-        kind = (f.get("metadata") or {}).get("kind") or _extract_kind_from_statement(f.get("statement", ""))
+        kind = (f.get("metadata") or {}).get("event_kind") \
+            or (f.get("metadata") or {}).get("kind") \
+            or _extract_kind_from_statement(f.get("statement", ""))
         sign = _kind_sign(kind)
         if sign == 0:
             continue

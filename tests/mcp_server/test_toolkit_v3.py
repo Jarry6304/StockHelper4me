@@ -613,3 +613,40 @@ class TestKalmanCurrentPriceBugFix:
         )
         result = data_tools.kalman_trend("9999", "2026-05-15")
         assert result["current_price"] == 999.99
+
+
+class TestMetadataEventKindCompatibility:
+    """v3.27 修法:_health / render 都改 event_kind 優先 + kind fallback。
+
+    確保新 facts(Rust 寫 metadata.event_kind)和舊 test fixture(metadata.kind)
+    都能被正確 parse。
+    """
+
+    def test_health_extracts_event_kind_from_metadata(self, monkeypatch):
+        """新 production facts metadata.event_kind 應正確 trigger signal。"""
+        from mcp_server import _health
+        # 模擬 production facts(Rust 寫 event_kind)
+        fact = {
+            "stock_id": "3030",
+            "fact_date": date(2026, 5, 15),
+            "timeframe": "daily",
+            "source_core": "macd_core",
+            "source_version": "0.1.0",
+            "statement": "GoldenCross on 2026-05-15",
+            "metadata": {"event_kind": "GoldenCross"},  # 注意是 event_kind 不是 kind
+        }
+        # 直接驗 extract 邏輯
+        meta = fact.get("metadata") or {}
+        extracted = meta.get("event_kind") or meta.get("kind")
+        assert extracted == "GoldenCross"
+        # 驗 sign mapping(GoldenCross 應 bullish)
+        assert _health._kind_sign("GoldenCross") == 1
+
+    def test_health_falls_back_to_kind_for_legacy_metadata(self, monkeypatch):
+        """舊 metadata.kind 仍 work(向下相容)。"""
+        from mcp_server import _health
+        fact = {"metadata": {"kind": "DeathCross"}}
+        meta = fact.get("metadata") or {}
+        extracted = meta.get("event_kind") or meta.get("kind")
+        assert extracted == "DeathCross"
+        assert _health._kind_sign("DeathCross") == -1

@@ -479,7 +479,8 @@ def render_facts_cloud(
                 "fact_date":   f.get("fact_date"),
                 "source_core": f.get("source_core"),
                 "statement":   f.get("statement"),
-                "kind":        (f.get("metadata") or {}).get("kind"),
+                "kind":        ((f.get("metadata") or {}).get("event_kind")
+                                or (f.get("metadata") or {}).get("kind")),
             }
             for f in filtered
         ]

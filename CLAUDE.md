@@ -252,6 +252,104 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.27 — MCP toolkit logic bug audit + metadata key fix(2026-05-17)
+
+接 v3.26 current_price hotfix 後 user 要求「全面 audit MCP toolkit 找其他同款 bug」。
+Explore agent 完整掃過 11 helper modules,揭露 6 個 medium-severity candidate,
+逐一 verify 後修真正的 2 個。
+
+### Audit 結果(8 helper modules)
+
+| Bug 編號 | 檔 / 行 | Severity | 狀態 |
+|---|---|---|---|
+| 1 | `_forecast.py:97` falsy check vs is_not_None | low | false alarm(`if dict` 與 `is not None` 行為等價在 None 比對)|
+| 2 | `_forecast.py` scenario_forest 過期 | medium | **out of scope**(staleness 需 tw_cores 重跑;v3.26 doc 已標)|
+| **3** | **`_health.py:292/316/341` `metadata.get("kind")`** | **medium** | **修(本 PR)** |
+| 4 | `_loan_collateral.py` SQL 缺 stock_id filter | medium | false alarm(SQL `WHERE stock_id = %s` 確實存在)|
+| 5 | `_risk_alert.py:104` `ps <= as_of <= pe` take first match | low | OK(rows ORDER BY date DESC,first = 最新 announcement)|
+| **6** | **`tools/render.py:482` 同款 `metadata.get("kind")`** | **medium** | **修(本 PR)** |
+| 7 | `_block_trade.py:59` 30 天邊界 inclusive 31 天 | low | acceptable(off-by-one,差 1 天可接受)|
+
+### 真實 bug 詳情
+
+**BUG 3 + 6:`metadata.kind` vs `metadata.event_kind` 不一致**
+
+Rust facts 寫入用 `fact_schema::with_event_kind` helper(`rust_compute/cores_shared/
+fact_schema/src/lib.rs:80-103`),strictly 寫入 `metadata.event_kind = "EventKindName"`。
+
+但既有 Python 代碼:
+- `_health.py` 3 處(line 292/316/341)讀 `metadata.get("kind")`
+- `tools/render.py:482` 同款
+
+→ 對 Rust 寫的 production facts(都用 `event_kind`),`.get("kind")` 永遠回 None →
+sign 永遠 0 → 4 維 score 全部變 0 → narrative 顯示「無顯著訊號」(實際有但讀不到)。
+
+這是和 v3.26 current_price 同款 root cause(MCP 層假設 indicator/metadata schema
+但實際 schema 不同),user 已預判到「應該還有其他 bug」。
+
+> v3.25 `_climate.py` 已修(2 處 line 354 / 408 用 `event_kind or kind` fallback
+> pattern),但 `_health.py` / `tools/render.py` v3.25 沒一起修 — v3.27 補完。
+
+### 修法
+
+統一 fallback pattern(同 v3.25):
+```python
+kind = (f.get("metadata") or {}).get("event_kind") \
+    or (f.get("metadata") or {}).get("kind") \
+    or _extract_kind_from_statement(f.get("statement", ""))
+```
+
+優先序:
+1. **Rust production facts** → `event_kind`(對齊 fact_schema::with_event_kind)
+2. **舊 test fixtures / migrations** → `kind`(向下相容)
+3. **fallback** → 從 statement 字串首字提取 enum 名
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_health.py` | 3 處 `metadata.get("kind")` → `event_kind or kind` fallback(replace_all)|
+| `mcp_server/tools/render.py:482` | 同款 1 處 |
+| `tests/mcp_server/test_toolkit_v3.py` | 加 `TestMetadataEventKindCompatibility` 2 test |
+| `CLAUDE.md` | v3.27 章節 |
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/ tests/agg/` ✅ **114 passed / 1 skipped**(從 112 + 2 new)
+- 新 test:`test_health_extracts_event_kind_from_metadata`(production schema)+
+  `test_health_falls_back_to_kind_for_legacy_metadata`(舊 fixture 相容)
+- 既有 ~100 test 0 regression(因為 fallback 對舊 `kind` schema 仍 work)
+
+### Out of scope(留 future)
+
+- **BUG 2 scenario_forest staleness**:user 提的 126.28 invalidation_price 屬
+  neely_core 沒重跑 backfill 導致。MCP 層無法修(沒有 indicator vs as_of 對比邏輯)。
+  V3.28 backlog:在 `_forecast.py` 加 staleness 警告(若 neely structural
+  fact_date < as_of - 7 天,narrative 加「scenario_forest 過期,請重跑 tw_cores」)
+- **`_loan_collateral.py` payload size 監控**:detail 含 25 sub-fields × 5
+  categories JSONB,單筆可能 ~2KB。目前 < 3KB budget OK,但 batch query 若回多筆
+  需注意。
+- **multi-stock health 一次回**:`stock_health` 目前 1 個 stock,若擴 batch
+  N 隻 stock 需重新評估 payload。
+
+### 風險
+
+🟢 低:
+- 純 metadata key fallback 加 1 個 .get(),0 behavior change for legacy schemas
+- 既有 ~100 test 自動套(fallback 對 `kind` schema 仍 work)
+- Rollback:單 commit `git revert` 即可
+
+### User 下次 session 自動套用
+
+```powershell
+git pull
+# v3.27 自動套用
+# 下次 stock_health / market_context / dashboard facts 點圖
+# 都能正確讀到 Rust 寫的 metadata.event_kind
+```
+
+---
+
 ## v3.26 — MCP current_price bug fix:直讀 price_daily(2026-05-17)
 
 接 v3.25(`945c1af` 合 main)後 user bug report:
