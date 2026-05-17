@@ -242,6 +242,120 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.18 — Round 8.3 calibration:milestone spacing 3→2 + Round 8 結算(2026-05-17)
+
+接 v3.17 Round 8.2 production verify(commit `493fc4a`)後,5/6 EventKind 達標,
+1 個微差(Low 7.88 距 8-10 下緣 0.12)+ annual variants 仍偏低於 target band 下緣
+(LowAnnual ~4.0 估 / HighAnnual ~2.9 估,未進 top 30 顯示)。本 session
+Round 8.3 收尾 nudge 全 4 milestone variants 居 target band 中央。
+
+### Round 8 三輪收尾分析(production-data-driven cluster size)
+
+**Retention 表(對 v3.14 base):**
+
+| variant | v3.14 | v3.15 sp=10 | v3.16 sp=5 | v3.17 sp=3 | v3.18 sp=2(預測)|
+|---|---|---|---|---|---|
+| Low | 15.46 | 3.97 (26%) | 5.87 (38%) | **7.88 (51%)** | ~9.6 (62%) |
+| High | 11.96 | 3.26 (27%) | 4.71 (39%) | **6.25 (52%)** | ~7.4 (62%) |
+| LowAnnual | 7.86 | 2.03 (26%) | 2.99 (38%) | ~4.0 (51%) | ~4.9 (62%) |
+| HighAnnual | 5.73 | 1.49 (26%) | 2.18 (38%) | ~2.9 (51%) | ~3.6 (62%) |
+
+**cluster size 模型修正**:retention 序列 25%/38%/51% 揭露真實 cluster ≈ **2.0 event**
+(非 v3.16 估的 4-event 也非 v3.17 估的 2.6)。spacing 邊際遞減清晰,spacing=2
+為 sweet spot — 對應 cluster=2.0 邏輯下「每個 cluster 留首發,後續壓掉」。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/chip/foreign_holding_core/src/lib.rs` | `MIN_MILESTONE_SPACING_DAYS` 3 → **2** + docstring 加 v3.18 + 2 test 數字微調(test1 3天→2天,test2 5天 gap→3天 gap) |
+| `scripts/verify_event_kind_rate.sql` | 加 Section 4:foreign_holding milestone 4 variants 顯式(annual variants 通常不進 Section 1 top 30,單獨拉 + target band 對照) |
+
+### 驗證(本 session 沙箱)
+
+- `cargo test --release -p foreign_holding_core` ✅ 6 passed(同 v3.17)
+- `cargo test --release --workspace --no-fail-fast` ✅ **426 passed / 0 failed**(同 v3.17)
+
+### 待 user 跑 production verify(下次 session)
+
+```powershell
+git pull
+cd rust_compute
+cargo clean -p foreign_holding_core -p tw_cores
+cargo build --release -p tw_cores
+cd ..
+
+# DELETE 4 milestone EventKinds(LargeTransaction 不動)
+psql $env:DATABASE_URL -c "
+DELETE FROM facts
+WHERE source_core = 'foreign_holding_core'
+  AND metadata->>'event_kind' IN
+      ('HoldingMilestoneLow','HoldingMilestoneHigh',
+       'HoldingMilestoneLowAnnual','HoldingMilestoneHighAnnual');
+"
+
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql
+# Section 4 會單獨列 4 milestone variants + target band 對照,annual 不再被 top 30 截掉
+```
+
+### 預期落點
+
+| EventKind | v3.17 實測 | v3.18 預期 | target band | 達標 |
+|---|---|---|---|---|
+| `HoldingMilestoneLow` | 7.88 | **~9.6/yr** | 8-10 | ✅ in band 中央 |
+| `HoldingMilestoneHigh` | 6.25 | **~7.4/yr** | 6-9 | ✅ in band 中央 |
+| `HoldingMilestoneLowAnnual` | ~4.0 | **~4.9/yr** | 4-6 | ✅ in band |
+| `HoldingMilestoneHighAnnual` | ~2.9 | **~3.6/yr** | 3-4 | ✅ in band 中央 |
+| `LargeTransaction` | 14.16 | 14.16(不動) | accepted baseline | ✅ |
+| `SignificantSingleDayChange` | 11.74 | 11.74(不動) | ≤ 12 | ✅ |
+
+### Round 8 calibration session 結算(v3.15 → v3.18 四輪)
+
+| 輪 | spacing / z | Low / High / LowAnn / HighAnn / LargeTx | 結論 |
+|---|---|---|---|
+| Round 8(v3.15) | sp=10, z=2.5, z=2.1 | 3.97 / 3.26 / 2.03 / 1.49 / 15.99 | spacing/z 雙 over-correction |
+| Round 8.1(v3.16) | sp=5, z=2.7 | 5.87 / 4.71 / 2.99 / 2.18 / 14.16 | 偏低 + LargeTx 仍 over |
+| Round 8.2(v3.17) | sp=3 | 7.88 / 6.25 / ~4.0 / ~2.9 / 14.16 accepted | 1/4 in band,LargeTx 並列 baseline |
+| **Round 8.3(v3.18)** | sp=2 | **~9.6 / ~7.4 / ~4.9 / ~3.6 預期** | **預期 4/4 in band 中央 ✅** |
+
+**Round 8 session 結算**:6 個原始 over-fired EventKind,5 個校準到 target band,
+1 個(LargeTransaction)接受為 accepted baseline(fat-tail reality)。Round 8 三輪
+production-data-driven cluster size 模型從 4 → 2.6 → 2.0 收斂,spacing 從 10 →
+5 → 3 → 2 同步收斂 sweet spot。
+
+### accepted baselines(v1.32 + v3.17,Round 8 結束時)
+
+| EventKind | rate/yr | 接受理由 |
+|---|---|---|
+| `institutional / DivergenceWithinInstitution` | 58.41 | v1.32 拍版 production reality |
+| `institutional / LargeTransaction` | 14.16 | v3.17 拍版 — fat-tail (Lo 2001),邊際效益遞減 |
+| `institutional / NetSellStreak` | 10.84 | ≤ 12 OK |
+| `institutional / NetBuyStreak` | 10.39 | ≤ 12 OK |
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`a6b7c8d9e0f1`(不變,本 session 0 migration)
+- Rust workspace:35 crates / **426 tests passed / 0 failed**
+- Round 8 calibration 結束(若 user 跑 v3.18 production verify 全綠)
+- 下次 session 動工候選:
+  1. **production verify v3.18**(user 跑 tw_cores + verify SQL Section 4,~10 分鐘)
+  2. **gov_bank_net Core 消費**(需先寫 GovBankAccumulation/Distribution EventKind 規格)
+  3. **probe --max 0 全 catalog**(找 sponsor tier 內其他 unused dataset)
+  4. **B-4 FastAPI thin wrap** Aggregation Layer 對外 API
+  5. **m3Spec/ 未動工項目**(P3 後階段 cores / Wave Cores Phase 20+)
+
+### 風險
+
+🟢 低:
+- 純 1 const value 改變,0 alembic / 0 Python / 0 collector.toml
+- 既有 6 test margin 仍充足(milestone spike 50→48 step 0.5 vs spacing=2 → 2 fire 預期 ✓)
+- 2 個 milestone spacing test 邏輯 0 變,只壓 spacing=2 邊界數字
+- production 行為改變 spec-defensible(cluster=2.0 production-data-driven 收斂)
+- Rollback:單 commit `git revert` 即可(spacing 3→2 反向)
+
+---
+
 ## v3.17 — Round 8.2 calibration:milestone spacing 5→3 + LargeTransaction 14.16 accepted baseline(2026-05-17)
 
 接 v3.16 Round 8.1 production verify(commit `5577fb3`)後,4 個 milestone variants
