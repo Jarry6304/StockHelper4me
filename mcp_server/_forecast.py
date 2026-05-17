@@ -93,6 +93,10 @@ def compute_neely_forecast(
     # 1. Primary scenario 從 neely structural 抽
     primary, all_scenarios = _extract_primary_and_top_scenarios(snapshot, limit=5)
 
+    # v3.28(2026-05-17):scenario_forest staleness check — neely_core 沒重 backfill
+    # 時 invalidation_price 等欄會是過期 anchor;surface 給 LLM 知道
+    scenario_staleness = _compute_scenario_staleness(snapshot, as_of)
+
     # 2. Current price(v3.26 修:直讀 price_daily;原本走 ma_core series 但 relevant_cores
     #    沒含 ma_core → 永遠 fallback 0.0;改 DB 直撈)
     from mcp_server._price import fetch_latest_close_for_tool
@@ -114,9 +118,53 @@ def compute_neely_forecast(
         "current_price":      current_price,
         "primary_scenario":   _format_primary_scenario(primary),
         "scenario_count":     len(all_scenarios),
+        "scenario_staleness": scenario_staleness,
         "forecasts":          forecasts,
         "key_levels":         key_levels,
         "invalidation_price": invalidation_price,
+    }
+
+
+def _compute_scenario_staleness(snapshot, as_of: date) -> dict[str, Any]:
+    """檢查 neely structural snapshot_date 距 as_of 多遠;> 7 天標 stale。
+
+    v3.28(2026-05-17):scenario_forest 過期會讓 invalidation_price / fib_zones
+    用舊 anchor 算,導致預測偏差。surface 給 LLM 知道何時需要 user 跑
+    `tw_cores run-all --write` 重算 neely_core。
+    """
+    structural = snapshot.structural or {}
+    neely_row = None
+    for key, row in structural.items():
+        if key.startswith("neely_core"):
+            neely_row = row
+            break
+    if neely_row is None:
+        return {
+            "snapshot_date": None,
+            "age_days":      None,
+            "is_stale":      None,
+            "warning":       "no neely_core structural snapshot 資料(尚未跑 tw_cores)",
+        }
+
+    snap_date = getattr(neely_row, "snapshot_date", None)
+    if not isinstance(snap_date, date):
+        return {"snapshot_date": None, "age_days": None, "is_stale": None,
+                "warning": "snapshot_date 缺失或非 date 物件"}
+
+    age_days = (as_of - snap_date).days
+    is_stale = age_days > 7
+    warning = None
+    if is_stale:
+        warning = (
+            f"scenario_forest 過期 {age_days} 天(snapshot_date={snap_date.isoformat()},"
+            f"as_of={as_of.isoformat()})— invalidation_price / fib_zones 可能用舊 anchor"
+            f"。請跑 `tw_cores run-all --write` 重算 neely_core 對 {snap_date}+ 的新 bars。"
+        )
+    return {
+        "snapshot_date": snap_date.isoformat(),
+        "age_days":      age_days,
+        "is_stale":      is_stale,
+        "warning":       warning,
     }
 
 
@@ -209,11 +257,20 @@ def _format_primary_scenario(scenario: dict | None) -> dict[str, Any]:
     else:
         pattern_label = "Unknown"
 
+    # v3.28 修(2026-05-17):wave_count 從 structure_label parse(`"5-wave from mw27..."`)
+    # 原 `rules_passed_count` 是「通過 Neely 規則數」非波浪數,user bug report 揭露錯誤
+    label = scenario.get("structure_label") or scenario.get("id") or ""
+    wave_count = 0
+    import re
+    m = re.search(r"(\d+)-wave", label)
+    if m:
+        wave_count = int(m.group(1))
+
     return {
-        "label":        scenario.get("structure_label") or scenario.get("id"),
+        "label":        label or None,
         "pattern_type": pattern_label,
         "power_rating": _power_rating_label(scenario.get("power_rating")),
-        "wave_count":   int(scenario.get("rules_passed_count") or 0),
+        "wave_count":   wave_count,
     }
 
 

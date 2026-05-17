@@ -109,6 +109,11 @@ def compute_kalman_trend(
     # 2. recent regime transitions(facts table 內 EnteredXxx events)
     recent_changes = _extract_recent_regime_changes(snapshot)
 
+    # v3.28(2026-05-17):indicator staleness check — kalman state 過期會讓 regime
+    # / smoothed_price / velocity 變舊值(user bug 報告 3030 stuck "Sideway" 但
+    # 實際 raw_close 已動);surface 給 LLM 知道何時需要重跑 tw_cores
+    indicator_staleness = _compute_indicator_staleness(indicator, as_of)
+
     return {
         "stock_id":         stock_id,
         "as_of":            as_of.isoformat(),
@@ -120,6 +125,7 @@ def compute_kalman_trend(
         "regime":           regime,
         "regime_label":     _REGIME_LABELS.get(regime, regime),
         "recent_regime_changes": recent_changes,
+        "indicator_staleness":   indicator_staleness,    # v3.28
         "narrative": _compose_narrative(
             stock_id=stock_id, regime=regime,
             smoothed_price=smoothed_price, raw_close=raw_close,
@@ -197,3 +203,35 @@ def _compose_narrative(
         f"{stock_id} 1-D Kalman 趨勢判讀:目前處於「{label}」(velocity={velocity:+.3f}/day),"
         f"current 收盤 {dev_dir} smoothed {dev_abs:.2f}σ{recent_phrase}。"
     )
+
+
+def _compute_indicator_staleness(indicator: Any, as_of: date) -> dict[str, Any]:
+    """檢查 kalman indicator value_date 距 as_of 多遠;> 7 天標 stale。
+
+    v3.28(2026-05-17):indicator 過期會讓 regime / smoothed_price / velocity 變舊值
+    (user bug 報告 3030 stuck "Sideway" 但實際 price 已動)。
+    """
+    if indicator is None:
+        return {"value_date": None, "age_days": None, "is_stale": None,
+                "warning": "no kalman_filter_core indicator(尚未跑 tw_cores)"}
+
+    value_date = getattr(indicator, "value_date", None)
+    if not isinstance(value_date, date):
+        return {"value_date": None, "age_days": None, "is_stale": None,
+                "warning": "value_date 缺失或非 date 物件"}
+
+    age_days = (as_of - value_date).days
+    is_stale = age_days > 7
+    warning = None
+    if is_stale:
+        warning = (
+            f"kalman state 過期 {age_days} 天(value_date={value_date.isoformat()},"
+            f"as_of={as_of.isoformat()})— regime / smoothed_price / velocity 可能是舊值"
+            f"。請跑 `tw_cores run-all --write` 重算 kalman_filter_core。"
+        )
+    return {
+        "value_date": value_date.isoformat(),
+        "age_days":   age_days,
+        "is_stale":   is_stale,
+        "warning":    warning,
+    }

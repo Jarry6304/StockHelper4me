@@ -252,6 +252,78 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.28 — neely wave_count + scenario/indicator staleness surface(2026-05-17)
+
+User v3.27 跑完 9 tools 對 3030 verify,揭露 3 個 follow-up:
+
+### 修真實 bug
+
+**A. `wave_count: 0` 但 label 「5-wave from mw27 to mw31」**(`_forecast.py:216`)
+- root cause:`scenario.rules_passed_count` 是「通過 Neely 規則數」,非波浪數
+- Rust `Scenario` struct(`rust_compute/cores/wave/neely_core/src/output.rs:373`)
+  確實有此欄但語意是 rule count
+- 修法:從 `structure_label` regex parse「N-wave」(`r"(\d+)-wave"`),fallback 0
+
+**B. neely scenario_forest staleness** — 過期 anchor 算出 invalidation_price 126.28
+- root cause:`tw_cores run-all` 對 3030 未 backfill 到 as_of=2026-05-15
+- 修法:加 `_compute_scenario_staleness()` helper,output 加 `scenario_staleness`
+  field 含 `snapshot_date / age_days / is_stale / warning`(> 7 天標 stale)
+- staleness 屬資料新鮮度,**不能在 MCP 層修 stale data 本身**,但能 surface 給 LLM
+
+**C. kalman regime stuck "Sideway" velocity 0**
+- root cause:kalman_filter_core indicator 對 3030 沒新 update(value_date 太舊)
+- 修法:加 `_compute_indicator_staleness()` helper,output 加 `indicator_staleness`
+  field 同款 pattern;MagicMock-safe(`isinstance(value_date, date)` 過濾)
+
+### 範圍(1 commit / main 直推)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_forecast.py` | `_format_primary_scenario` 加 regex parse(`(\d+)-wave`)/ 加 `_compute_scenario_staleness()` / output 加 `scenario_staleness` field |
+| `mcp_server/_kalman.py` | 加 `_compute_indicator_staleness()` / output 加 `indicator_staleness` field |
+| `tests/mcp_server/test_toolkit_v2.py` | `test_returns_required_keys` 加 `scenario_staleness` key |
+| `CLAUDE.md` | v3.28 章節 |
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/ tests/agg/` ✅ **114 passed / 1 skipped**
+- 0 regression(MagicMock-safe pattern 過濾)
+
+### user verify(下次 session 跑)
+
+```powershell
+git pull
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast, kalman_trend
+import json
+print(json.dumps(neely_forecast('3030','2026-05-15'), ensure_ascii=False, indent=2, default=str))
+"
+# 應該看到:
+#   primary_scenario.wave_count = 5(從 5-wave label parse)
+#   scenario_staleness: {snapshot_date, age_days, is_stale, warning}
+```
+
+### Out of scope(留 V3.29+ + user 動工)
+
+**Problem D: `risk_alert_status` severity `未分類`(3030)**
+- root cause:Bronze `measure` 字串對 3030 沒命中 `_parse_severity` 3 模式
+  (「全額交割」/「人工管制」/「注意交易資訊」)
+- user 跑 SQL inspect 實際字串(下次 session 修):
+  ```sql
+  SELECT date, condition, LEFT(measure, 200) AS measure
+    FROM disposition_securities_period_tw
+   WHERE stock_id = '3030'
+   ORDER BY date DESC LIMIT 3;
+  ```
+  把結果回我,新增 measure 模式或調整 parser
+
+**重算 stale data(user 端動工)**:
+- `tw_cores run-all --write` 重算 neely_core + kalman_filter_core 對 3030 ≤ 2026-05-15
+- 之後 `invalidation_price` / `regime` / `velocity` 都會回到最新狀態
+
+---
+
 ## v3.27 — MCP toolkit logic bug audit + metadata key fix(2026-05-17)
 
 接 v3.26 current_price hotfix 後 user 要求「全面 audit MCP toolkit 找其他同款 bug」。

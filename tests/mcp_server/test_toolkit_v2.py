@@ -706,6 +706,7 @@ class TestNeelyForecastStructure:
             "stock_id", "as_of", "current_price",
             "primary_scenario", "scenario_count", "forecasts",
             "key_levels", "invalidation_price",
+            "scenario_staleness",   # v3.28 加
         }
 
     def test_returns_4_timeframes(self, monkeypatch):
