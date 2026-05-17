@@ -1287,6 +1287,167 @@ CREATE TRIGGER mark_magic_formula_dirty_from_val
 
 
 -- =============================================================================
+-- v3.20(2026-05-17):5 個 sponsor-tier dataset 新 Bronze 表
+-- alembic b7c8d9e0f1g2 落地;對齊 v3.19 probe `--max 0` 揭露的高價值候選
+-- =============================================================================
+
+-- 借券抵押餘額(35 欄細項;比 margin_daily 6+8 欄豐富 5x)
+CREATE TABLE IF NOT EXISTS loan_collateral_balance_tw (
+    market                              TEXT NOT NULL,
+    stock_id                            TEXT NOT NULL,
+    date                                DATE NOT NULL,
+    margin_previous_day_balance         BIGINT,
+    margin_buy                          BIGINT,
+    margin_sell                         BIGINT,
+    margin_cash_redemption              BIGINT,
+    margin_current_day_balance          BIGINT,
+    margin_next_day_quota               BIGINT,
+    firm_loan_previous_day_balance      BIGINT,
+    firm_loan_buy                       BIGINT,
+    firm_loan_sell                      BIGINT,
+    firm_loan_cash_redemption           BIGINT,
+    firm_loan_replacement               BIGINT,
+    firm_loan_current_day_balance       BIGINT,
+    firm_loan_next_day_quota            BIGINT,
+    unrestricted_loan_previous_day_balance  BIGINT,
+    unrestricted_loan_buy                   BIGINT,
+    unrestricted_loan_sell                  BIGINT,
+    unrestricted_loan_cash_redemption       BIGINT,
+    unrestricted_loan_replacement           BIGINT,
+    unrestricted_loan_current_day_balance   BIGINT,
+    unrestricted_loan_next_day_quota        BIGINT,
+    finance_loan_previous_day_balance       BIGINT,
+    finance_loan_buy                        BIGINT,
+    finance_loan_sell                       BIGINT,
+    finance_loan_cash_redemption            BIGINT,
+    finance_loan_replacement                BIGINT,
+    finance_loan_current_day_balance        BIGINT,
+    finance_loan_next_day_quota             BIGINT,
+    settlement_margin_previous_day_balance  BIGINT,
+    settlement_margin_buy                   BIGINT,
+    settlement_margin_sell                  BIGINT,
+    settlement_margin_cash_redemption       BIGINT,
+    settlement_margin_replacement           BIGINT,
+    settlement_margin_current_day_balance   BIGINT,
+    settlement_margin_next_day_quota        BIGINT,
+    detail                              JSONB,
+    PRIMARY KEY (market, stock_id, date)
+);
+
+-- 大宗交易(配對 / 鉅額 / 自營;PK 加 trade_type 維度)
+CREATE TABLE IF NOT EXISTS block_trade_tw (
+    market          TEXT NOT NULL,
+    stock_id        TEXT NOT NULL,
+    date            DATE NOT NULL,
+    trade_type      TEXT NOT NULL,
+    price           NUMERIC(15, 4),
+    volume          BIGINT,
+    trading_money   BIGINT,
+    detail          JSONB,
+    PRIMARY KEY (market, stock_id, date, trade_type)
+);
+
+-- 個股市值(單欄;比 stock_info_ref.shares × close 推算精確)
+CREATE TABLE IF NOT EXISTS market_value_daily (
+    market          TEXT NOT NULL,
+    stock_id        TEXT NOT NULL,
+    date            DATE NOT NULL,
+    market_value    BIGINT,
+    detail          JSONB,
+    PRIMARY KEY (market, stock_id, date)
+);
+
+-- 處置股風險警示(all_market mode;date=公告日,period_*=處置期間)
+CREATE TABLE IF NOT EXISTS disposition_securities_period_tw (
+    market              TEXT NOT NULL,
+    stock_id            TEXT NOT NULL,
+    date                DATE NOT NULL,
+    disposition_cnt     INTEGER,
+    period_start        DATE,
+    period_end          DATE,
+    condition           TEXT,
+    measure             TEXT,
+    detail              JSONB,
+    PRIMARY KEY (market, stock_id, date, disposition_cnt)
+);
+
+-- 商品(初版 GOLD;PK 開放未來擴 SILVER/OIL/...;first_per_day aggregator)
+CREATE TABLE IF NOT EXISTS commodity_price_daily (
+    market          TEXT NOT NULL,
+    commodity       TEXT NOT NULL,
+    date            DATE NOT NULL,
+    price           NUMERIC(15, 4),
+    detail          JSONB,
+    PRIMARY KEY (market, commodity, date)
+);
+
+
+-- =============================================================================
+-- v3.21(2026-05-17):3 Silver derived 表 for loan_collateral / block_trade /
+-- commodity_macro cores;對齊 user 拍版 spec(chip §十/§十一/§十二 + env §十)
+-- alembic c8d9e0f1g2h3 落地
+-- =============================================================================
+
+-- 借券抵押餘額 derived(5 主欄 + 5 change_pct + JSONB pack 其他 25)
+CREATE TABLE IF NOT EXISTS loan_collateral_balance_derived (
+    market                              TEXT NOT NULL,
+    stock_id                            TEXT NOT NULL,
+    date                                DATE NOT NULL,
+    margin_current_balance              BIGINT,
+    firm_loan_current_balance           BIGINT,
+    unrestricted_loan_current_balance   BIGINT,
+    finance_loan_current_balance        BIGINT,
+    settlement_margin_current_balance   BIGINT,
+    margin_change_pct                   DOUBLE PRECISION,
+    firm_loan_change_pct                DOUBLE PRECISION,
+    unrestricted_loan_change_pct        DOUBLE PRECISION,
+    finance_loan_change_pct             DOUBLE PRECISION,
+    settlement_margin_change_pct        DOUBLE PRECISION,
+    total_balance                       BIGINT,
+    dominant_category                   TEXT,
+    dominant_category_ratio             DOUBLE PRECISION,
+    detail                              JSONB,
+    is_dirty                            BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                            TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+
+-- 大宗交易 derived(SUM by trade_type per stock,date)
+CREATE TABLE IF NOT EXISTS block_trade_derived (
+    market                          TEXT NOT NULL,
+    stock_id                        TEXT NOT NULL,
+    date                            DATE NOT NULL,
+    total_volume                    BIGINT,
+    total_trading_money             BIGINT,
+    matching_volume                 BIGINT,
+    matching_trading_money          BIGINT,
+    matching_share                  DOUBLE PRECISION,
+    largest_single_trade_money      BIGINT,
+    trade_type_count                INTEGER,
+    detail                          JSONB,
+    is_dirty                        BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                        TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+
+-- 商品 derived(z-score / streak / momentum per commodity)
+CREATE TABLE IF NOT EXISTS commodity_price_daily_derived (
+    market                  TEXT NOT NULL,
+    commodity               TEXT NOT NULL,
+    date                    DATE NOT NULL,
+    price                   NUMERIC(15, 4),
+    return_pct              DOUBLE PRECISION,
+    return_z_score          DOUBLE PRECISION,
+    momentum_state          TEXT,
+    streak_days             INTEGER,
+    detail                  JSONB,
+    is_dirty                BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at                TIMESTAMPTZ,
+    PRIMARY KEY (market, commodity, date)
+);
+
+
+-- =============================================================================
 -- 完成
 -- =============================================================================
 

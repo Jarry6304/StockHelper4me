@@ -16,13 +16,16 @@ run() 接口(對齊 SilverBuilder protocol),orchestrator 透過 `BUILDERS[name]`
 from __future__ import annotations
 
 from . import (
+    block_trade,
     business_indicator,
+    commodity_macro,
     day_trading,
     exchange_rate,
     financial_statement,
     foreign_holding,
     holding_shares_per,
     institutional,
+    loan_collateral,
     margin,
     market_margin,
     monthly_revenue,
@@ -47,6 +50,11 @@ BUILDERS: dict[str, object] = {
     "exchange_rate":         exchange_rate,
     "market_margin":         market_margin,
     "business_indicator":    business_indicator,
+    # v3.21 新加 3 個 builders
+    "loan_collateral":       loan_collateral,    # loan_collateral_balance_derived
+    "block_trade":           block_trade,        # block_trade_derived
+    "commodity_macro":       commodity_macro,    # commodity_price_daily_derived
     # price_limit_merge_events 不在這裡;Rust 計算走 rust_bridge,Phase 7c
     # magic_formula_ranked:v3.5 R3 搬到 cross_cores/(per-stock 契約違規)
+    # risk_alert 不需 Silver derived(直讀 Bronze,§十二 對齊 fear_greed 例外)
 }

@@ -44,7 +44,7 @@ logger = logging.getLogger("collector.silver.orchestrator")
 # Phase 分組(per blueprint §三 phase_executor 拆段)
 # =============================================================================
 
-# 7a — 不跨表 Silver,可平行(per spec §7.x — 11 張 + business_indicator = 12 張)
+# 7a — 不跨表 Silver,可平行(per spec §7.x — 12 + v3.21 3 = 15 張)
 PHASE_7A_BUILDERS: list[str] = [
     "institutional",        # institutional_daily_derived
     "margin",               # margin_daily_derived(SBL 6 欄留 follow-up)
@@ -58,6 +58,10 @@ PHASE_7A_BUILDERS: list[str] = [
     "exchange_rate",        # exchange_rate_derived
     "market_margin",        # market_margin_maintenance_derived(total_*_balance 留 follow-up)
     "business_indicator",   # business_indicator_derived
+    # v3.21(2026-05-17):3 new builders
+    "loan_collateral",      # loan_collateral_balance_derived(5 主欄 + 5 change_pct + JSONB)
+    "block_trade",          # block_trade_derived(SUM by trade_type per stock,date)
+    "commodity_macro",      # commodity_price_daily_derived(z-score / streak / momentum per commodity)
 ]
 
 # 7b — 跨表依賴(需先算完 7a 才能跑)

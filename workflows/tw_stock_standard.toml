@@ -245,6 +245,29 @@ enabled  = true
 priority = "P3"
 
 # ─────────────────────────────────────────────────────────
+# v3.21(2026-05-17):4 new cores
+# ─────────────────────────────────────────────────────────
+[[cores]]
+name     = "loan_collateral_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "block_trade_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "risk_alert_core"
+enabled  = true
+priority = "P2"
+
+[[cores]]
+name     = "commodity_macro_core"
+enabled  = true
+priority = "P2"
+
+# ─────────────────────────────────────────────────────────
 # 寫入策略(對齊 cores_overview §7.1)
 # ─────────────────────────────────────────────────────────
 [output]

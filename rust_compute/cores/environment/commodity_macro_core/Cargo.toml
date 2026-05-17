@@ -1,0 +1,18 @@
+[package]
+name        = "commodity_macro_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Commodity Macro Core(P2,商品 macro 信號;初版 GOLD;對齊 m3Spec/environment_cores.md §十)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fact_schema       = { path = "../../../cores_shared/fact_schema" }
+environment_loader = { path = "../../../cores_shared/environment_loader" }
+core_registry     = { path = "../../../cores_shared/core_registry" }
+anyhow            = { workspace = true }
+chrono            = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+inventory         = "0.3"

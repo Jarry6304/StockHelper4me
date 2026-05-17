@@ -612,3 +612,96 @@ is_backer    = false
 segment_days = 365
 field_rename = {"SBLShortSalesShortSales" = "short_sales", "SBLShortSalesReturns" = "returns", "SBLShortSalesCurrentDayBalance" = "current_day_balance"}
 notes        = "PR #21-B v3.2 Bronze raw 借券賣出 daily aggregate(來源 TaiwanDailyShortSaleBalances);feed margin_daily_derived sbl_short_sales_* 3 欄"
+
+# =============================================================================
+# v3.20(2026-05-17):5 個 sponsor-tier dataset 接入
+# 接 v3.19 probe `--max 0` audit 揭露的高價值 unused datasets。User 拍版:
+#   不做日內 tick / 不做權證期貨 / 不做可轉債 / GoldPrice 每日只存第一筆
+# alembic b7c8d9e0f1g2 落地 5 張 Bronze 表
+# =============================================================================
+
+# Bronze v3.20-1:loan_collateral_balance_tw — 借券抵押餘額 35 欄
+# FinMind `TaiwanStockLoanCollateralBalance` 一日 ~2000 stocks × 1 row,每 row
+# 帶 5 大借券類別(Margin / FirmLoan / UnrestrictedLoan / FinanceLoan /
+# SettlementMargin)× 7 sub-fields = ~34 ints + market/stock_id/date。
+# 比 margin_daily(6+8 detail)豐富 5×;loan_collateral_core proposal 等 spec 拍版。
+[[api]]
+name         = "loan_collateral_balance"
+dataset      = "TaiwanStockLoanCollateralBalance"
+param_mode   = "per_stock"
+target_table = "loan_collateral_balance_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"MarginPreviousDayBalance" = "margin_previous_day_balance", "MarginBuy" = "margin_buy", "MarginSell" = "margin_sell", "MarginCashRedemption" = "margin_cash_redemption", "MarginCurrentDayBalance" = "margin_current_day_balance", "MarginNextDayQuota" = "margin_next_day_quota", "SecuritiesFirmLoanPreviousDayBalance" = "firm_loan_previous_day_balance", "SecuritiesFirmLoanBuy" = "firm_loan_buy", "SecuritiesFirmLoanSell" = "firm_loan_sell", "SecuritiesFirmLoanCashRedemption" = "firm_loan_cash_redemption", "SecuritiesFirmLoanReplacement" = "firm_loan_replacement", "SecuritiesFirmLoanCurrentDayBalance" = "firm_loan_current_day_balance", "SecuritiesFirmLoanNextDayQuota" = "firm_loan_next_day_quota", "UnrestrictedLoanPreviousDayBalance" = "unrestricted_loan_previous_day_balance", "UnrestrictedLoanBuy" = "unrestricted_loan_buy", "UnrestrictedLoanSell" = "unrestricted_loan_sell", "UnrestrictedLoanCashRedemption" = "unrestricted_loan_cash_redemption", "UnrestrictedLoanReplacement" = "unrestricted_loan_replacement", "UnrestrictedLoanCurrentDayBalance" = "unrestricted_loan_current_day_balance", "UnrestrictedLoanNextDayQuota" = "unrestricted_loan_next_day_quota", "SecuritiesFinanceSecuredLoanPreviousDayBalance" = "finance_loan_previous_day_balance", "SecuritiesFinanceSecuredLoanBuy" = "finance_loan_buy", "SecuritiesFinanceSecuredLoanSell" = "finance_loan_sell", "SecuritiesFinanceSecuredLoanCashRedemption" = "finance_loan_cash_redemption", "SecuritiesFinanceSecuredLoanReplacement" = "finance_loan_replacement", "SecuritiesFinanceSecuredLoanCurrentDayBalance" = "finance_loan_current_day_balance", "SecuritiesFinanceSecuredLoanNextDayQuota" = "finance_loan_next_day_quota", "SettlementMarginPreviousDayBalance" = "settlement_margin_previous_day_balance", "SettlementMarginBuy" = "settlement_margin_buy", "SettlementMarginSell" = "settlement_margin_sell", "SettlementMarginCashRedemption" = "settlement_margin_cash_redemption", "SettlementMarginReplacement" = "settlement_margin_replacement", "SettlementMarginCurrentDayBalance" = "settlement_margin_current_day_balance", "SettlementMarginNextDayQuota" = "settlement_margin_next_day_quota"}
+notes        = "v3.20 借券抵押餘額;5 大類 × 7 sub-fields = ~34 int 散開為 column;比 margin_daily 豐富 5x"
+
+# Bronze v3.20-2:block_trade_tw — 大宗交易(配對 / 鉅額)
+# FinMind `TaiwanStockBlockTrade` 同 (stock_id, date) 可能多 row 不同 trade_type
+# (配對交易 / 鉅額),PK 加 trade_type 維度(對齊 v3.14 gov_bank bank_name pattern)。
+# Smart-money 大單痕跡;block_trade_core proposal 等 spec 拍版。
+[[api]]
+name         = "block_trade"
+dataset      = "TaiwanStockBlockTrade"
+param_mode   = "per_stock"
+target_table = "block_trade_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"trade_type" = "trade_type", "price" = "price", "volume" = "volume", "trading_money" = "trading_money"}
+notes        = "v3.20 大宗交易;PK 加 trade_type 維度;institutional smart-money flow 補強"
+
+# Bronze v3.20-3:market_value_daily — 個股市值(NTD)
+# FinMind `TaiwanStockMarketValue` 一日 1 row × stock,單一欄位 market_value。
+# 目前 stock_info_ref.shares × close 計算法有 share split / capital reduction 後
+# 同步誤差;直接拉精確。
+[[api]]
+name         = "market_value"
+dataset      = "TaiwanStockMarketValue"
+param_mode   = "per_stock"
+target_table = "market_value_daily"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"market_value" = "market_value"}
+notes        = "v3.20 個股市值;比 shares × close 推算精確(處理 split / 減資 / 增資)"
+
+# Bronze v3.20-4:disposition_securities_period_tw — 處置股風險警示
+# FinMind `TaiwanStockDispositionSecuritiesPeriod` all_market mode(probe 揭露
+# with_data_id=2330 → 0 row,no_data_id → 17 row)。risk_alert signal source。
+# 注意 measure 欄是長文本(中文 ~300 字描述處置措施),disposition_cnt 加進
+# PK(同股同日可能多次處置公告)。
+[[api]]
+name         = "disposition_securities_period"
+dataset      = "TaiwanStockDispositionSecuritiesPeriod"
+param_mode   = "all_market"
+target_table = "disposition_securities_period_tw"
+phase        = 5
+enabled      = true
+is_backer    = false
+segment_days = 365
+field_rename = {"disposition_cnt" = "disposition_cnt", "period_start" = "period_start", "period_end" = "period_end", "condition" = "condition", "measure" = "measure", "stock_name" = "_stock_name"}
+detail_fields = ["_stock_name"]
+notes        = "v3.20 處置股(注意 / 分盤撮合);risk_alert_core proposal 等 spec 拍版"
+
+# Bronze v3.20-5:commodity_price_daily — 商品(初版 GOLD)
+# FinMind `GoldPrice` 5-分鐘 intraday × all_market mode(無 data_id)。
+# User 拍版:每日只存第一筆 → aggregation = "first_per_day"。
+# Aggregator 注入 commodity="GOLD"(hardcoded;未來擴 silver/oil generalize)。
+# 對齊 exchange_rate macro pattern(PK 含 commodity 維度);commodity_macro_core
+# proposal 等 spec 拍版。
+[[api]]
+name         = "gold_price"
+dataset      = "GoldPrice"
+param_mode   = "all_market"
+target_table = "commodity_price_daily"
+phase        = 6
+enabled      = true
+is_backer    = false
+segment_days = 30
+field_rename = {"Price" = "price"}
+aggregation  = "first_per_day"
+notes        = "v3.20 GOLD 商品日價;5-min intraday → first_per_day → 每日 1 row;對齊 environment macro"

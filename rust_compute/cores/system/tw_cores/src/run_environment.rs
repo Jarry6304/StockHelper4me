@@ -135,4 +135,25 @@ pub async fn run_market_cores(
             )),
         }
     }
+
+    // 7. commodity_macro_core(v3.21;初版 GOLD;對齊 m3Spec/environment_cores.md §十)
+    if filter.is_enabled("commodity_macro_core") {
+        let params = commodity_macro_core::CommodityMacroParams::default();
+        for commodity in &params.commodities {
+            match environment_loader::load_commodity_macro(pool, commodity, ENV_LOOKBACK_DAYS).await {
+                Ok(series) => {
+                    let core = commodity_macro_core::CommodityMacroCore::new();
+                    summary.push(
+                        dispatch_indicator(
+                            pool, &core, &series, params.clone(), write,
+                        )
+                        .await,
+                    );
+                }
+                Err(e) => summary.push(loader_err_summary(
+                    "commodity_macro_core", "_global_", "load_commodity_macro", &e,
+                )),
+            }
+        }
+    }
 }

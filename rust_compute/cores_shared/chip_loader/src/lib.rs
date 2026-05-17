@@ -291,3 +291,148 @@ pub async fn load_holding_shares_per(
 }
 
 // 沒 unit test:loader 直接接 PG,沙箱無 PG 不能 mock;留 user 本機 integration test
+
+// ===========================================================================
+// v3.21 loan_collateral_balance_derived(5 主欄 + 5 change_pct + JSONB)
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoanCollateralSeries {
+    pub stock_id: String,
+    pub points: Vec<LoanCollateralRaw>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct LoanCollateralRaw {
+    pub date: NaiveDate,
+    pub margin_current_balance: Option<i64>,
+    pub firm_loan_current_balance: Option<i64>,
+    pub unrestricted_loan_current_balance: Option<i64>,
+    pub finance_loan_current_balance: Option<i64>,
+    pub settlement_margin_current_balance: Option<i64>,
+    pub margin_change_pct: Option<f64>,
+    pub firm_loan_change_pct: Option<f64>,
+    pub unrestricted_loan_change_pct: Option<f64>,
+    pub finance_loan_change_pct: Option<f64>,
+    pub settlement_margin_change_pct: Option<f64>,
+    pub total_balance: Option<i64>,
+    pub dominant_category: Option<String>,
+    pub dominant_category_ratio: Option<f64>,
+}
+
+pub async fn load_loan_collateral(
+    pool: &PgPool,
+    stock_id: &str,
+    lookback_days: i32,
+) -> Result<LoanCollateralSeries> {
+    let points: Vec<LoanCollateralRaw> = sqlx::query_as(
+        r#"
+        SELECT date,
+               margin_current_balance, firm_loan_current_balance,
+               unrestricted_loan_current_balance, finance_loan_current_balance,
+               settlement_margin_current_balance,
+               margin_change_pct, firm_loan_change_pct,
+               unrestricted_loan_change_pct, finance_loan_change_pct,
+               settlement_margin_change_pct,
+               total_balance, dominant_category, dominant_category_ratio
+        FROM loan_collateral_balance_derived
+        WHERE stock_id = $1
+          AND date >= (CURRENT_DATE - $2::int)
+        ORDER BY date ASC
+        "#,
+    )
+    .bind(stock_id)
+    .bind(lookback_days)
+    .fetch_all(pool)
+    .await
+    .context("load_loan_collateral query failed")?;
+    Ok(LoanCollateralSeries { stock_id: stock_id.to_string(), points })
+}
+
+// ===========================================================================
+// v3.21 block_trade_derived(SUM by trade_type per stock,date)
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BlockTradeSeries {
+    pub stock_id: String,
+    pub points: Vec<BlockTradeRaw>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct BlockTradeRaw {
+    pub date: NaiveDate,
+    pub total_volume: Option<i64>,
+    pub total_trading_money: Option<i64>,
+    pub matching_volume: Option<i64>,
+    pub matching_trading_money: Option<i64>,
+    pub matching_share: Option<f64>,
+    pub largest_single_trade_money: Option<i64>,
+    pub trade_type_count: Option<i32>,
+}
+
+pub async fn load_block_trade(
+    pool: &PgPool,
+    stock_id: &str,
+    lookback_days: i32,
+) -> Result<BlockTradeSeries> {
+    let points: Vec<BlockTradeRaw> = sqlx::query_as(
+        r#"
+        SELECT date, total_volume, total_trading_money,
+               matching_volume, matching_trading_money, matching_share,
+               largest_single_trade_money, trade_type_count
+        FROM block_trade_derived
+        WHERE stock_id = $1
+          AND date >= (CURRENT_DATE - $2::int)
+        ORDER BY date ASC
+        "#,
+    )
+    .bind(stock_id)
+    .bind(lookback_days)
+    .fetch_all(pool)
+    .await
+    .context("load_block_trade query failed")?;
+    Ok(BlockTradeSeries { stock_id: stock_id.to_string(), points })
+}
+
+// ===========================================================================
+// v3.21 risk_alert(直讀 Bronze disposition_securities_period_tw,§十二 例外)
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RiskAlertSeries {
+    pub stock_id: String,
+    pub points: Vec<RiskAlertRaw>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct RiskAlertRaw {
+    pub date: NaiveDate,             // 公告日
+    pub disposition_cnt: Option<i32>,
+    pub period_start: Option<NaiveDate>,
+    pub period_end: Option<NaiveDate>,
+    pub condition: Option<String>,
+    pub measure: Option<String>,
+}
+
+pub async fn load_risk_alert(
+    pool: &PgPool,
+    stock_id: &str,
+    lookback_days: i32,
+) -> Result<RiskAlertSeries> {
+    let points: Vec<RiskAlertRaw> = sqlx::query_as(
+        r#"
+        SELECT date, disposition_cnt, period_start, period_end, condition, measure
+        FROM disposition_securities_period_tw
+        WHERE stock_id = $1
+          AND date >= (CURRENT_DATE - $2::int)
+        ORDER BY date ASC, disposition_cnt ASC
+        "#,
+    )
+    .bind(stock_id)
+    .bind(lookback_days)
+    .fetch_all(pool)
+    .await
+    .context("load_risk_alert query failed")?;
+    Ok(RiskAlertSeries { stock_id: stock_id.to_string(), points })
+}
