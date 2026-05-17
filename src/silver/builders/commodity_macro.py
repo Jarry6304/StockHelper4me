@@ -121,7 +121,13 @@ def run(
 ) -> dict[str, Any]:
     start = time.monotonic()
 
-    bronze = fetch_bronze(db, "commodity_price_daily", stock_ids=None)
+    bronze = fetch_bronze(
+        db, "commodity_price_daily",
+        # commodity_price_daily 沒 stock_id 欄(PK = market, commodity, date),
+        # 對齊 exchange_rate.py pattern,覆寫 order_by
+        stock_ids=None,
+        order_by="market, commodity, date",
+    )
     silver = _build_silver_rows(bronze)
     written = upsert_silver(
         db, SILVER_TABLE, silver,

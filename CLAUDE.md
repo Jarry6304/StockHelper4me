@@ -251,6 +251,299 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.24 — Round 9 calibration + commodity_macro Silver builder hotfix(2026-05-17)
+
+接 v3.21 Commit C 全市場 production verify(`scripts/verify_event_kind_rate.sql`)
+揭露 2 個 issue:
+
+### Issue 1:`LoanCategoryConcentration` 125.69/yr 過頻(10.5× over target)
+
+**root cause**:level trigger(每天 ratio >= 0.70 就 fire)。台股借券 ratio 自然
+集中(unrestricted_loan 主導大多數股),level trigger 每天 fire = 噪音爆量。
+
+**修法**(對齊 institutional `LargeTransaction` r3 拍版,Brown & Warner 1985):
+- `loan_collateral_core.rs` 改 **edge trigger**:`cur_alert && !prev_alert` 才 fire
+- production 行為:從「每天 in zone fire」→「進入 zone 當日 fire」+ 「exit 後 re-enter fire」
+- 預期觸發率:125.69 → ~5-10/yr(對齊 institutional level→edge 95% retention 砍掉模式)
+
+### Issue 2:`commodity_macro_core` 0 events(Silver builder 沒跑成功)
+
+**root cause**:`commodity_macro.py` builder 沒覆寫 `fetch_bronze` 的 `order_by`
+default(`"market, stock_id, date"`),但 `commodity_price_daily` 表沒 `stock_id`
+欄(PK = `market, commodity, date`)→ SQL crash → silver orchestrator silently
+catch(對齊 cores_overview §7.5 dirty queue 契約「failed 不中斷其他」)。
+
+production 觀察:
+- Bronze `commodity_price_daily`:**2176 rows / 2019-01-01 → 2026-05-15** ✅
+- Silver `commodity_price_daily_derived`:**0 rows** ❌
+
+**修法**:對齊 `exchange_rate.py` 既有 market-level Bronze pattern,覆寫
+`order_by="market, commodity, date"`。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/chip/loan_collateral_core/src/lib.rs` | `compute` 加 `prev_concentration_alert` edge trigger 邏輯 + 2 new regression test(no_refire / refire_after_exit_reenter)|
+| `src/silver/builders/commodity_macro.py` | `fetch_bronze` 加 `order_by="market, commodity, date"` |
+| `CLAUDE.md` | v3.24 章節 |
+
+**0 alembic / 0 collector.toml**(2 line code tweak + builder param fix)。
+
+### 沙箱驗證
+
+- `cargo test --release -p loan_collateral_core` ✅ **6 passed**(4 + 2 new)
+- `cargo test --release --workspace` ✅ **443 passed / 0 failed**(從 441 +2 new)
+- `cargo build --release -p tw_cores` ✅ 0 warning
+- `python -c "from silver.builders import commodity_macro; ..."` ✅ sanity 通過
+
+### Production verify 結果(全市場 1266 stocks × 36 cores)
+
+| 指標 | 結果 |
+|---|---|
+| Wall time | 806.5s ≈ 13.4 min(v3.18 695s +16%,但加 4 new cores)|
+| Cores 全綠 | 36/36 ok(vwap 12 skipped:無 Silver data 的 stock,known)|
+| New facts | 41,785 rows(loan_collateral 18,887 / block_trade 18,887 / risk_alert 3,470 / commodity_macro 0 ← 上述 bug)|
+| Round 7 5 cores verify | **0 row** 超 12/yr ✅(v3.11 calibration 持續有效)|
+| Round 8.3 milestone 4 variants | **4/4 in target band** ✅(v3.18 完整結算持續有效)|
+| facts dead_pct(VACUUM 前)| 11.08%(已用 maintain_facts_stats.sql 清到 0%)|
+
+### v3.21 4 new cores production rate 統計
+
+| EventKind | rate/yr/stock | target | 狀態 |
+|---|---|---|---|
+| `loan_collateral / LoanCategoryConcentration` | **125.69** | ≤ 12 | ❌ over → **v3.24 edge trigger 修** |
+| `loan_collateral / MarginBalanceSurge` | 6.41 | ≤ 12 | ✅ OK |
+| `loan_collateral / 其他 9 EventKind` | 未 over 6 | ≤ 12 | ✅ OK(未進 Section 1 top 30 over 6)|
+| `block_trade_core / 全 4` | 估 ~2/yr(18887 events / 1266 stocks / 7 yr)| ≤ 12 | ✅ OK |
+| `risk_alert_core / 全 4` | 估 ~0.4/yr(3470 / 1266 / 7)| ≤ 12 | ✅ OK(處置稀少事件)|
+| `commodity_macro_core / 全 4` | 0(builder bug)| ≤ 12 | 🟡 待 v3.24 修後重 verify |
+
+### accepted baselines 不動(v1.32 + v3.17)
+
+- `institutional / DivergenceWithinInstitution` 58.41/yr — production reality
+- `institutional / LargeTransaction` 14.16/yr — fat-tail (Lo 2001)
+
+### 待 user 跑 production verify(下次 session)
+
+```powershell
+git pull
+cd rust_compute
+cargo clean -p loan_collateral_core -p tw_cores
+cargo build --release -p tw_cores
+cd ..
+
+# 1. 先讓 commodity_macro Silver builder 跑(v3.24 修法)
+python src/main.py silver phase 7a   # 應該見 commodity_macro read=2176 → wrote=2176
+
+# 2. DELETE 過頻 LoanCategoryConcentration(facts 中 1031150 row 將被砍)
+psql $env:DATABASE_URL -c "
+DELETE FROM facts
+ WHERE source_core = 'loan_collateral_core'
+   AND metadata->>'event_kind' = 'LoanCategoryConcentration';
+"
+
+# 3. tw_cores run-all(會重算 loan_collateral_core 新 edge trigger + commodity_macro 首次有資料)
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+
+# 4. verify
+psql $env:DATABASE_URL -f scripts/maintain_facts_stats.sql
+psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql
+# 預期:
+#   LoanCategoryConcentration 125.69 → ~5-10/yr ✅
+#   commodity_macro_core 0 → 數十-數百 events(macro 信號稀疏,GOLD-only 初版)
+```
+
+### 風險
+
+🟢 低:
+- 純 1 函式 logic 改 + 1 builder param fix
+- 既有 4 個 loan_collateral test margin 充足(spike z 設計與 edge trigger 兼容)
+- production 行為改變 spec-defensible(對齊 Brown & Warner 1985 + r3 institutional pattern)
+- Rollback:單 commit `git revert` 即可
+
+### Out of Scope(留 future)
+
+- **block_trade / risk_alert / commodity_macro 觸發率精校**:本 PR 只動 LoanCategoryConcentration
+  + commodity_macro builder bug fix;其他 EventKind 待下輪 verify 後評估
+- **Round 9 對其他 cores spec**:本 PR 僅 1 個 EventKind tightening,非全面 Round 9
+
+---
+
+## v3.23 — price_limit per_stock → all_market perf hotfix(2026-05-17)
+
+User 跑 v3.21 verify chain 中觀察到 `price_limit` incremental 走 per_stock × 1300
+stocks × 0.65 秒 = 14 分鐘只為了拉漲跌停(99% empty)。Probe FinMind 揭露
+`TaiwanStockPriceLimit` 可走 all_market mode,但有 **quirk**:multi-day range 靜默
+回 0 rows,單日查詢回 ~2745 rows(包含過去日)。
+
+### Probe 結果(2026-05-17)
+
+```
+start=5-15, end=5-16 (1 trading day in range) → 2745 rows ✅
+start=5-01, end=5-15 (10 trading days range)  → 0 rows ❌(FinMind quirk)
+start=end=5-13 (single past day)              → 2743 rows ✅(backfill 可行)
+```
+
+### 修法(`config/collector.toml`)
+
+| 欄 | 修前 | 修後 |
+|---|---|---|
+| `param_mode` | `per_stock` | **`all_market`** |
+| `segment_days` | 365 | **1**(避開 multi-day quirk)|
+
+### 效益
+
+| 場景 | 修前 | 修後 | 加速 |
+|---|---|---|---|
+| Daily incremental | ~14 min(1300 reqs)| **~0.65 秒**(1 req)| **420×** |
+| 5 yr backfill | ~70 min(6500 reqs)| **~20 min**(1825 reqs / sponsor 6000h)| **3.5×** |
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `config/collector.toml` | `price_limit` entry param_mode + segment_days 改 + notes 更新 |
+| `CLAUDE.md` | 加 v3.23 章節 |
+
+**0 alembic / 0 Rust / 0 Python**(純 config tweak;對齊 v3.14 gov_bank pattern 變體
+— gov_bank 用 `all_market_no_end` 因 dataset 拒 end_date,price_limit 接受但有
+multi-day quirk,故仍用 `all_market` + `segment_days=1`)。
+
+### 沙箱驗證
+
+- `python -c "from config_loader import load_collector_config; ..."` → all_market /
+  segment_days=1 解析正常,39 entries 全部對齊
+- 既有 `all_market` infrastructure(institutional_market / total_margin_purchase)
+  已有 ALL_MARKET_SENTINEL pattern 接 sync_tracker,無需動 Python
+
+### 用法(user 下次 incremental 自動套用)
+
+```powershell
+git pull   # 拉 collector.toml 改動
+python src/main.py incremental   # price_limit 從 14 min → 0.65 秒
+```
+
+舊 per_stock 的 `api_sync_progress` 紀錄不衝突(progress 表 PK 含 api_name +
+stock_id + segment;all_market mode 寫入 stock_id="_ALL_MARKET_" sentinel)。
+
+### Out of Scope
+
+- 其他 per_stock API 是否有同款 all_market quirk(price_daily / margin_daily /
+  institutional 等)— probe + audit 留 v3.24 backlog,本 hotfix 只動 price_limit
+- v3.14 gov_bank 同類 quirk audit(end_date 拒收 vs multi-day 靜默 0)— 既有 work
+  已收尾不動
+
+---
+
+## v3.22 — B-5:4 new MCP tools 暴露 v3.20-v3.21 cores(2026-05-17)
+
+接 v3.21 Commit C(`06d2829` Rust 4 cores + Silver 3 builders 全綠)後,user 拍版
+B-5 — 對 v3.20-v3.21 新 4 cores 各加 1 個 high-level MCP tool,讓 LLM 在 Claude
+Desktop 對話內可主動 surface 新訊號。
+
+**0 alembic / 0 Rust / 0 collector.toml**(純 Python:`mcp_server/` 內 4 個新
+helper + wrappers + tests)。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_loan_collateral.py` (新) | compute_loan_collateral_snapshot;直 SELECT loan_collateral_balance_derived |
+| `mcp_server/_block_trade.py` (新) | compute_block_trade_summary;30 天期間 SUM + matching spike |
+| `mcp_server/_risk_alert.py` (新) | compute_risk_alert_status;直讀 Bronze + measure 中文 parser(三級嚴重度)|
+| `mcp_server/_commodity_macro.py` (新) | compute_commodity_macro_snapshot;loop commodities |
+| `mcp_server/tools/data.py` | 加 4 wrapper function + 完整 docstring(LLM 看 tools list 用)|
+| `mcp_server/server.py` | `@mcp.tool()` 註冊 +4(5 → 9 public tools)+ instructions 描述更新 |
+| `tests/mcp_server/test_toolkit_v3.py` | 加 4 TestXxx class × 3-4 test = +15 cases(9 → 24)|
+
+### 4 new public tools
+
+| Tool | Signature | 對應 Core | 主要 Return |
+|---|---|---|---|
+| `loan_collateral_snapshot(stock_id, date)` | str,str | loan_collateral_core | 5 大類 balance / change_pct / ratio + concentration_alert(>70%)|
+| `block_trade_summary(stock_id, date, lookback_days=30)` | str,str,int | block_trade_core | total volume/money + matching_share_avg + matching_spike_dates |
+| `risk_alert_status(stock_id, date)` | str,str | risk_alert_core | current_status(in_period / severity / days_remaining)+ history_60d + escalation_count_60d |
+| `commodity_macro_snapshot(date, commodities=None)` | str,list | commodity_macro_core | per-commodity price / return_z_score / momentum_state / streak_days / spike_alert |
+
+### 設計拍版
+
+- **DB 路徑**:全部走 `agg._db.get_connection()`(對齊 v3.5 R5 C12 single entry);
+  直 SELECT 不重 wrap agg.as_of()(避免 join 不必要的 facts/indicator)
+- **三級嚴重度 parser**(`_risk_alert.py:_parse_severity`):
+  - 「全額交割」→ `cash_only`
+  - 「人工管制」→ `disposition`(分盤撮合)
+  - 「注意交易資訊」→ `warning`
+  - 其他 → `unknown`
+- **payload budget ≤ 3KB**(對齊既有 5 tools < 5KB):長 list 欄(matching_spike_dates
+  / history_60d)truncate 到 10 筆內
+- **empty fallback**:無 Silver 資料 → graceful narrative 指引 user 跑 builder
+- **multi-commodity 支援**:`commodity_macro_snapshot` 可傳 `["GOLD", "SILVER"]` 等
+  (v3.21 初版只有 GOLD,SILVER 等 data_available=False;預留擴展)
+
+### Reference(每 tool docstring 內)
+
+- loan_collateral:Basel Committee (2006) WP 15 — CR1 > 0.7 high concentration
+- block_trade:Cao, Field & Hanka (2009) JEF 16:1-25 — matching > 80% 異常
+- risk_alert:「證券交易所公布注意交易資訊處置作業要點」§4(2024 版)
+- commodity_macro:Brock et al. (1992) JoF 47(5)+ Hamilton (1989) Econometrica 57(2)
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/test_toolkit_v3.py` ✅ **24 passed**(從 9 → 24,+15 new tests)
+- `pytest tests/mcp_server/ tests/agg/` ✅ **101 passed / 1 skipped**(render_tools.py
+  fastmcp 缺裝是 pre-existing,非本次造成)
+- 4 個 helper module + tools/data.py + server.py 純 Python import ✅
+- payload budget assertion 全部 < 3KB(典型 case)
+
+### 待 user 跑 production verify(對齊 v3.21 Commit C verify chain)
+
+```powershell
+git pull
+
+# v3.21 Commit C verify(若還沒跑)
+python src/main.py incremental                    # Bronze 5 datasets 拉資料
+python src/main.py silver phase 7a                # Silver 3 new builders
+cd rust_compute && ./target/release/tw_cores.exe run-all --write
+cd ..
+psql $env:DATABASE_URL -f scripts/maintain_facts_stats.sql
+psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql
+
+# v3.22 B-5 整合驗證(MCP server stdio + Claude Desktop 對話)
+python -m mcp_server   # 開 stdio server
+# 在 Claude Desktop 對話內:
+#   "幫我看 2330 今天的 loan_collateral 狀況"
+#   "GOLD 過去 30 天的 macro 趨勢"
+#   "3363 的 risk_alert 狀態"
+#   "2330 過去 30 天的 block_trade 摘要"
+```
+
+### 風險
+
+🟢 低:
+- 0 Rust / 0 alembic / 0 collector.toml(純 Python)
+- 既有 agg layer 0 改動(只 reuse `get_connection()`)
+- 4 module 各獨立,1 個失敗不影響其他;既有 5 public tools 0 regression
+- 既有 ~30 agg tests + 既有 mcp tests 全綠
+- Rollback:單 commit `git revert` 即可
+
+### Out of Scope(留 future)
+
+- **C-9 dashboard tabs**(Streamlit 視覺化 v3.20-21 cores)— 等 user 對 B-5 LLM
+  體驗滿意後再做(避免 dashboard + MCP 雙 surface 邏輯重複)
+- **B-4 FastAPI thin wrap**(v1.35 backlog)— 獨立工作
+- **Round 9 calibration**(若 verify 揭露 4 new cores 過頻 / 過稀)— 純 Rust const tweak
+- **整合進 `market_context()`**(將 commodity_macro / risk_alert 摘要加進大盤判讀)
+  — v3.23 拍版題
+
+### 下一輪動工候選(verify 結果回來後)
+
+1. 若 production 4 cores 觸發率 OK → **C-9 dashboard tabs**(借券 / 風險警示 / GOLD)
+2. 若 4 cores 觸發率異常 → Round 9 calibration
+3. 若 user 對既有 MCP 5+4 tools 體驗滿意 → 開始 **B-4 FastAPI thin wrap**
+
+---
+
 ## v3.21 — 4 cores spec decisions 拍版 + risk_alert chip 歸位(2026-05-17)
 
 接 v3.20 Bronze 5 datasets 接入後,user 拍版 4 cores 20 個 open questions。

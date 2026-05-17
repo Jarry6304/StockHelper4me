@@ -105,6 +105,13 @@ impl IndicatorCore for LoanCollateralCore {
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
         let mut events = Vec::new();
         let thr = params.balance_change_pct_threshold;
+        // Round 9(v3.24,2026-05-17):LoanCategoryConcentration 改 edge trigger
+        // production verify 揭露 level trigger 125.69/yr/stock(target ≤ 12,10.5× 過頻)
+        // — 借券 ratio 在台股自然集中(unrestricted_loan 主導大多數股),level trigger
+        // 每天 fire 噪音爆量。改 edge trigger 對齊 institutional LargeTransaction r3
+        // (Brown & Warner 1985 事件研究「狀態變化」非「狀態持續」)。
+        // 預期 125.69/yr → ~5-10/yr。
+        let mut prev_concentration_alert = false;
 
         for p in &input.points {
             // 5 大類 × Surge/Crash
@@ -129,21 +136,26 @@ impl IndicatorCore for LoanCollateralCore {
                 LoanCollateralEventKind::SettlementMarginSurge,
                 LoanCollateralEventKind::SettlementMarginCrash);
 
-            // LoanCategoryConcentration(dominant_category_ratio > threshold)
-            if let Some(ratio) = p.dominant_category_ratio {
-                if ratio >= params.category_concentration_threshold {
-                    events.push(LoanCollateralEvent {
-                        date: p.date,
-                        kind: LoanCollateralEventKind::LoanCategoryConcentration,
-                        value: ratio,
-                        metadata: json!({
-                            "dominant_category": p.dominant_category.clone(),
-                            "category_ratio": ratio,
-                            "total_balance": p.total_balance.unwrap_or(0),
-                        }),
-                    });
-                }
+            // LoanCategoryConcentration — edge trigger(v3.24 Round 9)
+            // 僅在 ratio 從 < threshold 跨入 >= threshold 當日 fire(狀態轉換)
+            let cur_alert = match p.dominant_category_ratio {
+                Some(ratio) => ratio >= params.category_concentration_threshold,
+                None => false,
+            };
+            if cur_alert && !prev_concentration_alert {
+                let ratio = p.dominant_category_ratio.unwrap_or(0.0);
+                events.push(LoanCollateralEvent {
+                    date: p.date,
+                    kind: LoanCollateralEventKind::LoanCategoryConcentration,
+                    value: ratio,
+                    metadata: json!({
+                        "dominant_category": p.dominant_category.clone(),
+                        "category_ratio": ratio,
+                        "total_balance": p.total_balance.unwrap_or(0),
+                    }),
+                });
             }
+            prev_concentration_alert = cur_alert;
         }
 
         Ok(LoanCollateralOutput {
@@ -218,7 +230,8 @@ mod tests {
     }
 
     #[test]
-    fn concentration_above_70_pct() {
+    fn concentration_edge_trigger_first_day() {
+        // Round 9(v3.24):edge trigger,單日 ratio >= 0.70 從 None/below → fire 1 次
         let core = LoanCollateralCore::new();
         let input = LoanCollateralSeries {
             stock_id: "2330".to_string(),
@@ -227,7 +240,42 @@ mod tests {
         let out = core.compute(&input, LoanCollateralParams::default()).unwrap();
         let concentrations: Vec<_> = out.events.iter()
             .filter(|e| e.kind == LoanCollateralEventKind::LoanCategoryConcentration).collect();
-        assert_eq!(concentrations.len(), 1);
+        assert_eq!(concentrations.len(), 1, "edge trigger 首日進入 zone fire 1 次");
+    }
+
+    #[test]
+    fn concentration_no_refire_on_consecutive_days() {
+        // Round 9:edge trigger 連續多日 in zone 只 fire 第一日(不像舊 level trigger 每天 fire)
+        let core = LoanCollateralCore::new();
+        let input = LoanCollateralSeries {
+            stock_id: "2330".to_string(),
+            points: vec![
+                pt("2025-01-02", Some(0.0), Some(0.75)),  // edge: None → in zone → fire
+                pt("2025-01-03", Some(0.0), Some(0.78)),  // 仍 in zone,不 fire
+                pt("2025-01-04", Some(0.0), Some(0.80)),  // 仍 in zone,不 fire
+            ],
+        };
+        let out = core.compute(&input, LoanCollateralParams::default()).unwrap();
+        let concentrations: Vec<_> = out.events.iter()
+            .filter(|e| e.kind == LoanCollateralEventKind::LoanCategoryConcentration).collect();
+        assert_eq!(concentrations.len(), 1, "edge trigger 連續 in-zone 只 fire 1 次");
+    }
+
+    #[test]
+    fn concentration_refire_after_exit_then_reenter() {
+        let core = LoanCollateralCore::new();
+        let input = LoanCollateralSeries {
+            stock_id: "2330".to_string(),
+            points: vec![
+                pt("2025-01-02", Some(0.0), Some(0.75)),  // fire(edge)
+                pt("2025-01-03", Some(0.0), Some(0.60)),  // exit zone
+                pt("2025-01-04", Some(0.0), Some(0.72)),  // re-enter → fire
+            ],
+        };
+        let out = core.compute(&input, LoanCollateralParams::default()).unwrap();
+        let concentrations: Vec<_> = out.events.iter()
+            .filter(|e| e.kind == LoanCollateralEventKind::LoanCategoryConcentration).collect();
+        assert_eq!(concentrations.len(), 2, "exit + re-enter → 2 separate fires");
     }
 
     #[test]
