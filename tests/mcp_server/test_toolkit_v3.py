@@ -173,9 +173,17 @@ def _mk_fact(source_core: str, fact_date: date, metadata: dict):
 
 
 def _patch_agg_as_of(monkeypatch, *, indicator_value: dict | None,
-                     facts: list | None = None):
-    """Mock agg.as_of 回 snapshot 對應 _kalman.compute_kalman_trend 用。"""
+                     facts: list | None = None,
+                     latest_close: dict | None = None):
+    """Mock agg.as_of 回 snapshot 對應 _kalman.compute_kalman_trend 用。
+
+    v3.26:加 mock `fetch_latest_close_for_tool`(預設 None → fallback 走 indicator)。
+    """
     from mcp_server import _kalman
+    from mcp_server import _price as _price_mod
+
+    monkeypatch.setattr(_price_mod, "fetch_latest_close_for_tool",
+                        lambda *a, **kw: latest_close)
 
     snapshot = MagicMock()
     if indicator_value is not None:
@@ -563,3 +571,45 @@ class TestCommodityMacroSnapshot:
         silver = next(c for c in result["commodities"] if c["name"] == "SILVER")
         assert gold["data_available"] is True
         assert silver["data_available"] is False
+
+
+# ════════════════════════════════════════════════════════════
+# v3.26 — current_price bug fix(直讀 price_daily)
+# ════════════════════════════════════════════════════════════
+
+
+class TestKalmanCurrentPriceBugFix:
+    """v3.26 修法:current_price 走 price_daily,不依賴 indicator_latest.raw_close。"""
+
+    def test_uses_price_daily_when_available(self, monkeypatch):
+        """price_daily 有資料 → current_price 用 DB latest close。"""
+        _patch_agg_as_of(
+            monkeypatch,
+            indicator_value={
+                "raw_close": 999.99,      # indicator 內 stale 數據(會被忽略)
+                "smoothed_price": 1220.3,
+                "velocity": 0.42,
+                "uncertainty": 8.5,
+                "regime": "StableUp",
+            },
+            latest_close={
+                "date": "2026-05-15", "close": 395.0,
+                "prev_close": 397.0, "change_pct": -0.50,
+            },
+        )
+        result = data_tools.kalman_trend("3030", "2026-05-15")
+        # current_price 用 price_daily 395.0(authoritative),不是 indicator 的 999.99
+        assert result["current_price"] == 395.0
+
+    def test_falls_back_to_indicator_when_db_empty(self, monkeypatch):
+        """price_daily 無資料 → fallback indicator.raw_close(對齊既有行為)。"""
+        _patch_agg_as_of(
+            monkeypatch,
+            indicator_value={
+                "raw_close": 999.99, "smoothed_price": 1000.0,
+                "velocity": 0.1, "uncertainty": 5.0, "regime": "Sideway",
+            },
+            latest_close=None,
+        )
+        result = data_tools.kalman_trend("9999", "2026-05-15")
+        assert result["current_price"] == 999.99

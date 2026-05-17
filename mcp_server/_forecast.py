@@ -93,8 +93,11 @@ def compute_neely_forecast(
     # 1. Primary scenario 從 neely structural 抽
     primary, all_scenarios = _extract_primary_and_top_scenarios(snapshot, limit=5)
 
-    # 2. Current price(從 ma_core series 最後一筆,或 valuation_core fallback)
-    current_price = _extract_current_price(snapshot)
+    # 2. Current price(v3.26 修:直讀 price_daily;原本走 ma_core series 但 relevant_cores
+    #    沒含 ma_core → 永遠 fallback 0.0;改 DB 直撈)
+    from mcp_server._price import fetch_latest_close_for_tool
+    price_info = fetch_latest_close_for_tool(stock_id, as_of, database_url=database_url)
+    current_price = price_info["close"] if price_info else _extract_current_price(snapshot)
 
     # 3. 4 時間框架價位區間
     forecasts = _build_forecasts(primary, current_price, snapshot, as_of)

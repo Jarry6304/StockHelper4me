@@ -86,7 +86,14 @@ def compute_kalman_trend(
         return _empty_result(stock_id, as_of, reason="no_kalman_indicator")
 
     val = indicator.value or {}
-    raw_close       = float(val.get("raw_close") or 0.0)
+
+    # raw_close v3.26 修:authoritative source 是 price_daily,indicator 內的
+    # raw_close 可能是 indicator 跑那天的舊值;DB 直撈最新確保 deviation 計算正確。
+    # 若 DB 無資料 fallback 走 indicator value(對齊既有行為)。
+    from mcp_server._price import fetch_latest_close_for_tool
+    price_info = fetch_latest_close_for_tool(stock_id, as_of, database_url=database_url)
+    raw_close = price_info["close"] if price_info else float(val.get("raw_close") or 0.0)
+
     smoothed_price  = float(val.get("smoothed_price") or 0.0)
     velocity        = float(val.get("velocity") or 0.0)
     uncertainty     = float(val.get("uncertainty") or 0.0)

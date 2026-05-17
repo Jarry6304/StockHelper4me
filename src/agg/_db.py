@@ -158,6 +158,54 @@ def fetch_ohlc(
         return cur.fetchall()
 
 
+def fetch_latest_close(
+    conn,
+    *,
+    stock_id: str,
+    as_of,
+) -> dict[str, Any] | None:
+    """從 price_daily 撈 <= as_of 最新一筆 close + 漲跌幅(authoritative source)。
+
+    v3.26(2026-05-17):MCP tools(`stock_health` / `kalman_trend` /
+    `neely_forecast`)current_price 不再從 indicator_latest.ma_core 取
+    (那邊可能 stale 或無資料)— 改直讀 Bronze price_daily,保證即時準確。
+
+    Args:
+        stock_id: 股票代號(支援保留字 _index_taiex_ 等)
+        as_of: 上界(包含)
+
+    Returns:
+        dict {date, close, prev_close, change_pct} 或 None(無資料)。
+        change_pct 計算 vs 前一筆;date / close 為 float / str。
+    """
+    sql = """
+        SELECT date, close
+        FROM price_daily
+        WHERE market = 'TW' AND stock_id = %s AND date <= %s
+        ORDER BY date DESC
+        LIMIT 2
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, [stock_id, as_of])
+        rows = cur.fetchall() or []
+    if not rows:
+        return None
+    latest = rows[0]
+    close = latest.get("close")
+    if close is None:
+        return None
+    prev_close = rows[1].get("close") if len(rows) > 1 else None
+    change_pct = None
+    if prev_close is not None and float(prev_close) != 0.0:
+        change_pct = round(100.0 * (float(close) - float(prev_close)) / float(prev_close), 2)
+    return {
+        "date":       latest.get("date").isoformat() if latest.get("date") else None,
+        "close":      float(close),
+        "prev_close": float(prev_close) if prev_close is not None else None,
+        "change_pct": change_pct,
+    }
+
+
 def fetch_cross_stock_ranked(
     conn,
     *,

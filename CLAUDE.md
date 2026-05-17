@@ -252,6 +252,104 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.26 — MCP current_price bug fix:直讀 price_daily(2026-05-17)
+
+接 v3.25(`945c1af` 合 main)後 user bug report:
+- `stock_health(3030)` / `kalman_trend(3030)` `current_price = 0`(預期 395)
+- `neely_forecast(3030)` `current_price = 126.28`(舊 scenario_forest anchor,
+  非實際最新收盤)
+- 確認 DB 沒問題:`price_daily` 3030 最新 close=395 / 前幾日 397-414
+
+### Root cause
+
+3 個 MCP helper 全部從 `indicator_latest` 撈 current_price:
+- `_health._extract_current_price`:讀 ma_core series 最後一筆 close
+- `_kalman.compute_kalman_trend`:讀 kalman_filter_core indicator.value["raw_close"]
+- `_forecast._extract_current_price`:讀 ma_core series
+
+但:
+1. `_forecast.py:79` `relevant_cores` 列表 **沒含 ma_core** → indicator_latest 內無
+   ma_core entry → 永遠 fallback 0.0
+2. 若 ma_core / kalman_filter_core 沒最近重跑(stock 新進、或 stale build),
+   `indicator_latest` 對該股 = empty → fallback 0.0
+3. neely_forecast 的 126.28 = `_extract_invalidation_price` 從**過期 scenario_forest
+   anchor** 算出來的價(neely_core 沒重 backfill)
+
+**核心問題**:current_price 不該依賴 indicator_latest(stale 或 missing 風險),
+應**直讀 price_daily Bronze**(authoritative source)。
+
+### 修法
+
+加 `agg._db.fetch_latest_close(conn, stock_id, as_of)` helper(取 <= as_of 最新
+close + prev_close + change_pct),3 個 MCP helper 內共用 `mcp_server/_price.py`
+wrapper(self-contained get_connection)。
+
+優先序:
+1. **price_daily 有資料** → 用 DB close(永遠最新最準)
+2. **DB 無資料 fallback** → indicator_latest(對齊既有行為,測試覆蓋)
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `src/agg/_db.py` | 加 `fetch_latest_close(conn, stock_id, as_of)`,SELECT close FROM price_daily ≤ as_of LIMIT 2 計算 change_pct |
+| `mcp_server/_price.py`(新)| `fetch_latest_close_for_tool()` self-contained wrapper(opens conn) |
+| `mcp_server/_health.py` | compute_stock_health 加 v3.26 price_daily 優先 path,fallback indicator |
+| `mcp_server/_kalman.py` | compute_kalman_trend 同款 fix(影響 deviation_sigma 計算) |
+| `mcp_server/_forecast.py` | compute_neely_forecast 同款 fix(current_price 不再 0,fix _build_forecasts fallback path)|
+| `tests/mcp_server/test_toolkit_v{2,3}.py` | `_patch_agg_as_of*` 加 `latest_close` param + 2 new regression test |
+| `CLAUDE.md` | v3.26 章節 |
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/ tests/agg/` ✅ **112 passed / 1 skipped**(從 110 + 2 new)
+- 2 new regression:
+  - `test_uses_price_daily_when_available`:price_daily 有→用 395(不是 indicator 的 999.99)
+  - `test_falls_back_to_indicator_when_db_empty`:price_daily 空→fallback indicator
+- 既有 ~100 tests 0 regression(`_patch_agg_as_of` 預設 mock latest_close=None
+  保留既有 indicator-only path)
+
+### 範圍對齊 user 拍版原則
+
+- **零耦合,少抽象**:單一 helper `fetch_latest_close_for_tool`,3 個 caller 各
+  自獨立調用,不串接彼此
+- **資料分層**:Layer 4 MCP tool 改直讀 Layer 1 Bronze(`price_daily`),不依賴
+  Layer 3 M3 Cores 是否新鮮
+- **fallback graceful**:DB 連線失敗或 stock 無資料 → 回 None → caller 走原
+  indicator path(保證向下相容)
+
+### Out of scope(separate issue,未動)
+
+- **neely scenario_forest 過期**:user 提的 126.28 invalidation_price 本質是
+  neely_core 沒 backfill 3030 最新資料導致 structural_snapshots 過期。MCP 層
+  無法修,需 user 跑 `tw_cores run-all --write` 重算 neely_core。
+- **加 staleness 警告**:若 neely structural 距 as_of >7 天可加 narrative 警告
+  (V3.27 backlog)。
+- **加 stock_health change_pct field**:`fetch_latest_close` 已回 change_pct
+  但 health output 還沒 surface 出來(只用 close);可後續 enhancement。
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Rust / 0 collector.toml(純 Python)
+- 既有 indicator-only path 完整保留(graceful fallback)
+- 既有 ~100 tests 自動套 `latest_close=None` 沒 regression
+- Rollback:單 commit `git revert` 即可
+
+### user 下次跑就自動修正
+
+```powershell
+git pull
+python -m mcp_server  # 開 stdio
+# Claude Desktop 內:
+#   "幫我看 3030 最新股價"  → stock_health 應正確回 current_price=395
+#   "3030 Kalman 趨勢"      → kalman_trend.current_price=395(deviation_sigma 重算)
+#   "3030 Neely 預測"       → neely_forecast.current_price=395
+#                            (但 scenario_forest 仍 stale,需另 tw_cores run-all)
+```
+
+---
+
 ## v3.25 — `market_context()` 整合 commodity_macro + risk_alert(2026-05-17)
 
 接 v3.24 production verify 收尾 + docs alignment 合 main(`d86a1c6`)後,user

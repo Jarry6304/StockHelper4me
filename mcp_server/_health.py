@@ -246,8 +246,10 @@ def compute_stock_health(
     # Top 5 signals(by weight × decay,desc)
     top_signals = _top_signals(facts_dicts, as_of, limit=5)
 
-    # current_price(從 indicator_latest 拿;若沒有 fallback 0.0)
-    current_price = _extract_current_price(snapshot)
+    # current_price(v3.26 修:直讀 price_daily;indicator_latest 可能 stale 或缺 ma_core)
+    from mcp_server._price import fetch_latest_close_for_tool
+    price_info = fetch_latest_close_for_tool(stock_id, as_of, database_url=database_url)
+    current_price = price_info["close"] if price_info else _extract_current_price(snapshot)
 
     # Narrative 組裝
     narrative = _compose_narrative(

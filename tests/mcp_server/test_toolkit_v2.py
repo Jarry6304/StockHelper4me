@@ -410,10 +410,19 @@ class TestMarketContextTimeDecay:
 # ────────────────────────────────────────────────────────────
 
 
-def _patch_agg_as_of(monkeypatch, facts: list[dict], indicator_latest: dict | None = None):
-    """Mock agg.as_of() 回固定 AsOfSnapshot。"""
+def _patch_agg_as_of(monkeypatch, facts: list[dict], indicator_latest: dict | None = None,
+                       *, latest_close: dict | None = None):
+    """Mock agg.as_of() 回固定 AsOfSnapshot + v3.26 mock fetch_latest_close。
+
+    v3.26:預設 latest_close=None → 回退到 indicator_latest path(對齊既有 test 期望)。
+    若指定 dict {"close":..,"prev_close":..,"change_pct":..}則 fetch_latest_close 回該值。
+    """
     from agg import _types
     import agg
+    from mcp_server import _price as _price_mod
+
+    monkeypatch.setattr(_price_mod, "fetch_latest_close_for_tool",
+                        lambda *a, **kw: latest_close)
 
     def fake_as_of(stock_id, as_of, **kwargs):
         rows = [
@@ -606,10 +615,18 @@ def _patch_agg_as_of_with_neely(
     *,
     scenarios: list[dict],
     indicator_latest: dict | None = None,
+    latest_close: dict | None = None,
 ):
-    """Mock agg.as_of() 回包含 neely structural snapshot 的 AsOfSnapshot。"""
+    """Mock agg.as_of() 回包含 neely structural snapshot 的 AsOfSnapshot。
+
+    v3.26:加 mock `fetch_latest_close_for_tool`(預設 None → fallback 走 indicator)。
+    """
     from agg import _types
     import agg
+    from mcp_server import _price as _price_mod
+
+    monkeypatch.setattr(_price_mod, "fetch_latest_close_for_tool",
+                        lambda *a, **kw: latest_close)
 
     def fake_as_of(stock_id, as_of, **kwargs):
         # Wrap scenarios in structural snapshot
