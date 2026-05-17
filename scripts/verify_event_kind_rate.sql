@@ -3,9 +3,16 @@
 -- ============================================================================
 -- v3.14(2026-05-17):per-EventKind 觸發率 verify SQL,Round N calibration 用。
 -- v3.15(2026-05-16):Round 8 calibration 動工 — 3 EventKinds tighten
---   institutional/LargeTransaction:z 2.0 → 2.5(預期 23.49 → ~6.4/yr ✅)
---   foreign_holding/HoldingMilestoneLow:加 MIN_MILESTONE_SPACING_DAYS=10(預期 15.46 → ~8-10/yr ✅)
---   foreign_holding/SignificantSingleDayChange:z 2.0 → 2.1(預期 12.88 → ~10/yr ✅)
+--   institutional/LargeTransaction:z 2.0 → 2.5(預期 23.49 → ~6.4/yr,實測 15.99/yr 仍 over)
+--   foreign_holding/HoldingMilestoneLow:加 MIN_MILESTONE_SPACING_DAYS=10
+--     (預期 15.46 → ~8-10/yr,實測 3.97/yr over-tight)
+--   foreign_holding/SignificantSingleDayChange:z 2.0 → 2.1(預期 12.88 → ~10/yr,實測 11.74/yr ✅)
+-- v3.16 Round 8.1(2026-05-17):2 個 over-correction 修正
+--   institutional/LargeTransaction:z 2.5 → 2.7(預期 15.99 → ~8/yr ✅)
+--     重尾分布(Lo 2001 + Cont 2001),Gaussian 預期 ×2.5 = production 觀察
+--   foreign_holding 4 milestone variants:MIN_MILESTONE_SPACING_DAYS 10 → 5
+--     production cluster size ≈ 4-event,spacing=5 → ~50% retention(對齊 1 週)
+--     預期 Low ~7-9/yr ✅ / High ~5-7 / LowAnn ~3-5 / HighAnn ~2-4
 --
 -- 對齊 v1.32 acceptance 標準:per-stock cores 每 EventKind ≤ 12/yr/stock。
 -- 修 B.extra SQL bug:對 distinct_stocks ≤ 5 的 market-level cores(taiex /

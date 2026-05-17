@@ -35,12 +35,16 @@ inventory::submit! {
 const MILESTONE_LOOKBACK_QUARTERLY: usize = 60;
 const MILESTONE_LOOKBACK_ANNUAL: usize = 252;
 
-/// Milestone events 最小間距(交易日),預設 10(~2 週)
-/// Reference(2026-05-16 v3.15 Round 8): Lucas & LeBeau (1992) "Technical Traders Guide
-/// to Computer Analysis" Ch.7 — pivot 確認需要 N-bar holding 期間;週時間框架慣例。
-/// v3.15: production data 揭露 HoldingMilestoneLow 觸發率 15.46/yr/stock 超 v1.32
-/// ≤ 12/yr/stock 標準;連續探低 cluster 視為同一事件,間距 10d 後預期 ~8-10/yr/stock。
-const MIN_MILESTONE_SPACING_DAYS: usize = 10;
+/// Milestone events 最小間距(交易日),預設 5(~1 週)
+/// Reference(2026-05-16 v3.15 Round 8 → v3.16 Round 8.1): Lucas & LeBeau (1992)
+/// "Technical Traders Guide to Computer Analysis" Ch.7 — pivot 確認需要 N-bar holding 期間。
+/// v3.15(2026-05-16): production data 揭露 HoldingMilestoneLow 觸發率 15.46/yr/stock 超 v1.32
+/// ≤ 12/yr/stock 標準;首試 spacing=10 對稱套 4 variants。
+/// v3.16 Round 8.1(2026-05-17): spacing=10 過嚴 — 4 variants 全 collapse 到 1.5-4/yr
+/// (Low 3.97,High 3.26,LowAnn 2.03,HighAnn 1.49)。production-data-driven 觀察:
+/// 台股外資持股 cluster 平均 ≈ 4-event(連續探低/探高 monotonic drift),spacing=10
+/// 達 25% retention(過嚴 2×)。縮 5 達 ~50% retention,Low 預期 ~7-9/yr ✅。
+const MIN_MILESTONE_SPACING_DAYS: usize = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForeignHoldingParams {
@@ -433,8 +437,8 @@ mod tests {
             "fire date 應為進入 near-limit zone 當日");
     }
 
-    /// v3.15 Round 8(2026-05-16):MIN_MILESTONE_SPACING_DAYS=10 防連續探低 cluster。
-    /// 連續 10 天每日新低,應只 fire 1 次(進入新低當日)。
+    /// v3.16 Round 8.1(2026-05-17):MIN_MILESTONE_SPACING_DAYS=5 防連續探低 cluster。
+    /// 連續 4 天每日新低(在 spacing=5 window 內),應只 fire 1 次(進入新低當日)。
     #[test]
     fn milestone_spacing_prevents_consecutive_low_fires() {
         let mut points = Vec::with_capacity(80);
@@ -445,9 +449,9 @@ mod tests {
             r.date = base + chrono::Duration::days(i);
             points.push(r);
         }
-        // 連續 8 天每日新低 50→49.5→49.0→...→46.5(在 spacing=10 內)
+        // 連續 4 天每日新低 50→49.5→49.0→48.5→48.0(壓進 spacing=5 內)
         let mut ratio = 50.0;
-        for i in 60..68 {
+        for i in 60..64 {
             ratio -= 0.5;
             let mut r = raw("2026-01-01", ratio);
             r.date = base + chrono::Duration::days(i as i64);
@@ -463,14 +467,14 @@ mod tests {
         assert_eq!(
             lows.len(),
             1,
-            "MIN_MILESTONE_SPACING_DAYS=10 連續 8 天探低應只 fire 1 次(實際 {} 次)",
+            "MIN_MILESTONE_SPACING_DAYS=5 連續 4 天探低應只 fire 1 次(實際 {} 次)",
             lows.len()
         );
         // 第一次 fire 應在第 60 天(進入新低當日)
         assert_eq!(lows[0].date, base + chrono::Duration::days(60));
     }
 
-    /// v3.15 Round 8:spacing 過後可再次 fire(隔 >= 10 trading day 的二次探低)
+    /// v3.16 Round 8.1:spacing 過後可再次 fire(隔 >= 5 trading day 的二次探低)
     #[test]
     fn milestone_spacing_allows_refire_after_gap() {
         let mut points = Vec::with_capacity(100);
@@ -485,15 +489,15 @@ mod tests {
         let mut r = raw("2026-01-01", 49.0);
         r.date = base + chrono::Duration::days(60);
         points.push(r);
-        // 第 61-71 天 持平 49.0(無新低,11 天 gap)
-        for i in 61..72 {
+        // 第 61-66 天 持平 49.0(無新低,7 天 gap >= spacing=5)
+        for i in 61..67 {
             let mut r = raw("2026-01-01", 49.0);
             r.date = base + chrono::Duration::days(i as i64);
             points.push(r);
         }
-        // 第 72 天 再探低 48.0(spacing >= 10,應再 fire)
+        // 第 67 天 再探低 48.0(spacing >= 5,應再 fire)
         let mut r = raw("2026-01-01", 48.0);
-        r.date = base + chrono::Duration::days(72);
+        r.date = base + chrono::Duration::days(67);
         points.push(r);
 
         let series = ForeignHoldingSeries { stock_id: "2330".to_string(), points };

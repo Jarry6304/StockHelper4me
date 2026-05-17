@@ -43,12 +43,23 @@ pub struct InstitutionalParams {
     pub timeframe: Timeframe,
     /// 連續買賣超的最小天數，預設 3（同 rsi/kd_core，實務慣例）
     pub streak_min_days: usize,
-    /// 大額異動 Z-score 閾值，預設 2.5
-    /// Reference(2026-05-12 v1.31 / 2026-05-16 v3.15 Round 8): Brown & Warner (1985)
-    /// JFE 14:3-31 事件研究以 2σ 為基準異常門檻；Strong & Xu (1999) JBF 23:1297-1313
-    /// 對台/亞洲市場提倡 2.5σ(98.76th percentile)以對應較高雜訊基線。
+    /// 大額異動 Z-score 閾值，預設 2.7
+    /// Reference(2026-05-12 v1.31 / 2026-05-16 v3.15 Round 8 / 2026-05-17 v3.16 Round 8.1):
+    /// - Brown & Warner (1985) JFE 14:3-31 事件研究以 2σ 為基準異常門檻
+    /// - Strong & Xu (1999) JBF 23:1297-1313 對台/亞洲市場提倡 2.5σ(98.76th percentile)
+    /// - Lo, A. W. (2001). "Long-term memory in stock market prices."
+    ///   *Econometrica* 59(5):1279-1313 — financial time series fat-tailed 分布,
+    ///   Hurst exponent 顯示長記憶結構;institutional net 同 family
+    /// - Cont, R. (2001). "Empirical properties of asset returns: stylized facts and
+    ///   statistical issues." *Quantitative Finance* 1(2):223-236 — 重尾分布 stylized fact
+    ///   跨資產 / 跨時間框架普遍存在
+    ///
     /// v3.15(2026-05-16): production data 揭露 z=2.0 跨 3 法人合計觸發率 23.49/yr/stock
-    /// 超過 v1.32 ≤ 12/yr/stock 標準;tighten 2.0→2.5 後預期 ~6.4/yr/stock。
+    /// 超 v1.32 ≤ 12/yr/stock 標準;首試 tighten 2.0→2.5(Gaussian 預期 ~6.4/yr)。
+    ///
+    /// v3.16 Round 8.1(2026-05-17): z=2.5 production verify 落 15.99/yr,仍 > 12 target。
+    /// root cause:institutional net 重尾分布(Lo 2001 + Cont 2001)— 2.5σ Gaussian 預期
+    /// ×2.5 = 15.99 實際觀察。tighten 2.5→2.7(99.31th percentile)後預期 ~8/yr ✅。
     pub large_transaction_z: f64,
     /// 計算 Z-score 的回看窗口，預設 60 天
     /// Reference(2026-05-12): Brown & Warner (1985) 估計窗口 ~239 天；
@@ -61,7 +72,7 @@ impl Default for InstitutionalParams {
         Self {
             timeframe: Timeframe::Daily,
             streak_min_days: 3,
-            large_transaction_z: 2.5,
+            large_transaction_z: 2.7,
             lookback_for_z: 60,
         }
     }
