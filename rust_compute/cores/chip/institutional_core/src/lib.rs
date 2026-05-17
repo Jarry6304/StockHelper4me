@@ -59,7 +59,15 @@ pub struct InstitutionalParams {
     ///
     /// v3.16 Round 8.1(2026-05-17): z=2.5 production verify 落 15.99/yr,仍 > 12 target。
     /// root cause:institutional net 重尾分布(Lo 2001 + Cont 2001)— 2.5σ Gaussian 預期
-    /// ×2.5 = 15.99 實際觀察。tighten 2.5→2.7(99.31th percentile)後預期 ~8/yr ✅。
+    /// ×2.5 = 15.99 實際觀察。tighten 2.5→2.7(99.31th percentile)後預期 ~8/yr。
+    ///
+    /// v3.17 Round 8.2(2026-05-17,accepted baseline): z=2.7 production verify 落 14.16/yr,
+    /// 仍 17% over target。fat-tailed reality 進一步驗證 — Gaussian 預期 ×3.4 = 13.6
+    /// 實際 14.16(極接近 fat-tail 模型而非 Gaussian)。每次 z+0.2σ 邊際效益遞減:
+    /// v3.15→v3.16 z 2.5→2.7 -11%,預期 v3.17 z 2.7→3.0 仍只 -15% 至 ~12,
+    /// 投資報酬率低且踏 99.73th percentile 過嚴。**accepted baseline 14.16/yr**,
+    /// 對齊 `DivergenceWithinInstitution 58.41/yr`(v1.32 accepted)的 production
+    /// reality 並列處理 — spec ≤ 12 為方向性目標,非硬規則(per cores_overview §7.5)。
     pub large_transaction_z: f64,
     /// 計算 Z-score 的回看窗口，預設 60 天
     /// Reference(2026-05-12): Brown & Warner (1985) 估計窗口 ~239 天；

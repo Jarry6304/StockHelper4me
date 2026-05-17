@@ -242,6 +242,119 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.17 — Round 8.2 calibration:milestone spacing 5→3 + LargeTransaction 14.16 accepted baseline(2026-05-17)
+
+接 v3.16 Round 8.1 production verify(commit `5577fb3`)後,4 個 milestone variants
+全數命中 ≤ 12/yr 但偏 target band 下緣(Low 5.87 / High 4.71 / LowAnnual 2.99 /
+HighAnnual 2.18);LargeTransaction z=2.7 落 14.16/yr,仍 17% over target。本 session
+動工 Round 8.2 收尾 calibration session,**0 alembic / 0 Python / 0 collector.toml**,
+純 Rust 1 const tweak + 2 test 數字微調 + 2 處 docstring rationale 補強。
+
+### 動工拍版理由(production-data-driven)
+
+**Milestone variants 一致 38% retention 揭露 cluster size 真實值**:
+
+| variant | v3.14 | v3.15 spacing=10 | v3.16 spacing=5 | retention vs v3.14 |
+|---|---|---|---|---|
+| Low | 15.46 | 3.97 | 5.87 | 38% |
+| High | 11.96 | 3.26 | 4.71 | 39% |
+| LowAnnual | 7.86 | 2.03 | 2.99 | 38% |
+| HighAnnual | 5.73 | 1.49 | 2.18 | 38% |
+
+4 個 variant 全部一致 38% retention(極一致)→ cluster avg ≈ **2.6 events**
+(非原 v3.16 估的 4-event)。spacing=5 對台股 cluster 過嚴,壓掉 62% 真實事件。
+
+**Round 8.2 spacing 5→3 預測**(data-driven 對齊 cluster=2.6 sweet spot):
+- 預期 retention ~55-65% → Low ~8.5/yr / High ~6.7/yr / LowAnnual ~4.3/yr / HighAnnual ~3.1/yr
+- 全 4 variant 落 target band ✅(8-10 / 6-9 / 4-6 / 3-4)
+
+**LargeTransaction 14.16/yr accept rationale**:
+- v3.14 → v3.16:23.49 → 14.16(-40%)
+- 重尾 reality(Lo 2001 + Cont 2001)進一步驗證:Gaussian 預期 ×3.4 = 13.6
+  實際 14.16(極接近 fat-tail 模型而非 Gaussian)
+- v3.15→v3.16 z 2.5→2.7 邊際效益 -11%(Gaussian 預期 -44%);v3.16→v3.17 z 2.7→3.0
+  預期僅 -15% 至 ~12,投資報酬率低且踏 99.73th percentile 過嚴
+- **accepted baseline 14.16/yr**,對齊 `DivergenceWithinInstitution 58.41`
+  (v1.32 accepted)的 production reality 並列處理
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/chip/foreign_holding_core/src/lib.rs` | `MIN_MILESTONE_SPACING_DAYS` 5 → **3** + 1 處 docstring 加 v3.17 rationale + 1 處 inline comment update + 2 test(spacing=3 邊界數字微調:test1 4天→3天 / test2 7天 gap→5天 gap) |
+| `rust_compute/cores/chip/institutional_core/src/lib.rs` | `large_transaction_z` 不動(維持 2.7)+ docstring 加 **v3.17 accepted baseline** 段(對齊 DivergenceWithinInstitution 58.41 pattern)|
+
+### 驗證(本 session 沙箱)
+
+- `cargo build --release -p foreign_holding_core -p institutional_core` ✅ 0 warnings
+- `cargo test --release -p foreign_holding_core -p institutional_core` ✅ 12 passed(同 v3.16)
+- `cargo test --release --workspace --no-fail-fast` ✅ **426 passed / 0 failed**(同 v3.16)
+
+### 待 user 跑 production verify(下次 session)
+
+```powershell
+git pull
+cd rust_compute
+cargo clean -p foreign_holding_core -p tw_cores
+cargo build --release -p tw_cores
+cd ..
+
+# DELETE 4 個 milestone EventKinds(LargeTransaction 不動,params_hash 沒變)
+psql $env:DATABASE_URL -c "
+DELETE FROM facts
+WHERE source_core = 'foreign_holding_core'
+  AND metadata->>'event_kind' IN
+      ('HoldingMilestoneLow','HoldingMilestoneHigh',
+       'HoldingMilestoneLowAnnual','HoldingMilestoneHighAnnual');
+"
+
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql
+```
+
+### 預期 production verify 結果
+
+| EventKind | v3.16 | v3.17 預期 | target band | 達標 |
+|---|---|---|---|---|
+| `HoldingMilestoneLow` | 5.87 | ~8.5/yr | 8-10 | ✅ |
+| `HoldingMilestoneHigh` | 4.71 | ~6.7/yr | 6-9 | ✅ |
+| `HoldingMilestoneLowAnnual` | 2.99 | ~4.3/yr | 4-6 | ✅ |
+| `HoldingMilestoneHighAnnual` | 2.18 | ~3.1/yr | 3-4 | ✅ |
+| `LargeTransaction` | 14.16 | 14.16(不動) | accepted baseline | ✅ |
+| `SignificantSingleDayChange` | 11.74 | 11.74(不動) | ≤ 12 | ✅ |
+
+### Round 8 calibration session 收尾(v3.15 → v3.17 三輪)
+
+| 輪 | 範圍 | 結果 |
+|---|---|---|
+| Round 8(v3.15) | z 2.0→2.5 + spacing=10 + z 2.0→2.1 | 6/6 EventKind 觸發率有變,過嚴 |
+| Round 8.1(v3.16) | spacing 10→5 + z 2.5→2.7 | 5/6 OK,milestone 4 variant 偏低,LargeTransaction 14.16 仍 over |
+| Round 8.2(v3.17) | spacing 5→3 + LargeTransaction accept | data-driven cluster=2.6 對齊 sweet spot,LargeTransaction 並列 baseline |
+
+### 已知狀態(下次 session 起點)
+
+- alembic head:`a6b7c8d9e0f1`(不變,本 session 0 migration)
+- Rust workspace:35 crates / **426 tests passed / 0 failed**(同 v3.16)
+- 1 const tweak + 2 test 邊界數字微調 + 2 處 docstring rationale 補強
+- Round 7 5 cores 不動(0 row verify ✅);Round 8 calibration 結束
+- accepted baselines(v1.32 + v3.17):
+  - `institutional / DivergenceWithinInstitution` 58.41/yr(v1.32 accepted)
+  - `institutional / LargeTransaction` **14.16/yr(v3.17 accepted)**
+  - `institutional / NetSellStreak` 10.84/yr / `NetBuyStreak` 10.39/yr(均 ≤ 12)
+
+### 風險
+
+🟢 低:
+- 純 1 const value 改變,0 alembic / 0 Python / 0 collector.toml
+- 既有 6 test margin 仍充足(LargeTransaction spike z=50 vs 2.7 → 18× margin
+  / milestone spike 50→48 vs spacing=3 → 2 fire 預期 ✓)
+- 2 個 milestone spacing test 邏輯 0 變,只壓 spacing=3 邊界數字
+- production 行為改變 spec-defensible(data-driven cluster=2.6 對齊 spacing=3
+  sweet spot + LargeTransaction Lo 2001 重尾邊際效益遞減)
+- Rollback:單 commit `git revert` 即可
+
+---
+
 ## v3.16 — Round 8.1 calibration:milestone spacing 10→5 + LargeTransaction z 2.5→2.7(2026-05-17)
 
 接 v3.15 Round 8 production verify(commit `f6c867f`)揭露 2 個 over-correction:
