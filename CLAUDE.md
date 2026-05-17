@@ -303,21 +303,36 @@ Spike / MomentumUp / MomentumDown / RegimeBreak。
 - **資料分層**:Bronze → Silver → Core → MCP;per-stock 屬 chip,全市場屬 env
 - **參數選擇優先序**:production calibration → spec → 財經論文 + reference
 
+### Commit 切法(本 session 切 2 個)
+
+**Commit A**(已 push `2a3cd2c`):4 cores spec decisions 拍版 + risk_alert chip 歸位
+
+**Commit B**(本 push,alembic + schema):3 Silver derived 表落地
+- `loan_collateral_balance_derived`(5 主欄 + 5 change_pct + JSONB)
+- `block_trade_derived`(SUM by trade_type per stock,date)
+- `commodity_price_daily_derived`(z-score / streak / momentum per commodity)
+- risk_alert 不需 Silver derived(直讀 Bronze,對齊 fear_greed 例外)
+- market_value 不需 Silver derived(valuation_core 直接消費 Bronze)
+- alembic head:`b7c8d9e0f1g2` → **`c8d9e0f1g2h3`**
+
+**Commit C(下個 session,等 user 跑 alembic upgrade head 後再上)**:
+- `rust_compute/cores/chip/loan_collateral_core/`
+- `rust_compute/cores/chip/block_trade_core/`
+- `rust_compute/cores/chip/risk_alert_core/`
+- `rust_compute/cores/environment/commodity_macro_core/`
+- `src/silver/builders/loan_collateral.py` + `block_trade.py` + `commodity_macro.py`
+- `tw_cores` dispatcher.rs 加 4 個 match arm + workflows toml 加 4 entry
+- cargo test 全綠後 push
+
 ### 待 user 做(下次 session 起點)
 
-1. **review 4 spec 拍版段落**(chip §十/§十一/§十二 + env §十)— 看決策表 +
-   reference 是否合理;若有覆議再開
-2. **下個 commit:Rust 4 crates + Silver 3 builders + dispatcher + workflows**
-   - `rust_compute/cores/chip/loan_collateral_core/`
-   - `rust_compute/cores/chip/block_trade_core/`
-   - `rust_compute/cores/chip/risk_alert_core/`
-   - `rust_compute/cores/environment/commodity_macro_core/`
-   - `src/silver/builders/loan_collateral.py` + `block_trade.py` + `commodity_macro.py`
-   - `tw_cores` dispatcher.rs 加 4 個 match arm
-   - `workflows/tw_stock_standard.toml` 加 4 個 enabled entry
-   - cargo test 全綠後 push
-3. **最後 backfill**:`python src/main.py incremental` 拉 5 個新 dataset(估
-   ~6h per_stock × 3 + 2 all_market 數分鐘)+ production verify
+1. **跑 Commit B alembic**:`alembic upgrade head` → head `c8d9e0f1g2h3`
+2. **驗證 3 張 Silver derived 表存在**:
+   ```powershell
+   psql $env:DATABASE_URL -c "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('loan_collateral_balance_derived','block_trade_derived','commodity_price_daily_derived') ORDER BY tablename;"
+   ```
+3. **回覆我** → 我上 Commit C(Rust + Silver builders + dispatcher)
+4. **最後**:`python src/main.py incremental` 拉 5 datasets + production verify
 
 ### 風險
 
