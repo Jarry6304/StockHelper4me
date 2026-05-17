@@ -32,24 +32,28 @@ members = [
     "cores/indicator/candlestick_pattern_core",
     "cores/indicator/trendline_core",
     "cores/indicator/kalman_filter_core",
-    # Chip Cores(P2 — 5 個)
+    # Chip Cores(P2 — 5 個 + v3.21 3 個)
     "cores/chip/day_trading_core",
     "cores/chip/institutional_core",
     "cores/chip/margin_core",
     "cores/chip/foreign_holding_core",
     "cores/chip/shareholder_core",
+    "cores/chip/loan_collateral_core",
+    "cores/chip/block_trade_core",
+    "cores/chip/risk_alert_core",
     # Fundamental Cores(P2 — 3 個 + v3.4 magic_formula)
     "cores/fundamental/revenue_core",
     "cores/fundamental/valuation_core",
     "cores/fundamental/financial_statement_core",
     "cores/fundamental/magic_formula_core",
-    # Environment Cores(P2 — 5 個)
+    # Environment Cores(P2 — 6 個 + v3.21 1 個)
     "cores/environment/taiex_core",
     "cores/environment/us_market_core",
     "cores/environment/exchange_rate_core",
     "cores/environment/fear_greed_core",
     "cores/environment/market_margin_core",
     "cores/environment/business_indicator_core",
+    "cores/environment/commodity_macro_core",
     # System Cores(monolithic binary)
     "cores/system/tw_cores",
 ]

@@ -241,3 +241,50 @@ pub async fn load_business_indicator(pool: &PgPool, lookback_days: i32) -> Resul
     .bind(lookback_days).fetch_all(pool).await.context("load_business_indicator failed")?;
     Ok(BusinessIndicatorSeries { points })
 }
+
+// ===========================================================================
+// v3.21 commodity_macro(commodity_price_daily_derived,GROUP BY commodity)
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommodityMacroSeries {
+    pub commodity: String,                       // 'GOLD' | future SILVER/OIL/...
+    pub points: Vec<CommodityMacroRaw>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CommodityMacroRaw {
+    pub date: NaiveDate,
+    pub price: Option<f64>,                       // NUMERIC → f64(SELECT cast)
+    pub return_pct: Option<f64>,
+    pub return_z_score: Option<f64>,
+    pub momentum_state: Option<String>,           // 'up' | 'down' | 'neutral'
+    pub streak_days: Option<i32>,
+}
+
+pub async fn load_commodity_macro(
+    pool: &PgPool,
+    commodity: &str,
+    lookback_days: i32,
+) -> Result<CommodityMacroSeries> {
+    let points: Vec<CommodityMacroRaw> = sqlx::query_as(
+        r#"
+        SELECT date,
+               price::float8 AS price,
+               return_pct,
+               return_z_score,
+               momentum_state,
+               streak_days
+        FROM commodity_price_daily_derived
+        WHERE commodity = $1
+          AND date >= (CURRENT_DATE - $2::int)
+        ORDER BY date ASC
+        "#,
+    )
+    .bind(commodity)
+    .bind(lookback_days)
+    .fetch_all(pool)
+    .await
+    .context("load_commodity_macro query failed")?;
+    Ok(CommodityMacroSeries { commodity: commodity.to_string(), points })
+}

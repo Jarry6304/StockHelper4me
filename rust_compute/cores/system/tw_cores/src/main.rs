@@ -143,9 +143,14 @@ fn list_cores() -> Result<()> {
     let _ = exchange_rate_core::ExchangeRateCore::new();
     let _ = fear_greed_core::FearGreedCore::new();
     let _ = market_margin_core::MarketMarginCore::new();
+    // v3.21 new cores(2026-05-17)
+    let _ = loan_collateral_core::LoanCollateralCore::new();
+    let _ = block_trade_core::BlockTradeCore::new();
+    let _ = risk_alert_core::RiskAlertCore::new();
+    let _ = commodity_macro_core::CommodityMacroCore::new();
 
     println!();
-    println!("Stage 1-10 + Facts + PG IO + Inventory + run-all dispatch ✅(M3 PR-9a)");
+    println!("Stage 1-10 + Facts + PG IO + Inventory + run-all dispatch ✅(M3 PR-9a + v3.21 4 new)");
     println!("(對齊 m3Spec/cores_overview.md §五 + neely_core_architecture.md §七)");
     Ok(())
 }

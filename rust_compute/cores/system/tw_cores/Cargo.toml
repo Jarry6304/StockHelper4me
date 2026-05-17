@@ -46,12 +46,15 @@ trendline_core              = { path = "../../indicator/trendline_core" }
 # Statistical / state-space Cores(P3 — v3.4)
 kalman_filter_core          = { path = "../../indicator/kalman_filter_core" }
 
-# Chip Cores(P2 — 5)
+# Chip Cores(P2 — 5 + v3.21 3 個)
 day_trading_core      = { path = "../../chip/day_trading_core" }
 institutional_core    = { path = "../../chip/institutional_core" }
 margin_core           = { path = "../../chip/margin_core" }
 foreign_holding_core  = { path = "../../chip/foreign_holding_core" }
 shareholder_core      = { path = "../../chip/shareholder_core" }
+loan_collateral_core  = { path = "../../chip/loan_collateral_core" }
+block_trade_core      = { path = "../../chip/block_trade_core" }
+risk_alert_core       = { path = "../../chip/risk_alert_core" }
 
 # Fundamental Cores(P2 — 3 + v3.4 magic_formula)
 revenue_core              = { path = "../../fundamental/revenue_core" }
@@ -59,13 +62,14 @@ valuation_core            = { path = "../../fundamental/valuation_core" }
 financial_statement_core  = { path = "../../fundamental/financial_statement_core" }
 magic_formula_core        = { path = "../../fundamental/magic_formula_core" }
 
-# Environment Cores(P2 — 5)
+# Environment Cores(P2 — 6 + v3.21 1 個)
 taiex_core            = { path = "../../environment/taiex_core" }
 us_market_core        = { path = "../../environment/us_market_core" }
 exchange_rate_core    = { path = "../../environment/exchange_rate_core" }
 fear_greed_core       = { path = "../../environment/fear_greed_core" }
 market_margin_core    = { path = "../../environment/market_margin_core" }
 business_indicator_core = { path = "../../environment/business_indicator_core" }
+commodity_macro_core  = { path = "../../environment/commodity_macro_core" }
 
 # 一般依賴
 clap          = { workspace = true }

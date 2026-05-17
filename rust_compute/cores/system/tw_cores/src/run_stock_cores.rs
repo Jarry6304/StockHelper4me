@@ -313,4 +313,43 @@ pub async fn run_stock_cores(
             )),
         }
     }
+
+    // ---- 20. loan_collateral_core(日頻;v3.21)----
+    if filter.is_enabled("loan_collateral_core") {
+        match chip_loader::load_loan_collateral(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+            Ok(series) => summary.push(
+                dispatch_indicator(pool, &loan_collateral_core::LoanCollateralCore::new(), &series,
+                    loan_collateral_core::LoanCollateralParams::default(), write).await,
+            ),
+            Err(e) => summary.push(loader_err_summary(
+                "loan_collateral_core", stock_id, "load_loan_collateral", &e,
+            )),
+        }
+    }
+
+    // ---- 21. block_trade_core(日頻;v3.21)----
+    if filter.is_enabled("block_trade_core") {
+        match chip_loader::load_block_trade(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+            Ok(series) => summary.push(
+                dispatch_indicator(pool, &block_trade_core::BlockTradeCore::new(), &series,
+                    block_trade_core::BlockTradeParams::default(), write).await,
+            ),
+            Err(e) => summary.push(loader_err_summary(
+                "block_trade_core", stock_id, "load_block_trade", &e,
+            )),
+        }
+    }
+
+    // ---- 22. risk_alert_core(日頻;v3.21;直讀 Bronze 對齊 fear_greed 例外)----
+    if filter.is_enabled("risk_alert_core") {
+        match chip_loader::load_risk_alert(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+            Ok(series) => summary.push(
+                dispatch_indicator(pool, &risk_alert_core::RiskAlertCore::new(), &series,
+                    risk_alert_core::RiskAlertParams::default(), write).await,
+            ),
+            Err(e) => summary.push(loader_err_summary(
+                "risk_alert_core", stock_id, "load_risk_alert", &e,
+            )),
+        }
+    }
 }
