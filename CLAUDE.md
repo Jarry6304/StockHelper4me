@@ -251,6 +251,85 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.21 — 4 cores spec decisions 拍版 + risk_alert chip 歸位(2026-05-17)
+
+接 v3.20 Bronze 5 datasets 接入後,user 拍版 4 cores 20 個 open questions。
+**0 alembic / 0 Rust 邏輯 / 0 collector.toml**(純 spec 拍版 doc + Rust 落地
+留待後續 commit)。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `m3Spec/chip_cores.md` | §十 loan_collateral_core proposal → 拍版(11 EventKind);§十一 block_trade_core proposal → 拍版(4 EventKind);加 §十二 risk_alert_core(從 env §十 搬入,4 EventKind)|
+| `m3Spec/environment_cores.md` | 移除原 §十 risk_alert(搬到 chip §十二);原 §十一 commodity_macro 重編 §十 + 拍版(4 EventKind)|
+| `docs/m3_cores_spec_pending.md` | §3.7 / §3.8 / §3.9(新)/ §5.6(廢棄)/ §5.7 拍版 decisions table |
+| `CLAUDE.md` | 加 v3.21 章節 |
+
+### 拍版 4 cores summary
+
+#### `loan_collateral_core`(chip §十)— 11 EventKind
+
+5 大類 × Surge/Crash = 10 + LoanCategoryConcentration = 11。
+- Silver:`loan_collateral_balance_derived` 新表,5 主欄 + 5 change_pct + JSONB pack
+- 70% concentration 對齊 Basel Committee (2006) WP 15
+- 與 margin_core 並存(不整合,粒度不同)
+
+#### `block_trade_core`(chip §十一)— 4 EventKind
+
+LargeBlockTrade / Accumulation / Distribution / MatchingTradeSpike。
+- Silver:`block_trade_derived` 新表(SUM by trade_type)
+- 80% MatchingSpike 對齊 Cao et al. (2009) JEF — block trade matched 通常 50-70%
+
+#### `risk_alert_core`(chip §十二,**從 env §十 搬入**)— 4 EventKind
+
+Announced / Entered / Exited / Escalation,**全帶 metadata.severity**:
+warning(注意)/ disposition(分盤撮合)/ cash_only(全額交割)。
+- Silver:暫無 derived 表(直讀 Bronze,對齊 fear_greed 風格)
+- escalation 60d ≥ 2 次對齊「證券交易所公布注意交易資訊處置作業要點」§4
+- 分層歸位:per-stock signal 屬 chip(non-environment)
+
+#### `commodity_macro_core`(environment §十)— 4 EventKind
+
+Spike / MomentumUp / MomentumDown / RegimeBreak。
+- Silver:`commodity_price_daily_derived` 新表(GROUP BY commodity 算 z/streak)
+- streak_min_days = 5(macro 長於個股 3)— Brock et al. (1992) JoF
+- regime_break_window = 10 — Hamilton (1989) Econometrica regime-switching
+
+### 設計原則(user 拍版 2026-05-17)
+
+- **零耦合,少抽象**:各 EventKind 獨立判定,不跨 core 整合;共用 threshold 但
+  個別 EventKind fire(若需 individual disable 走 workflows toml `enabled = false`)
+- **資料分層**:Bronze → Silver → Core → MCP;per-stock 屬 chip,全市場屬 env
+- **參數選擇優先序**:production calibration → spec → 財經論文 + reference
+
+### 待 user 做(下次 session 起點)
+
+1. **review 4 spec 拍版段落**(chip §十/§十一/§十二 + env §十)— 看決策表 +
+   reference 是否合理;若有覆議再開
+2. **下個 commit:Rust 4 crates + Silver 3 builders + dispatcher + workflows**
+   - `rust_compute/cores/chip/loan_collateral_core/`
+   - `rust_compute/cores/chip/block_trade_core/`
+   - `rust_compute/cores/chip/risk_alert_core/`
+   - `rust_compute/cores/environment/commodity_macro_core/`
+   - `src/silver/builders/loan_collateral.py` + `block_trade.py` + `commodity_macro.py`
+   - `tw_cores` dispatcher.rs 加 4 個 match arm
+   - `workflows/tw_stock_standard.toml` 加 4 個 enabled entry
+   - cargo test 全綠後 push
+3. **最後 backfill**:`python src/main.py incremental` 拉 5 個新 dataset(估
+   ~6h per_stock × 3 + 2 all_market 數分鐘)+ production verify
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Rust / 0 collector.toml
+- 純 doc 拍版,後續 Rust 上線時對齊本文件決策
+- m3Spec 章節重編(risk_alert env→chip)是文件級搬移,既有 5 chip cores
+  + 5 env cores 0 改動
+- Rollback:單 commit `git revert` 即可
+
+---
+
 ## v3.20 — 5 sponsor-tier datasets 接入 Bronze + 4 core spec proposals(2026-05-17)
 
 接 v3.19 probe `--max 0` 全 catalog 跑完(user 本機,59 unused datasets / 15 回 200

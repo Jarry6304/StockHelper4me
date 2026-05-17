@@ -46,8 +46,10 @@
 7. [`market_margin_core`](#七market_margin_core)
 8. [`business_indicator_core`](#八business_indicator_core)
 9. [Environment 與個股 Core 的並排原則](#九environment-與個股-core-的並排原則)
-10. [`risk_alert_core`](#十risk_alert_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
-11. [`commodity_macro_core`](#十一commodity_macro_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
+10. [`commodity_macro_core`](#十commodity_macro_core-decisions-拍版2026-05-17) 🟢 **拍版**
+
+> 註:原 §十 `risk_alert_core` 為 per-stock 訊號,已搬到 `chip_cores.md §十二`
+> (2026-05-17 拍版)。
 
 ---
 
@@ -773,101 +775,71 @@ pub enum BusinessIndicatorEventKind {
 
 ---
 
-## 十、`risk_alert_core` 🟡 **proposal(2026-05-17,等 user 拍版)**
+## 十、`commodity_macro_core` 🟢 **decisions 拍版(2026-05-17)**
 
-> **狀態**:proposal draft。Bronze 表 `disposition_securities_period_tw`
-> v3.20 落地(alembic `b7c8d9e0f1g2`),0 core 消費。
+> **狀態**:spec 拍版 + Rust 實作 backlog。Bronze 表 `commodity_price_daily`
+> v3.20 落地(alembic `b7c8d9e0f1g2`,初版 commodity='GOLD' 一個)。
+>
+> **章節變動**:原 §十 `risk_alert_core` 已 **搬到** `chip_cores.md §十二`
+> (拍版決策:per-stock signal 屬 chip,environment 限全市場層;見 spec_pending
+> §5.6.4 拍版理由)。本 §十 為原 §十一 `commodity_macro_core` 重編。
 
 ### 10.1 定位
-
-台股「處置股」公告追蹤(注意股 / 分盤撮合 / 改全額交割)。**non-environment
-classification 思辨**:雖然處置股是 per-stock 訊號(非全市場層級),但本質是
-**監管行為 / 風險警示** 而非 chip / fundamental / momentum signal,放
-environment_cores 對齊「環境變數」語意(對 individual stock 的「外加風險環境」)。
-
-### 10.2 上游 Bronze / Silver
-
-- Bronze:`disposition_securities_period_tw` PK `(market, stock_id, date,
-  disposition_cnt)`,fields: period_start / period_end / condition / measure
-- Silver:暫不需要 derived 表(事件性低頻,直接讀 Bronze 即可;對齊
-  `fear_greed_core` 的 architecture 例外)
-
-### 10.3 Params
-
-```rust
-pub struct RiskAlertParams {
-    pub timeframe: Timeframe,
-    pub include_warning_only: bool,           // 是否包含「注意股」(輕度),預設 true
-}
-```
-
-### 10.4 Output(EventKind proposal)
-
-| EventKind | 觸發 | 動機 |
-|---|---|---|
-| `DispositionAnnounced` | 公告日當天 fire | 風險升高警訊 |
-| `DispositionEntered` | period_start 當日 fire | 進入處置期間 |
-| `DispositionExited` | period_end + 1 當日 fire | 退出處置期間 |
-| `DispositionEscalation` | disposition_cnt 增加(同股短期內多次處置)| 重複違規,嚴重警訊 |
-
-### 10.5 開放問題清單
-
-| # | 問題 | best-guess | 影響 |
-|---|---|---|---|
-| 10.5.1 | DispositionAnnounced + Entered 重複? | 不重複(公告日 ≠ 開始日)| 兩個 EventKind 並存 |
-| 10.5.2 | escalation 判定窗口(短期內 N 次)| 60 天內第 ≥ 2 次 | best-guess 校準 |
-| 10.5.3 | 是否區分「注意」/「處置」/「全額交割」三級嚴重度 | YES,measure 解析 | 需 measure 中文字串 parser |
-| 10.5.4 | per-stock 訊號歸 environment 章節合理? | YES(對應「外加環境」語意)| 文件歸位 |
-| 10.5.5 | structural_snapshots 寫入 | NO(對齊 fear_greed 風格)| facts only |
-
-### 10.6 跨 Core 並排原則
-
-對齊 §九「環境並排不整合」,本 core fact 不和個股 indicator core fact
-combine 出新 EventKind。Aggregation Layer 並排呈現「處置警示 + 個股技術指標」
-供 user 自判。
-
----
-
-## 十一、`commodity_macro_core` 🟡 **proposal(2026-05-17,等 user 拍版)**
-
-> **狀態**:proposal draft。Bronze 表 `commodity_price_daily` v3.20 落地
-> (alembic `b7c8d9e0f1g2`,初版 commodity='GOLD' 一個),0 core 消費。
-
-### 11.1 定位
 
 商品市場 macro signal(初版只 gold,future 擴 silver / oil / copper / etc)。
 對齊 `exchange_rate_core`(§五)/ `us_market_core`(§四)同款 environment 層
 macro 訊號 — 個股無關,全市場通用。
 
-### 11.2 上游 Silver
+### 10.2 上游 Silver
 
 - Bronze:`commodity_price_daily` PK `(market, commodity, date)`,
   field: price NUMERIC(15, 4)
-- Silver:proposal 拍版後新增 `commodity_price_daily_derived`(對 price 算
-  z-score / streak / momentum)
+- Silver:`commodity_price_daily_derived`(對 price 算 z-score / streak /
+  momentum;PK 同 Bronze 含 commodity 維度)
 
-### 11.3 Params
+### 10.3 Params(拍版)
 
 ```rust
 pub struct CommodityMacroParams {
     pub timeframe: Timeframe,
-    pub commodities: Vec<String>,             // 預設 ["GOLD"](對齊 v3.20 Bronze)
+    pub commodities: Vec<String>,             // 初版 ["GOLD"]
     pub momentum_lookback: usize,             // 預設 60
     pub z_score_threshold: f64,               // 預設 2.0
-    pub streak_min_days: usize,               // 預設 5
+    pub streak_min_days: usize,               // 預設 5(macro,長於個股 3)
+    pub regime_break_window: usize,           // 預設 10(MomentumUp ↔ Down alternation)
 }
 ```
 
-### 11.4 Output(EventKind proposal)
+> **Reference**:
+> - `streak_min_days = 5` ── Brock, Lakonishok & LeBaron (1992) "Simple Technical
+>   Trading Rules and the Stochastic Properties of Stock Returns" *Journal of
+>   Finance* 47(5):1731-1764 — macro / low-frequency signals 需 longer streak
+>   抑制 false positive;per-stock 慣例 3 天,macro 提升至 5
+> - `regime_break_window = 10` ── Hamilton (1989) "A New Approach to the
+>   Economic Analysis of Nonstationary Time Series and the Business Cycle"
+>   *Econometrica* 57(2):357-384 — Markov regime-switching 短窗 alternation
+>   pattern
 
-| EventKind | 觸發 | 動機 |
-|---|---|---|
-| `CommoditySpike` | 單日 \|return z\| > threshold | macro shock(避險 / 通膨)|
-| `CommodityMomentumUp` | 連續 ≥ streak_min_days 上漲 | risk-off 趨勢確立(gold)|
-| `CommodityMomentumDown` | 連續 ≥ streak_min_days 下跌 | risk-on 趨勢確立 |
-| `CommodityRegimeBreak` | momentum 與前期 reverse(z 跨閾值)| 環境切換警示 |
+### 10.4 warmup_periods
 
-### 11.5 metadata 設計
+```rust
+fn warmup_periods(&self, params: &CommodityMacroParams) -> usize {
+    params.momentum_lookback + 10  // = 70
+}
+```
+
+### 10.5 Output(拍版 EventKind)
+
+```rust
+pub enum CommodityMacroEventKind {
+    CommoditySpike,        // 單日 |return z| > threshold
+    CommodityMomentumUp,   // 連續 ≥ streak_min_days 上漲
+    CommodityMomentumDown, // 連續 ≥ streak_min_days 下跌
+    CommodityRegimeBreak,  // MomentumUp/Down 在 regime_break_window 天內 alternation
+}
+```
+
+### 10.6 metadata 設計
 
 ```json
 {
@@ -878,21 +850,32 @@ pub struct CommodityMacroParams {
 }
 ```
 
-### 11.6 開放問題清單
+`CommodityRegimeBreak` 額外攜帶:
+```json
+{
+  "prev_streak_kind": "MomentumUp",
+  "prev_streak_end_date": "2026-05-10",
+  "days_since_prev_streak": 7
+}
+```
 
-| # | 問題 | best-guess | 影響 |
-|---|---|---|---|
-| 11.6.1 | 初版只支援 GOLD,extension path | params.commodities = Vec<String> | Bronze schema 已 PK 含 commodity,可直擴 |
-| 11.6.2 | 與 fear_greed_core 重複? | NO(fear_greed 是 sentiment proxy 綜合,gold 是 hard signal)| 兩個並存,Aggregation 並排 |
-| 11.6.3 | per-stock 影響(避險時防禦股 outperform)| 不寫進 Core | 對齊 §九「環境並排不整合」 |
-| 11.6.4 | 連假 / 週末 gold price 處理 | first_per_day aggregator 不會 fire(週末 0 row 不寫入)| 自然 NaN 跳過 |
-| 11.6.5 | streak_min_days=5 vs 個股 streak 3 的設計差異 | macro 訊號頻率較低,容忍 noise 高 | 校準依據 |
+### 10.7 跨 commodity / 跨 Core 設計
 
-### 11.7 future commodity 擴展
+- **多 commodity 擴展**:params.commodities 列出多支,Rust 對每支 commodity 各自
+  計算 EventKind;metadata 攜帶 commodity 識別。Bronze schema PK 已含 commodity
+  維度,擴展不需 alembic
+- **連假 / 週末**:GOLD 23/5 國際盤,週末仍可能有報價。Silver derived 保留 all
+  available dates,個股 join 時 LEFT JOIN ON commodity.date <= stock.date 取
+  最近一日(週末資料 carry forward 到次週一個股端)
+- **與 fear_greed_core 區別**:fear_greed 是 sentiment proxy(綜合 7 子指標),
+  commodity_macro 是 hard signal(單一商品 price)。兩 core 並存,Aggregation
+  Layer 並排呈現
+- **不寫進 per-stock 影響**:對齊 §九「環境並排不整合」原則
 
-對齊 §11.5 metadata `commodity` 欄,新加 commodity 只需:
+### 10.8 future commodity 擴展 path
+
 1. Bronze:collector.toml 加新 entry(對齊 `gold_price` pattern),
-   aggregator 走 `first_per_day`(注入 commodity 名,需擴 `inject_commodity`
-   param);schema 已 PK 含 commodity,0 alembic
-2. params.commodities 加新代碼
-3. Silver derived 加新 commodity 算 momentum/z-score
+   aggregator 走 `first_per_day`(需擴 `inject_commodity` param 走 collector.toml
+   `extra` 欄;v3.20 v1 hardcode "GOLD")
+2. Silver derived 自動跑(SQL 對所有 commodity GROUP BY 計算)
+3. params.commodities 加新代碼;Rust 0 改動

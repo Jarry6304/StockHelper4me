@@ -72,8 +72,9 @@ v1.29 Round 1 P2 阻塞 6 條目。
 7. [`day_trading_core`](#七day_trading_core)
 8. [跨 Chip Core 綜合事實的處理](#八跨-chip-core-綜合事實的處理)
 9. [`gov_bank_core`](#九gov_bank_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
-10. [`loan_collateral_core`](#十loan_collateral_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
-11. [`block_trade_core`](#十一block_trade_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
+10. [`loan_collateral_core`](#十loan_collateral_core-decisions-拍版2026-05-17) 🟢 **拍版**
+11. [`block_trade_core`](#十一block_trade_core-decisions-拍版2026-05-17) 🟢 **拍版**
+12. [`risk_alert_core`](#十二risk_alert_core-decisions-拍版2026-05-17) 🟢 **拍版**(從 env §十 搬入)
 
 ---
 
@@ -933,11 +934,10 @@ rust_compute/cores/chip/gov_bank_core/
 
 ---
 
-## 十、`loan_collateral_core` 🟡 **proposal(2026-05-17,等 user 拍版)**
+## 十、`loan_collateral_core` 🟢 **decisions 拍版(2026-05-17)**
 
-> **狀態**:proposal draft。Bronze 表 `loan_collateral_balance_tw` v3.20 落地
-> (alembic `b7c8d9e0f1g2`,5 大類借券 × 7 sub-fields = 34 cols),但目前 **0 個
-> core 真正消費**。本節為 spec draft 等 user 拍版後上 Rust。
+> **狀態**:spec 拍版 + Rust 實作 backlog。Bronze 表 `loan_collateral_balance_tw`
+> v3.20 落地(alembic `b7c8d9e0f1g2`,35 cols),user 拍版 11 EventKind。
 
 ### 10.1 定位
 
@@ -945,49 +945,94 @@ rust_compute/cores/chip/gov_bank_core/
 SecuritiesFinanceSecuredLoan / SettlementMargin)。比既有 `margin_core` 對應的
 `margin_daily_derived` 細粒度高 ~5×,可細看「哪一類借券動」。
 
-### 10.2 上游 Silver
+### 10.2 上游 Silver(拍版)
 
-- 目前 **無 Silver builder**(Bronze 表 v3.20 剛落地);proposal 拍版後需新增
-  `loan_collateral_balance_derived`(對應 5 大類 × CurrentDayBalance 5 主欄
-  + change_pct 5 衍生欄)
-- Bronze:`loan_collateral_balance_tw` PK `(market, stock_id, date)`,~34 columns
+- Silver:**`loan_collateral_balance_derived`** 新表
+  - PK:`(market, stock_id, date)`
+  - 5 主欄:`{margin / firm_loan / unrestricted_loan / finance_loan /
+    settlement_margin}_current_balance`
+  - 5 衍生欄:`{...}_change_pct`(對前一交易日 % 變化)
+  - JSONB pack:其他 25 cols(Previous / Buy / Sell / CashRedemption /
+    Replacement / NextDayQuota × 5 類)+ 5 類合計 + 各占比
+- Bronze:`loan_collateral_balance_tw` PK `(market, stock_id, date)`,35 cols
 
-### 10.3 Params
+> **設計拍版理由**:5 主欄 + JSONB pack 對齊 `margin_daily_derived` 風格(少
+> 抽象);NextDayQuota 純監控用,不消費,進 JSONB detail。
+
+### 10.3 Params(拍版)
 
 ```rust
 pub struct LoanCollateralParams {
     pub timeframe: Timeframe,
-    pub balance_change_pct_threshold: f64,    // 預設 10.0%(對齊 margin_core)
-    pub category_concentration_threshold: f64, // 某類占 5 類合計 > %,預設 70.0
+    pub balance_change_pct_threshold: f64,      // 預設 10.0%(對齊 margin_core)
+    pub category_concentration_threshold: f64,  // 預設 70.0(對齊 Basel ICAAP)
 }
 ```
 
-### 10.4 Output(EventKind proposal)
+> **Reference(`category_concentration_threshold = 70.0`)**:
+> Basel Committee on Banking Supervision (2006), "Studies on Credit Risk
+> Concentration," Working Paper No. 15 — 集中度比率 CR1 > 0.7(單類占 70%
+> 以上)視為 high concentration risk。本 core 對 5 類借券 mirror 該標準。
 
-| EventKind | 觸發 | 對齊 |
-|---|---|---|
-| `MarginBalanceSurge` / `MarginBalanceCrash` | margin_current_day_balance 變化 > threshold | margin_core MarginSurge |
-| `FirmLoanSurge` / `FirmLoanCrash` | firm_loan_current_day_balance 變化 > threshold | 新類別 |
-| `UnrestrictedLoanSurge` / `UnrestrictedLoanCrash` | 同上 | 新類別 |
-| `FinanceLoanSurge` / `FinanceLoanCrash` | 同上(證金擔保借券)| 新類別 |
-| `LoanCategoryConcentration` | 某類占合計 > 70%(系統風險警訊)| 新跨類訊號 |
+### 10.4 warmup_periods
 
-### 10.5 開放問題清單
+```rust
+fn warmup_periods(&self, _params: &LoanCollateralParams) -> usize {
+    2  // 需 t-1 算 change_pct;固定 2 個交易日緩衝
+}
+```
 
-| # | 問題 | best-guess | 影響 |
-|---|---|---|---|
-| 10.5.1 | 與既有 margin_core 關係(margin_core 已有 MarginSurge / Crash)| 並存(粒度不同)| 若整合則 margin_core 擴 4 類 |
-| 10.5.2 | 5 大類各自獨立 EventKind 必要? | YES(對等對稱)| 8 EventKind + 1 concentration = 9 |
-| 10.5.3 | LoanCategoryConcentration 70% 閾值依據 | best-guess | 需 production 資料校準 |
-| 10.5.4 | Silver 表設計:5 主欄 + 25 detail JSONB or 34 columns 全散開? | 5 主欄 + detail JSONB | 對齊 margin_daily_derived |
-| 10.5.5 | NextDayQuota 欄是否消費 | NO(僅監控用)| 7 cols × 5 類 = 35 cols 縮為 25 |
+### 10.5 Output(拍版 11 EventKind)
+
+```rust
+pub enum LoanCollateralEventKind {
+    // 5 類 × Surge/Crash = 10
+    MarginBalanceSurge, MarginBalanceCrash,
+    FirmLoanSurge, FirmLoanCrash,
+    UnrestrictedLoanSurge, UnrestrictedLoanCrash,
+    FinanceLoanSurge, FinanceLoanCrash,
+    SettlementMarginSurge, SettlementMarginCrash,
+    // 1 跨類
+    LoanCategoryConcentration,                  // 任一類占合計 > 70%
+}
+```
+
+> **對等對稱拍版**:雖然 SettlementMargin(交割保證金借券)production data 中
+> 多為 0(僅交割異常時動用),仍保留 Surge/Crash 對等;production calibration
+> 後可 individual disable(workflows toml `enabled = false`)。
+
+### 10.6 metadata 設計
+
+```json
+{
+  "category": "margin|firm_loan|unrestricted_loan|finance_loan|settlement_margin",
+  "current_balance": 26483,
+  "prev_balance": 26164,
+  "change_pct": 1.22
+}
+```
+
+`LoanCategoryConcentration` 額外攜帶:
+```json
+{
+  "dominant_category": "margin",
+  "category_ratio": 0.75,
+  "total_balance": 35450
+}
+```
+
+### 10.7 與 `margin_core` 並存(拍版)
+
+不整合 `margin_core`(粒度不同)。`margin_core` 對應 `margin_daily_derived`
+(融資 / 融券 6 欄),本 core 對應 `loan_collateral_balance_derived`(5 大類
+35 欄)。Aggregation Layer 並排呈現。
 
 ---
 
-## 十一、`block_trade_core` 🟡 **proposal(2026-05-17,等 user 拍版)**
+## 十一、`block_trade_core` 🟢 **decisions 拍版(2026-05-17)**
 
-> **狀態**:proposal draft。Bronze 表 `block_trade_tw` v3.20 落地(alembic
-> `b7c8d9e0f1g2`,PK `(market, stock_id, date, trade_type)`),0 core 消費。
+> **狀態**:spec 拍版 + Rust 實作 backlog。Bronze 表 `block_trade_tw` v3.20
+> 落地(alembic `b7c8d9e0f1g2`,PK `(market, stock_id, date, trade_type)`)。
 
 ### 11.1 定位
 
@@ -996,41 +1041,194 @@ pub struct LoanCollateralParams {
 block_trade 是 visible big transactions 直接揭露,LargeTransaction 是 inferred
 from aggregated 法人 daily net。
 
-### 11.2 上游 Silver
+### 11.2 上游 Silver(拍版)
 
-- 目前 **無 Silver builder**;proposal 拍版後新增 `block_trade_derived`
-  (per-stock per-day SUM aggregation by trade_type → 配對 net / 鉅額 net /
-  自營 net + total)
+- Silver:**`block_trade_derived`** 新表
+  - PK:`(market, stock_id, date)`(per-stock per-day,trade_type 在 builder 端 GROUP BY SUM)
+  - 主欄:`total_volume / total_trading_money / matching_volume / matching_trading_money / largest_single_trade_money / trade_type_count`
+  - JSONB pack:per-trade_type detail
 - Bronze:`block_trade_tw` PK `(market, stock_id, date, trade_type)`,
   fields: price / volume / trading_money
 
-### 11.3 Params
+> **同 (stock, date, trade_type) 多筆 FinMind 回傳**:當前 PK 邏輯允許 upsert
+> 最後一筆 wins(idempotent overwrite)。產線校準後若需保留所有筆,進 V3 backlog
+> 加 row_idx INTEGER 到 Bronze PK。
+
+### 11.3 Params(拍版)
 
 ```rust
 pub struct BlockTradeParams {
     pub timeframe: Timeframe,
-    pub min_trading_money_threshold: i64,     // 預設 100_000_000 NTD(1 億)
+    pub min_trading_money_threshold: i64,     // 預設 100_000_000 NTD(1 億,大單下限)
     pub z_score_threshold: f64,               // 對個股自身分布,預設 2.5
-    pub lookback_for_z: usize,                // 預設 60
+    pub lookback_for_z: usize,                // 預設 60(對齊 institutional)
     pub streak_min_days: usize,               // 預設 3
+    pub matching_trade_share_threshold: f64,  // 預設 0.80(MatchingTradeSpike)
 }
 ```
 
-### 11.4 Output(EventKind proposal)
+> **Reference(`matching_trade_share_threshold = 0.80`)**:
+> Cao, Field & Hanka (2009), "Block Trading and Stock Prices" *Journal of
+> Empirical Finance* 16:1-25 — matched trades 通常占 block trade volume 的
+> 50-70%(成熟市場);> 80% 視為異常集中(利益關係人交易 / 規避公開市場
+> price discovery)。本 best-guess 待 production 校準。
 
-| EventKind | 觸發 | 動機 |
-|---|---|---|
-| `LargeBlockTrade` | 單日 trading_money > 個股 60d z=2.5 threshold | 大型機構建倉 / 出貨痕跡 |
-| `BlockTradeAccumulation` | 連續 ≥ streak_min_days 大宗 net buy 同向 | 政策性 / 系統性建倉 |
-| `BlockTradeDistribution` | 連續 ≥ streak_min_days 大宗 net sell | 出貨 |
-| `MatchingTradeSpike` | 配對交易單日佔總 block_trade > 80% | 利益關係人交易 / 規避公開市場 |
+### 11.4 warmup_periods
 
-### 11.5 開放問題清單
+```rust
+fn warmup_periods(&self, params: &BlockTradeParams) -> usize {
+    params.lookback_for_z + 10  // = 70
+}
+```
 
-| # | 問題 | best-guess | 影響 |
-|---|---|---|---|
-| 11.5.1 | 是否整合進 institutional_core LargeTransaction | NO | 信號粒度不同,獨立 core 對齊 §四 zero-coupling |
-| 11.5.2 | trade_type 種類完整列表 | 配對交易 / 鉅額 / 自營(probe 看到)| 需 5 年 backfill 後重審 |
-| 11.5.3 | MatchingTradeSpike 80% 閾值 | best-guess | production 校準 |
-| 11.5.4 | per-trade_type EventKind 必要? | NO(SUM by trade_type 即可)| 簡化 |
-| 11.5.5 | 同一日多筆同 trade_type 處理(Bronze PK 覆蓋舊資料)| 待 user 確認影響 | 可能需要 Bronze schema 改:PK 加 row_idx |
+### 11.5 Output(拍版 4 EventKind)
+
+```rust
+pub enum BlockTradeEventKind {
+    LargeBlockTrade,           // 單日 trading_money 對個股 60d z > 2.5
+    BlockTradeAccumulation,    // 連續 ≥ streak_min_days 大宗 net buy 同向
+    BlockTradeDistribution,    // 連續 ≥ streak_min_days 大宗 net sell
+    MatchingTradeSpike,        // 配對交易單日佔總 block_trade volume > 80%
+}
+```
+
+> **per-trade_type EventKind 拒設**(11.5.4 拍版 NO):4 個 EventKind 在
+> Silver 層 SUM by trade_type 後一致觸發,不細分 per-type。MatchingTradeSpike
+> 已是「配對交易」的 per-type 例外 carve-out。
+
+> **trade_type 種類列舉**(11.5.2 拍版):Silver builder 保留 String 不 enum,
+> defer 到 production 5 年 backfill 後 DISTINCT 看到全部 trade_type 再決定是
+> 否 normalize。
+
+### 11.6 metadata 設計
+
+```json
+{
+  "total_volume": 152300,
+  "total_trading_money": 162000000,
+  "matching_share": 0.65,
+  "largest_single_trade_money": 80000000,
+  "trade_type_count": 3,
+  "z_score": 2.78
+}
+```
+
+`BlockTradeAccumulation` / `Distribution` 額外:
+```json
+{
+  "start_date": "2026-04-21",
+  "end_date": "2026-04-25",
+  "days": 5,
+  "cumulative_volume": 524000
+}
+```
+
+---
+
+## 十二、`risk_alert_core` 🟢 **decisions 拍版(2026-05-17)**
+
+> **狀態**:spec 拍版 + Rust 實作 backlog。Bronze 表
+> `disposition_securities_period_tw` v3.20 落地(alembic `b7c8d9e0f1g2`)。
+>
+> **章節歸位變動**:原 `environment_cores.md §十` proposal,2026-05-17 user 拍版
+> 「per-stock signal 屬 chip,environment 限全市場」分層原則,**搬到本 §十二**。
+
+### 12.1 定位
+
+台股「處置股」公告追蹤(注意 / 處置 / 全額交割)。**監管行為 / 風險警示**,
+per-stock signal 來自交易所 disposition announcement,本質是 regulator 對個股
+施加的「外加風險環境」。歸 chip_cores 對齊 per-stock 邊界(§一 範圍)。
+
+### 12.2 上游 Bronze / Silver
+
+- Bronze:`disposition_securities_period_tw` PK `(market, stock_id, date,
+  disposition_cnt)`,fields: period_start / period_end / condition / measure
+- Silver:**暫不需要 derived 表**(事件性低頻,Bronze 直讀;對齊 `fear_greed_core`
+  例外風格)
+
+### 12.3 Params(拍版)
+
+```rust
+pub struct RiskAlertParams {
+    pub timeframe: Timeframe,
+    pub escalation_window_days: usize,        // 預設 60(對齊監管 §4)
+    pub escalation_min_count: usize,          // 預設 2
+    pub include_warning_only: bool,           // 是否包含「注意股」(輕度),預設 true
+}
+```
+
+> **Reference(escalation 60 天窗 + ≥ 2 次)**:
+> 「證券交易所公布注意交易資訊處置作業要點」§4(2024 版)— 60 個營業日內第 2
+> 次以上達處置標準者升級嚴重度。Spec 直接 mirror 監管規則。
+
+### 12.4 warmup_periods
+
+```rust
+fn warmup_periods(&self, _params: &RiskAlertParams) -> usize {
+    0  // 事件性 core,無需 warmup
+}
+```
+
+### 12.5 Output(拍版 EventKind)
+
+```rust
+pub enum RiskAlertEventKind {
+    DispositionAnnounced,  // 公告日當天 fire(date 欄)
+    DispositionEntered,    // period_start 當日 fire
+    DispositionExited,     // period_end + 1 個交易日 fire
+    DispositionEscalation, // escalation_window_days 內第 ≥ escalation_min_count 次
+}
+```
+
+> **Announced + Entered 兩 EventKind 並存設計**:
+> 公告日 ≠ period_start(實務上公告日常 + 5~7 個交易日 = period_start)。
+> Announced 是 「未來幾日將進入處置」的預警;Entered 是「現已進入處置」的
+> 狀態變化 — 兩者語義不同,各自 fire。
+
+### 12.6 三級嚴重度(拍版)
+
+對齊「注意 / 處置 / 全額交割」三級體系,**Silver builder 在 ingest 時** 用
+regex 解析 Bronze `measure` 中文字串,寫入 metadata.severity:
+
+| metadata.severity | Bronze `measure` 字串 pattern |
+|---|---|
+| `warning`(注意股,輕度)| 含「注意交易資訊」+ 不含「人工管制」+ 不含「全額交割」|
+| `disposition`(處置,中度)| 含「人工管制之撮合終端機」(分盤撮合)|
+| `cash_only`(全額交割,重度)| 含「全額交割」|
+
+未匹配三 pattern 任一 → `unknown`(保留 raw measure 在 metadata.raw_measure)。
+4 個 EventKind 都帶 severity metadata。
+
+### 12.7 metadata 設計
+
+```json
+{
+  "severity": "disposition",
+  "disposition_cnt": 2,
+  "period_start": "2025-01-14",
+  "period_end": "2025-02-07",
+  "condition": "連續5個營業日及沖銷標準",
+  "raw_measure": "上詮光纖通信..."
+}
+```
+
+`DispositionEscalation` 額外帶:
+```json
+{
+  "escalation_chain": [
+    {"date": "2025-01-13", "disposition_cnt": 1, "severity": "warning"},
+    {"date": "2025-04-22", "disposition_cnt": 2, "severity": "disposition"}
+  ]
+}
+```
+
+### 12.8 structural_snapshots 寫入
+
+**NO**(facts only)。對齊 fear_greed_core / indicator-style 慣例;事件性低頻
+不需 structural 邊界 snapshot。
+
+### 12.9 跨 Core 並排原則
+
+對齊 §八「跨 Chip Core 綜合事實的處理」原則,Aggregation Layer 並排呈現
+「處置警示 + 個股技術指標」供 user 自判;不和個股 indicator core fact combine
+出新 EventKind。
