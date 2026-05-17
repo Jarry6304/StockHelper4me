@@ -3,10 +3,11 @@ bronze/aggregators/
 ===================
 Bronze 層 schema transform + business aggregation(v3.5 R1 C2 拆 package)。
 
-3 個 module:
+4 個 module:
   - pivot_institutional.py  三大法人 N 列 → 1 寬列 pivot(per-stock + market-level)
   - pack_financial.py       財報 N 科目 → 1 row + detail JSONB pack
   - pack_holding_shares.py  股權分散 N 級距 → 1 row + detail JSONB pack
+  - first_per_day.py        intraday → daily 收斂(取每日最早一筆,v3.20 GoldPrice)
 
 入口 `apply_aggregation(strategy, rows, ...)` 依 collector.toml aggregation 欄
 分派到對應函式。
@@ -20,6 +21,7 @@ from bronze.aggregators.pivot_institutional import (
 )
 from bronze.aggregators.pack_financial import aggregate_financial
 from bronze.aggregators.pack_holding_shares import aggregate_holding_shares
+from bronze.aggregators.first_per_day import aggregate_first_per_day
 
 __all__ = [
     "apply_aggregation",
@@ -27,6 +29,7 @@ __all__ = [
     "aggregate_institutional_market",
     "aggregate_financial",
     "aggregate_holding_shares",
+    "aggregate_first_per_day",
 ]
 
 
@@ -61,5 +64,8 @@ def apply_aggregation(
 
     if strategy == "pack_holding_shares":
         return aggregate_holding_shares(rows)
+
+    if strategy == "first_per_day":
+        return aggregate_first_per_day(rows)
 
     raise ValueError(f"未知的聚合策略:'{strategy}'")

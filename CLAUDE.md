@@ -251,6 +251,97 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.20 — 5 sponsor-tier datasets 接入 Bronze + 4 core spec proposals(2026-05-17)
+
+接 v3.19 probe `--max 0` 全 catalog 跑完(user 本機,59 unused datasets / 15 回 200
++ 有資料),拍版動工 5 個高價值 dataset。User 拍版規則(2026-05-17):
+- 不做日內 tick / 5-second
+- 不做權證 / 期貨 / 期權
+- 不做可轉債
+- GoldPrice 5-分鐘粒度 → 每日只存第一筆
+
+**1 alembic migration + 5 collector.toml entry + 1 aggregator + 4 m3Spec core proposals**。
+
+### 範圍(2 commits / branch `claude/continue-previous-work-xdKrl`)
+
+| Phase | 範圍 |
+|---|---|
+| **Bronze infrastructure**(production-ready,user 可直 backfill)| alembic `b7c8d9e0f1g2` 落 5 張 Bronze 表 / collector.toml 5 new entry(34→39)/ `bronze/aggregators/first_per_day.py` 新檔 + dispatcher 加 `first_per_day` strategy / schema_pg.sql 同步 |
+| **m3Spec core proposals**(等 user 拍版)| chip_cores.md §十 + §十一 / environment_cores.md §十 + §十一 / docs/m3_cores_spec_pending.md §3.7 / §3.8 / §5.6 / §5.7 open question 表 |
+
+### 5 個 Bronze datasets
+
+| Dataset | Bronze 表 | PK | param_mode | 動機 |
+|---|---|---|---|---|
+| `TaiwanStockLoanCollateralBalance` | `loan_collateral_balance_tw` | (market,stock_id,date)| per_stock | 5 大借券類別 × 7 sub-fields = 34 cols,比 margin_daily 豐富 5× |
+| `TaiwanStockBlockTrade` | `block_trade_tw` | (market,stock_id,date,trade_type)| per_stock | 大宗交易(配對 / 鉅額),smart-money 痕跡 |
+| `TaiwanStockMarketValue` | `market_value_daily` | (market,stock_id,date)| per_stock | 個股市值,比 shares × close 推算精確 |
+| `TaiwanStockDispositionSecuritiesPeriod` | `disposition_securities_period_tw` | (market,stock_id,date,disposition_cnt)| all_market | 處置股風險警示 |
+| `GoldPrice`(每日 1 筆)| `commodity_price_daily` | (market,commodity,date)| all_market + agg `first_per_day` | GOLD macro signal,PK 含 commodity 開放擴 silver/oil |
+
+### 4 個 m3Spec core proposals
+
+| Core | 章節 | EventKind 提案 |
+|---|---|---|
+| `loan_collateral_core` | chip_cores.md §十 | 5 大類 × Surge/Crash(8)+ Concentration(1)= 9 |
+| `block_trade_core` | chip_cores.md §十一 | LargeBlockTrade / Accumulation / Distribution / MatchingSpike(4)|
+| `risk_alert_core` | environment_cores.md §十 | DispositionAnnounced / Entered / Exited / Escalation(4)|
+| `commodity_macro_core` | environment_cores.md §十一 | Spike / MomentumUp / MomentumDown / RegimeBreak(4)|
+
+**market_value 不開 core**(純資料層,valuation_core 直接用即可)。
+
+### 設計決策
+
+- **block_trade_tw PK 加 `trade_type` 維度**(對齊 v3.14 gov_bank `bank_name` pattern)。同 (stock_id, date, trade_type) 多筆視為同 logical row。
+- **disposition_securities_period `param_mode = all_market`**(probe 揭露 with_data_id=2330 → 0 row,no_data_id → 17 row)。
+- **commodity_price_daily PK 含 `commodity` 維度**(對齊 exchange_rate macro pattern;`first_per_day` aggregator hardcode 注入 `commodity='GOLD'`,未來擴 silver/oil 時 generalize)。
+- **loan_collateral 34 columns 全散開**(對齊 Bronze raw 設計理念;Silver derived 後續 proposal 拍版後再決定 5 主欄 + JSONB 或全散開)。
+- **risk_alert_core 歸 environment_cores**(雖然 per-stock 但本質是「外加風險環境」,對齊 env layer 語意)。
+
+### 沙箱驗證(本 session)
+
+- `python -c "tomllib.load(...)"`:39 entries 全部解析正常,5 new entries 對齊
+- `load_collector_config('config/collector.toml')`:5 new entries ApiConfig 全部正確
+- `apply_aggregation('first_per_day', rows)`:3 unit test 通過(intraday → daily / empty / existing commodity 不覆蓋)
+- `pytest tests/`:19 pre-existing failures 全 pytest-asyncio 缺裝,非本次改動觸發
+- 0 Rust 改動(spec proposal 階段)
+
+### 待 user 做(下次 session 起點)
+
+1. **執行 alembic migration**:`alembic upgrade head` 落 5 張 Bronze 表
+   (head 從 `a6b7c8d9e0f1` → `b7c8d9e0f1g2`)
+2. **跑 incremental backfill**:`python src/main.py incremental` 拉 5 個新 dataset
+   - 預估 wall time:per_stock × 3 datasets × 1266 stocks × 5 year = ~6h(對齊 1600 reqs/h)
+   - DispositionSecuritiesPeriod all_market × 5 yearly seg = 數分鐘
+   - GoldPrice all_market × 5 yr / 30 day seg = ~60 reqs × 2.25s = 數分鐘
+3. **review m3Spec 4 proposals**(chip §十 / §十一 + environment §十 / §十一),拍版 open questions 表
+4. **拍版後 1 個一個上 Rust**(對齊 v3.14 gov_bank pattern):新 crate + Silver derived + dispatcher
+5. **(沿用)production verify 前先跑** `scripts/maintain_facts_stats.sql`
+
+### 風險
+
+🟢 低:
+- alembic CREATE TABLE IF NOT EXISTS(空表落地,0 既有資料受影響)
+- collector.toml 5 entry 純 additive,既有 34 entry 0 改動
+- field_rename 對 FinMind 真實欄名(probe 確認)
+- first_per_day aggregator 沙箱驗證 + 既有 4 aggregator 0 改動
+- m3Spec proposal 純 doc(對齊「best-guess 不上 Rust」鐵律)
+- 既有 Python 模組 0 改動(field_mapper / phase_executor / segment_runner / silver builders)
+
+### 注意事項
+
+- **commodity 注入 hardcode "GOLD"**:當前 first_per_day aggregator 對 0 個既有
+  case 適用(只 v3.20 GoldPrice 用)。未來擴 silver/oil 時需 generalize(走
+  collector.toml extra field)。
+- **block_trade Bronze 同 (stock_id, date, trade_type) 多筆**:目前 PK 邏輯
+  讓再次 upsert 覆蓋舊資料。若同日多筆同 trade_type 需保留,需 alembic 加
+  `row_idx INTEGER` 進 PK(spec_pending §3.8.5 open question)。
+- **DispositionSecuritiesPeriod `measure` 欄是長中文字串**(~300 字描述處置
+  措施),Silver builder 後續若要解析三級嚴重度需中文字串 parser(spec_pending
+  §5.6.3 open question)。
+
+---
+
 ## v3.19 — 3 並行 track:gov_bank Core spec proposal + probe audit + wall time 假設(2026-05-17)
 
 接 v3.18 Round 8 結算 + docs 整理後 user 拍版「開工」3 件事:

@@ -72,6 +72,8 @@ v1.29 Round 1 P2 阻塞 6 條目。
 7. [`day_trading_core`](#七day_trading_core)
 8. [跨 Chip Core 綜合事實的處理](#八跨-chip-core-綜合事實的處理)
 9. [`gov_bank_core`](#九gov_bank_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
+10. [`loan_collateral_core`](#十loan_collateral_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
+11. [`block_trade_core`](#十一block_trade_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
 
 ---
 
@@ -928,3 +930,107 @@ rust_compute/cores/chip/gov_bank_core/
 - `tw_cores/Cargo.toml` deps 加 1 行
 - `tw_cores/src/dispatcher.rs` `dispatch_indicator!` 加 1 個 match arm
 - `workflows/tw_stock_standard.toml` 加 1 個 enabled = true entry
+
+---
+
+## 十、`loan_collateral_core` 🟡 **proposal(2026-05-17,等 user 拍版)**
+
+> **狀態**:proposal draft。Bronze 表 `loan_collateral_balance_tw` v3.20 落地
+> (alembic `b7c8d9e0f1g2`,5 大類借券 × 7 sub-fields = 34 cols),但目前 **0 個
+> core 真正消費**。本節為 spec draft 等 user 拍版後上 Rust。
+
+### 10.1 定位
+
+5 大類融券 / 借券細項追蹤(Margin / SecuritiesFirmLoan / UnrestrictedLoan /
+SecuritiesFinanceSecuredLoan / SettlementMargin)。比既有 `margin_core` 對應的
+`margin_daily_derived` 細粒度高 ~5×,可細看「哪一類借券動」。
+
+### 10.2 上游 Silver
+
+- 目前 **無 Silver builder**(Bronze 表 v3.20 剛落地);proposal 拍版後需新增
+  `loan_collateral_balance_derived`(對應 5 大類 × CurrentDayBalance 5 主欄
+  + change_pct 5 衍生欄)
+- Bronze:`loan_collateral_balance_tw` PK `(market, stock_id, date)`,~34 columns
+
+### 10.3 Params
+
+```rust
+pub struct LoanCollateralParams {
+    pub timeframe: Timeframe,
+    pub balance_change_pct_threshold: f64,    // 預設 10.0%(對齊 margin_core)
+    pub category_concentration_threshold: f64, // 某類占 5 類合計 > %,預設 70.0
+}
+```
+
+### 10.4 Output(EventKind proposal)
+
+| EventKind | 觸發 | 對齊 |
+|---|---|---|
+| `MarginBalanceSurge` / `MarginBalanceCrash` | margin_current_day_balance 變化 > threshold | margin_core MarginSurge |
+| `FirmLoanSurge` / `FirmLoanCrash` | firm_loan_current_day_balance 變化 > threshold | 新類別 |
+| `UnrestrictedLoanSurge` / `UnrestrictedLoanCrash` | 同上 | 新類別 |
+| `FinanceLoanSurge` / `FinanceLoanCrash` | 同上(證金擔保借券)| 新類別 |
+| `LoanCategoryConcentration` | 某類占合計 > 70%(系統風險警訊)| 新跨類訊號 |
+
+### 10.5 開放問題清單
+
+| # | 問題 | best-guess | 影響 |
+|---|---|---|---|
+| 10.5.1 | 與既有 margin_core 關係(margin_core 已有 MarginSurge / Crash)| 並存(粒度不同)| 若整合則 margin_core 擴 4 類 |
+| 10.5.2 | 5 大類各自獨立 EventKind 必要? | YES(對等對稱)| 8 EventKind + 1 concentration = 9 |
+| 10.5.3 | LoanCategoryConcentration 70% 閾值依據 | best-guess | 需 production 資料校準 |
+| 10.5.4 | Silver 表設計:5 主欄 + 25 detail JSONB or 34 columns 全散開? | 5 主欄 + detail JSONB | 對齊 margin_daily_derived |
+| 10.5.5 | NextDayQuota 欄是否消費 | NO(僅監控用)| 7 cols × 5 類 = 35 cols 縮為 25 |
+
+---
+
+## 十一、`block_trade_core` 🟡 **proposal(2026-05-17,等 user 拍版)**
+
+> **狀態**:proposal draft。Bronze 表 `block_trade_tw` v3.20 落地(alembic
+> `b7c8d9e0f1g2`,PK `(market, stock_id, date, trade_type)`),0 core 消費。
+
+### 11.1 定位
+
+大宗交易(配對 / 鉅額 / 自營等)信號萃取。Smart-money 大單痕跡,
+**institutional_core LargeTransaction 信號**(z-score on net buy/sell)的補強:
+block_trade 是 visible big transactions 直接揭露,LargeTransaction 是 inferred
+from aggregated 法人 daily net。
+
+### 11.2 上游 Silver
+
+- 目前 **無 Silver builder**;proposal 拍版後新增 `block_trade_derived`
+  (per-stock per-day SUM aggregation by trade_type → 配對 net / 鉅額 net /
+  自營 net + total)
+- Bronze:`block_trade_tw` PK `(market, stock_id, date, trade_type)`,
+  fields: price / volume / trading_money
+
+### 11.3 Params
+
+```rust
+pub struct BlockTradeParams {
+    pub timeframe: Timeframe,
+    pub min_trading_money_threshold: i64,     // 預設 100_000_000 NTD(1 億)
+    pub z_score_threshold: f64,               // 對個股自身分布,預設 2.5
+    pub lookback_for_z: usize,                // 預設 60
+    pub streak_min_days: usize,               // 預設 3
+}
+```
+
+### 11.4 Output(EventKind proposal)
+
+| EventKind | 觸發 | 動機 |
+|---|---|---|
+| `LargeBlockTrade` | 單日 trading_money > 個股 60d z=2.5 threshold | 大型機構建倉 / 出貨痕跡 |
+| `BlockTradeAccumulation` | 連續 ≥ streak_min_days 大宗 net buy 同向 | 政策性 / 系統性建倉 |
+| `BlockTradeDistribution` | 連續 ≥ streak_min_days 大宗 net sell | 出貨 |
+| `MatchingTradeSpike` | 配對交易單日佔總 block_trade > 80% | 利益關係人交易 / 規避公開市場 |
+
+### 11.5 開放問題清單
+
+| # | 問題 | best-guess | 影響 |
+|---|---|---|---|
+| 11.5.1 | 是否整合進 institutional_core LargeTransaction | NO | 信號粒度不同,獨立 core 對齊 §四 zero-coupling |
+| 11.5.2 | trade_type 種類完整列表 | 配對交易 / 鉅額 / 自營(probe 看到)| 需 5 年 backfill 後重審 |
+| 11.5.3 | MatchingTradeSpike 80% 閾值 | best-guess | production 校準 |
+| 11.5.4 | per-trade_type EventKind 必要? | NO(SUM by trade_type 即可)| 簡化 |
+| 11.5.5 | 同一日多筆同 trade_type 處理(Bronze PK 覆蓋舊資料)| 待 user 確認影響 | 可能需要 Bronze schema 改:PK 加 row_idx |
