@@ -269,10 +269,297 @@ class TestKalmanTrend:
 
 
 class TestToolkitV3PublicSurface:
-    """確認 5 個 public tools 都 importable + 可 invoke(callable check 不打 PG)。"""
+    """確認 9 個 public tools 都 importable + 可 invoke(callable check 不打 PG)。"""
 
-    def test_all_five_tools_present(self):
-        for name in ("neely_forecast", "stock_health", "market_context",
-                     "magic_formula_screen", "kalman_trend"):
+    def test_all_nine_tools_present(self):
+        for name in (
+            # v3 (5)
+            "neely_forecast", "stock_health", "market_context",
+            "magic_formula_screen", "kalman_trend",
+            # v3.22 (4)
+            "loan_collateral_snapshot", "block_trade_summary",
+            "risk_alert_status", "commodity_macro_snapshot",
+        ):
             assert hasattr(data_tools, name), f"data_tools.{name} 缺失"
             assert callable(getattr(data_tools, name))
+
+
+# ════════════════════════════════════════════════════════════
+# v3.22 — 4 new tools(direct cursor mock pattern,對齊 _magic_formula)
+# ════════════════════════════════════════════════════════════
+
+
+def _patch_direct_conn(monkeypatch, module_name: str, cursor):
+    """Mock <module>.get_connection 回 conn(指定 cursor)。"""
+    from mcp_server import _loan_collateral, _block_trade, _risk_alert, _commodity_macro
+    target = {
+        "_loan_collateral":  _loan_collateral,
+        "_block_trade":      _block_trade,
+        "_risk_alert":       _risk_alert,
+        "_commodity_macro":  _commodity_macro,
+    }[module_name]
+
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.close = MagicMock()
+    monkeypatch.setattr(target, "get_connection", lambda *a, **kw: conn)
+
+
+def _mk_simple_cursor(fetchone_val=None, fetchall_val=None):
+    cur = MagicMock()
+    cur.fetchone.return_value = fetchone_val
+    cur.fetchall.return_value = fetchall_val or []
+    cur.__enter__ = lambda self: self
+    cur.__exit__ = lambda *args: False
+    return cur
+
+
+class TestLoanCollateralSnapshot:
+
+    def test_categories_structure(self, monkeypatch):
+        """5 大類各有 balance / change_pct / ratio,dominant 對齊 row。"""
+        row = {
+            "date": date(2026, 5, 15),
+            "margin_current_balance": 26483,
+            "firm_loan_current_balance": 22,
+            "unrestricted_loan_current_balance": 77125,
+            "finance_loan_current_balance": 8691,
+            "settlement_margin_current_balance": 0,
+            "margin_change_pct": 1.22,
+            "firm_loan_change_pct": 0.0,
+            "unrestricted_loan_change_pct": -0.5,
+            "finance_loan_change_pct": 0.0,
+            "settlement_margin_change_pct": 0.0,
+            "total_balance": 112321,
+            "dominant_category": "unrestricted_loan",
+            "dominant_category_ratio": 0.6866,
+        }
+        cur = _mk_simple_cursor(fetchone_val=row)
+        _patch_direct_conn(monkeypatch, "_loan_collateral", cur)
+
+        result = data_tools.loan_collateral_snapshot("2330", "2026-05-15")
+        assert result["stock_id"] == "2330"
+        assert result["snapshot_date"] == "2026-05-15"
+        for cat in ("margin", "firm_loan", "unrestricted_loan",
+                    "finance_loan", "settlement_margin"):
+            assert cat in result["categories"]
+            assert "balance" in result["categories"][cat]
+            assert "change_pct" in result["categories"][cat]
+            assert "ratio" in result["categories"][cat]
+        assert result["dominant_category"] == "unrestricted_loan"
+        assert result["dominant_category_label"] == "無限制借券"
+        assert result["concentration_alert"] is False    # 0.6866 < 0.70
+
+    def test_concentration_alert_at_70_pct(self, monkeypatch):
+        row = {
+            "date": date(2026, 5, 15),
+            "margin_current_balance": 0, "firm_loan_current_balance": 0,
+            "unrestricted_loan_current_balance": 75000,
+            "finance_loan_current_balance": 0, "settlement_margin_current_balance": 0,
+            "margin_change_pct": 0.0, "firm_loan_change_pct": 0.0,
+            "unrestricted_loan_change_pct": 12.5,
+            "finance_loan_change_pct": 0.0, "settlement_margin_change_pct": 0.0,
+            "total_balance": 100000,
+            "dominant_category": "unrestricted_loan",
+            "dominant_category_ratio": 0.75,
+        }
+        cur = _mk_simple_cursor(fetchone_val=row)
+        _patch_direct_conn(monkeypatch, "_loan_collateral", cur)
+        result = data_tools.loan_collateral_snapshot("2330", "2026-05-15")
+        assert result["concentration_alert"] is True
+        assert "70%" in result["narrative"]
+
+    def test_empty_when_no_data(self, monkeypatch):
+        cur = _mk_simple_cursor(fetchone_val=None)
+        _patch_direct_conn(monkeypatch, "_loan_collateral", cur)
+        result = data_tools.loan_collateral_snapshot("9999", "2026-05-15")
+        assert result["snapshot_date"] is None
+        assert result["categories"] == {}
+        assert "無借券抵押餘額資料" in result["narrative"]
+
+    def test_payload_size_bounded(self, monkeypatch):
+        row = {
+            "date": date(2026, 5, 15),
+            "margin_current_balance": 26483,
+            "firm_loan_current_balance": 22,
+            "unrestricted_loan_current_balance": 77125,
+            "finance_loan_current_balance": 8691,
+            "settlement_margin_current_balance": 0,
+            "margin_change_pct": 1.22, "firm_loan_change_pct": 0.0,
+            "unrestricted_loan_change_pct": -0.5,
+            "finance_loan_change_pct": 0.0, "settlement_margin_change_pct": 0.0,
+            "total_balance": 112321, "dominant_category": "unrestricted_loan",
+            "dominant_category_ratio": 0.6866,
+        }
+        cur = _mk_simple_cursor(fetchone_val=row)
+        _patch_direct_conn(monkeypatch, "_loan_collateral", cur)
+        result = data_tools.loan_collateral_snapshot("2330", "2026-05-15")
+        n = len(json.dumps(result, ensure_ascii=False))
+        assert n < 3_000, f"payload {n} bytes 超 budget 3 KB"
+
+
+class TestBlockTradeSummary:
+
+    def test_active_days_and_totals(self, monkeypatch):
+        rows = [
+            {"date": date(2026, 5, 14),
+             "total_volume": 50_000, "total_trading_money": 50_000_000,
+             "matching_volume": 30_000, "matching_trading_money": 30_000_000,
+             "matching_share": 0.6, "largest_single_trade_money": 25_000_000,
+             "trade_type_count": 2},
+            {"date": date(2026, 5, 12),
+             "total_volume": 100_000, "total_trading_money": 100_000_000,
+             "matching_volume": 90_000, "matching_trading_money": 90_000_000,
+             "matching_share": 0.9, "largest_single_trade_money": 80_000_000,
+             "trade_type_count": 1},
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_block_trade", cur)
+        result = data_tools.block_trade_summary("2330", "2026-05-15", lookback_days=30)
+        assert result["active_days"] == 2
+        assert result["total_volume"] == 150_000
+        assert result["total_trading_money"] == 150_000_000
+        # 2026-05-12 share=0.9 >= 0.80 → spike fired
+        assert "2026-05-12" in result["matching_spike_dates"]
+        assert "2026-05-14" not in result["matching_spike_dates"]
+
+    def test_empty_when_no_data(self, monkeypatch):
+        cur = _mk_simple_cursor(fetchall_val=[])
+        _patch_direct_conn(monkeypatch, "_block_trade", cur)
+        result = data_tools.block_trade_summary("9999", "2026-05-15")
+        assert result["active_days"] == 0
+        assert "無大宗交易" in result["narrative"]
+
+    def test_payload_size_bounded(self, monkeypatch):
+        # 模擬 30 個 spike 日(極端 case)
+        rows = [
+            {"date": date(2026, 4, 16) + timedelta(days=i),
+             "total_volume": 100, "total_trading_money": 100_000_000,
+             "matching_volume": 90, "matching_trading_money": 90_000_000,
+             "matching_share": 0.9, "largest_single_trade_money": 80_000_000,
+             "trade_type_count": 1}
+            for i in range(30)
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_block_trade", cur)
+        result = data_tools.block_trade_summary("2330", "2026-05-15", lookback_days=30)
+        assert len(result["matching_spike_dates"]) <= 10   # truncate to 10
+        n = len(json.dumps(result, ensure_ascii=False))
+        assert n < 3_000, f"payload {n} bytes 超 budget 3 KB"
+
+
+class TestRiskAlertStatus:
+
+    def test_in_disposition_period(self, monkeypatch):
+        rows = [
+            {"announced_date": date(2025, 1, 13), "disposition_cnt": 2,
+             "period_start": date(2025, 1, 14), "period_end": date(2025, 2, 7),
+             "condition": "連續5日及沖銷標準",
+             "measure": "人工管制之撮合終端機"},
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_risk_alert", cur)
+        # as_of 在 period 區間內
+        result = data_tools.risk_alert_status("3363", "2025-01-20")
+        cs = result["current_status"]
+        assert cs["in_disposition_period"] is True
+        assert cs["severity"] == "disposition"
+        assert cs["severity_label"] == "處置股(分盤撮合)"
+        assert cs["days_remaining"] == 18    # 2025-02-07 - 2025-01-20
+
+    def test_severity_parser_cash_only(self, monkeypatch):
+        rows = [
+            {"announced_date": date(2025, 1, 13), "disposition_cnt": 3,
+             "period_start": date(2025, 1, 14), "period_end": date(2025, 2, 7),
+             "condition": "...", "measure": "改以全額交割"},
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_risk_alert", cur)
+        result = data_tools.risk_alert_status("3363", "2025-01-20")
+        assert result["current_status"]["severity"] == "cash_only"
+
+    def test_escalation_chain(self, monkeypatch):
+        rows = [
+            {"announced_date": date(2025, 2, 20), "disposition_cnt": 2,
+             "period_start": date(2025, 2, 21), "period_end": date(2025, 3, 15),
+             "condition": "...", "measure": "人工管制"},
+            {"announced_date": date(2025, 1, 13), "disposition_cnt": 1,
+             "period_start": date(2025, 1, 14), "period_end": date(2025, 2, 7),
+             "condition": "...", "measure": "注意交易資訊"},
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_risk_alert", cur)
+        # as_of 不在任何 period 內;測 escalation_count 60d
+        result = data_tools.risk_alert_status("3363", "2025-03-20")
+        assert result["escalation_count_60d"] == 2
+        assert len(result["history_60d"]) == 2
+
+    def test_empty_no_alerts(self, monkeypatch):
+        cur = _mk_simple_cursor(fetchall_val=[])
+        _patch_direct_conn(monkeypatch, "_risk_alert", cur)
+        result = data_tools.risk_alert_status("2330", "2026-05-15")
+        assert result["current_status"]["in_disposition_period"] is False
+        assert result["escalation_count_60d"] == 0
+        assert "無風險警訊" in result["narrative"]
+
+
+class TestCommodityMacroSnapshot:
+
+    def test_gold_basic(self, monkeypatch):
+        rows = [
+            {"commodity": "GOLD", "date": date(2026, 5, 15),
+             "price": 2630.50, "return_pct": 0.85, "return_z_score": 1.23,
+             "momentum_state": "up", "streak_days": 4},
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_commodity_macro", cur)
+        result = data_tools.commodity_macro_snapshot("2026-05-15")
+        assert result["snapshot_date"] == "2026-05-15"
+        assert len(result["commodities"]) == 1
+        c = result["commodities"][0]
+        assert c["name"] == "GOLD"
+        assert c["label"] == "黃金"
+        assert c["price"] == 2630.50
+        assert c["momentum_state"] == "up"
+        assert c["streak_days"] == 4
+        assert c["spike_alert"] is False    # |1.23| < 2.0
+
+    def test_spike_alert_when_abs_z_above_2(self, monkeypatch):
+        rows = [
+            {"commodity": "GOLD", "date": date(2026, 5, 15),
+             "price": 2700.0, "return_pct": 3.0, "return_z_score": 2.4,
+             "momentum_state": "up", "streak_days": 1},
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_commodity_macro", cur)
+        result = data_tools.commodity_macro_snapshot("2026-05-15")
+        assert result["commodities"][0]["spike_alert"] is True
+        assert "spike 警戒" in result["narrative"]
+
+    def test_empty_when_no_data(self, monkeypatch):
+        cur = _mk_simple_cursor(fetchall_val=[])
+        _patch_direct_conn(monkeypatch, "_commodity_macro", cur)
+        result = data_tools.commodity_macro_snapshot("2026-05-15")
+        assert result["snapshot_date"] is None
+        # commodities list 仍含 default ["GOLD"] 但 data_available=False
+        assert len(result["commodities"]) == 1
+        assert result["commodities"][0]["data_available"] is False
+        assert "無 commodity_price_daily_derived" in result["narrative"]
+
+    def test_multi_commodity_subset_returned(self, monkeypatch):
+        rows = [
+            {"commodity": "GOLD", "date": date(2026, 5, 15),
+             "price": 2630.0, "return_pct": 0.5, "return_z_score": 0.8,
+             "momentum_state": "up", "streak_days": 2},
+            # SILVER 沒回 → data_available=False
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_commodity_macro", cur)
+        result = data_tools.commodity_macro_snapshot(
+            "2026-05-15", commodities=["GOLD", "SILVER"]
+        )
+        assert len(result["commodities"]) == 2
+        gold = next(c for c in result["commodities"] if c["name"] == "GOLD")
+        silver = next(c for c in result["commodities"] if c["name"] == "SILVER")
+        assert gold["data_available"] is True
+        assert silver["data_available"] is False

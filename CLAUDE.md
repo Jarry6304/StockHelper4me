@@ -251,6 +251,114 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.22 — B-5:4 new MCP tools 暴露 v3.20-v3.21 cores(2026-05-17)
+
+接 v3.21 Commit C(`06d2829` Rust 4 cores + Silver 3 builders 全綠)後,user 拍版
+B-5 — 對 v3.20-v3.21 新 4 cores 各加 1 個 high-level MCP tool,讓 LLM 在 Claude
+Desktop 對話內可主動 surface 新訊號。
+
+**0 alembic / 0 Rust / 0 collector.toml**(純 Python:`mcp_server/` 內 4 個新
+helper + wrappers + tests)。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_loan_collateral.py` (新) | compute_loan_collateral_snapshot;直 SELECT loan_collateral_balance_derived |
+| `mcp_server/_block_trade.py` (新) | compute_block_trade_summary;30 天期間 SUM + matching spike |
+| `mcp_server/_risk_alert.py` (新) | compute_risk_alert_status;直讀 Bronze + measure 中文 parser(三級嚴重度)|
+| `mcp_server/_commodity_macro.py` (新) | compute_commodity_macro_snapshot;loop commodities |
+| `mcp_server/tools/data.py` | 加 4 wrapper function + 完整 docstring(LLM 看 tools list 用)|
+| `mcp_server/server.py` | `@mcp.tool()` 註冊 +4(5 → 9 public tools)+ instructions 描述更新 |
+| `tests/mcp_server/test_toolkit_v3.py` | 加 4 TestXxx class × 3-4 test = +15 cases(9 → 24)|
+
+### 4 new public tools
+
+| Tool | Signature | 對應 Core | 主要 Return |
+|---|---|---|---|
+| `loan_collateral_snapshot(stock_id, date)` | str,str | loan_collateral_core | 5 大類 balance / change_pct / ratio + concentration_alert(>70%)|
+| `block_trade_summary(stock_id, date, lookback_days=30)` | str,str,int | block_trade_core | total volume/money + matching_share_avg + matching_spike_dates |
+| `risk_alert_status(stock_id, date)` | str,str | risk_alert_core | current_status(in_period / severity / days_remaining)+ history_60d + escalation_count_60d |
+| `commodity_macro_snapshot(date, commodities=None)` | str,list | commodity_macro_core | per-commodity price / return_z_score / momentum_state / streak_days / spike_alert |
+
+### 設計拍版
+
+- **DB 路徑**:全部走 `agg._db.get_connection()`(對齊 v3.5 R5 C12 single entry);
+  直 SELECT 不重 wrap agg.as_of()(避免 join 不必要的 facts/indicator)
+- **三級嚴重度 parser**(`_risk_alert.py:_parse_severity`):
+  - 「全額交割」→ `cash_only`
+  - 「人工管制」→ `disposition`(分盤撮合)
+  - 「注意交易資訊」→ `warning`
+  - 其他 → `unknown`
+- **payload budget ≤ 3KB**(對齊既有 5 tools < 5KB):長 list 欄(matching_spike_dates
+  / history_60d)truncate 到 10 筆內
+- **empty fallback**:無 Silver 資料 → graceful narrative 指引 user 跑 builder
+- **multi-commodity 支援**:`commodity_macro_snapshot` 可傳 `["GOLD", "SILVER"]` 等
+  (v3.21 初版只有 GOLD,SILVER 等 data_available=False;預留擴展)
+
+### Reference(每 tool docstring 內)
+
+- loan_collateral:Basel Committee (2006) WP 15 — CR1 > 0.7 high concentration
+- block_trade:Cao, Field & Hanka (2009) JEF 16:1-25 — matching > 80% 異常
+- risk_alert:「證券交易所公布注意交易資訊處置作業要點」§4(2024 版)
+- commodity_macro:Brock et al. (1992) JoF 47(5)+ Hamilton (1989) Econometrica 57(2)
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/test_toolkit_v3.py` ✅ **24 passed**(從 9 → 24,+15 new tests)
+- `pytest tests/mcp_server/ tests/agg/` ✅ **101 passed / 1 skipped**(render_tools.py
+  fastmcp 缺裝是 pre-existing,非本次造成)
+- 4 個 helper module + tools/data.py + server.py 純 Python import ✅
+- payload budget assertion 全部 < 3KB(典型 case)
+
+### 待 user 跑 production verify(對齊 v3.21 Commit C verify chain)
+
+```powershell
+git pull
+
+# v3.21 Commit C verify(若還沒跑)
+python src/main.py incremental                    # Bronze 5 datasets 拉資料
+python src/main.py silver phase 7a                # Silver 3 new builders
+cd rust_compute && ./target/release/tw_cores.exe run-all --write
+cd ..
+psql $env:DATABASE_URL -f scripts/maintain_facts_stats.sql
+psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql
+
+# v3.22 B-5 整合驗證(MCP server stdio + Claude Desktop 對話)
+python -m mcp_server   # 開 stdio server
+# 在 Claude Desktop 對話內:
+#   "幫我看 2330 今天的 loan_collateral 狀況"
+#   "GOLD 過去 30 天的 macro 趨勢"
+#   "3363 的 risk_alert 狀態"
+#   "2330 過去 30 天的 block_trade 摘要"
+```
+
+### 風險
+
+🟢 低:
+- 0 Rust / 0 alembic / 0 collector.toml(純 Python)
+- 既有 agg layer 0 改動(只 reuse `get_connection()`)
+- 4 module 各獨立,1 個失敗不影響其他;既有 5 public tools 0 regression
+- 既有 ~30 agg tests + 既有 mcp tests 全綠
+- Rollback:單 commit `git revert` 即可
+
+### Out of Scope(留 future)
+
+- **C-9 dashboard tabs**(Streamlit 視覺化 v3.20-21 cores)— 等 user 對 B-5 LLM
+  體驗滿意後再做(避免 dashboard + MCP 雙 surface 邏輯重複)
+- **B-4 FastAPI thin wrap**(v1.35 backlog)— 獨立工作
+- **Round 9 calibration**(若 verify 揭露 4 new cores 過頻 / 過稀)— 純 Rust const tweak
+- **整合進 `market_context()`**(將 commodity_macro / risk_alert 摘要加進大盤判讀)
+  — v3.23 拍版題
+
+### 下一輪動工候選(verify 結果回來後)
+
+1. 若 production 4 cores 觸發率 OK → **C-9 dashboard tabs**(借券 / 風險警示 / GOLD)
+2. 若 4 cores 觸發率異常 → Round 9 calibration
+3. 若 user 對既有 MCP 5+4 tools 體驗滿意 → 開始 **B-4 FastAPI thin wrap**
+
+---
+
 ## v3.21 — 4 cores spec decisions 拍版 + risk_alert chip 歸位(2026-05-17)
 
 接 v3.20 Bronze 5 datasets 接入後,user 拍版 4 cores 20 個 open questions。
