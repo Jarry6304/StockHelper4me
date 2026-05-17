@@ -879,3 +879,24 @@ pub enum CommodityMacroEventKind {
    `extra` 欄;v3.20 v1 hardcode "GOLD")
 2. Silver derived 自動跑(SQL 對所有 commodity GROUP BY 計算)
 3. params.commodities 加新代碼;Rust 0 改動
+
+### 10.9 Production calibration baseline(v3.24 verify,2026-05-17)
+
+GOLD 單一 commodity 跑出(7 yr Bronze 資料):
+
+| EventKind | total events | events/yr | 狀態 |
+|---|---|---|---|
+| `CommoditySpike` | 73 | **12.2** | 🟡 accepted baseline(macro fat-tail,對齊 `institutional / LargeTransaction 14.16` 同款處置)|
+| `CommodityMomentumUp` | 21 | 3.5 | ✅ |
+| `CommodityMomentumDown` | 9 | 1.5 | ✅ |
+| `CommodityRegimeBreak` | 2 | 2.0(1 yr 數據)| ✅ |
+
+> **CommoditySpike 12.2/yr accept rationale**:
+> 1. market-level core(distinct_stocks=1),per-stock metric 不適用 ≤ 12 規則
+> 2. 對齊 `exchange_rate / SignificantSingleDayMove 14.8/yr` 既有 accept pattern
+>    (v1.32+)
+> 3. macro signal fat-tail 自然分布(Lo 2001 同 family),tighten 邊際效益低
+> 4. spec §10.3 `z_score_threshold = 2.0` 對齊 Brown & Warner 1985 學術標準
+>
+> → **accept 為 v3.24 baseline**,對齊 `institutional / LargeTransaction 14.16`
+> 同款 fat-tail accepted 處置(per cores_overview §7.5)。

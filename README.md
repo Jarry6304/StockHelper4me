@@ -1,9 +1,9 @@
 # StockHelper4me — tw-stock-collector
 
-> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 35 crates + Aggregation Layer)。
+> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + MCP toolkit 9 tools)。
 
-**版本**:v3.18(alembic head `a6b7c8d9e0f1` / 2026-05-17)
-**狀態**:**Round 7 + Round 8 calibration session 完整結算** ☕(2026-05-17 production verify 全綠);m2 大重構正式終結 ✅;M3 Cores 35 crates production-ready;Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP);Neely Core v1.0.1 P0 Gate 通過;Rust workspace **426 tests passed / 0 failed**;1266 stocks × 35 cores / wall time ~10 min / facts ~10M+
+**版本**:v3.24(alembic head `c8d9e0f1g2h3` / 2026-05-17)
+**狀態**:**Round 7 + Round 8 + Round 9 calibration 完整結算** ☕(2026-05-17 production verify 全綠)+ **5 sponsor-tier datasets 接入 + 4 new cores production-ready + 4 new MCP tools(toolkit 5→9)+ price_limit 420× incremental 加速**;m2 大重構正式終結 ✅;M3 Cores **39 crates** production-ready(原 35 + v3.21 4 new);Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP);Rust workspace **443 tests passed / 0 failed**;1266 stocks × 36 cores / wall time ~12 min(v3.24 後 13.4→12.3 min)/ facts ~5.1M(VACUUM 後)
 
 ---
 
@@ -13,7 +13,7 @@
 
 | 文件 | 用途 |
 |---|---|
-| **`CLAUDE.md`** | v1.35 → v3.18 跨 session 歷程紀錄(改 schema / 加 entry 前必看「關鍵架構決策」+ 最新 v3.X 段;v1.5 ~ v1.34 已歸檔 `docs/claude_history.md`)|
+| **`CLAUDE.md`** | v1.35 → v3.24 跨 session 歷程紀錄(改 schema / 加 entry 前必看「關鍵架構決策」+ 最新 v3.X 段;v1.5 ~ v1.34 已歸檔 `docs/claude_history.md`)|
 | **`m2Spec/layered_schema_post_refactor.md`** | Bronze + Silver schema 規範(主要 spec)|
 | **`m3Spec/`** | M3 Cores 層 spec(13 份,涵蓋 indicator / pattern / chip / fundamental / environment / neely / agg layer)|
 |   `m3Spec/neely_core_architecture.md` | Neely Wave Core(P0)架構,r6(v3.6 RuleId enum 76 variants)|
@@ -36,8 +36,8 @@
 | **Layer 1 Bronze** | FinMind raw(8 張 `*_tw` + 21+ raw,7 個分類 B0~B6)+ Reference 2 表 | `python src/main.py backfill` / `incremental`(`bronze/phase_executor.py`)|
 | **Layer 2 Silver per-stock** | 13 個 `*_derived` SQL builder + 4 個 fwd 表(Rust)+ `price_limit_merge_events` | `python src/main.py silver phase 7a/7b/7c`(`silver/orchestrator.py`)|
 | **Layer 2.5 Cross-Stock Cores**(v3.5 R3 新)| 跨股 ranking(目前 1 個:`magic_formula_ranked_derived`)| `python src/main.py cross_cores phase 8`(`cross_cores/orchestrator.py`)|
-| **Layer 3 M3 Cores** | 35 crates Rust workspace 全市場全核 dispatch(Wave / Indicator / Chip / Fundamental / Environment / System)| `tw_cores run-all --workflow workflows/tw_stock_standard.toml --write` |
-| **Layer 4 MCP / API 對外** | Aggregation Layer + Streamlit dashboards 6 tabs + FastMCP server 5 tools | `agg.as_of()` / `dashboards/aggregation.py` / `mcp_server/server.py` |
+| **Layer 3 M3 Cores** | **39 crates** Rust workspace 全市場全核 dispatch(Wave / Indicator / Chip 8 / Fundamental / Environment 7 / System)| `tw_cores run-all --workflow workflows/tw_stock_standard.toml --write` |
+| **Layer 4 MCP / API 對外** | Aggregation Layer + Streamlit dashboards 6 tabs + FastMCP server **9 public tools**(v3.22 加 4) | `agg.as_of()` / `dashboards/aggregation.py` / `mcp_server/server.py` |
 
 ```
               FinMind / 外部資料
@@ -93,8 +93,8 @@
 
 ```
 StockHelper4me/
-├── alembic/versions/                # Schema migrations(40+ migrations 至 z5a6b7c8d9e0)
-├── config/collector.toml            # 27 個 [[api]] entry(v3.10 移除 5 _legacy)
+├── alembic/versions/                # Schema migrations(40+ migrations 至 c8d9e0f1g2h3)
+├── config/collector.toml            # 39 個 [[api]] entry(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market)
 ├── src/
 │   ├── main.py                      # CLI(collector / silver / cross_cores / refresh / status / validate)
 │   ├── bronze/                      # v3.5 R1 拆解
@@ -127,15 +127,17 @@ StockHelper4me/
 │   ├── cores_shared/fact_schema/    # Fact + IndicatorCore / WaveCore trait + params_hash
 │   ├── cores/wave/neely_core/       # P0 Wave Core(Stage 1-10 完整 + v3.6 RuleId 81 variants + v3.7 真窮舉 compaction)
 │   ├── cores/indicator/             # 8 P1 + 8 P3 + 3 P2 pattern + ATR / Bollinger / OBV
-│   ├── cores/chip/                  # 5 P2(day_trading / institutional / margin / foreign_holding / shareholder)
+│   ├── cores/chip/                  # 8 P2(day_trading / institutional / margin / foreign_holding / shareholder + v3.21:loan_collateral / block_trade / risk_alert)
 │   ├── cores/fundamental/           # 3 P2(revenue / valuation / financial_statement)
-│   ├── cores/environment/           # 6 P2(taiex / us_market / exchange_rate / fear_greed / market_margin / business_indicator)
+│   ├── cores/environment/           # 7 P2(taiex / us_market / exchange_rate / fear_greed / market_margin / business_indicator + v3.21:commodity_macro)
 │   ├── cores/system/tw_cores/       # M3 cores monolithic binary(v3.5 R4 拆 8 module + workflow.rs)
 │   └── silver_s1_adjustment/        # Silver Phase 7c 後復權(舊 tw_stock_compute binary)
 ├── workflows/
 │   └── tw_stock_standard.toml       # 35 cores workflow(dispatch via tw_cores run-all --workflow)
+├── workflows/tw_stock_standard.toml # 39 cores workflow(v3.21 +4 entries)
 ├── dashboards/aggregation.py        # Streamlit 6 tabs(K-line / Chip / Fund / Env / Neely / Facts)
-├── mcp_server/                      # FastMCP stdio server(5 tools 包 agg + dashboards)
+├── mcp_server/                      # FastMCP stdio server(v3.22 9 public tools + helpers)
+│   ├── _loan_collateral / _block_trade / _risk_alert / _commodity_macro  # v3.22 加 4 helper modules
 ├── scripts/                         # verifier / inspect / reverse-pivot 工具
 ├── docs/
 │   ├── api_pipeline_reference.md    # entry × table × code 索引
@@ -164,7 +166,7 @@ cp .env.example .env
 
 # 3. pip install + alembic upgrade head 落 schema
 pip install -e .                      # editable install,src/silver / src/bronze / src/agg 全部 importable
-alembic upgrade head                  # → a6b7c8d9e0f1(v3.14 gov_bank Bronze 加 bank_name 維度)
+alembic upgrade head                  # → c8d9e0f1g2h3(v3.21 加 3 張 Silver derived:loan_collateral / block_trade / commodity_macro)
 ```
 
 ### 4.2 編 Rust workspace(雙 binary)
@@ -359,16 +361,51 @@ v3.15-v3.18 Round 8 calibration 四輪(sp=10 → 5 → 3 → 2,LargeTransaction 
         Low 10.06 / High 7.90 / LowAnn 5.10 / HighAnn 3.74
 ```
 
+### v3.19 → v3.24(2026-05-17,5 datasets + 4 new cores + Round 9)
+
+```
+v3.19 gov_bank_core spec proposal(等 EventKind 拍版)+ probe audit 工具就緒
+      + facts 表 stats 維護 SQL(scripts/maintain_facts_stats.sql)
+v3.20 5 sponsor-tier datasets 接入 Bronze:
+      - loan_collateral_balance_tw(35 cols 細項,5 大類 × 7 sub-fields)
+      - block_trade_tw(PK 加 trade_type 維度)
+      - market_value_daily(個股市值)
+      - disposition_securities_period_tw(處置股 all_market mode)
+      - commodity_price_daily(初版 GOLD,first_per_day aggregator)
+      collector.toml 34 → 39 entries / alembic b7c8d9e0f1g2
+v3.21 4 cores 拍版 + Rust 全套上線(alembic c8d9e0f1g2h3 + Silver 3 new builders):
+      - loan_collateral_core(11 EventKind:5 類 Surge/Crash + Concentration)
+      - block_trade_core(4 EventKind:LargeBlock / Acc / Dist / MatchingSpike)
+      - risk_alert_core(4 EventKind + 三級嚴重度 measure 中文 parser)
+      - commodity_macro_core(4 EventKind:Spike / Momentum / RegimeBreak)
+      - workflows toml +4 entries / chip_loader +3 / env_loader +1
+v3.22 B-5 MCP toolkit 從 5 → 9 public tools:
+      - loan_collateral_snapshot / block_trade_summary
+      - risk_alert_status / commodity_macro_snapshot
+      - tests +15 new(toolkit_v3 從 9 → 24 cases)
+v3.23 price_limit per_stock → all_market perf hotfix:
+      - 14 min → 0.65 秒(420× incremental 加速,FinMind 1 req 回 2745 stocks)
+      - segment_days=1 避開 FinMind multi-day range quirk
+v3.24 Round 9 calibration + commodity_macro builder fix:
+      - LoanCategoryConcentration level → edge trigger
+        (對齊 v3.16 institutional r3 Brown & Warner 1985)
+      - production verify:125.69/yr → ~1.16/yr ✅(events -82%,facts_new -99%)
+      - commodity_macro Silver builder order_by fix(market-level Bronze pattern)
+      - 4 new cores 全部 production-ready,觸發率合理
+      - wall time 806s → 738s(-8.5%)
+```
+
 ---
 
 ## 8. 測試
 
 ```bash
-# Python tests(agg + silver + cross_cores)
+# Python tests(agg + silver + cross_cores + mcp_server)
 pytest tests/agg/                       # 39 passed / 1 skipped(pandas 未裝)
+pytest tests/mcp_server/                # 33+ passed(v3.22 toolkit_v3 24 cases)
 pytest tests/                           # 全套 unit test
 
-# Rust workspace tests(35 crates / 426 passed / 0 failed)
+# Rust workspace tests(39 crates / 443 passed / 0 failed)
 cd rust_compute && cargo test --release --workspace
 ```
 
