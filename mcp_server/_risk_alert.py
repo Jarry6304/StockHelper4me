@@ -34,14 +34,22 @@ _SEVERITY_LABELS: dict[str, str] = {
 ESCALATION_WINDOW_DAYS = 60   # 對齊監管 §4
 
 
-def _parse_severity(measure: str | None) -> str:
-    if not measure:
+def _parse_severity(measure: str | None, condition: str | None = None) -> str:
+    """v3.29:`condition` 一起讀;加 `處置` / `注意` broad pattern。
+
+    3030 production case: measure="第一次處置" condition="連續三次" → "disposition"
+    (既有 keyword `人工管制` / `注意交易資訊` 不命中此短字串)。
+    """
+    text = " ".join(filter(None, [measure or "", condition or ""]))
+    if not text:
         return "unknown"
-    if "全額交割" in measure:
+    if "全額交割" in text:
         return "cash_only"
-    if "人工管制" in measure:
+    if "人工管制" in text or "分盤撮合" in text:
         return "disposition"
-    if "注意交易資訊" in measure:
+    if "處置" in text:
+        return "disposition"
+    if "注意交易資訊" in text or "注意" in text:
         return "warning"
     return "unknown"
 
@@ -106,7 +114,7 @@ def compute_risk_alert_status(
             break
 
     if current_row:
-        cur_severity = _parse_severity(current_row.get("measure"))
+        cur_severity = _parse_severity(current_row.get("measure"), current_row.get("condition"))
         days_remaining = (current_row["period_end"] - as_of).days
         current_status = {
             "in_disposition_period": True,
@@ -129,7 +137,7 @@ def compute_risk_alert_status(
     # history_60d:全 60 天內的 disposition 公告(對齊監管 escalation 規則)
     history_60d: list[dict[str, Any]] = []
     for r in rows:
-        sev = _parse_severity(r.get("measure"))
+        sev = _parse_severity(r.get("measure"), r.get("condition"))
         history_60d.append({
             "announced_date": r["announced_date"].isoformat(),
             "severity":       sev,

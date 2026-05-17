@@ -252,6 +252,94 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.29 — risk_alert severity parser:`處置` / `注意` broad pattern(2026-05-17)
+
+接 v3.28 production verify(`tw_cores run-all --write` 重算 + Neely / Kalman
+staleness 全部 fresh)後 user 跑 SQL inspect 3030 揭露:
+```
+date       | condition | measure_excerpt
+2026-05-07 | 連續三次  | 第一次處置
+```
+
+3030 的 measure 是極短字串「第一次處置」+ condition「連續三次」。既有
+`_parse_severity` 三個 keyword(`全額交割` / `人工管制` / `注意交易資訊`)都
+不命中 → fallback `unknown` → narrative 顯示「未分類」(production bug)。
+
+### 修法(`mcp_server/_risk_alert.py`)
+
+1. signature 加 `condition: str | None = None` kwarg(向下相容)
+2. text 合併 measure + condition 後 match
+3. 補 broad pattern:
+   - `處置`(含「第一次處置」/「處置股」等變體)→ `disposition`
+   - `分盤撮合`(對齊「人工管制之撮合終端機」變體)→ `disposition`
+   - `注意`(含「連續三次注意異常」/「注意交易資訊」等)→ `warning`
+4. priority 不變(最強到最弱):cash_only > disposition > warning > unknown
+
+優先序保留:`人工管制` / `分盤撮合` / `處置` 並列 disposition 但都比 `注意` 強;
+全額交割最強(prepay required 交易限制)。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_risk_alert.py` | `_parse_severity` 加 condition kwarg + 2 broad pattern;兩處 call site(current_status / history_60d)同步傳 condition |
+| `tests/mcp_server/test_toolkit_v3.py` | 加 2 test:`test_v3_29_short_disposition_measure`(3030 case)/ `test_v3_29_attention_only_from_condition` |
+| `CLAUDE.md` | v3.29 章節 |
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/test_toolkit_v3.py` ✅ **30 passed**(28 + 2 new)
+- `pytest tests/mcp_server/ tests/agg/ --ignore=test_render_tools` ✅ **116 passed / 1 skipped**
+- 既有 4 risk_alert test(disposition / cash_only / escalation / empty)0 regression
+  (因為 condition 預設 None 不變,舊 measure-only keyword 仍命中)
+
+### v3.28 production verify(同 session)
+
+User 跑 `tw_cores run-all --write`(653s / 41,785 rows / 40 cores 全綠)後,3030
+神經系統全部回到 fresh state:
+- `wave_count = 5`(從 v3.28 regex parse 修法後正確抓到 5-wave label)✅
+- `scenario_staleness.snapshot_date = 2026-05-15 / age_days = 0 / is_stale = false` ✅
+- `indicator_staleness.value_date = 2026-05-15 / age_days = 0 / is_stale = false` ✅
+
+`invalidation_price = 126.28` / `kalman regime = Sideway` 現在是 production fresh
+state 的實際模型輸出,**不再是 stale data**(若 user 對 3030 模型輸出 disagree,
+那是 neely / kalman 模型參數題,非 MCP layer issue)。
+
+### user 下次 session 自動套用
+
+```powershell
+git pull
+python -m mcp_server  # 開 stdio,Claude Desktop 對話內測:
+# "3030 的 risk_alert 狀態"
+# → severity = "disposition"(不再「未分類」)
+# → severity_label = "處置股(分盤撮合)"
+```
+
+### Reference
+
+- 「證券交易所公布注意交易資訊處置作業要點」§4(2024 版)— 三級嚴重度判定
+  - 注意股:單日異常 + 連續注意(累計)
+  - 處置股:5 日 / 10 日累計注意 → 5 / 10 / 20 min 分盤撮合
+  - 全額交割:預收款券,最嚴
+
+### Out of scope(留 v3.30+)
+
+- **monitor `unknown` rate**:production 跑 1 週後拉 SQL 看還有多少 measure 字串
+  落 `unknown`,可能還有其他奇特格式(若 < 1% 接受,否則加新 pattern)
+- **per-tier severity weighting**(market_context risk_alert score):目前
+  warning / disposition / cash_only 都單純 +1 active_count;未來可加權
+  (disposition = 1.5× / cash_only = 3×)
+
+### 風險
+
+🟢 低:
+- 純 `_parse_severity` 函式邏輯加 1 個 keyword + 1 個 broad pattern
+- signature 加 optional kwarg 向下相容,既有 4 test 全綠
+- 0 Rust / 0 alembic / 0 collector.toml
+- Rollback:單 commit `git revert` 即可
+
+---
+
 ## v3.28 — neely wave_count + scenario/indicator staleness surface(2026-05-17)
 
 User v3.27 跑完 9 tools 對 3030 verify,揭露 3 個 follow-up:
