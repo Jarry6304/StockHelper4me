@@ -35,12 +35,27 @@ inventory::submit! {
 const MILESTONE_LOOKBACK_QUARTERLY: usize = 60;
 const MILESTONE_LOOKBACK_ANNUAL: usize = 252;
 
+/// Milestone events 最小間距(交易日),預設 3
+/// Reference(2026-05-16 v3.15 → v3.17 Round 8.2): Lucas & LeBeau (1992)
+/// "Technical Traders Guide to Computer Analysis" Ch.7 — pivot 確認需要 N-bar holding 期間。
+/// v3.15 Round 8(2026-05-16): spacing=10 首試,production 揭露過嚴 — 4 variants
+/// collapse 到 1.5-4/yr(Low 3.97,High 3.26,LowAnn 2.03,HighAnn 1.49)。
+/// v3.16 Round 8.1(2026-05-17): spacing=5,production 揭露 4 variants 仍偏低
+/// (Low 5.87,High 4.71,LowAnn 2.99,HighAnn 2.18)。retention 全部一致 38%
+/// → cluster 平均 ≈ 2.6 event(非原估 4-event)。
+/// v3.17 Round 8.2(2026-05-17): spacing=3 — data-driven 對齊 cluster=2.6 sweet spot。
+/// 預期 retention ~55-65% → Low ~8.5/yr / High ~6.7/yr / LowAnn ~4.3/yr / HighAnn ~3.1/yr
+/// 全 4 落 target band ✅。
+const MIN_MILESTONE_SPACING_DAYS: usize = 3;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ForeignHoldingParams {
     pub timeframe: Timeframe,
-    /// SignificantSingleDayChange 的 rolling z-score 閾值,預設 2.0
+    /// SignificantSingleDayChange 的 rolling z-score 閾值,預設 2.1
     /// Reference(2026-05-12 P2 阻塞 6): Fama, Fisher, Jensen & Roll (1969) IER 10(1):1-21
     /// 現代事件研究方法論 —「顯著」= 超過個股歷史波動度 2σ,而非跨股票固定百分比閾值。
+    /// v3.15 Round 8(2026-05-16): production data 揭露 z=2.0 觸發率 12.88/yr/stock
+    /// 微超 v1.32 ≤ 12/yr/stock 標準;tighten 2.0→2.1(97.86th percentile)後預期 ~10/yr。
     pub change_z_threshold: f64,
     /// rolling z-score 的回看窗口,預設 60 天
     pub change_lookback: usize,
@@ -52,7 +67,7 @@ impl Default for ForeignHoldingParams {
     fn default() -> Self {
         Self {
             timeframe: Timeframe::Daily,
-            change_z_threshold: 2.0,
+            change_z_threshold: 2.1,
             change_lookback: 60,
             limit_alert_remaining: 5.0,
         }
@@ -154,6 +169,13 @@ fn mean_std_f64(values: &[f64]) -> (f64, f64) {
 fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) -> Vec<ForeignHoldingEvent> {
     let mut events = Vec::new();
     let mut was_near_limit = false;
+    // v3.15 Round 8 → v3.17 Round 8.2: MIN_MILESTONE_SPACING_DAYS 控連續探低/探高
+    // cluster 視為同一事件;production-data-driven cluster size ≈ 2.6 → spacing=3。
+    // 對齊 Lucas & LeBeau (1992) pivot 確認 N-bar holding。
+    let mut last_quarterly_high_idx: Option<usize> = None;
+    let mut last_quarterly_low_idx: Option<usize> = None;
+    let mut last_annual_high_idx: Option<usize> = None;
+    let mut last_annual_low_idx: Option<usize> = None;
     for (i, p) in series.iter().enumerate() {
         // SignificantSingleDayChange — rolling z-score(2026-05-12 P2 阻塞 6 修)
         // 原固定 0.5% 閾值不適應個股波動度(大型股 0.5%/day 是常態)→ 34.87/yr 噪音。
@@ -205,46 +227,58 @@ fn detect_events(series: &[ForeignHoldingPoint], params: &ForeignHoldingParams) 
             });
         }
         was_near_limit = is_near_limit;
-        // Milestone high / low — 季新高/低（60d）
+        // Milestone high / low — 季新高/低（60d）+ v3.15 MIN_MILESTONE_SPACING_DAYS spacing
         if i >= MILESTONE_LOOKBACK_QUARTERLY {
             let window = &series[i - MILESTONE_LOOKBACK_QUARTERLY..i];
             let max_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::NEG_INFINITY, f64::max);
             let min_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::INFINITY, f64::min);
-            if p.foreign_holding_pct > max_prev {
+            if p.foreign_holding_pct > max_prev
+                && last_quarterly_high_idx.map_or(true, |last| i - last >= MIN_MILESTONE_SPACING_DAYS)
+            {
                 events.push(ForeignHoldingEvent {
                     date: p.date,
                     kind: ForeignHoldingEventKind::HoldingMilestoneHigh,
                     value: p.foreign_holding_pct,
                     metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_QUARTERLY), "value": p.foreign_holding_pct }),
                 });
-            } else if p.foreign_holding_pct < min_prev {
+                last_quarterly_high_idx = Some(i);
+            } else if p.foreign_holding_pct < min_prev
+                && last_quarterly_low_idx.map_or(true, |last| i - last >= MIN_MILESTONE_SPACING_DAYS)
+            {
                 events.push(ForeignHoldingEvent {
                     date: p.date,
                     kind: ForeignHoldingEventKind::HoldingMilestoneLow,
                     value: p.foreign_holding_pct,
                     metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_QUARTERLY), "value": p.foreign_holding_pct }),
                 });
+                last_quarterly_low_idx = Some(i);
             }
         }
-        // Milestone high / low — 年新高/低（252d，George & Hwang 2004 標準）
+        // Milestone high / low — 年新高/低（252d，George & Hwang 2004 標準）+ v3.15 spacing
         if i >= MILESTONE_LOOKBACK_ANNUAL {
             let window = &series[i - MILESTONE_LOOKBACK_ANNUAL..i];
             let max_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::NEG_INFINITY, f64::max);
             let min_prev = window.iter().map(|q| q.foreign_holding_pct).fold(f64::INFINITY, f64::min);
-            if p.foreign_holding_pct > max_prev {
+            if p.foreign_holding_pct > max_prev
+                && last_annual_high_idx.map_or(true, |last| i - last >= MIN_MILESTONE_SPACING_DAYS)
+            {
                 events.push(ForeignHoldingEvent {
                     date: p.date,
                     kind: ForeignHoldingEventKind::HoldingMilestoneHighAnnual,
                     value: p.foreign_holding_pct,
                     metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_ANNUAL), "value": p.foreign_holding_pct }),
                 });
-            } else if p.foreign_holding_pct < min_prev {
+                last_annual_high_idx = Some(i);
+            } else if p.foreign_holding_pct < min_prev
+                && last_annual_low_idx.map_or(true, |last| i - last >= MIN_MILESTONE_SPACING_DAYS)
+            {
                 events.push(ForeignHoldingEvent {
                     date: p.date,
                     kind: ForeignHoldingEventKind::HoldingMilestoneLowAnnual,
                     value: p.foreign_holding_pct,
                     metadata: json!({ "lookback": format!("{}d", MILESTONE_LOOKBACK_ANNUAL), "value": p.foreign_holding_pct }),
                 });
+                last_annual_low_idx = Some(i);
             }
         }
     }
@@ -404,6 +438,84 @@ mod tests {
         assert_eq!(alerts[0].date,
             NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Duration::days(10),
             "fire date 應為進入 near-limit zone 當日");
+    }
+
+    /// v3.17 Round 8.2(2026-05-17):MIN_MILESTONE_SPACING_DAYS=3 防連續探低 cluster。
+    /// 連續 3 天每日新低(在 spacing=3 window 內),應只 fire 1 次(進入新低當日)。
+    #[test]
+    fn milestone_spacing_prevents_consecutive_low_fires() {
+        let mut points = Vec::with_capacity(80);
+        let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        // baseline 60 天 @ 50%
+        for i in 0..60 {
+            let mut r = raw("2026-01-01", 50.0);
+            r.date = base + chrono::Duration::days(i);
+            points.push(r);
+        }
+        // 連續 3 天每日新低 50→49.5→49.0→48.5(壓進 spacing=3 內)
+        let mut ratio = 50.0;
+        for i in 60..63 {
+            ratio -= 0.5;
+            let mut r = raw("2026-01-01", ratio);
+            r.date = base + chrono::Duration::days(i as i64);
+            points.push(r);
+        }
+        let series = ForeignHoldingSeries { stock_id: "2330".to_string(), points };
+        let out = ForeignHoldingCore::new()
+            .compute(&series, ForeignHoldingParams::default())
+            .unwrap();
+        let lows: Vec<_> = out.events.iter()
+            .filter(|e| e.kind == ForeignHoldingEventKind::HoldingMilestoneLow)
+            .collect();
+        assert_eq!(
+            lows.len(),
+            1,
+            "MIN_MILESTONE_SPACING_DAYS=3 連續 3 天探低應只 fire 1 次(實際 {} 次)",
+            lows.len()
+        );
+        // 第一次 fire 應在第 60 天(進入新低當日)
+        assert_eq!(lows[0].date, base + chrono::Duration::days(60));
+    }
+
+    /// v3.17 Round 8.2:spacing 過後可再次 fire(隔 >= 3 trading day 的二次探低)
+    #[test]
+    fn milestone_spacing_allows_refire_after_gap() {
+        let mut points = Vec::with_capacity(100);
+        let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        // baseline 60 天 @ 50%
+        for i in 0..60 {
+            let mut r = raw("2026-01-01", 50.0);
+            r.date = base + chrono::Duration::days(i);
+            points.push(r);
+        }
+        // 第 60 天 探低 49.0(第 1 次 fire)
+        let mut r = raw("2026-01-01", 49.0);
+        r.date = base + chrono::Duration::days(60);
+        points.push(r);
+        // 第 61-64 天 持平 49.0(無新低,5 天 gap >= spacing=3)
+        for i in 61..65 {
+            let mut r = raw("2026-01-01", 49.0);
+            r.date = base + chrono::Duration::days(i as i64);
+            points.push(r);
+        }
+        // 第 65 天 再探低 48.0(spacing >= 3,應再 fire)
+        let mut r = raw("2026-01-01", 48.0);
+        r.date = base + chrono::Duration::days(65);
+        points.push(r);
+
+        let series = ForeignHoldingSeries { stock_id: "2330".to_string(), points };
+        let out = ForeignHoldingCore::new()
+            .compute(&series, ForeignHoldingParams::default())
+            .unwrap();
+        let lows: Vec<_> = out.events.iter()
+            .filter(|e| e.kind == ForeignHoldingEventKind::HoldingMilestoneLow)
+            .collect();
+        assert_eq!(
+            lows.len(),
+            2,
+            "spacing 過後應再 fire(實際 {} 次)",
+            lows.len()
+        );
     }
 
     #[test]
