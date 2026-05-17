@@ -262,18 +262,23 @@ field_rename = {"max" = "high", "min" = "low", "Trading_Volume" = "volume", "Tra
 detail_fields = ["_trading_money", "_spread"]
 notes        = "日K 原始價格。⚠️ v1.2/v1.3 缺 field_rename，max/min/Trading_Volume 會被 PRAGMA 過濾掉"
 
+# v3.23(2026-05-17):price_limit per_stock → all_market(probe 揭 1 req 回 2745 stocks)
+# FinMind quirk:單日 range 回正常,multi-day range 靜默回 0 rows(probe 確認:
+#   start=5-15/end=5-16 → 2745 rows;start=5-01/end=5-15 → 0 rows;start=end=5-13 → 2743 rows)
+# 因此用 all_market + segment_days=1(每次 1 天,共用 v3.14 gov_bank pattern 變體)。
+# 效益:incremental 14 min → 0.65 秒(420× 加速);5 yr backfill 70 min → 20 min(3.5×)。
 [[api]]
 name         = "price_limit"
 dataset      = "TaiwanStockPriceLimit"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "price_limit"
 phase        = 3
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
 field_rename = {"reference_price" = "_reference_price"}
 detail_fields = ["_reference_price"]
-notes        = "漲跌停價；limit_up/limit_down 已對齊 DB，reference_price 進 detail"
+notes        = "v3.23 漲跌停價:all_market + segment_days=1(FinMind quirk:multi-day range 回 0,單日 OK);1 req/day = ~2745 rows,省 14 分鐘 incremental"
 
 # =============================================================================
 # Phase 4：RUST 計算（不定義 [[api]] entry）

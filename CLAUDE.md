@@ -251,6 +251,72 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.23 — price_limit per_stock → all_market perf hotfix(2026-05-17)
+
+User 跑 v3.21 verify chain 中觀察到 `price_limit` incremental 走 per_stock × 1300
+stocks × 0.65 秒 = 14 分鐘只為了拉漲跌停(99% empty)。Probe FinMind 揭露
+`TaiwanStockPriceLimit` 可走 all_market mode,但有 **quirk**:multi-day range 靜默
+回 0 rows,單日查詢回 ~2745 rows(包含過去日)。
+
+### Probe 結果(2026-05-17)
+
+```
+start=5-15, end=5-16 (1 trading day in range) → 2745 rows ✅
+start=5-01, end=5-15 (10 trading days range)  → 0 rows ❌(FinMind quirk)
+start=end=5-13 (single past day)              → 2743 rows ✅(backfill 可行)
+```
+
+### 修法(`config/collector.toml`)
+
+| 欄 | 修前 | 修後 |
+|---|---|---|
+| `param_mode` | `per_stock` | **`all_market`** |
+| `segment_days` | 365 | **1**(避開 multi-day quirk)|
+
+### 效益
+
+| 場景 | 修前 | 修後 | 加速 |
+|---|---|---|---|
+| Daily incremental | ~14 min(1300 reqs)| **~0.65 秒**(1 req)| **420×** |
+| 5 yr backfill | ~70 min(6500 reqs)| **~20 min**(1825 reqs / sponsor 6000h)| **3.5×** |
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `config/collector.toml` | `price_limit` entry param_mode + segment_days 改 + notes 更新 |
+| `CLAUDE.md` | 加 v3.23 章節 |
+
+**0 alembic / 0 Rust / 0 Python**(純 config tweak;對齊 v3.14 gov_bank pattern 變體
+— gov_bank 用 `all_market_no_end` 因 dataset 拒 end_date,price_limit 接受但有
+multi-day quirk,故仍用 `all_market` + `segment_days=1`)。
+
+### 沙箱驗證
+
+- `python -c "from config_loader import load_collector_config; ..."` → all_market /
+  segment_days=1 解析正常,39 entries 全部對齊
+- 既有 `all_market` infrastructure(institutional_market / total_margin_purchase)
+  已有 ALL_MARKET_SENTINEL pattern 接 sync_tracker,無需動 Python
+
+### 用法(user 下次 incremental 自動套用)
+
+```powershell
+git pull   # 拉 collector.toml 改動
+python src/main.py incremental   # price_limit 從 14 min → 0.65 秒
+```
+
+舊 per_stock 的 `api_sync_progress` 紀錄不衝突(progress 表 PK 含 api_name +
+stock_id + segment;all_market mode 寫入 stock_id="_ALL_MARKET_" sentinel)。
+
+### Out of Scope
+
+- 其他 per_stock API 是否有同款 all_market quirk(price_daily / margin_daily /
+  institutional 等)— probe + audit 留 v3.24 backlog,本 hotfix 只動 price_limit
+- v3.14 gov_bank 同類 quirk audit(end_date 拒收 vs multi-day 靜默 0)— 既有 work
+  已收尾不動
+
+---
+
 ## v3.22 — B-5:4 new MCP tools 暴露 v3.20-v3.21 cores(2026-05-17)
 
 接 v3.21 Commit C(`06d2829` Rust 4 cores + Silver 3 builders 全綠)後,user 拍版
