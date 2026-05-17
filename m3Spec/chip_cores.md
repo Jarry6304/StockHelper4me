@@ -992,14 +992,35 @@ pub enum LoanCollateralEventKind {
     UnrestrictedLoanSurge, UnrestrictedLoanCrash,
     FinanceLoanSurge, FinanceLoanCrash,
     SettlementMarginSurge, SettlementMarginCrash,
-    // 1 跨類
-    LoanCategoryConcentration,                  // 任一類占合計 > 70%
+    // 1 跨類(v3.24 Round 9:edge trigger,對齊 institutional §3.6 r3 pattern)
+    LoanCategoryConcentration,
 }
 ```
 
 > **對等對稱拍版**:雖然 SettlementMargin(交割保證金借券)production data 中
 > 多為 0(僅交割異常時動用),仍保留 Surge/Crash 對等;production calibration
 > 後可 individual disable(workflows toml `enabled = false`)。
+
+### 10.5.1 LoanCategoryConcentration — Edge Trigger 設計(v3.24 Round 9)
+
+**問題**:原 level trigger 實作每天 ratio >= 0.70 就 fire → production verify
+揭露 125.69/yr/stock 🔴(10.5× over ≤ 12 target)。台股借券 ratio 自然集中
+(unrestricted_loan 主導大多數股),level trigger 每天 fire = 噪音爆量。
+
+**修正**(2026-05-17 v3.24):改為 **edge trigger**,僅在 ratio **從 < threshold
+跨入 >= threshold** 當日 fire(狀態轉換語意)。
+
+```
+if cur_alert && !prev_alert { fire }
+```
+
+**Production calibration 結果**:125.69/yr → **1.16/yr/stock** ✅(events -82%,
+facts_new -99%,wall time -89% 在 loan_collateral_core 部分)。
+
+**Reference**:對齊 institutional `LargeTransaction` §3.6 r3 同款 pattern:
+- Brown & Warner (1985) JFE 14(1):3-31 — 「事件」是狀態變化,不是狀態持續
+- Sheingold (1978) "Analog-Digital Conversion Notes" — edge trigger vs level
+  trigger 設計原則
 
 ### 10.6 metadata 設計
 
@@ -1026,6 +1047,19 @@ pub enum LoanCollateralEventKind {
 不整合 `margin_core`(粒度不同)。`margin_core` 對應 `margin_daily_derived`
 (融資 / 融券 6 欄),本 core 對應 `loan_collateral_balance_derived`(5 大類
 35 欄)。Aggregation Layer 並排呈現。
+
+### 10.8 Production calibration baseline(v3.24 verify,2026-05-17)
+
+全市場 1266 stocks × 7 yr 跑出:
+
+| EventKind | total events | rate/yr/stock | 狀態 |
+|---|---|---|---|
+| `MarginBalanceSurge` | 51,332 | 6.41 | ✅ |
+| `LoanCategoryConcentration` | ~10,255(v3.24 edge trigger 後)| **1.16** | ✅(從 125.69 大幅校準)|
+| 其他 9 個 Surge/Crash | 合計約 205K | 各 <6 | ✅(未進 Section 1 top 30)|
+
+對齊 v1.32 acceptance 標準(per-EventKind ≤ 12/yr/stock)。SettlementMargin 觸發
+率自然偏低(SettlementMargin balance 多為 0),屬正常 production 行為。
 
 ---
 

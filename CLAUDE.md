@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v3.18,最新 2026-05-17;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v3.24,最新 2026-05-17;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X 段落。
 
 ---
@@ -11,13 +11,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
-Python 3.11+ + Rust workspace 35 crates(Silver S1 後復權 + M3 Cores 全市場全核 dispatch)。
+Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores)。
 
-- **alembic head**:`a6b7c8d9e0f1`(v3.14 gov_bank Bronze 加 bank_name 維度;v3.15 → v3.18 純 Rust const tweak 0 migration)
-- **開發分支**:`claude/continue-previous-work-xdKrl`
-- **collector.toml**:34 entries(gov_bank 需 FinMind sponsor tier)
-- **Rust tests**:35 crates / **426 passed / 0 failed**
-- **Production state**:1266 stocks × 35 cores / wall time ~10 min / facts ~10M;Round 7 + Round 8 calibration **完整結算**(6/6 over-fired EventKind = 5 校準 + 1 accepted baseline,v3.18 production verify 4/4 milestone in band)
+- **alembic head**:`c8d9e0f1g2h3`(v3.21 加 3 張 Silver derived:loan_collateral / block_trade / commodity_macro)
+- **開發分支**:`claude/continue-previous-work-xdKrl` → 合 main
+- **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
+- **Rust tests**:39 crates / **443 passed / 0 failed**
+- **MCP toolkit**:**9 public tools**(v3 5 + v3.22 4 new:loan_collateral / block_trade / risk_alert / commodity_macro)
+- **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**(7/7 over-fired EventKind = 6 校準 + 1 accepted baseline,v3.24 production verify:LoanCategoryConcentration 125.69 → 1.16/yr ✅,commodity_macro 0 → 105 events ✅)
 
 ---
 
@@ -2136,14 +2137,17 @@ python scripts/probe_finmind_sponsor_unused.py --max 0
 - **Wave Cores Phase 20+**(若 user 想拓展非 Elliott 派波浪理論)
 - **跨資產配對交易**(pairs_trading core in `cross_cores/`)
 
-### accepted baselines(超 12/yr/stock 但 user 拍版接受)
+### accepted baselines(超 12/yr 但 user 拍版接受)
 
 | EventKind | rate/yr | 接受理由 | 紀錄版本 |
 |---|---|---|---|
-| `institutional / DivergenceWithinInstitution` | 58.41 | production reality(高頻法人分歧)| v1.32 |
-| `institutional / LargeTransaction` | 14.16 | fat-tail (Lo 2001),邊際效益遞減 | v3.17 |
+| `institutional / DivergenceWithinInstitution` | 58.41/yr/stock | production reality(高頻法人分歧)| v1.32 |
+| `institutional / LargeTransaction` | 14.16/yr/stock | fat-tail (Lo 2001),邊際效益遞減 | v3.17 |
+| `exchange_rate / SignificantSingleDayMove` | 14.8/yr(market-level)| macro shock 自然頻率,distinct_stocks=1 規則不適用 | v1.32 |
+| `commodity_macro / CommoditySpike` | 12.2/yr(market-level)| 同上 macro fat-tail,對齊 LargeTransaction 模式 | v3.24 |
 
-之後 calibration 看到 ≤ 12/yr/stock 為方向性目標,以上兩個 EventKind 不需要再 tighten。
+之後 calibration 看到 ≤ 12/yr 為方向性目標,以上 4 個 EventKind 不需要再 tighten。
+注意:market-level cores(distinct_stocks ≤ 5)的 ≤ 12 規則本來就不適用,以 events/yr 評估即可。
 
 ### ⚠️ V2 階段禁止做(spec 已明文)
 
