@@ -252,6 +252,159 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.25 — `market_context()` 整合 commodity_macro + risk_alert(2026-05-17)
+
+接 v3.24 production verify 收尾 + docs alignment 合 main(`d86a1c6`)後,user
+拍版動工「整合 commodity_macro / risk_alert 進 `market_context()` MCP tool」
+(對齊 v3.24 doc 提的 Out of Scope 第 4 項 → 本 PR 轉入 In Scope)。
+
+**0 alembic / 0 Rust / 0 collector.toml**(純 Python:`mcp_server/_climate.py`
++ 9 new tests)。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_climate.py` | weights 6 → 8 / kinds 加 4 commodity / risks 加 2 commodity-related / `_aggregate_risk_alert_marketwide()` 新函式 / `_score_risk_alert()` 新函式 / `_COMP_LABEL` 加 2 中文 |
+| `tests/mcp_server/test_toolkit_v2.py` | 加 3 TestXxx class × 3-4 test = +9 cases / `test_returns_6_components` 改 8 / `_patch_get_connection` 補預設 risk_alert mock |
+| `CLAUDE.md` | v3.25 章節 |
+
+### 新 8 components 權重(v3.25 拍版)
+
+| Component | weight | source | 變動 |
+|---|---|---|---|
+| `taiex` | 0.22 | taiex_core | 0.25 → 0.22(-0.03) |
+| `us_market` | 0.17 | us_market_core | 0.20 → 0.17 |
+| `fear_greed` | 0.13 | fear_greed_core | 0.15 → 0.13 |
+| `business` | 0.17 | business_indicator_core | 0.20 → 0.17 |
+| `exchange_rate` | 0.08 | exchange_rate_core | 0.10 → 0.08 |
+| `market_margin` | 0.08 | market_margin_core | 0.10 → 0.08 |
+| **`commodity_macro`** | **0.05** | commodity_macro_core(`_global_`)| **NEW** |
+| **`risk_alert`** | **0.10** | risk_alert_core(marketwide agg)| **NEW** |
+| **Sum** | **1.00** | | |
+
+risk_alert 0.10 比 commodity_macro 0.05 高的理由:**domestic 處置股直接反映台股
+監管風險**,信號性高於 single-commodity macro 訊號。
+
+### commodity_macro EventKind sign(GOLD 為 risk-off proxy,對 equities 反向)
+
+| EventKind | sign | 邏輯 |
+|---|---|---|
+| `CommodityMomentumUp` | **-1**(bearish for equities) | GOLD 漲 = 避險情緒升高 = 對股市偏空 |
+| `CommodityMomentumDown` | **+1**(bullish) | GOLD 跌 = risk-on 環境 |
+| `CommoditySpike` | 0(中性) | 方向需看 metadata,但加進 systemic_risks |
+| `CommodityRegimeBreak` | 0 | 警示性質,加 systemic_risks |
+
+### risk_alert marketwide aggregation 設計
+
+per-stock facts(real stock_ids)→ 3 個 marketwide 指標:
+
+1. **`active_count`**:當下在處置期內的 distinct stocks
+   ```sql
+   SELECT COUNT(DISTINCT stock_id) FROM facts
+    WHERE source_core = 'risk_alert_core'
+      AND metadata->>'event_kind' = 'DispositionEntered'
+      AND (metadata->>'period_end')::date >= as_of
+   ```
+2. **`announced_14d`**:近 14 天 DispositionAnnounced distinct stocks 數
+3. **`escalations_60d`**:近 60 天 DispositionEscalation 總次數
+
+`_score_risk_alert()` 給負分(對股市風險意義):
+
+| 條件 | score 貢獻 |
+|---|---|
+| `active_count` >= 10 | **-100** |
+| `active_count` 5-9 | -50 |
+| `active_count` 1-4 | -15 |
+| `escalations_60d` >= 3 | -30 額外 |
+| `escalations_60d` 1-2 | -15 額外 |
+| `announced_14d` >= 5 | -15 額外 |
+| 最終 clamp `[-100, +100]` | |
+
+### 新 systemic_risks 標籤
+
+- `macro_commodity_spike`(近 14 天 CommoditySpike 出現)
+- `macro_commodity_regime_shift`(近 14 天 CommodityRegimeBreak)
+- `tw_disposition_cluster`(active_count >= 5)
+- `tw_disposition_escalation_cluster`(escalations_60d >= 3)
+
+### Output schema(新)
+
+```json
+{
+  "as_of": "2026-05-13",
+  "overall_climate": "bearish",
+  "climate_score": -25.3,
+  "components": {
+    "taiex": {"score": -10, "fact_count": 5},
+    ... (6 既有 components)
+    "commodity_macro": {"score": -25, "fact_count": 3},
+    "risk_alert": {
+      "score": -65,
+      "active_disposition_stocks": 7,
+      "escalations_60d": 1,
+      "announced_14d": 2
+    }
+  },
+  "systemic_risks": ["tw_disposition_cluster", "macro_commodity_spike"],
+  "narrative": "..."
+}
+```
+
+risk_alert component 多 3 個 detail keys(`active_disposition_stocks` /
+`escalations_60d` / `announced_14d`)— LLM 看 narrative 取概念,需要細節可
+讀這些。
+
+### 沙箱驗證
+
+- `python -c "_score_risk_alert(...)"` ✅ 5/5 thresholds 對齊
+- `python -c "weights sum"` ✅ 1.000
+- `pytest tests/mcp_server/ tests/agg/` ✅ **110 passed / 1 skipped**(從 101 +9 new)
+- 既有 5 public tools + 4 v3.22 tools 0 regression
+- `market_context()` 對既有 LLM caller 向下相容(只增 components keys,不破舊 keys)
+
+### 範圍對齊 user 拍版原則
+
+- **零耦合,少抽象**:per-component score 各自獨立計算,commodity 訊號不會被
+  taiex 訊號污染;risk_alert 走獨立 query 不污染既有 6 cores 路徑
+- **資料分層**:Layer 4 MCP tool 只是 read-only summary;不改動 Bronze /
+  Silver / M3 cores / facts table
+- **參數選擇**:
+  - commodity_macro weight 0.05:macro 1-commodity 初版,信號強度有限
+  - risk_alert weight 0.10:domestic 處置股 hard signal,權重高於 commodity
+  - active_count 閾值 5/10:Basel ICAAP 風險集中度概念變體
+  - escalations_60d 閾值 3:對齊 TSEC 處置作業要點 §4「60 日內 ≥ 2 次升級」+ buffer 1
+
+### 待 user 跑(下次 session 起點)
+
+```powershell
+git pull
+# v3.25 自動套用 — 下次 market_context() call 多 2 components
+python -m mcp_server   # 開 stdio
+# Claude Desktop 對話內測:
+#   "幫我看今天大盤狀況"  → LLM 看 narrative 內若 commodity / risk_alert 訊號偏空
+#                          + systemic_risks 含 tw_disposition_cluster 等 → 自然警示
+```
+
+### 風險
+
+🟢 低:
+- 0 Rust / 0 alembic / 0 collector.toml(純 Python)
+- 既有 7 cores facts query 路徑 0 改動;risk_alert 走新獨立 SQL,失敗 graceful(except → 0)
+- weights 重新配權但 sum=1.0 保證 backward-compat 量綱
+- 既有 ~100 tests 全綠;9 new tests pass
+- Rollback:單 commit `git revert` 即可
+
+### Out of Scope(留 future)
+
+- **C-9 dashboard tabs**(Streamlit 視覺化 v3.20-21 cores + 新 components 視覺化)
+- **B-4 FastAPI thin wrap**(v1.35 backlog)
+- **多 commodity 支援**(SILVER / OIL 加入 commodity_macro / market_context 各 0.02-0.03 子權重)
+- **Round 10 calibration**(若 user 跑 production 後 commodity_macro / risk_alert
+  訊號量過低或過頻,可再調 weights)
+
+---
+
 ## v3.24 — Round 9 calibration + commodity_macro Silver builder hotfix(2026-05-17)
 
 接 v3.21 Commit C 全市場 production verify(`scripts/verify_event_kind_rate.sql`)
