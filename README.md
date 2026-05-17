@@ -2,8 +2,8 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + MCP toolkit 9 tools)。
 
-**版本**:v3.24(alembic head `c8d9e0f1g2h3` / 2026-05-17)
-**狀態**:**Round 7 + Round 8 + Round 9 calibration 完整結算** ☕(2026-05-17 production verify 全綠)+ **5 sponsor-tier datasets 接入 + 4 new cores production-ready + 4 new MCP tools(toolkit 5→9)+ price_limit 420× incremental 加速**;m2 大重構正式終結 ✅;M3 Cores **39 crates** production-ready(原 35 + v3.21 4 new);Aggregation Layer 4 Phase 全套(spec / lib / dashboard / MCP);Rust workspace **443 tests passed / 0 failed**;1266 stocks × 36 cores / wall time ~12 min(v3.24 後 13.4→12.3 min)/ facts ~5.1M(VACUUM 後)
+**版本**:v3.25(alembic head `c8d9e0f1g2h3` / 2026-05-17)
+**狀態**:**Round 7 + Round 8 + Round 9 calibration 完整結算** ☕(2026-05-17 production verify 全綠)+ **5 sponsor-tier datasets 接入 + 4 new cores production-ready + 4 new MCP tools(toolkit 5→9)+ `market_context()` 整合 commodity_macro / risk_alert(8 components weights)+ price_limit 420× incremental 加速**;m2 大重構正式終結 ✅;M3 Cores **39 crates** production-ready;Aggregation Layer 4 Phase 全套;Rust workspace **443 tests passed / 0 failed**;Python tests **110 passed / 1 skipped**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
 
 ---
 

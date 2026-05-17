@@ -66,10 +66,20 @@ def _patch_fetch_market_facts(monkeypatch, grouped: dict[str, list[dict]]):
 
 
 def _patch_get_connection(monkeypatch):
-    """Mock agg._db.get_connection 回 MagicMock conn。"""
+    """Mock agg._db.get_connection 回 MagicMock conn。
+
+    v3.25:同時 mock _aggregate_risk_alert_marketwide 預設回 0,
+    避免 MagicMock conn 的 int() 行為返回 1 把 risk_alert score 帶進去。
+    對 v3.25 自己的 test 個別覆寫即可。
+    """
     from agg import _db
+    from mcp_server import _climate as climate_mod
 
     monkeypatch.setattr(_db, "get_connection", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(
+        climate_mod, "_aggregate_risk_alert_marketwide",
+        lambda *a, **kw: {"active_count": 0, "announced_14d": 0, "escalations_60d": 0},
+    )
 
 
 # ────────────────────────────────────────────────────────────
@@ -92,18 +102,16 @@ class TestMarketContextStructure:
             "narrative",
         }
 
-    def test_returns_6_components(self, monkeypatch):
+    def test_returns_8_components(self, monkeypatch):
+        """v3.25:6 → 8 components(加 commodity_macro + risk_alert)。"""
         _patch_get_connection(monkeypatch)
         _patch_fetch_market_facts(monkeypatch, {})
 
         result = data_tools.market_context("2026-05-13")
         assert set(result["components"].keys()) == {
-            "taiex",
-            "us_market",
-            "fear_greed",
-            "business",
-            "exchange_rate",
-            "market_margin",
+            "taiex", "us_market", "fear_greed", "business",
+            "exchange_rate", "market_margin",
+            "commodity_macro", "risk_alert",   # v3.25
         }
 
     def test_empty_facts_gives_neutral_climate(self, monkeypatch):
@@ -226,6 +234,149 @@ class TestMarketContextScoring:
         for comp in result["components"].values():
             assert -100 <= comp["score"] <= 100
         assert -100 <= result["climate_score"] <= 100
+
+
+# ════════════════════════════════════════════════════════════
+# v3.25 — commodity_macro + risk_alert integration
+# ════════════════════════════════════════════════════════════
+
+
+def _patch_risk_alert_summary(monkeypatch, summary: dict[str, int]):
+    """Mock _aggregate_risk_alert_marketwide 回固定 summary dict。"""
+    from mcp_server import _climate as climate_mod
+    monkeypatch.setattr(
+        climate_mod, "_aggregate_risk_alert_marketwide",
+        lambda *a, **kw: summary,
+    )
+
+
+class TestMarketContextCommodityMacro:
+    """v3.25:commodity_macro_core 加進 _global_ 的 7th env core。"""
+
+    def test_gold_momentum_up_bearish_for_equities(self, monkeypatch):
+        """GOLD MomentumUp = risk-off → 對股市偏空(sign=-1)。"""
+        _patch_get_connection(monkeypatch)
+        _patch_risk_alert_summary(monkeypatch, {
+            "active_count": 0, "announced_14d": 0, "escalations_60d": 0,
+        })
+        as_of = date(2026, 5, 13)
+        grouped = {
+            "_global_": [
+                _make_fact(
+                    stock_id="_global_",
+                    fact_date=as_of,
+                    source_core="commodity_macro_core",
+                    kind="CommodityMomentumUp",
+                ),
+            ],
+        }
+        _patch_fetch_market_facts(monkeypatch, grouped)
+        result = data_tools.market_context("2026-05-13")
+        assert result["components"]["commodity_macro"]["score"] < 0
+        # 對總 climate_score 拖累(weight 0.05)
+        assert result["climate_score"] < 0
+
+    def test_gold_momentum_down_bullish_for_equities(self, monkeypatch):
+        _patch_get_connection(monkeypatch)
+        _patch_risk_alert_summary(monkeypatch, {
+            "active_count": 0, "announced_14d": 0, "escalations_60d": 0,
+        })
+        as_of = date(2026, 5, 13)
+        grouped = {
+            "_global_": [
+                _make_fact(
+                    stock_id="_global_",
+                    fact_date=as_of,
+                    source_core="commodity_macro_core",
+                    kind="CommodityMomentumDown",
+                ),
+            ],
+        }
+        _patch_fetch_market_facts(monkeypatch, grouped)
+        result = data_tools.market_context("2026-05-13")
+        assert result["components"]["commodity_macro"]["score"] > 0
+
+    def test_commodity_spike_triggers_systemic_risk(self, monkeypatch):
+        _patch_get_connection(monkeypatch)
+        _patch_risk_alert_summary(monkeypatch, {
+            "active_count": 0, "announced_14d": 0, "escalations_60d": 0,
+        })
+        as_of = date(2026, 5, 13)
+        grouped = {
+            "_global_": [
+                _make_fact(
+                    stock_id="_global_",
+                    fact_date=as_of,
+                    source_core="commodity_macro_core",
+                    kind="CommoditySpike",
+                ),
+            ],
+        }
+        _patch_fetch_market_facts(monkeypatch, grouped)
+        result = data_tools.market_context("2026-05-13")
+        assert "macro_commodity_spike" in result["systemic_risks"]
+
+
+class TestMarketContextRiskAlert:
+    """v3.25:per-stock risk_alert 聚合成 marketwide summary。"""
+
+    def test_no_active_dispositions_score_zero(self, monkeypatch):
+        _patch_get_connection(monkeypatch)
+        _patch_fetch_market_facts(monkeypatch, {})
+        _patch_risk_alert_summary(monkeypatch, {
+            "active_count": 0, "announced_14d": 0, "escalations_60d": 0,
+        })
+        result = data_tools.market_context("2026-05-13")
+        assert result["components"]["risk_alert"]["score"] == 0
+        assert result["components"]["risk_alert"]["active_disposition_stocks"] == 0
+
+    def test_active_dispositions_lowers_score(self, monkeypatch):
+        _patch_get_connection(monkeypatch)
+        _patch_fetch_market_facts(monkeypatch, {})
+        _patch_risk_alert_summary(monkeypatch, {
+            "active_count": 7, "announced_14d": 3, "escalations_60d": 1,
+        })
+        result = data_tools.market_context("2026-05-13")
+        # active 5-9 = -50;esc 1-2 = -15 → -65
+        assert result["components"]["risk_alert"]["score"] == -65
+        assert result["components"]["risk_alert"]["active_disposition_stocks"] == 7
+
+    def test_disposition_cluster_triggers_systemic_risk(self, monkeypatch):
+        """active_count >= 5 → tw_disposition_cluster。"""
+        _patch_get_connection(monkeypatch)
+        _patch_fetch_market_facts(monkeypatch, {})
+        _patch_risk_alert_summary(monkeypatch, {
+            "active_count": 6, "announced_14d": 2, "escalations_60d": 0,
+        })
+        result = data_tools.market_context("2026-05-13")
+        assert "tw_disposition_cluster" in result["systemic_risks"]
+
+    def test_escalation_cluster_triggers_systemic_risk(self, monkeypatch):
+        """escalations_60d >= 3 → tw_disposition_escalation_cluster。"""
+        _patch_get_connection(monkeypatch)
+        _patch_fetch_market_facts(monkeypatch, {})
+        _patch_risk_alert_summary(monkeypatch, {
+            "active_count": 0, "announced_14d": 0, "escalations_60d": 4,
+        })
+        result = data_tools.market_context("2026-05-13")
+        assert "tw_disposition_escalation_cluster" in result["systemic_risks"]
+
+
+class TestMarketContextWeightsV325:
+    """v3.25 拍版:8 components weights sum = 1.0。"""
+
+    def test_weights_sum_to_one(self):
+        from mcp_server._climate import _COMPONENT_WEIGHTS
+        total = sum(_COMPONENT_WEIGHTS.values())
+        assert abs(total - 1.0) < 0.001, f"weights sum {total} != 1.0"
+
+    def test_weights_keys_match_8_components(self):
+        from mcp_server._climate import _COMPONENT_WEIGHTS
+        assert set(_COMPONENT_WEIGHTS.keys()) == {
+            "taiex", "us_market", "fear_greed", "business",
+            "exchange_rate", "market_margin",
+            "commodity_macro", "risk_alert",
+        }
 
 
 class TestMarketContextTimeDecay:
