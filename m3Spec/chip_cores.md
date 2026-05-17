@@ -71,6 +71,7 @@ v1.29 Round 1 P2 阻塞 6 條目。
 6. [`shareholder_core`](#六shareholder_core)
 7. [`day_trading_core`](#七day_trading_core)
 8. [跨 Chip Core 綜合事實的處理](#八跨-chip-core-綜合事實的處理)
+9. [`gov_bank_core`](#九gov_bank_core-proposal2026-05-17等-user-拍版) 🟡 **proposal**
 
 ---
 
@@ -715,3 +716,215 @@ if ratio <= ratio_low_threshold  && !prev_was_low  { fire RatioExtremeLow }
 - 違反零耦合原則(總綱 §2.1)
 - 「籌碼集中」的定義因人而異(有人重外資、有人重大戶持股),寫進 Core 等於替使用者下定義
 - 一個檔案說「集中」未必另一個視角也算集中,屬經驗判讀
+
+---
+
+## 九、`gov_bank_core` 🟡 **proposal(2026-05-17,等 user 拍版)**
+
+> **狀態**:proposal draft。`institutional_daily_derived.gov_bank_net` 欄已
+> v3.14 全市場 backfill 完(fill 80.74%),`chip_loader::InstitutionalDailyRaw`
+> 已 load 此欄,但目前 **0 個 core 真正消費**。本節為等 user 拍版的 spec draft。
+
+### 9.1 定位
+
+8 大公股銀行(兆豐、第一、華南、彰銀、台銀、土銀、合庫、中信)單日合計買賣
+超的事實萃取。**「政府部位 signal」**:8 行庫合計為近似 sovereign-controlled
+fund 在台股的代表性 footprint,具下列獨特性質,與 3 大法人(外資 / 投信 /
+自營商)有質的差異:
+
+1. **政策面 signal**:8 行庫由財政部 / 金管會體系間接持股,buying 在市場深跌
+   時常代表「國安基金路徑」(雖 not always officially activated)
+2. **信號稀疏**:7 成交易日 daily total = 0 lots(無進出);only 30% trading
+   days have non-zero gov_bank_net → cluster-of-events 訊號比 institutional
+   更明顯
+3. **per-bank breakdown**:Bronze 已分到 8 banks daily row(`bank_name`
+   維度),Silver 聚合為 stock-day-level sum。是否需要 per-bank EventKind 為
+   open question(§9.10 待 user 拍版)
+
+### 9.2 上游 Silver
+
+- 表:`institutional_daily_derived`(同 institutional_core)
+- PK:`(market, stock_id, date)`
+- 關鍵欄位:`gov_bank_net`(8 行庫 buy 合計 - sell 合計,股數;NULL 視同 0)
+- 載入器:`shared/chip_loader::InstitutionalDailyRaw.gov_bank_net`(已 load,
+  Option<i64>)
+
+> **與 `institutional_core` 共用 Silver 表的設計選擇**:Bronze 共用設計理由
+> (8 行庫合計 net 邏輯上與 3 大法人並列),但語意上是獨立 signal source。
+> 對齊 §四 zero-coupling,**Core 層拆分**(獨立 crate),Silver 層共用。
+
+### 9.3 Params
+
+```rust
+pub struct GovBankParams {
+    pub timeframe: Timeframe,                  // 日 / 週聚合
+    pub streak_min_days: usize,                // 連續買賣超的最小天數,預設 3
+    pub large_transaction_z: f64,              // 大額異動 Z-score 閾值,預設 2.7
+    pub lookback_for_z: usize,                 // 計算 Z-score 的回看窗口,預設 60
+    pub silence_period_days: usize,            // 0 net 連續期間視為「靜默」,預設 10 🟡
+}
+```
+
+> **Reference / 設計拍版**:
+> - `streak_min_days = 3` ── 對齊 `institutional_core`(§3.3)同款 streak 慣例
+> - `large_transaction_z = 2.7` ── 對齊 v3.17(Round 8.2)拍版 institutional_core
+>   `large_transaction_z=2.7` 的 fat-tail (Lo 2001) 拍版邏輯;台股法人 / 公股
+>   行庫 net 重尾分布共通
+> - `lookback_for_z = 60` ── 對齊 institutional_core;Krivin et al. (2003) 台股
+>   短期結構建議下界
+> - `silence_period_days = 10` 🟡 ── **best-guess,待 user 拍版**;~2 週交易日
+>   為 「policy desk 沉默期」的經驗值,實測前無 ground truth
+
+### 9.4 warmup_periods
+
+```rust
+fn warmup_periods(&self, params: &GovBankParams) -> usize {
+    params.lookback_for_z + 10  // = 70
+}
+```
+
+對齊 §3.4 institutional_core;`lookback_for_z + 10` 留 z-score 計算
+estimation window 起步緩衝。
+
+### 9.5 Output
+
+```rust
+pub struct GovBankOutput {
+    pub series: Vec<GovBankPoint>,
+    pub events: Vec<GovBankEvent>,
+}
+
+pub struct GovBankPoint {
+    pub date: NaiveDate,
+    pub gov_bank_net: i64,                     // 8 行庫合計 net(股數)
+    pub gov_bank_cumulative_5d: i64,           // 5 日累積
+    pub gov_bank_cumulative_20d: i64,          // 20 日累積
+    pub days_since_last_nonzero: usize,        // 距離上次 net ≠ 0 的天數
+}
+
+pub struct GovBankEvent {
+    pub date: NaiveDate,
+    pub kind: GovBankEventKind,
+    pub value: f64,                            // streak 累積 / large_tx z-score
+    pub metadata: serde_json::Value,
+}
+
+pub enum GovBankEventKind {
+    GovBankAccumulation,         // 連續 ≥ streak_min_days 淨買超(政策進場)
+    GovBankDistribution,         // 連續 ≥ streak_min_days 淨賣超(政策退場)
+    GovBankLargeTransaction,     // 單日大額異動(z-score edge trigger)
+    GovBankSilenceBreak,         // 沉默 ≥ silence_period_days 後首次進出 🟡
+}
+```
+
+### 9.6 觸發機制
+
+#### 9.6.1 `GovBankAccumulation` / `GovBankDistribution`(streak pattern)
+
+對齊 institutional_core `NetBuyStreak` / `NetSellStreak`(§3.5):
+
+```
+連續 ≥ streak_min_days 天 sign(gov_bank_net) 同向且 != 0
+→ 在 streak 結束日 fire(對齊 institutional_core 慣例)
+```
+
+NULL / 0 net 視為「中斷 streak」(非 silent state)。
+
+#### 9.6.2 `GovBankLargeTransaction`(edge trigger,對齊 §3.6 r3)
+
+```
+if cur_z_abs >= threshold && prev_z_abs < threshold { fire }
+```
+
+z-score 在 `lookback_for_z` rolling window 內計算;sign 由 metadata 保留。
+對齊 institutional `LargeTransaction` r3 設計(Brown & Warner 1985 事件研究
+「狀態變化」語意,非「狀態持續」)。
+
+#### 9.6.3 `GovBankSilenceBreak`(unique,no institutional 範本)🟡
+
+```
+prev_nonzero_idx 與 cur_idx 間距 >= silence_period_days
+AND cur gov_bank_net != 0
+→ fire(進出日當日,sign 由 metadata 保留)
+```
+
+**設計動機**:政府部位通常**長期靜默**(70% trading days = 0 net),
+打破靜默本身為 signal(policy desk 啟動)。與 institutional 三大法人「
+持續交易」性質不同,故獨立 EventKind。**待 user 拍版**是否保留。
+
+### 9.7 metadata 結構範例
+
+| EventKind | metadata 欄位 |
+|---|---|
+| `GovBankAccumulation` / `GovBankDistribution` | `{ start_date, end_date, days, total_shares }` |
+| `GovBankLargeTransaction` | `{ z_score, net_shares, direction: "buy"\|"sell" }` |
+| `GovBankSilenceBreak` | `{ silence_days, prev_nonzero_date, direction: "buy"\|"sell", net_shares }` |
+
+### 9.8 Fact 範例
+
+| Fact statement | metadata |
+|---|---|
+| `Gov bank net buy 4 consecutive days from 2026-04-21 to 2026-04-24, total 32,500 shares` | `{ start_date: "2026-04-21", end_date: "2026-04-24", days: 4, total_shares: 32500 }` |
+| `Gov bank single-day large transaction: +18,200 shares on 2026-04-25 (z=+3.1)` | `{ z_score: 3.1, net_shares: 18200, direction: "buy" }` |
+| `Gov bank broke 14-day silence with sell-down on 2026-05-02` | `{ silence_days: 14, prev_nonzero_date: "2026-04-17", direction: "sell", net_shares: -5400 }` |
+
+### 9.9 與 `institutional_core` 的區別
+
+| 維度 | `institutional_core` | `gov_bank_core` |
+|---|---|---|
+| 訊號性質 | 商業性 trading flow(3 大法人 alpha / beta 追求)| 政策性 holding(8 行庫 stabilization / sovereign)|
+| 觸發頻率 | high(per_stock 30-60/yr)| 預期 low(per_stock 3-10/yr,稀疏)|
+| Silence 概念 | 不適用(法人天天交易)| **核心訊號**(70% 日 net=0)|
+| 單一 EventKind | `LargeTransaction` 涵蓋全 3 法人 | 限於 8 行庫合計 |
+| 跨來源 divergence | `DivergenceWithinInstitution` | N/A(8 行庫視為單一 actor)|
+
+> **為何不在 institutional_core 加 EventKind**:
+> 1. **訊號量綱不同**:institutional `LargeTransaction` threshold(2.7σ)算在 3
+>    法人 daily net 分布上;gov_bank 自己分布更稀疏,共用 threshold 不適切
+> 2. **Silence pattern unique**:institutional 三大法人沒有「長期靜默」概念,
+>    `SilenceBreak` 加進去屬於異質訊號污染既有 core
+> 3. **對齊 §四 zero-coupling**:各 core 服務一個 Silver derived 欄位邊界;
+>    `gov_bank_net` 自然劃為獨立 core
+
+### 9.10 開放問題清單(等 user 拍版)
+
+| # | 問題 | 預設(待拍版)| 影響 |
+|---|---|---|---|
+| 9.10.1 | 是否保留 `GovBankSilenceBreak` EventKind | YES(觸發稀疏 ~3-5/yr 預估)| 若 NO 則砍此 variant + silence_period_days param |
+| 9.10.2 | `silence_period_days` 預設值 | 10(~2 週交易日)| 影響 SilenceBreak 觸發頻率 |
+| 9.10.3 | per-bank breakdown EventKind | NO(只看 8 行庫合計)| 若 YES 需 Bronze→Silver pivot 加 per-bank net 欄位 + 8 個 metadata 細項 |
+| 9.10.4 | 是否要 `GovBankFlowReversal`(20d 累積方向翻轉)| NO | 對齊 §八 跨指標 reversal 屬 Aggregation Layer 識讀 |
+| 9.10.5 | NULL 處理 | 視同 0(對齊 institutional builder UNION fix v3.14.1)| 影響 fill 80.74% 期間 streak 連續性 |
+| 9.10.6 | timeframe 支援 | Daily only(初版)| 週 / 月聚合可後 V3 加 |
+| 9.10.7 | 對 2021-06-30 前(Bronze 無資料)的處理 | warmup_periods 由 chip_loader 自動 cut | 確認 chip_loader 不 panic on missing |
+| 9.10.8 | structural_snapshots 是否寫入 | NO(對齊 institutional_core,只寫 facts)| 對齊 indicator-style core 慣例 |
+
+### 9.11 Production calibration 目標(實作後)
+
+對齊 v1.32 acceptance 標準:**per-EventKind ≤ 12/yr/stock**(對齊 institutional
+其他 EventKinds);per_stock_year_rate 預估:
+
+| EventKind | best-guess 預期 | 落點區間 |
+|---|---|---|
+| `GovBankAccumulation` | ~5/yr | 3-8 |
+| `GovBankDistribution` | ~4/yr | 2-6 |
+| `GovBankLargeTransaction` | ~6/yr(對齊 institutional LargeTransaction 14.16 × 8 行庫 稀疏度 ~40%)| 4-10 |
+| `GovBankSilenceBreak` | ~3/yr | 1-5 |
+
+**校準腳本**:`scripts/verify_event_kind_rate.sql` Section 1 加 `gov_bank_core`
+條目;Section 5(新)gov_bank-specific verify(對齊 v3.18 Section 4 milestone
+顯式查的 pattern)。
+
+### 9.12 Crate 結構建議
+
+```
+rust_compute/cores/chip/gov_bank_core/
+├── Cargo.toml          (依 institutional_core / shareholder_core 同款)
+└── src/lib.rs          (對齊 institutional_core 範本)
+```
+
+`tw_cores` dispatch 加 4 處(對齊 §十四「新增 core 改 3-4 處」):
+- `Cargo.toml` workspace members 加 1 行
+- `tw_cores/Cargo.toml` deps 加 1 行
+- `tw_cores/src/dispatcher.rs` `dispatch_indicator!` 加 1 個 match arm
+- `workflows/tw_stock_standard.toml` 加 1 個 enabled = true entry

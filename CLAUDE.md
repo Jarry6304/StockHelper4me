@@ -251,6 +251,103 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.19 — 3 並行 track:gov_bank Core spec proposal + probe audit + wall time 假設(2026-05-17)
+
+接 v3.18 Round 8 結算 + docs 整理後 user 拍版「開工」3 件事:
+(1) gov_bank_net Core 消費(等 EventKind 規格 — user 選「我先 draft proposal」)
+(2) probe sponsor tier 全 catalog audit
+(3) wall time +24% regression 假設調查
+
+**0 alembic / 0 Rust / 0 collector.toml**(純 spec + script + doc 動工)。
+
+### Track A:gov_bank_core spec proposal(`m3Spec/chip_cores.md §九`)
+
+新增第 9 節完整 spec draft(~200 行,§9.1 ~ §9.12)+ 目錄同步 + `docs/m3_cores_spec_pending.md §3.6` 8 個 open question 表落地。**等 user 拍版後再上 Rust**(對齊「best-guess 不上 Rust」鐵律)。
+
+| 段 | 重點 |
+|---|---|
+| §9.1 定位 | 8 公股行庫合計 net,sovereign-controlled stabilization signal;與 institutional 質的差異(政策面 / 70% 日 net=0 稀疏 / per-bank breakdown 可選)|
+| §9.2 上游 Silver | `institutional_daily_derived.gov_bank_net`(v3.14 fill 80.74%);`chip_loader::InstitutionalDailyRaw.gov_bank_net` 已 load 但 0 core 消費 |
+| §9.3 Params | streak_min_days=3 / large_transaction_z=2.7(對齊 v3.17 institutional)/ lookback_for_z=60 / silence_period_days=10 🟡 |
+| §9.5 Output | 4 個 EventKind:`GovBankAccumulation` / `GovBankDistribution` / `GovBankLargeTransaction` / `GovBankSilenceBreak` 🟡 |
+| §9.6 觸發機制 | streak / edge trigger(對齊 institutional §3.6 r3 Brown & Warner 1985)/ silence break unique pattern |
+| §9.9 與 institutional 區別表 | 訊號性質 / 頻率 / silence 概念 / cross-source divergence — 4 維對照,佐證獨立 core 設計 |
+| §9.10 8 open questions | SilenceBreak 保留? / silence_period_days 預設? / per-bank breakdown? / FlowReversal? / NULL 處理 / timeframe / 2021-06-30 前處理 / structural_snapshots 寫入? |
+| §9.11 calibration 目標 | per-EventKind ≤ 12/yr/stock 對齊 v1.32 baseline;預估 3 ~ 10/yr 區間 |
+| §9.12 crate 結構 | 新 `cores/chip/gov_bank_core/`(對齊 §四 zero-coupling),`tw_cores` dispatch 加 4 處 |
+
+### Track B:probe sponsor tier 全 catalog audit(`scripts/probe_finmind_sponsor_unused.py`)
+
+腳本 **production-ready 無需動**:
+- `--max 0` default + line 166 `if args.max > 0` conditional skip = 全 catalog 模式正常
+- 422 enum parser → catalog ~91 datasets - collector.toml 34 enabled ≈ **57 unused** 待 probe
+- 2.25s/req × (probe + 可能 fallback 4.5s) × 57 ≈ **4-5 分鐘**(< 1600 reqs/h rate limit)
+- IP ban abort 已 wired(line 184 / 403 + body 含 "ip" → abort)
+- Windows cp950 console UTF-8 reconfigure + ASCII labels([OK]/[WARN]/[LOCK]/[BAN]/[FAIL])
+
+**user 跑法**(下次 session 起點):
+```powershell
+# 確認 IP ban 已解(過去 collector backfill 可能踩到 ban)
+python scripts/probe_finmind_sponsor_unused.py --max 0
+# 輸出 Summary 段列「unused datasets 回 200 + 有資料」候選清單
+# 找到候選後 → 寫進 collector.toml + alembic Bronze schema(對齊 v3.14 gov_bank pattern)
+```
+
+### Track C:wall time +24% regression — root cause 假設 + 2 diagnostic 腳本
+
+Explore agent 沙箱調查結論(`rust_compute/cores/system/tw_cores/`):
+
+**per-core `elapsed_s` 真實語意**:**cumulative across concurrent stock workers**,
+非 wall time(`dispatcher.rs:86` 對每個 (core, stock) 個別 `start.elapsed()` 計時,
+`summary.rs:78` `entry.5 += r.elapsed_ms` 聚合)。v3.18 每個 core elapsed_s 5-15×
+暴增是 **worker idle/blocking 量訊號**,非 CPU 工作量。
+
+**Root cause 排序(信心):**
+1. **🔴 60% PG stats 過期** — v3.18 foreign_holding facts_new 165888→210996(+27%);
+   DELETE+INSERT 後未 trigger ANALYZE → planner 對 `uq_facts_dedup` unique index
+   選錯 plan → ON CONFLICT 路徑掃描變慢 → connection hold time ↑ → 全 worker 排隊
+2. **🟡 25% sqlx pool contention** — pool size = `concurrency + 4`(= 36 if 32);
+   原因 1 觸發後 connection hold 變長 → 其他 task queue
+3. **🟡 15% Facts batch upsert 邏輯** — `ON CONFLICT DO NOTHING` 在 ~10M+ row facts
+   表 + 多 partition 上每 batch 都掃 index
+
+**沙箱動工**(2 新腳本):
+
+| 腳本 | 用途 |
+|---|---|
+| `scripts/maintain_facts_stats.sql` | 5 phase:pre stats / ANALYZE 三表 / VACUUM / post stats / index 健康度;Round N DELETE+INSERT 後跑(便宜 50-200ms 換 planner 對 facts 正確 stats) |
+| `scripts/diagnose_slow_tw_cores.sql` | tw_cores 跑期間另開 psql 取樣;4 phase:active sessions / lock waits / EXPLAIN dedup query plan / pool saturation + 4 種觀察組合解讀指南 |
+
+### 範圍(2 commits / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `m3Spec/chip_cores.md` | 加 §九 gov_bank_core proposal(~210 行)+ 目錄 1 行 |
+| `docs/m3_cores_spec_pending.md` | 加 §3.6 gov_bank_core 8 open questions 表 |
+| `scripts/maintain_facts_stats.sql`(新)| 5 phase ANALYZE + VACUUM stats 維護 |
+| `scripts/diagnose_slow_tw_cores.sql`(新)| 4 phase wall time 慢時即時取樣 + 解讀指南 |
+| `CLAUDE.md` | helper 腳本清單 2 新行 + v3.19 章節 |
+
+### 待 user 做(下次 session 起點)
+
+1. **review gov_bank_core spec proposal**(§九 + spec_pending §3.6)→ 拍版 8 個 open
+   question → 我下個 session 上 Rust(對齊 §9.12 crate 結構 + dispatch 4 處)
+2. **跑 probe 全 catalog**:`python scripts/probe_finmind_sponsor_unused.py --max 0`
+   → 看 Summary 段候選 dataset → 評估是否加 collector.toml(對齊 v3.14 gov_bank pattern)
+3. **下次 production verify 前跑** `psql -f scripts/maintain_facts_stats.sql`,記下
+   wall time;若仍 +24% 就在 tw_cores 跑期間另開 psql 跑 `diagnose_slow_tw_cores.sql`
+   取證據確認 root cause(60% 我猜 ANALYZE 後降回 v3.17 水準)
+
+### 風險
+
+🟢 低:
+- spec proposal 純 doc,0 程式碼;user 拍版後才動 Rust
+- 2 SQL 腳本是 read-only stats + 維護(ANALYZE / VACUUM 不 lock 表)
+- 0 alembic / 0 Rust workspace / 0 collector.toml
+- Rollback:每段獨立 commit,任意可單獨 revert
+
+---
+
 ## v3.18 — Round 8.3 calibration:milestone spacing 3→2 + Round 8 結算(2026-05-17)
 
 接 v3.17 Round 8.2 production verify(commit `493fc4a`)後,5/6 EventKind 達標,
@@ -1415,7 +1512,9 @@ distinct stock_id,0 dirty → skip Rust dispatch 完整省 ~6 分鐘。對齊
 | `scripts/reverse_pivot_foreign_holding.py` 🆕 v1.10 | foreign_holding → foreign_investor_share_tw(2 stored + 9 detail unpack) | `python scripts/reverse_pivot_foreign_holding.py` |
 | `scripts/verify_pr18_bronze.py` 🆕 v1.10 | PR #18 5 張 Bronze 反推聚合驗證,印 status table。push 前必跑 5/5 OK | `python scripts/verify_pr18_bronze.py` |
 | `scripts/probe_finmind_sponsor_unused.py` 🆕 v3.13 | 從 422 enum parser 拉 FinMind 全 catalog → diff vs collector.toml unused → probe 看 row+sample;ASCII labels(cp950 console OK)| `python scripts/probe_finmind_sponsor_unused.py --max 5` |
-| `scripts/verify_event_kind_rate.sql` 🆕 v3.14 | per-EventKind 觸發率 verify(對齊 v1.32 ≤ 12/yr/stock 標準),3 sections:per-stock cores / market-level cores(events/yr 評估)/ Round-specific verify | `psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql` |
+| `scripts/verify_event_kind_rate.sql` 🆕 v3.14 | per-EventKind 觸發率 verify(對齊 v1.32 ≤ 12/yr/stock 標準),4 sections:per-stock cores / market-level cores / Round 7 verify / milestone 4 variants 顯式(v3.18 加)| `psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql` |
+| `scripts/maintain_facts_stats.sql` 🆕 v3.19 | facts / indicator_values / structural_snapshots 三表 ANALYZE + VACUUM stats refresh;Round N DELETE+INSERT 後或 wall time 反常變慢時跑(便宜 ~50-200ms 換 query planner stats) | `psql $env:DATABASE_URL -f scripts/maintain_facts_stats.sql` |
+| `scripts/diagnose_slow_tw_cores.sql` 🆕 v3.19 | tw_cores 跑期間另開 psql 取樣:pg_stat_activity / lock waits / dedup query plan / pool saturation 4 phase + 解讀指南 | `psql $env:DATABASE_URL -f scripts/diagnose_slow_tw_cores.sql`(tw_cores 開跑後 30s) |
 
 ---
 
