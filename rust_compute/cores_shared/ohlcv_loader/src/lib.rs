@@ -75,29 +75,35 @@ pub async fn load_daily(
 
 /// 從 price_weekly_fwd 讀最近 N 週。
 ///
-/// price_weekly_fwd PK = (market, stock_id, year, week);本 loader 只篩 stock_id,
-/// 用 (year, week) 排序倒推最近 N 週。week 對應週末日期由 Silver builder 已寫入 date 欄位。
+/// **v3.37 fix(2026-05-18)**:原本 SQL 用 `date` column 但 price_weekly_fwd 沒有
+/// (PK = (market, stock_id, year, week))。改用 (year, week) ORDER BY DESC LIMIT N
+/// 取最近 N 週,然後 outer query reverse → ASC(NeelyCore Stage 1 monowave
+/// detector 期待時序遞增)。date 從 `make_date(year, 1, 1) + (week-1)*7` 合成。
 pub async fn load_weekly(
     pool: &PgPool,
     stock_id: &str,
     lookback_weeks: i32,
 ) -> Result<OhlcvSeries> {
-    // price_weekly_fwd 不一定有 date 欄,部分 schema 用 (year, week);
-    // 假設 date 欄存在(對齊 Silver builder),否則本 query 需改 (year, week) 推算
     let rows: Vec<FwdBarRow> = sqlx::query_as(
         r#"
-        SELECT date,
-               open::float8  AS open,
-               high::float8  AS high,
-               low::float8   AS low,
-               close::float8 AS close,
-               volume
-        FROM price_weekly_fwd
-        WHERE stock_id = $1
-          AND is_dirty = FALSE
-          AND date >= (CURRENT_DATE - ($2::int * 7))
-          AND open IS NOT NULL AND high IS NOT NULL
-          AND low IS NOT NULL AND close IS NOT NULL
+        WITH ordered AS (
+            SELECT
+                make_date(year, 1, 1) + INTERVAL '1 day' * ((week - 1) * 7) AS date,
+                open::float8  AS open,
+                high::float8  AS high,
+                low::float8   AS low,
+                close::float8 AS close,
+                volume
+            FROM price_weekly_fwd
+            WHERE stock_id = $1
+              AND is_dirty = FALSE
+              AND open IS NOT NULL AND high IS NOT NULL
+              AND low IS NOT NULL AND close IS NOT NULL
+            ORDER BY year DESC, week DESC
+            LIMIT $2::int
+        )
+        SELECT date::date AS date, open, high, low, close, volume
+        FROM ordered
         ORDER BY date ASC
         "#,
     )
@@ -111,6 +117,10 @@ pub async fn load_weekly(
 }
 
 /// 從 price_monthly_fwd 讀最近 N 月。
+///
+/// **v3.37 fix(2026-05-18)**:同 load_weekly,price_monthly_fwd PK=(market,stock_id,
+/// year, month) 沒 date column。改用 (year, month) ORDER BY DESC LIMIT N 取最近 N 月,
+/// outer reverse → ASC。date 用 `make_date(year, month, 1)` 合成(月初代表性日期)。
 pub async fn load_monthly(
     pool: &PgPool,
     stock_id: &str,
@@ -118,18 +128,24 @@ pub async fn load_monthly(
 ) -> Result<OhlcvSeries> {
     let rows: Vec<FwdBarRow> = sqlx::query_as(
         r#"
-        SELECT date,
-               open::float8  AS open,
-               high::float8  AS high,
-               low::float8   AS low,
-               close::float8 AS close,
-               volume
-        FROM price_monthly_fwd
-        WHERE stock_id = $1
-          AND is_dirty = FALSE
-          AND date >= (CURRENT_DATE - ($2::int * 31))
-          AND open IS NOT NULL AND high IS NOT NULL
-          AND low IS NOT NULL AND close IS NOT NULL
+        WITH ordered AS (
+            SELECT
+                make_date(year, month, 1) AS date,
+                open::float8  AS open,
+                high::float8  AS high,
+                low::float8   AS low,
+                close::float8 AS close,
+                volume
+            FROM price_monthly_fwd
+            WHERE stock_id = $1
+              AND is_dirty = FALSE
+              AND open IS NOT NULL AND high IS NOT NULL
+              AND low IS NOT NULL AND close IS NOT NULL
+            ORDER BY year DESC, month DESC
+            LIMIT $2::int
+        )
+        SELECT date::date AS date, open, high, low, close, volume
+        FROM ordered
         ORDER BY date ASC
         "#,
     )
