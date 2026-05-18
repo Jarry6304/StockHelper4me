@@ -66,14 +66,21 @@ def _fetch_latest_revenue_yoy(
 def _fetch_inst_20d_net(
     db: Any, end_date: Any, *, market: str = "TW",
 ) -> dict[str, float]:
-    """每股過去 20 個交易日 institutional sum(net = foreign + investment_trust + dealer)。"""
+    """每股過去 20 個交易日 institutional sum(三大法人加總)。
+
+    Schema 對齊 institutional_daily_derived(v1.5 5 類法人各拆 buy/sell):
+      net = (foreign + foreign_dealer_self + investment_trust + dealer + dealer_hedging) buy - sell
+    """
     rows = db.query(
         """
         WITH ranked AS (
           SELECT stock_id, date,
-                 COALESCE(foreign_net::float8, 0)
-                 + COALESCE(investment_trust_net::float8, 0)
-                 + COALESCE(dealer_net::float8, 0) AS net,
+                 (COALESCE(foreign_buy, 0) + COALESCE(foreign_dealer_self_buy, 0)
+                  + COALESCE(investment_trust_buy, 0)
+                  + COALESCE(dealer_buy, 0) + COALESCE(dealer_hedging_buy, 0)
+                  - COALESCE(foreign_sell, 0) - COALESCE(foreign_dealer_self_sell, 0)
+                  - COALESCE(investment_trust_sell, 0)
+                  - COALESCE(dealer_sell, 0) - COALESCE(dealer_hedging_sell, 0))::float8 AS net,
                  ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY date DESC) AS rn
             FROM institutional_daily_derived
            WHERE market = %s AND date <= %s

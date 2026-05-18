@@ -44,13 +44,22 @@ TOP_N = 30
 def _fetch_institutional_20d(
     db: Any, end_date: Any, *, market: str = "TW",
 ) -> dict[str, list[dict[str, Any]]]:
-    """每股最近 20 個交易日 institutional net。"""
+    """每股最近 20 個交易日 institutional net。
+
+    Schema 對齊 institutional_daily_derived(v1.5 5 類法人各拆 buy/sell):
+      - 外資   = foreign + foreign_dealer_self
+      - 投信   = investment_trust
+      - 自營   = dealer + dealer_hedging
+    """
     rows = db.query(
         """
         SELECT stock_id, date,
-               COALESCE(foreign_net::float8, 0) AS foreign_net,
-               COALESCE(investment_trust_net::float8, 0) AS investment_trust_net,
-               COALESCE(dealer_net::float8, 0) AS dealer_net
+               (COALESCE(foreign_buy, 0) + COALESCE(foreign_dealer_self_buy, 0)
+                - COALESCE(foreign_sell, 0) - COALESCE(foreign_dealer_self_sell, 0))::float8 AS foreign_net,
+               (COALESCE(investment_trust_buy, 0)
+                - COALESCE(investment_trust_sell, 0))::float8 AS investment_trust_net,
+               (COALESCE(dealer_buy, 0) + COALESCE(dealer_hedging_buy, 0)
+                - COALESCE(dealer_sell, 0) - COALESCE(dealer_hedging_sell, 0))::float8 AS dealer_net
           FROM institutional_daily_derived
          WHERE market = %s AND date <= %s
          ORDER BY stock_id, date DESC
