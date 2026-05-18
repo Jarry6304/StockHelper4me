@@ -13,11 +13,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores)。
 
-- **alembic head**:`c8d9e0f1g2h3`(v3.21 加 3 張 Silver derived:loan_collateral / block_trade / commodity_macro)
+- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;前 head `c8d9e0f1g2h3` v3.21 Silver derived)
 - **開發分支**:`claude/continue-previous-work-xdKrl` → 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **443 passed / 0 failed**
-- **MCP toolkit**:**4 public tools**(v3.31 consolidation:`neely_forecast` / `kalman_trend` / `magic_formula_screen` / `stock_snapshot` 6-in-1;6 個 helper 仍 callable from Python)
+- **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens:`monthly_screen` / `quarterly_screen` / `annual_low_risk_screen` / `monthly_trigger_scan`)
 - **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**(7/7 over-fired EventKind = 6 校準 + 1 accepted baseline,v3.24 production verify:LoanCategoryConcentration 125.69 → 1.16/yr ✅,commodity_macro 0 → 105 events ✅)
 
 ---
@@ -249,6 +249,182 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v3.32 — 10 new cross_cores factor builders + 4 MCP toolkit screens(2026-05-18)
+
+接 v3.31 後 user 提出量化因子選型提案 v1.1(4 輪辯證後),要求 11 個 factor 落
+Layer 2.5 cross_cores + 4 個高 level MCP toolkit screen wrapper(對齊提案 §六)。
+
+### 動工拍版(2026-05-18)
+
+| 範圍 | 數量 |
+|---|---|
+| 新 cross_cores builders(magic_formula 已 done)| **10**(`persistent_momentum` / `revenue_momentum` / `institutional_concert` / `f_score` / `low_volatility` / `industry_adj_gp` / `long_term_low_vol` / `dividend_yield` / `mom_12_1` / `monthly_trigger`)|
+| alembic migration | **1**(`d9e0f1g2h3i4` 加 10 張表)|
+| 新 MCP toolkit screens(對齊提案 §六)| **4**(`monthly_screen` / `quarterly_screen` / `annual_low_risk_screen` / `monthly_trigger_scan`)|
+| MCP 暴露 toolkit 總數 | **8**(v3.31 4 + v3.32 4)|
+
+### 4 個 sub-toolkit 結構(對齊提案 §四)
+
+| Toolkit | 換倉頻率 | Builders | MCP wrapper |
+|---|---|---|---|
+| A(monthly)| 月 | persistent_momentum + revenue_momentum + institutional_concert + vol overlay | `monthly_screen(date, top_n)` |
+| B(quarterly)| 季 | f_score + low_volatility + industry_adj_gp | `quarterly_screen(date, top_n)` |
+| C(annual)| 年 | long_term_low_vol + dividend_yield + mom_12_1 | `annual_low_risk_screen(date, top_n)` |
+| Layer 5(monthly overlay)| 月 | monthly_trigger | `monthly_trigger_scan(date)` |
+
+### 設計細節
+
+- **0 Rust / 0 collector.toml**(純 Python builders + alembic + MCP wrappers + tests)
+- 既有 `CrossStockBuilder` Protocol 0 改動(magic_formula 是 template)
+- 共用 helper `src/cross_cores/_shared.py`(`fetch_universe_filter` / `assign_ranks` /
+  `compute_std` / `compute_returns_from_closes` / `fetch_close_series` 等)減少 10 個
+  builder 的 boilerplate
+- universe filter 對齊 magic_formula EXCLUDED_KEYWORDS + 加 `delisting_date IS NULL`
+  防 survivorship bias
+- F-Score 9 條件對齊 Piotroski 2000(放寬 ≥ 7 為 strong winner,對齊提案 v1.1)
+- Industry-Adj GP:per-industry median 減算(Asness-Frazzini-Pedersen QMJ 2014 conditional sort 概念)
+- Dividend Yield:三 hard filter(殖利率 ≥ 4% / 12M 報酬 > -20% / 5y ≥ 3y 配息)
+  + soft rank(殖利率高的好);yield trap 防護對齊提案 v1.1
+- Vol-managed overlay:per-stock 6M realized vol > 跨股均值 × 1.5 → detail.vol_managed_scale = 0.5
+  (Barroso-Santa-Clara 2015 JFE);非 hard cutoff,LLM 看 detail hint 自己判斷
+
+### 學術根據(提案 §十二 完整 reference list)
+
+- **A+ 等級**(台股本土 peer-reviewed):Chen-Chou-Hsieh 2023 JFM / Hung-Lu-Yang 2025 RQFA
+- **A 等級**(國際 OOS 含亞洲):Piotroski 2000 + Walkshäusl 2020 / Ang 2009 JFE /
+  Novy-Marx 2013 / Blitz-van Vliet 2007 / Boudoukh 2007 / Jegadeesh-Titman 1993
+- **B 等級**(risk overlay):Barroso-Santa-Clara 2015 / Daniel-Moskowitz 2016 momentum crash
+- **C 等級**(工程設計):Layer 5 trigger 架構 / 權重比例 / 過濾門檻
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `alembic/versions/2026_05_18_d9e0f1g2h3i4_v3_32_10_cross_cores_tables.py`(新)| 10 張 `*_ranked_derived` + 1 張 `monthly_trigger_signals_derived` 表 |
+| `src/cross_cores/_shared.py`(新)| universe filter / rank assign / std / returns / close series 共用 helper |
+| `src/cross_cores/{persistent_momentum,revenue_momentum,institutional_concert,f_score,low_volatility,industry_adj_gp,long_term_low_vol,dividend_yield,mom_12_1,monthly_trigger}.py`(各新)| 10 個 builder |
+| `src/cross_cores/orchestrator.py` | BUILDERS dict +10 entries(1 → 11)|
+| `mcp_server/_screens.py`(新)| 4 compute_*_screen() 內部走 fetch_cross_stock_ranked |
+| `mcp_server/tools/data.py` | 加 4 個 wrapper(monthly_screen / quarterly_screen / annual_low_risk_screen / monthly_trigger_scan)|
+| `mcp_server/server.py` | 4 行 `mcp.tool()` + docstring + instructions 8 tools |
+| `tests/cross_cores/test_v3_32_builders.py`(新)| 23 tests(shared helpers + 10 builder empty smoke + orchestrator + f_score logic)|
+| `tests/mcp_server/test_screens.py`(新)| 17 tests(4 screen × 3 tests + Layer 5 2 tests + public surface)|
+| `CLAUDE.md` | v3.32 章節 + Quick Reference tool 數 4 → 8 |
+| `README.md` | MCP toolkit 4 → 8 + cross_cores 11 builders 同步 |
+
+### 沙箱驗證
+
+- `pytest tests/cross_cores/ tests/mcp_server/ tests/agg/` ✅ **165 passed / 1 skipped**
+  (從 125 + 40 new = 23 cross_cores + 17 screens)
+- 0 Rust / 0 collector.toml(純 Python + alembic)
+- 既有 magic_formula 0 regression
+
+### user 下次 session 起點(production verify chain)
+
+**Phase A:Pre-impl SQL diagnostic**(必跑,blocking)
+
+```powershell
+git pull
+# A-1:F-Score 需要 9 個 financial_statement detail key 都存在
+psql $env:DATABASE_URL -c "
+SELECT DISTINCT jsonb_object_keys(detail) AS key
+  FROM financial_statement_derived
+ WHERE stock_id = '2330' AND type IN ('income','balance','cashflow')
+ ORDER BY key;
+"
+# 預期看到:營業收入合計 / 營業成本合計 / 本期淨利 / 流動資產 / 流動負債 /
+#          長期借款 / 資產總額 / 營業活動之現金流量 / 股本
+
+# A-2:industry_category populated %(B3 industry-adj GP 需 ≥ 80%)
+psql $env:DATABASE_URL -c "
+SELECT COUNT(*) AS total,
+       COUNT(industry_category) AS non_null,
+       (COUNT(industry_category)::float / COUNT(*) * 100)::numeric(5,2) AS pct
+  FROM stock_info_ref
+ WHERE market = 'TW' AND delisting_date IS NULL;
+"
+
+# A-3:valuation_daily_derived.dividend_yield populated %(C2 用)
+psql $env:DATABASE_URL -c "
+SELECT (COUNT(dividend_yield)::float / COUNT(*) * 100)::numeric(5,2) AS pct
+  FROM valuation_daily_derived
+ WHERE date = (SELECT MAX(date) FROM valuation_daily_derived) AND market = 'TW';
+"
+```
+
+**Phase B:alembic + phase 8 跑全市場**
+
+```powershell
+alembic upgrade head      # head: c8d9e0f1g2h3 → d9e0f1g2h3i4
+
+python src/main.py cross_cores phase 8 --full-rebuild
+# 預期 11 個 builder 全 OK(magic_formula + 10 new),
+# 每 builder rows_written ~1100-1300
+
+python src/main.py cross_cores phase 8 --builder f_score
+# 單 builder 跑(對齊既有 --builder 支援)
+```
+
+**Phase C:MCP 對 4 個 toolkit screen 驗**
+
+```powershell
+python -m mcp_server
+# Claude Desktop 對話內:
+#   "今天 monthly screen top 30"  → monthly_screen 內 3 個 factor + vol overlay
+#   "今天 quarterly screen"        → F-Score / Low Vol / Industry-Adj GP
+#   "今天 annual low risk screen"  → Long-Term Low Vol / Dividend Yield / 12-1 Mom
+#   "今天 monthly trigger scan"    → Positive / Negative triggers
+```
+
+**Phase D:跨 toolkit 重疊 stock 觀察**
+
+```sql
+WITH a AS (SELECT stock_id FROM persistent_momentum_ranked_derived
+            WHERE is_top_n AND date = '2026-05-15'),
+     b AS (SELECT stock_id FROM f_score_ranked_derived
+            WHERE is_top_n AND date = '2026-05-15'),
+     c AS (SELECT stock_id FROM long_term_low_vol_ranked_derived
+            WHERE is_top_n AND date = '2026-05-15')
+SELECT
+  (SELECT COUNT(*) FROM a) AS a_count,
+  (SELECT COUNT(*) FROM b) AS b_count,
+  (SELECT COUNT(*) FROM c) AS c_count,
+  (SELECT COUNT(*) FROM a INTERSECT SELECT * FROM b) AS a_inter_b;
+-- 預期:跨 toolkit 交集 ≤ 30%(若 > 50% 表 toolkit 高度重疊)
+```
+
+### 風險
+
+🟢 低:
+- 0 Rust(純 Python builders + alembic + tests)
+- 既有 cross_cores orchestrator / MCP helper / Silver schema 0 改動
+- Magic Formula 0 regression
+- 10 個 builder 各自獨立,1 個壞不影響其他
+- Rollback:單 commit `git revert` + `alembic downgrade -1`
+
+🟡 中:
+- **F-Score 9 條件 detail key 對齊 FinMind 中文 origin_name**:Phase A-1 SQL 揭露
+  若缺 key 需先擴 Bronze field_mapper(或在 _detail_get fallback chain 加新 key)
+- **Industry classification 覆蓋率**:< 80% → B3 fallback 用 sector proxy;< 60% 暫不上線
+- **vol-managed overlay**:6M monthly approximation,Barroso-Santa-Clara 2015 原版用
+  daily realized vol — 走 detail JSONB hint 非 hard cutoff
+
+🔴 高:
+- **McLean-Pontiff 2016 衰減**:published factor 平均 alpha 衰減 58%。本實作所有結果
+  **僅作 LLM screening reference**,**不直接 trade**。User 需另跑 walk-forward backtest
+  harness(提案 §十 prerequisite,本 PR 不含)
+
+### Out of scope(留 future,對齊提案 §十 實作優先序)
+
+- **Walk-forward backtest harness**(提案 §十 prerequisite)— 獨立 sprint
+- **Per-builder scheduling**(月/季/年 trigger)— V3 議題
+- **Workflow.toml 對 cross_cores 支援** — V3 議題
+- **Dirty queue 真正啟用 for cross_cores** — V3(schema 有 column 但 noop)
+- **Multi-factor composite portfolio**(提案 §三 資金配置 25/25/25/20)
+  — LLM 看 4 toolkit screens + magic_formula 自己 compose
 
 ---
 

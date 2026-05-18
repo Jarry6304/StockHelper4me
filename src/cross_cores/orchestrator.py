@@ -19,13 +19,40 @@ import time
 from typing import Any
 
 from cross_cores import magic_formula
+# v3.32:10 new cross_cores builders(對齊 plan/hashed-foraging-pixel.md)
+from cross_cores import (
+    persistent_momentum,
+    revenue_momentum,
+    institutional_concert,
+    f_score,
+    low_volatility,
+    industry_adj_gp,
+    long_term_low_vol,
+    dividend_yield,
+    mom_12_1,
+    monthly_trigger,
+)
 
 logger = logging.getLogger("collector.cross_cores.orchestrator")
 
 
 # 註冊表:name → module
 BUILDERS: dict[str, Any] = {
-    "magic_formula": magic_formula,
+    "magic_formula":          magic_formula,
+    # v3.32 Toolkit A(monthly)
+    "persistent_momentum":    persistent_momentum,
+    "revenue_momentum":       revenue_momentum,
+    "institutional_concert":  institutional_concert,
+    # v3.32 Toolkit B(quarterly)
+    "f_score":                f_score,
+    "low_volatility":         low_volatility,
+    "industry_adj_gp":        industry_adj_gp,
+    # v3.32 Toolkit C(annual)
+    "long_term_low_vol":      long_term_low_vol,
+    "dividend_yield":         dividend_yield,
+    "mom_12_1":               mom_12_1,
+    # v3.32 Layer 5
+    "monthly_trigger":        monthly_trigger,
 }
 
 

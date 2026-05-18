@@ -3,11 +3,15 @@
 對齊 plan Phase D + MCP v3 重構 + v3.22 B-5 + v3.31 consolidation
 (`/root/.claude/plans/hashed-foraging-pixel.md`)。
 
-**Public toolkit(v3.31:9 → 4 高度封裝 tools)**:
+**Public toolkit(v3.32:4 + 4 cross-stock factor screens = 8 tools)**:
 - `neely_forecast`:Neely NEoWave 預測(Tool 1)
 - `kalman_trend`:個股 1-D Kalman trend + 5-class regime(Tool 2)
 - `magic_formula_screen`:Greenblatt 2005 跨股篩選(Tool 3,cross-stock)
 - `stock_snapshot`:6-in-1 基本資料(health + loan + block + risk + market + commodity)
+- `monthly_screen`:Toolkit A 月度 — Persistent Mom + Rev Mom + Inst Concert + vol overlay
+- `quarterly_screen`:Toolkit B 季度 — F-Score + Low Vol + Industry-Adj GP
+- `annual_low_risk_screen`:Toolkit C 年度 — Long-Term Low Vol + Dividend + 12-1 Mom
+- `monthly_trigger_scan`:Layer 5 — Positive/Negative trigger overlay(conviction adjustment)
 
 **Hidden tools(v3.31 從 MCP 隱藏 — 仍可從 Python 直接呼叫供 dashboard 用)**:
 - stock_health / market_context / loan_collateral_snapshot /
@@ -40,40 +44,51 @@ from mcp_server.tools import data as _data_tools
 mcp = FastMCP(
     name="StockHelper4me",
     instructions=(
-        "Taiwan stock M3 aggregation layer。\n\n"
-        "**Public toolkit(v3.31:4 個高度封裝 tools)**:\n"
-        "  1. `neely_forecast(stock_id, date)` — NEoWave 預測,4 個時間框架"
-        "(月/季/半年/年)上漲機率 + 價位區間。\n"
-        "  2. `kalman_trend(stock_id, date)` — 1-D Kalman 濾波趨勢平滑 + "
-        "5-class regime(stable_up / accelerating / sideway / decelerating / "
-        "stable_down)+ recent regime transitions。\n"
-        "  3. `magic_formula_screen(date, top_n=30)` — Greenblatt 2005 神奇公式"
-        "跨股篩選(排除金融 + 公用後,EBIT/EV + EBIT/IC combined rank top N)。\n"
-        "  4. `stock_snapshot(stock_id, date)` — **6-in-1 基本資料當下快照**:\n"
-        "     - `health` — 個股 4 維健康度(技術 / 籌碼 / 估值 / 基本面)+ top 5 訊號\n"
-        "     - `loan_collateral` — 5 大類借券抵押 + 集中度警示(> 70%)\n"
-        "     - `block_trade` — 30 日大宗交易摘要 + 配對交易 spike 日\n"
-        "     - `risk_alert` — 處置股當前狀態 + 60 日 escalation 鏈\n"
-        "     - `market_context` — 大盤環境(TAIEX / 美股 / VIX / Fear-Greed / 景氣 / 融資 / 商品 / 風險)\n"
-        "     - `commodity_macro` — GOLD macro 信號(z-score / momentum / spike)\n\n"
+        "Taiwan stock M3 aggregation layer + cross-stock factor toolkit。\n\n"
+        "**個股 / 整合 tools(4 個)**:\n"
+        "  1. `neely_forecast(stock_id, date)` — NEoWave 預測,4 個時間框架。\n"
+        "  2. `kalman_trend(stock_id, date)` — 1-D Kalman 趨勢 + 5-class regime。\n"
+        "  3. `magic_formula_screen(date, top_n=30)` — Greenblatt 2005 跨股篩選。\n"
+        "  4. `stock_snapshot(stock_id, date)` — 6-in-1 基本資料(health + loan + "
+        "block + risk + market + commodity)。\n\n"
+        "**v3.32 Cross-Stock Factor Screens(4 toolkit,對齊量化研究)**:\n"
+        "  5. `monthly_screen(date, top_n=30)` — Toolkit A 月度:"
+        "Persistent Momentum(Chen-Chou-Hsieh 2023)+ Revenue Momentum"
+        "(Hung-Lu-Yang 2025)+ Institutional Concert(Sias 2004)+ vol "
+        "overlay(Barroso-Santa-Clara 2015)。\n"
+        "  6. `quarterly_screen(date, top_n=30)` — Toolkit B 季度:"
+        "Piotroski F-Score ≥ 7(Piotroski 2000)+ Low Volatility 252d"
+        "(Ang 2009)+ Industry-Adjusted GP(Novy-Marx 2013)。\n"
+        "  7. `annual_low_risk_screen(date, top_n=30)` — Toolkit C 年度:"
+        "Long-Term Low Vol 36M + Dividend Yield(yield trap filter)+ "
+        "12-1 Momentum。\n"
+        "  8. `monthly_trigger_scan(date)` — Layer 5:Positive(YoY > +30% + "
+        "法人買超)/ Negative(YoY < -20% + 法人賣超 > 1%)triggers。\n\n"
         "設計約束:\n"
         "- 所有 tool 強制 as_of date(回測 / 即時同介面)\n"
         "- facts 已過 look-ahead bias 防衛\n"
-        "- stock_snapshot 各 sub-section graceful degradation(1 段壞不影響 5 段)\n"
-        "- 內部處理時間區間 / 數字 / 排序;LLM 只看結論"
+        "- 4 個 factor screen 各 toolkit graceful degradation(1 factor 壞不影響其他)\n"
+        "- 內部處理時間區間 / 數字 / 排序;LLM 只看結論\n"
+        "- 量化 toolkit 僅作 screening reference,不替代 walk-forward backtest"
     ),
 )
 
 
-# Public toolkit(v3.31 consolidation:9 → 4 高度封裝 tools)
+# Public toolkit(v3.32:4 個個股 / 跨股 + 4 個 cross-stock factor screen = 8 tools)
 #
-# 設計拍版(2026-05-17):LLM 只看 4 個 tool 名 + 簡單 args(stock_id / date)。
-# 6 個 per-stock / market 基本資料 → 合進 stock_snapshot 1 個 query 拿全。
-# 對齊 plan /root/.claude/plans/hashed-foraging-pixel.md v3.31。
+# 設計拍版(2026-05-17 v3.32):v3.31 consolidation 砍到 4 個 + v3.32 加 4 個
+# cross-stock factor toolkit screens(對齊提案 v1.1 §六)。
+# 對齊 plan /root/.claude/plans/hashed-foraging-pixel.md v3.32。
 mcp.tool(_data_tools.neely_forecast)              # 預測 1:Neely NEoWave
 mcp.tool(_data_tools.kalman_trend)                # 預測 2:Kalman 1-D regime
 mcp.tool(_data_tools.magic_formula_screen)        # 跨股預測(Greenblatt 2005)
 mcp.tool(_data_tools.stock_snapshot)              # v3.31 6-in-1 基本資料快照
+
+# v3.32:4 個 cross-stock factor toolkit screens
+mcp.tool(_data_tools.monthly_screen)              # Toolkit A:Persistent Mom + Rev Mom + Inst Concert + vol overlay
+mcp.tool(_data_tools.quarterly_screen)            # Toolkit B:F-Score + Low Vol + Industry-Adj GP
+mcp.tool(_data_tools.annual_low_risk_screen)      # Toolkit C:Long-Term Low Vol + Dividend Yield + 12-1 Mom
+mcp.tool(_data_tools.monthly_trigger_scan)        # Layer 5:Positive/Negative trigger overlay
 
 # v3.31:以下 6 個仍在 mcp_server.tools.data 內(dashboard / direct python 用),
 # 但**不再透過 MCP server.py 註冊**,LLM 看不到。stock_snapshot 內部會呼叫

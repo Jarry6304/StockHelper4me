@@ -616,6 +616,106 @@ def _compose_snapshot_narrative(
 
 
 # ────────────────────────────────────────────────────────────
+# v3.32 Cross-Stock Factor Screens(4 個 toolkit MCP wrappers)
+# ────────────────────────────────────────────────────────────
+
+
+def monthly_screen(
+    date: str,
+    top_n: int = 30,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """v3.32 Toolkit A:Monthly screen — 3 factors + Barroso-Santa-Clara vol overlay。
+
+    對齊 v1.1 提案 §四 Toolkit A:
+      - A1 Persistent Momentum(Chen-Chou-Hsieh 2023 JFM)
+      - A2 Revenue Momentum 3-consec(Hung-Lu-Yang 2025 RQFA)
+      - A3 Institutional Concert(Sias 2004 / 周賓凰-池祥麟 2014)
+      - Vol-managed overlay(Barroso-Santa-Clara 2015 JFE)
+
+    Args:
+        date:    ISO 字串(例 "2026-05-15")
+        top_n:   每 factor 取 top N(預設 30)
+
+    Returns:
+        {as_of, top_n, toolkit, factors: {3 sub-factor 各 top_stocks + narrative},
+         vol_managed_overlay: {scale, rationale}, narrative}
+    """
+    from mcp_server._screens import compute_monthly_screen
+
+    return compute_monthly_screen(_parse_date(date), top_n=top_n,
+                                   database_url=database_url)
+
+
+def quarterly_screen(
+    date: str,
+    top_n: int = 30,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """v3.32 Toolkit B:Quarterly screen — F-Score + Low Vol + Industry-Adj GP。
+
+    對齊 v1.1 提案 §四 Toolkit B:
+      - B1 Piotroski F-Score ≥ 7(Piotroski 2000 JAR / Walkshäusl 2020 JAM)
+      - B2 Low Volatility 252d(Ang et al 2009 JFE / Blitz-van Vliet 2007 JPM)
+      - B3 Industry-Adjusted GP(Novy-Marx 2013 JFE / Ng-Shen 2020 A&F)
+
+    Returns:
+        {as_of, top_n, toolkit, factors: {3 sub-factor 各 top_stocks + narrative}, narrative}
+    """
+    from mcp_server._screens import compute_quarterly_screen
+
+    return compute_quarterly_screen(_parse_date(date), top_n=top_n,
+                                     database_url=database_url)
+
+
+def annual_low_risk_screen(
+    date: str,
+    top_n: int = 30,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """v3.32 Toolkit C:Annual low-risk screen — Long-Term Low Vol + Dividend Yield + 12-1 Momentum。
+
+    對齊 v1.1 提案 §四 Toolkit C:
+      - C1 Long-Term Low Vol 36M(Blitz-van Vliet 2007)
+      - C2 Cash Dividend Yield + yield trap filter(Boudoukh 2007;提案 v1.1 新增 12M return > -20%
+        + 5y 至少 3y 配息 filter)
+      - C3 12-1 Momentum(Jegadeesh-Titman 1993 JF)
+
+    Returns:
+        {as_of, top_n, toolkit, factors: {3 sub-factor 各 top_stocks + narrative}, narrative}
+    """
+    from mcp_server._screens import compute_annual_low_risk_screen
+
+    return compute_annual_low_risk_screen(_parse_date(date), top_n=top_n,
+                                          database_url=database_url)
+
+
+def monthly_trigger_scan(
+    date: str,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """v3.32 Layer 5:Monthly trigger scan(實驗性 conviction adjustment)。
+
+    對齊 v1.1 提案 §四 Layer 5:
+      - Positive trigger:月營收 YoY > +30% + 過去 20D 法人累積買超 → 部位 +20% hint
+      - Negative trigger:月營收 YoY < -20% + 法人賣超 > 流通股數 1% → 部位 -50% hint
+
+    底層因子 A 級(Hung-Lu-Yang 2025 月營收揭露 alpha + Sias 2004),
+    Trigger 架構 C 級(自創 conviction adjustment),需實盤驗證。
+
+    Returns:
+        {as_of, signal_date, toolkit, positive_triggers: [...], negative_triggers: [...], narrative}
+    """
+    from mcp_server._screens import compute_monthly_trigger_scan
+
+    return compute_monthly_trigger_scan(_parse_date(date), database_url=database_url)
+
+
+# ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
 
