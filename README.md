@@ -3,6 +3,7 @@
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + Cross-Stock Cores 11 builders + MCP toolkit 8 tools)。
 
 **版本**:v3.32(alembic head `d9e0f1g2h3i4` / 2026-05-18)
+**驗證流水線**:今日 4 commits(v3.29 / v3.30 / v3.31 / v3.32)完整 verify chain 見 [CLAUDE.md §下班後 verify 流水線](CLAUDE.md#下班後-verify-流水線2026-05-18-整日-4-commits)(6 phase:env / SQL diagnostic / alembic+phase 8 / 資料 spot-check / Kalman-Neely verify / MCP 8 tools 對話內測 / pytest)
 **狀態**:**Round 7-9 calibration 完整結算** ☕ + **v3.31 MCP toolkit 9 → 4 consolidation(stock_snapshot 6-in-1)** + **v3.32 10 new cross_cores factor builders + 4 MCP screen wrappers**(對齊量化因子提案 v1.1:Toolkit A momentum + B value-quality + C low-risk + Layer 5 trigger overlay)。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**(magic_formula + v3.32 10 個);Aggregation Layer 4 Phase 全套;Rust workspace **443 tests passed / 0 failed**;Python tests **165 passed / 1 skipped**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
 
 ---
