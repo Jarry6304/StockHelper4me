@@ -266,6 +266,142 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.36 — Neely load_for_neely lookback hotfix(2026-05-18)
+
+接 v3.35.1 production verify(commit `25bcbe6`)後 user 跑 monowave_series SQL 揭露
+**3030 monowave detection 從 2024-09-25 才開始**(snapshot date 2026-05-15 往前
+僅 ~20 個月)— 但 3030 有 2019-2026 共 7+ 年 price_daily_fwd 資料。Neely 完全沒看
+過 2019-2024 共 5 年的長期 history,所以 Stage 3 Generator 永遠產不出 long-degree
+candidates。
+
+### Root cause
+
+`rust_compute/cores_shared/ohlcv_loader/src/lib.rs::load_for_neely`(原 line 149-169):
+
+```rust
+let warmup = core.warmup_periods(params);    // Daily=500
+let lookback = (warmup as f64 * 1.2).ceil() as i32;   // = 600 bars ≈ 2.4 yr
+```
+
+Neely 只載 **600 trading bars(~2.4 yr)**,**其他所有 cores 都用
+`STOCK_LOOKBACK_DAYS = 365*6 = 6 年`**(在 `tw_cores::run_stock_cores.rs:24`)。
+
+`STOCK_LOOKBACK_DAYS` 註解明文「**6 年日線(覆蓋各 indicator warmup × 1.2 + 充足實際
+series)**」是設計 intent,但 `load_for_neely` 走自己 shortcut 沒對齊 — **是 loader
+logic 不一致 bug,不是 spec 設計**。
+
+### 修法(1 commit / 1 file / 7 行改動)
+
+`load_for_neely` 加 6-year floor(對齊既有 6 yr 慣例 + Forest_max_size=200 +
+compaction_timeout 仍守門):
+
+```rust
+let warmup_buffered = (warmup as f64 * 1.2).ceil() as i32;
+let lookback = match params.timeframe {
+    Timeframe::Daily   => warmup_buffered.max(365 * 6),       // ≥ 6 yr daily
+    Timeframe::Weekly  => warmup_buffered.max(365 * 6 / 7),
+    Timeframe::Monthly => warmup_buffered.max(6 * 12 + 12),
+    Timeframe::Quarterly => warmup_buffered.max(6 * 4 + 4),
+};
+```
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores_shared/ohlcv_loader/src/lib.rs` | `load_for_neely`:加 6 yr floor + 更新 docstring 含 v3.36 rationale |
+| `CLAUDE.md` | v3.36 章節 |
+
+**0 alembic / 0 collector.toml / 0 MCP layer 改動**(純 loader logic fix)。
+
+### Risk 評估
+
+🟢 低:
+- Forest_max_size=200 仍 cap(BeamSearchFallback 取 top 100 by power_rating)
+- compaction_timeout(NeelyEngineConfig 內既有設定)防 long-history 爆 wall time
+- params_hash 不變(load lookback 不在 params 序列化內)→ user 重跑 tw_cores 走
+  ON CONFLICT UPDATE 覆寫既有 structural_snapshots,**不需 DELETE**
+- 既有 cargo workspace tests 全綠(448 passed,0 改動)
+- Rollback:單 commit `git revert`
+
+🟡 中:
+- **3030 7 年資料對 wall time 影響**:預期 monowave 從 ~80 → ~300+,Stage 3 candidates
+  從 ~50 → ~500(走 beam_width × 10 cap),compaction Round 1-2 wall time 上升。對齊
+  既有 compaction_timeout 機制,但 user 跑 production 時可能比 v3.35 慢 ~10-30%
+- **3030 短-degree 仍存在(若 Ch5 規則對非標準急漲股全拒)**:loader 修了讓 Neely 看到
+  完整 history,但 Validator 可能仍拒 long-span candidates(對齊上輪 audit 揭露:
+  `Ch5_Essential / Zigzag_Max_BRetracement / Equality / Overlap_Trending` 全拒)。
+  若 fix 後 user 仍只看到 short-degree,真正升 C3 multi-timeframe Neely
+
+🔴 高:
+- **無**
+
+### 沙箱驗證
+
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release --workspace --no-fail-fast` ✅ **448 passed / 0 failed**
+
+### user 本機 production verify(下輪 session)
+
+```powershell
+git pull
+cd rust_compute
+cargo build --release -p tw_cores
+cd ..
+
+# 重跑 tw_cores(neely_core params_hash 不變 → ON CONFLICT UPDATE 覆寫,不需 DELETE)
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+
+# 驗 3030 monowave_series 是否從 2019(或更早)開始
+psql $env:DATABASE_URL -c "
+SELECT
+  COUNT(*)                                          AS total_monowaves,
+  MIN(mw->>'start_date')                            AS earliest_mw_date,
+  MAX(mw->>'end_date')                              AS latest_mw_date
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'monowave_series') AS mw
+WHERE stock_id = '3030'
+  AND core_name = 'neely_core'
+  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE stock_id='3030' AND core_name='neely_core');
+"
+# 預期:earliest_mw_date <= 2020-05-15(對齊 6 年 lookback),
+# total_monowaves 從 84 → 200-400
+
+# 驗 scenario_forest 是否含 long-span(Minor / Primary)candidates
+psql $env:DATABASE_URL -c "
+SELECT
+  ((s->'wave_tree'->>'end')::date - (s->'wave_tree'->>'start')::date) AS span_days,
+  s->>'power_rating' AS power, s->>'structure_label' AS label
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE stock_id='3030' AND core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE stock_id='3030' AND core_name='neely_core')
+ORDER BY span_days DESC LIMIT 10;
+"
+# 預期:top scenario span_days > 365(年級 anchor 出現)
+
+# MCP 對 3030 驗 primary_scenario.effective_degree
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast
+import json
+r = neely_forecast('3030','2026-05-15')
+print('effective_degree:', r['primary_scenario']['effective_degree'])
+print('wave_span_years:', r['primary_scenario']['wave_span_years'])
+print('is_usable:', r['quality_caveat']['is_usable'])
+"
+# 預期:effective_degree = Minor / Primary(非 SubMinuette)
+# 預期:is_usable = True(quality_caveat 不再 fire)
+```
+
+### 後續(若 hotfix 不夠)
+
+若 user verify 後 3030 monowave_series 確實涵蓋 2020-2026 但仍**只有 short-degree
+scenarios**(Validator 拒絕所有 long-span Ch5 規則)→ 屬「真實資料 + 標準 NEoWave
+衝突」,動 v3.37+ C3 multi-timeframe Neely(weekly/monthly 粒度可能讓 Ch5 滿足)。
+
+---
+
 ## v3.35.1 — Quality caveat:short-degree only + fib decoupled warnings(2026-05-18)
 
 接 v3.35 production verify(commit `2d791ef`)後 user 跑 3030 揭露 picker 邏輯對但

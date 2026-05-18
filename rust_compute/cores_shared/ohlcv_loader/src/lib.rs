@@ -144,7 +144,16 @@ pub async fn load_monthly(
 
 /// 輔助函式:依 NeelyCore.warmup_periods(params) 自動載入足量 OHLCV。
 ///
-/// Daily / Weekly / Monthly 對應 warmup * 1.2 (緩衝 20%) 量的歷史。
+/// **v3.36 hotfix(2026-05-18)**:原本 `warmup * 1.2`(Daily=600 bars ≈ 2.4 yr)
+/// 對長 history 股票(e.g. 3030 7+ yr)會把 5 年 history 全砍掉,monowave detection
+/// 只看到近 ~20 個月,Stage 3 Generator 永遠產不出 long-degree candidates。
+/// User 對 3030 看到的 primary 永遠是 SubMinuette(< 1 yr)就是這原因。
+///
+/// 修法:對齊 `tw_cores::run_stock_cores::STOCK_LOOKBACK_DAYS = 365*6 = 2190` 既有
+/// 6 年慣例(loader 註解明文「6 年日線,覆蓋各 indicator warmup × 1.2 + 充足實際 series」),
+/// 但 load_for_neely 走自己 shortcut → 加 max() floor 對齊 6 年。Forest_max_size=200
+/// 仍 cap(BeamSearchFallback 取 top 100),compaction_timeout 防爆。
+///
 /// 對齊 cores_overview §3.4 / §7.3。
 pub async fn load_for_neely(
     pool: &PgPool,
@@ -154,8 +163,17 @@ pub async fn load_for_neely(
     use fact_schema::WaveCore;
     let core = NeelyCore::new();
     let warmup = core.warmup_periods(params);
-    // 1.2x 緩衝(對齊 §7.3)
-    let lookback = (warmup as f64 * 1.2).ceil() as i32;
+    // 1.2x 緩衝(對齊 §7.3 原規格)
+    let warmup_buffered = (warmup as f64 * 1.2).ceil() as i32;
+
+    // v3.36 hotfix:對齊 tw_cores STOCK_LOOKBACK_DAYS = 365*6 6-year floor
+    // (Daily ~ 1500 trading bars / Weekly ~ 312 / Monthly ~ 84)
+    let lookback = match params.timeframe {
+        Timeframe::Daily   => warmup_buffered.max(365 * 6),
+        Timeframe::Weekly  => warmup_buffered.max(365 * 6 / 7),
+        Timeframe::Monthly => warmup_buffered.max(6 * 12 + 12),
+        Timeframe::Quarterly => warmup_buffered.max(6 * 4 + 4),
+    };
 
     match params.timeframe {
         Timeframe::Daily => load_daily(pool, stock_id, lookback).await,
