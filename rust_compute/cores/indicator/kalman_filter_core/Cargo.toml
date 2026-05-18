@@ -1,8 +1,8 @@
 [package]
 name        = "kalman_filter_core"
-version     = "0.2.0"
+version     = "0.3.0"
 edition     = "2021"
-description = "Kalman Filter Core(P3,1-D trend smoothing + 5-class regime,對齊 m3Spec/kalman_filter_core.md)"
+description = "Kalman Filter Core(P3,multi-horizon 1-D trend smoothing + 5-class regime,對齊 m3Spec/kalman_filter_core.md)"
 
 [lib]
 path = "src/lib.rs"
