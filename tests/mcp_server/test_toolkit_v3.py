@@ -258,6 +258,34 @@ class TestKalmanTrend:
         assert result["regime"] is None
         assert "無 kalman_filter_core 資料" in result["narrative"]
 
+    def test_v3_30_reads_series_last_entry(self, monkeypatch):
+        """v3.30:Rust 寫入 `{stock_id, series: [...KalmanPoint], events}`,最新
+        state 在 `series[-1]`。原本 `val.get("smoothed_price")` 讀頂層 → 永遠 0
+        (production 2330 bug)。
+
+        確認:value.series[-1] 提供值 + 頂層無欄位 → 正確讀 latest state。
+        """
+        production_schema_value = {
+            "stock_id": "2330",
+            "timeframe": "Daily",
+            "series": [
+                {"date": "2026-05-13", "raw_close": 2200.0, "smoothed_price": 2180.0,
+                 "uncertainty": 12.0, "velocity": 0.5, "regime": "StableUp"},
+                {"date": "2026-05-14", "raw_close": 2230.0, "smoothed_price": 2200.0,
+                 "uncertainty": 11.5, "velocity": 0.6, "regime": "StableUp"},
+                {"date": "2026-05-15", "raw_close": 2265.0, "smoothed_price": 2225.0,
+                 "uncertainty": 11.0, "velocity": 0.7, "regime": "Accelerating"},
+            ],
+            "events": [],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=production_schema_value)
+        result = data_tools.kalman_trend("2330", "2026-05-15", lookback_days=180)
+        # 應該讀 series[-1] 的 2225 / 11.0 / 0.7 / Accelerating(不是頂層 missing → 0)
+        assert result["smoothed_price"] == 2225.0
+        assert result["uncertainty_band"] == [2214.0, 2236.0]
+        assert result["trend_velocity"] == 0.7
+        assert result["regime"] == "Accelerating"
+
     def test_payload_size_bounded(self, monkeypatch):
         _patch_agg_as_of(
             monkeypatch,
@@ -509,6 +537,39 @@ class TestRiskAlertStatus:
         assert result["current_status"]["in_disposition_period"] is False
         assert result["escalation_count_60d"] == 0
         assert "無風險警訊" in result["narrative"]
+
+    def test_v3_29_short_disposition_measure(self, monkeypatch):
+        """v3.29:3030 production case — measure='第一次處置' condition='連續三次'。
+
+        既有 keyword `人工管制` / `注意交易資訊` 不命中此短字串,但 `處置` broad
+        pattern 應 fire `disposition` 而非 fallback `unknown`。
+        """
+        rows = [
+            {"announced_date": date(2026, 5, 7), "disposition_cnt": 1,
+             "period_start": date(2026, 5, 7), "period_end": date(2026, 5, 20),
+             "condition": "連續三次", "measure": "第一次處置"},
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_risk_alert", cur)
+        result = data_tools.risk_alert_status("3030", "2026-05-15")
+        cs = result["current_status"]
+        assert cs["in_disposition_period"] is True
+        assert cs["severity"] == "disposition"
+        assert cs["severity_label"] == "處置股(分盤撮合)"
+        # history_60d row 也需要對齊
+        assert result["history_60d"][0]["severity"] == "disposition"
+
+    def test_v3_29_attention_only_from_condition(self, monkeypatch):
+        """v3.29:condition 含 `注意` 但 measure 不含關鍵字 → warning。"""
+        rows = [
+            {"announced_date": date(2026, 5, 7), "disposition_cnt": 1,
+             "period_start": date(2026, 5, 7), "period_end": date(2026, 5, 20),
+             "condition": "連續三次注意異常", "measure": ""},
+        ]
+        cur = _mk_simple_cursor(fetchall_val=rows)
+        _patch_direct_conn(monkeypatch, "_risk_alert", cur)
+        result = data_tools.risk_alert_status("3030", "2026-05-15")
+        assert result["current_status"]["severity"] == "warning"
 
 
 class TestCommodityMacroSnapshot:

@@ -87,17 +87,25 @@ def compute_kalman_trend(
 
     val = indicator.value or {}
 
+    # v3.30(2026-05-17):Rust 寫入 indicator_values.value 整個 KalmanFilterOutput
+    # (`{stock_id, timeframe, series: [...KalmanPoint], events: [...]}`),
+    # 最新 state 在 `series[-1]`,不是頂層欄位。原本 `val.get("smoothed_price")`
+    # 永遠拿不到 → 全部 fallback 0(production 2330 smoothed/velocity/uncertainty
+    # 全 0 bug)。fallback 頂層讀法保留給 test fixtures 向下相容。
+    series = val.get("series") or []
+    latest_state = series[-1] if series else val
+
     # raw_close v3.26 修:authoritative source 是 price_daily,indicator 內的
     # raw_close 可能是 indicator 跑那天的舊值;DB 直撈最新確保 deviation 計算正確。
     # 若 DB 無資料 fallback 走 indicator value(對齊既有行為)。
     from mcp_server._price import fetch_latest_close_for_tool
     price_info = fetch_latest_close_for_tool(stock_id, as_of, database_url=database_url)
-    raw_close = price_info["close"] if price_info else float(val.get("raw_close") or 0.0)
+    raw_close = price_info["close"] if price_info else float(latest_state.get("raw_close") or 0.0)
 
-    smoothed_price  = float(val.get("smoothed_price") or 0.0)
-    velocity        = float(val.get("velocity") or 0.0)
-    uncertainty     = float(val.get("uncertainty") or 0.0)
-    regime          = str(val.get("regime") or "Sideway")
+    smoothed_price  = float(latest_state.get("smoothed_price") or 0.0)
+    velocity        = float(latest_state.get("velocity") or 0.0)
+    uncertainty     = float(latest_state.get("uncertainty") or 0.0)
+    regime          = str(latest_state.get("regime") or "Sideway")
 
     band_lo = smoothed_price - uncertainty
     band_hi = smoothed_price + uncertainty

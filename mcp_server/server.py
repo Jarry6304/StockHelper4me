@@ -14,7 +14,7 @@
 - `risk_alert_status`:處置股風險警示(Tool 8 — v3.22)
 - `commodity_macro_snapshot`:商品 macro 信號(Tool 9 — v3.22)
 
-**Render tools(LLM 視覺輸出 PNG + 短摘要)**:
+**Hidden tools(v3.30 暫隱藏 — production silent fail 修好後解開)**:
 - render_kline / render_chip / render_fundamental / render_environment /
   render_neely / render_facts_cloud
 
@@ -28,7 +28,13 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from mcp_server.tools import data as _data_tools
-from mcp_server.tools import render as _render_tools
+# v3.30(2026-05-17):render tools 暫隱藏 — production 6 支(render_kline /
+# render_chip / render_fundamental / render_environment / render_neely /
+# render_facts_cloud)全部回 "outputSchema defined but no structured output
+# returned",PNG 生成 pipeline 後端 silent fail。functions 仍留在
+# `mcp_server.tools.render` 給 dashboard / direct python 用,只是不曝露 MCP。
+# 修好後解開下方 `mcp.tool(_render_tools.*)` 6 行即可。
+# from mcp_server.tools import render as _render_tools
 
 
 mcp = FastMCP(
@@ -55,8 +61,6 @@ mcp = FastMCP(
         "escalation 鏈(注意 / 處置 / 全額交割 三級嚴重度)。\n"
         "  9. `commodity_macro_snapshot(date, commodities=None)` — 商品 macro 信號"
         "(初版 GOLD;return z-score / momentum streak / spike 警戒)。\n\n"
-        "**Render tools(視覺輸出 PNG + 短摘要)**:render_kline / render_chip / "
-        "render_fundamental / render_environment / render_neely / render_facts_cloud。\n\n"
         "設計約束:\n"
         "- 所有 tool 強制 as_of date(回測 / 即時同介面)\n"
         "- facts 已過 look-ahead bias 防衛\n"
@@ -87,9 +91,11 @@ mcp.tool(_data_tools.commodity_macro_snapshot)    # v3.22(Brock 1992 / Hamilton 
 # 上方 3 個 public toolkit。
 
 # Render tools(視覺輸出 — PNG image content)
-mcp.tool(_render_tools.render_kline)
-mcp.tool(_render_tools.render_chip)
-mcp.tool(_render_tools.render_fundamental)
-mcp.tool(_render_tools.render_environment)
-mcp.tool(_render_tools.render_neely)
-mcp.tool(_render_tools.render_facts_cloud)
+# v3.30(2026-05-17):暫隱藏 — production 6 支全 silent fail
+# (outputSchema defined but no structured output returned)。修好後解開:
+# mcp.tool(_render_tools.render_kline)
+# mcp.tool(_render_tools.render_chip)
+# mcp.tool(_render_tools.render_fundamental)
+# mcp.tool(_render_tools.render_environment)
+# mcp.tool(_render_tools.render_neely)
+# mcp.tool(_render_tools.render_facts_cloud)
