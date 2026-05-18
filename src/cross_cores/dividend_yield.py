@@ -72,7 +72,12 @@ def _fetch_latest_yield(
 def _fetch_5y_payout_history(
     db: Any, end_date: Any, *, market: str = "TW",
 ) -> dict[str, int]:
-    """每股 5 年內配息年數(對齊 price_adjustment_events.cash_dividend > 0)。"""
+    """每股 5 年內配息年數。
+
+    對齊 price_adjustment_events schema(bronze/post_process_dividend.py:64):
+    event_type 是 'dividend'(統稱現金 + 股票股利),`cash_dividend` 欄判斷有無現金。
+    過濾 cash_dividend > 0 → 只算發過現金股利的年份。
+    """
     five_years_ago = end_date - timedelta(days=365 * 5)
     rows = db.query(
         """
@@ -80,7 +85,7 @@ def _fetch_5y_payout_history(
                COUNT(DISTINCT EXTRACT(YEAR FROM date))::int AS payout_years
           FROM price_adjustment_events
          WHERE market = %s AND date <= %s AND date >= %s
-           AND event_type = 'cash_dividend'
+           AND event_type = 'dividend'
            AND cash_dividend IS NOT NULL AND cash_dividend > 0
          GROUP BY stock_id
         """,
