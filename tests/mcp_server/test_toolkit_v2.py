@@ -707,6 +707,7 @@ class TestNeelyForecastStructure:
             "primary_scenario", "scenario_count", "forecasts",
             "key_levels", "invalidation_price",
             "scenario_staleness",   # v3.28 加
+            "quality_caveat",       # v3.35.1 加
         }
 
     def test_returns_4_timeframes(self, monkeypatch):
@@ -963,6 +964,91 @@ class TestV3_35Picker:
         assert result["primary_scenario"]["wave_span_years"] is None
         # 其他 field 正常(對齊既有 test_returns_required_keys)
         assert result["primary_scenario"]["power_rating"] == "Bullish"
+
+    def test_v3_35_1_quality_caveat_short_degree_only(self, monkeypatch):
+        """v3.35.1:所有 scenarios 都 SubMinuette → quality_caveat.is_short_degree_only=True
+        + warning 內含對應字串。對應 3030 production case。"""
+        short_scenarios = [
+            _scenario_with_dates(
+                scenario_id=f"short_{i}", power_rating="Bullish",
+                start=f"2025-{i:02d}-01", end=f"2025-{i:02d}-28",
+                invalidation_below=80.0,
+            )
+            for i in range(1, 4)
+        ]
+        _patch_agg_as_of_with_neely(
+            monkeypatch, scenarios=short_scenarios,
+            latest_close={"close": 395.0, "change_pct": 1.0, "prev_close": 391.0},
+        )
+        result = data_tools.neely_forecast("3030", "2026-05-15")
+        caveat = result["quality_caveat"]
+        assert caveat["is_short_degree_only"] is True
+        assert caveat["max_scenario_degree"] == "SubMinuette"
+        assert caveat["is_usable"] is False
+        assert any("short-degree" in w for w in caveat["warnings"])
+
+    def test_v3_35_1_quality_caveat_fib_decoupled_from_price(self, monkeypatch):
+        """v3.35.1:primary fib zones 全在 1000-1500,current=395 完全脫節 →
+        fib_zones_decoupled_from_price=True + warning 內含 price 數字。"""
+        decoupled = {
+            "id": "decoupled",
+            "pattern_type": "Impulse",
+            "power_rating": "Bullish",
+            "structure_label": "5-wave decoupled",
+            "rules_passed_count": 5,
+            "expected_fib_zones": [
+                {"label": "fib_0.382", "low": 1100.0, "high": 1150.0, "source_ratio": 0.382},
+                {"label": "fib_0.618", "low": 1200.0, "high": 1300.0, "source_ratio": 0.618},
+                {"label": "fib_1.000", "low": 1400.0, "high": 1500.0, "source_ratio": 1.000},
+            ],
+            "invalidation_triggers": [],
+            # 給 wave_tree 確保 effective_degree 非 short(走 (b) 分支獨立驗)
+            "wave_tree": {
+                "label": "decoupled",
+                "start": "2020-01-01", "end": "2026-05-01",
+                "children": [],
+            },
+        }
+        _patch_agg_as_of_with_neely(
+            monkeypatch, scenarios=[decoupled],
+            latest_close={"close": 395.0, "change_pct": 1.0, "prev_close": 391.0},
+        )
+        result = data_tools.neely_forecast("TEST", "2026-05-15")
+        caveat = result["quality_caveat"]
+        assert caveat["fib_zones_decoupled_from_price"] is True
+        # current=395 不在 [1100, 1500] +/- 50% buffer
+        assert any("不適用當前 price level" in w for w in caveat["warnings"])
+
+    def test_v3_35_1_quality_caveat_usable_when_long_degree_and_aligned(self, monkeypatch):
+        """v3.35.1:long-degree + fib zones 對齊 current_price → is_usable=True 無 warning。"""
+        good = {
+            "id": "good",
+            "pattern_type": "Impulse",
+            "power_rating": "Bullish",
+            "structure_label": "5-wave long aligned",
+            "rules_passed_count": 5,
+            "expected_fib_zones": [
+                {"label": "fib_0.382", "low": 380.0, "high": 400.0, "source_ratio": 0.382},
+                {"label": "fib_0.618", "low": 420.0, "high": 450.0, "source_ratio": 0.618},
+            ],
+            "invalidation_triggers": [],
+            "wave_tree": {
+                "label": "good",
+                "start": "2020-01-01", "end": "2026-05-01",   # 6 yr → Minor
+                "children": [],
+            },
+        }
+        _patch_agg_as_of_with_neely(
+            monkeypatch, scenarios=[good],
+            latest_close={"close": 395.0, "change_pct": 1.0, "prev_close": 391.0},
+        )
+        result = data_tools.neely_forecast("TEST", "2026-05-15")
+        caveat = result["quality_caveat"]
+        assert caveat["is_short_degree_only"] is False
+        assert caveat["max_scenario_degree"] == "Minor"
+        assert caveat["fib_zones_decoupled_from_price"] is False
+        assert caveat["is_usable"] is True
+        assert caveat["warnings"] == []
 
     def test_picker_invalidation_filter_only_acts_on_invalidate_action(self, monkeypatch):
         """OnTriggerAction == WeakenScenario 不視為失效(只 InvalidateScenario 會過濾)。"""

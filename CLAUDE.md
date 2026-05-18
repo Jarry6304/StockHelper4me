@@ -266,6 +266,86 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.35.1 — Quality caveat:short-degree only + fib decoupled warnings(2026-05-18)
+
+接 v3.35 production verify(commit `2d791ef`)後 user 跑 3030 揭露 picker 邏輯對但
+Rust scenario_forest **全部 7 個 scenarios 都是 < 60 天 span**(SubMinuette),最長
+僅 0.14 yr。對應 v3.35 plan 文件中度風險被命中:
+
+> 「若 production scenario_forest 對 3030 真的只有近期 swing 候選 → picker 無效」
+
+加 `quality_caveat` field 給 LLM 警示 picker 給的 primary 是否可用,**不修 Rust**
+(Rust 修法走 v3.36 B1/B2)。
+
+### 動工(1 commit / 0 Rust / 1 helper)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_forecast.py` | 加 `_compute_quality_caveat(all_scenarios, primary, current_price)` helper / 主 return dict 加 `quality_caveat` field |
+| `tests/mcp_server/test_toolkit_v2.py` | `test_returns_required_keys` 加 `quality_caveat` key + 3 new tests(short_degree_only / fib_decoupled / usable_when_long_aligned)|
+| `CLAUDE.md` | v3.35.1 章節 |
+
+### Quality caveat output schema
+
+```python
+"quality_caveat": {
+    "is_short_degree_only":           True,        # 所有 scenarios ≤ SubMinuette
+    "max_scenario_span_years":        0.14,        # 最長 scenario span
+    "max_scenario_degree":            "SubMinuette",
+    "fib_zones_decoupled_from_price": True,        # current_price 在 fib zones [low, high] +/-50% buffer 外
+    "is_usable":                      False,        # 任一警示 → 不可用
+    "warnings": [
+        "所有 7 個 scenarios 都是 short-degree(最長 span 0.14 yr,SubMinuette)— "
+            "Rust Stage 3 Generator 對長期 history 沒產 Minor+ degree candidates...",
+        "current_price=395.0 在 primary scenario fib zones [98.50, 156.20] 之外(+/- 50% buffer)— "
+            "forecasts 區間基於短期 swing anchor 投影,不適用當前 price level。"
+    ]
+}
+```
+
+### v3.36 候選(對齊 user B1 拍版,待跑 SQL diagnostic 後確認 root cause)
+
+| 路線 | 範圍 | 估時 |
+|---|---|---|
+| B1.1 audit Stage 2 monowave Rule of Neutrality | `monowave/` module:若 mw1-mw7 被 Neutral 過濾,調 threshold/邏輯 | 1-2 天 |
+| B1.2 audit Stage 3 Generator | `candidates/generator.rs:56-107` sliding window logic;若需加 skip-monowave partition | 2-3 天 |
+
+audit blocked on user SQL(`diagnostics->rejections` 查 mw1-mw7 是否 ever generated)。
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/test_toolkit_v2.py::TestV3_35Picker` ✅ **8 passed**(5 v3.35 + 3 new v3.35.1)
+- `pytest tests/mcp_server/test_toolkit_v2.py::TestNeelyForecastStructure` ✅ **4 passed**(`test_returns_required_keys` 更新加 `quality_caveat` key)
+- `pytest tests/mcp_server/ tests/agg/ tests/cross_cores/` ✅ **183 passed / 1 skipped**(從 180 +3 new)
+- 0 Rust / 0 alembic / 0 collector.toml
+
+### user 本機(no re-run needed,純 MCP)
+
+```powershell
+git pull
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast
+import json
+r = neely_forecast('3030','2026-05-15')
+print('is_usable:', r['quality_caveat']['is_usable'])
+print('warnings:')
+for w in r['quality_caveat']['warnings']:
+    print(' -', w)
+"
+# 預期:is_usable=False / 2 條 warning(short-degree only + fib decoupled)
+```
+
+### 風險
+
+🟢 低:
+- 0 Rust / 0 alembic / 0 collector.toml(純 Python helper)
+- backward compat:現有 tests 改 1 個 keys 集合即可,fixture 無 wave_tree → 走 graceful path
+- 既有 9 個 Neely tests + ~170 其他 Python tests 0 regression
+- Rollback:單 commit `git revert`
+
+---
+
 ## v3.35 — Neely-C-MCP picker:invalidation filter + degree-aware ordering(2026-05-18)
 
 接 v3.33 Kalman multi-horizon + v3.34 polish 收尾後,user 拍版動 v3.35+ Neely 修法。

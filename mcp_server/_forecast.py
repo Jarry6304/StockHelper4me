@@ -125,6 +125,13 @@ def compute_neely_forecast(
     # 5. Invalidation price 從 primary 的 triggers 抽
     invalidation_price = _extract_invalidation_price(primary, current_price)
 
+    # 6. v3.35.1 quality caveat:
+    #    (a) 若所有 scenarios 都是 short-degree → warn LLM 沒長期 anchor
+    #    (b) 若 primary fib zones 與 current_price 完全脫節 → forecasts 不可用
+    #    對應 v3.35 production verify 揭露:Rust Stage 3 Generator 對長 history 股票
+    #    只產短 span candidates,picker 即使選最長也仍是 SubMinuette。
+    quality_caveat = _compute_quality_caveat(all_scenarios, primary, current_price)
+
     return {
         "stock_id":           stock_id,
         "as_of":              as_of.isoformat(),
@@ -135,6 +142,7 @@ def compute_neely_forecast(
         "forecasts":          forecasts,
         "key_levels":         key_levels,
         "invalidation_price": invalidation_price,
+        "quality_caveat":     quality_caveat,
     }
 
 
@@ -462,6 +470,87 @@ def _scenario_span_years(scenario: dict) -> float | None:
     if end < start:
         return None
     return (end - start).days / 365.25
+
+
+# ────────────────────────────────────────────────────────────
+# v3.35.1 quality caveat — LLM 警示 picker 給的 primary 是否可用
+# ────────────────────────────────────────────────────────────
+
+# Degree label → is_short_degree?(<= SubMinuette 視為短期 swing,不適合長 history 股票)
+_SHORT_DEGREE_LABELS: set[str] = {"SubMicro", "Micro", "SubMinuette"}
+
+
+def _compute_quality_caveat(
+    all_scenarios: list[dict], primary: dict | None, current_price: float,
+) -> dict[str, Any]:
+    """v3.35.1 picker quality 警示:幫 LLM 識別何時 primary 不適合 long-anchor 判讀。
+
+    對應 v3.35 production verify 揭露的 root cause:
+      Rust Stage 3 Generator 對長 history 股票(e.g. 3030 7 yr)只產短 span
+      candidates(全 SubMinuette < 1 yr)→ picker 即使 degree DESC 也只能選最長的 SubMinuette
+      → forecasts / invalidation_price / key_levels 對齊 short swing,LLM 若不知情會誤判。
+
+    回兩種警示:
+      (a) is_short_degree_only:所有 scenarios 都 ≤ SubMinuette → 無長期 anchor 可用
+      (b) fib_zones_decoupled_from_price:primary fib zones 與 current_price 完全脫節
+          (zones bracket 外 50% buffer 以上)→ forecasts 區間不可用
+
+    若 (a) 或 (b) 命中,narrative 出警示 + 設旗 is_usable=False。
+    """
+    warnings: list[str] = []
+
+    # ── (a) short-degree only ─────────────────────────────────
+    is_short_only = False
+    max_span = 0.0
+    max_degree: str | None = None
+    if all_scenarios:
+        for s in all_scenarios:
+            span = _scenario_span_years(s)
+            if span is not None and span > max_span:
+                max_span = span
+                max_degree = _compute_scenario_effective_degree(s)
+        is_short_only = (max_degree is None) or (max_degree in _SHORT_DEGREE_LABELS)
+        if is_short_only and max_span > 0:
+            warnings.append(
+                f"所有 {len(all_scenarios)} 個 scenarios 都是 short-degree "
+                f"(最長 span {max_span:.2f} yr,{max_degree or 'unknown'})— Rust Stage 3 Generator "
+                f"對長期 history 沒產 Minor+ degree candidates,LLM 無長期 anchor 可用。"
+                f"參考 invalidation_price 時請注意該值對應近期短 swing。"
+            )
+
+    # ── (b) primary fib zones 與 current_price 脫節 ───────────
+    is_decoupled = False
+    if primary is not None and current_price > 0:
+        fib_zones = primary.get("expected_fib_zones") or []
+        all_prices: list[float] = []
+        for zone in fib_zones:
+            if not isinstance(zone, dict):
+                continue
+            for key in ("low", "high"):
+                v = zone.get(key)
+                if isinstance(v, (int, float)):
+                    all_prices.append(float(v))
+
+        if all_prices:
+            fib_max = max(all_prices)
+            fib_min = min(all_prices)
+            buffer = (fib_max - fib_min) * 0.5 if fib_max > fib_min else fib_max * 0.1
+            if current_price > fib_max + buffer or current_price < fib_min - buffer:
+                is_decoupled = True
+                warnings.append(
+                    f"current_price={current_price:.2f} 在 primary scenario fib zones "
+                    f"[{fib_min:.2f}, {fib_max:.2f}] 之外(+/- 50% buffer)— forecasts 區間"
+                    f"基於短期 swing anchor 投影,不適用當前 price level。"
+                )
+
+    return {
+        "is_short_degree_only":           is_short_only,
+        "max_scenario_span_years":        round(max_span, 2) if max_span > 0 else None,
+        "max_scenario_degree":            max_degree,
+        "fib_zones_decoupled_from_price": is_decoupled,
+        "is_usable":                      not (is_short_only or is_decoupled),
+        "warnings":                       warnings,
+    }
 
 
 def _extract_current_price(snapshot) -> float:
