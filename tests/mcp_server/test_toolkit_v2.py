@@ -708,6 +708,7 @@ class TestNeelyForecastStructure:
             "key_levels", "invalidation_price",
             "scenario_staleness",   # v3.28 加
             "quality_caveat",       # v3.35.1 加
+            "neely_by_timeframe",   # v3.37 加
         }
 
     def test_returns_4_timeframes(self, monkeypatch):
@@ -1049,6 +1050,97 @@ class TestV3_35Picker:
         assert caveat["fib_zones_decoupled_from_price"] is False
         assert caveat["is_usable"] is True
         assert caveat["warnings"] == []
+
+    # ════════════════════════════════════════════════════════════
+    # v3.37 multi-timeframe Neely
+    # ════════════════════════════════════════════════════════════
+
+    def test_v3_37_picker_promotes_monthly_minor_over_daily_subminuette(self, monkeypatch):
+        """v3.37:multi-timeframe picker 跨 daily/weekly/monthly 取最高 degree primary。
+
+        對 3030 case 模擬:
+          daily 有 SubMinuette short swing(50天 span)
+          monthly 有 Minor degree(5 年 span)
+        → primary 應走 monthly Minor,而非 daily SubMinuette。
+        """
+        from agg import _types
+        import agg
+        from mcp_server import _price as _price_mod
+
+        daily_short = _scenario_with_dates(
+            scenario_id="daily_short",
+            power_rating="StrongBullish",
+            start="2026-03-01", end="2026-05-01",     # ~60 天 → SubMinuette
+            invalidation_below=300.0,
+        )
+        monthly_minor = _scenario_with_dates(
+            scenario_id="monthly_minor",
+            power_rating="Bullish",
+            start="2020-05-01", end="2026-05-01",     # ~6 年 → Minor
+            invalidation_below=80.0,
+        )
+
+        monkeypatch.setattr(_price_mod, "fetch_latest_close_for_tool",
+                            lambda *a, **kw: {"close": 395.0, "change_pct": 1.0, "prev_close": 391.0})
+
+        def fake_as_of(stock_id, as_of, **kwargs):
+            structural = {
+                "neely_core@daily": _types.StructuralRow(
+                    stock_id=stock_id, snapshot_date=as_of, timeframe="daily",
+                    core_name="neely_core", source_version="1.0.1",
+                    snapshot={"scenario_forest": [daily_short]},
+                ),
+                "neely_core@monthly": _types.StructuralRow(
+                    stock_id=stock_id, snapshot_date=as_of, timeframe="monthly",
+                    core_name="neely_core", source_version="1.0.1",
+                    snapshot={"scenario_forest": [monthly_minor]},
+                ),
+            }
+            return _types.AsOfSnapshot(
+                stock_id=stock_id, as_of=as_of, facts=[],
+                indicator_latest={}, structural=structural,
+                metadata=_types.QueryMetadata(
+                    stock_id=stock_id, as_of=as_of,
+                    lookback_days=30, cores=None, include_market=False, timeframes=None,
+                ),
+            )
+        monkeypatch.setattr(agg, "as_of", fake_as_of)
+
+        result = data_tools.neely_forecast("3030", "2026-05-15")
+
+        # primary 應是 monthly_minor(Minor degree)而非 daily_short(SubMinuette)
+        primary = result["primary_scenario"]
+        assert primary["effective_degree"] == "Minor"
+        assert primary["timeframe"] == "monthly"
+        assert primary["wave_span_years"] is not None and primary["wave_span_years"] > 5.5
+
+        # invalidation_price 對齊 monthly_minor 的 80.0(非 daily_short 的 300.0)
+        assert result["invalidation_price"] == 80.0
+
+        # neely_by_timeframe 三 timeframe 都有 entry
+        by_tf = result["neely_by_timeframe"]
+        assert by_tf["daily"]["timeframe_present"] is True
+        assert by_tf["daily"]["primary_effective_degree"] == "SubMinuette"
+        assert by_tf["weekly"]["timeframe_present"] is False
+        assert by_tf["monthly"]["timeframe_present"] is True
+        assert by_tf["monthly"]["primary_effective_degree"] == "Minor"
+        assert "monthly=Minor" in by_tf["cross_timeframe_summary"]
+        assert "weekly=無資料" in by_tf["cross_timeframe_summary"]
+
+    def test_v3_37_backward_compat_daily_only(self, monkeypatch):
+        """v3.37:既有 single-timeframe fixture(只 daily entry)應 graceful。"""
+        _patch_agg_as_of_with_neely(monkeypatch, scenarios=[_bullish_scenario_fixture()])
+        result = data_tools.neely_forecast("2330", "2026-05-13")
+
+        by_tf = result["neely_by_timeframe"]
+        assert by_tf["daily"]["timeframe_present"] is True
+        assert by_tf["weekly"]["timeframe_present"] is False
+        assert by_tf["monthly"]["timeframe_present"] is False
+        # primary_scenario 仍正常 work
+        assert result["primary_scenario"]["power_rating"] == "Bullish"
+        # cross_timeframe_summary 反映只 daily 有 data
+        assert "weekly=無資料" in by_tf["cross_timeframe_summary"]
+        assert "monthly=無資料" in by_tf["cross_timeframe_summary"]
 
     def test_picker_invalidation_filter_only_acts_on_invalidate_action(self, monkeypatch):
         """OnTriggerAction == WeakenScenario 不視為失效(只 InvalidateScenario 會過濾)。"""

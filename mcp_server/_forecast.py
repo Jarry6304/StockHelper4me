@@ -132,6 +132,10 @@ def compute_neely_forecast(
     #    只產短 span candidates,picker 即使選最長也仍是 SubMinuette。
     quality_caveat = _compute_quality_caveat(all_scenarios, primary, current_price)
 
+    # 7. v3.37 multi-timeframe Neely 摘要(LLM 看 daily / weekly / monthly 各自 primary
+    #    + 跨 timeframe 一致性)。primary 帶 __timeframe__ tag 告知它來自哪 timeframe。
+    neely_by_timeframe = _build_neely_by_timeframe(snapshot, current_price)
+
     return {
         "stock_id":           stock_id,
         "as_of":              as_of.isoformat(),
@@ -143,6 +147,7 @@ def compute_neely_forecast(
         "key_levels":         key_levels,
         "invalidation_price": invalidation_price,
         "quality_caveat":     quality_caveat,
+        "neely_by_timeframe": neely_by_timeframe,    # v3.37 加
     }
 
 
@@ -196,54 +201,65 @@ def _compute_scenario_staleness(snapshot, as_of: date) -> dict[str, Any]:
 def _extract_primary_and_top_scenarios(
     snapshot, *, current_price: float | None = None, limit: int = 5,
 ) -> tuple[dict | None, list[dict]]:
-    """從 structural['neely_core@daily'] 取 scenario_forest,picker 選 primary。
+    """從 structural['neely_core@*'] 取 scenario_forest,picker 選 primary。
 
-    v3.35 picker upgrade(對齊 NEoWave 展示式森林設計 + 解 3030 user bug):
-      1. 若 current_price 提供 → invalidation filter:
-         - 過 PriceBreakBelow > current_price(bullish scenario 已破底)
-         - 過 PriceBreakAbove < current_price(bearish scenario 已破頂)
-         - 只 filter OnTriggerAction == InvalidateScenario(WeakenScenario 保留)
-      2. 排序:(effective_degree DESC, power_rating DESC, rules_passed_count DESC)
-         - degree 從 wave_tree.start / end span 推算(對齊 Stage 11 §13.3)
-         - 解決 3030 case:短期 swing vs 長期主升 power_rating 同 → degree 拆票
+    v3.37(2026-05-18)multi-timeframe pick:
+      - 從 ALL neely_core@{daily,weekly,monthly} structural rows 收集 scenarios
+      - 對每 scenario tag `__timeframe__`(daily/weekly/monthly)
+      - 跨 timeframe 統一 (degree DESC, power DESC, rules DESC) 排序
+      - 對 3030 long-history:weekly/monthly Neely 產 Minor/Primary degree scenarios,
+        排序後 promote 到 primary,取代 daily SubMinuette
 
-    v3.35 之前(v3.4 ~ v3.34):只 (power_rating, rules_count) 排序,無 invalidation filter,
-    無 degree-aware preference;3030 user 看到短期 swing 當 primary,IP=126.28 過舊。
+    v3.35 picker(沿用):
+      1. invalidation filter(若 current_price 可用)
+      2. degree-aware ordering
 
     Args:
         current_price: 若 None,跳過 invalidation filter(向下相容 unit test)
+
+    Returns:
+        (primary, top_scenarios) — primary 帶 __timeframe__ tag,top 限 `limit` 筆
     """
     structural = snapshot.structural
-    neely_row = None
-    for key, row in structural.items():
-        if key.startswith("neely_core"):
-            neely_row = row
-            break
-    if neely_row is None:
-        return None, []
 
-    snap = neely_row.snapshot or {}
-    scenarios = snap.get("scenario_forest") or snap.get("scenarios") or []
-    if not isinstance(scenarios, list) or not scenarios:
+    # v3.37:iterate ALL neely_core@<tf> rows(不再 break on first)
+    all_scenarios: list[dict] = []
+    for key, row in structural.items():
+        if not key.startswith("neely_core"):
+            continue
+        # key format "neely_core@daily" / "neely_core@weekly" / "neely_core@monthly"
+        tf_str = key.split("@", 1)[1] if "@" in key else "daily"
+        snap = row.snapshot or {}
+        scenarios = snap.get("scenario_forest") or snap.get("scenarios") or []
+        if not isinstance(scenarios, list):
+            continue
+        for s in scenarios:
+            if not isinstance(s, dict):
+                continue
+            tagged = dict(s)        # shallow copy(不污染 indicator_latest snapshot 內 dict)
+            tagged["__timeframe__"] = tf_str
+            all_scenarios.append(tagged)
+
+    if not all_scenarios:
         return None, []
 
     # v3.35 step 1:invalidation filter(若 current_price 可用)
     if current_price is not None and current_price > 0:
-        scenarios = [
-            s for s in scenarios
+        all_scenarios = [
+            s for s in all_scenarios
             if not _scenario_is_invalidated(s, current_price)
         ]
-        if not scenarios:
+        if not all_scenarios:
             return None, []
 
-    # v3.35 step 2:degree-aware ordering
+    # v3.35 step 2:degree-aware ordering(跨 timeframe 統一排序)
     def _score(s: dict) -> tuple[int, int, int]:
         degree_rank = _degree_rank(_compute_scenario_effective_degree(s))
         pr_strength = _power_rating_strength(s.get("power_rating"))
         rules_count = int(s.get("rules_passed_count") or 0)
         return (degree_rank, pr_strength, rules_count)
 
-    sorted_scenarios = sorted(scenarios, key=_score, reverse=True)
+    sorted_scenarios = sorted(all_scenarios, key=_score, reverse=True)
     top = sorted_scenarios[:limit]
     primary = top[0] if top else None
     return primary, top
@@ -452,7 +468,92 @@ def _format_primary_scenario(scenario: dict | None) -> dict[str, Any]:
         "wave_count":         wave_count,
         "effective_degree":   degree,
         "wave_span_years":    round(span_years, 2) if span_years is not None else None,
+        # v3.37:scenario 來自哪 timeframe(daily / weekly / monthly)
+        "timeframe":          scenario.get("__timeframe__"),
     }
+
+
+def _build_neely_by_timeframe(snapshot, current_price: float) -> dict[str, Any]:
+    """v3.37:per-timeframe primary scenario 摘要,LLM 看跨 timeframe 一致性。
+
+    output schema:
+      {
+        "daily":   {"timeframe_present": True,  "scenario_count": 7,
+                    "primary_scenario": {...},  "primary_effective_degree": "SubMinuette"},
+        "weekly":  {"timeframe_present": True,  "scenario_count": 5,
+                    "primary_scenario": {...},  "primary_effective_degree": "Minute"},
+        "monthly": {"timeframe_present": True,  "scenario_count": 2,
+                    "primary_scenario": {...},  "primary_effective_degree": "Minor"},
+        "cross_timeframe_summary": "monthly 給 Minor degree anchor / daily / weekly 給短中期 momentum confirm"
+      }
+
+    Backward compat:若 snapshot 內無 weekly / monthly 的 neely_core entry(v3.37 前的
+    舊 production data),該 entry 走 `timeframe_present=False`,primary_scenario 為 None。
+    """
+    structural = snapshot.structural or {}
+    out: dict[str, Any] = {}
+
+    for tf in ("daily", "weekly", "monthly"):
+        key = f"neely_core@{tf}"
+        row = structural.get(key)
+        if row is None:
+            out[tf] = {
+                "timeframe_present":         False,
+                "scenario_count":            0,
+                "primary_scenario":          None,
+                "primary_effective_degree":  None,
+            }
+            continue
+
+        snap = row.snapshot or {}
+        scenarios = snap.get("scenario_forest") or snap.get("scenarios") or []
+        if not isinstance(scenarios, list):
+            scenarios = []
+
+        # tag + invalidation filter + sort 同款邏輯(per-timeframe 獨立)
+        tagged = []
+        for s in scenarios:
+            if not isinstance(s, dict):
+                continue
+            t = dict(s)
+            t["__timeframe__"] = tf
+            tagged.append(t)
+
+        if current_price is not None and current_price > 0:
+            tagged = [s for s in tagged if not _scenario_is_invalidated(s, current_price)]
+
+        def _score(s: dict) -> tuple[int, int, int]:
+            return (
+                _degree_rank(_compute_scenario_effective_degree(s)),
+                _power_rating_strength(s.get("power_rating")),
+                int(s.get("rules_passed_count") or 0),
+            )
+        tagged.sort(key=_score, reverse=True)
+        primary = tagged[0] if tagged else None
+        out[tf] = {
+            "timeframe_present":         True,
+            "scenario_count":            len(tagged),
+            "primary_scenario":          _format_primary_scenario(primary),
+            "primary_effective_degree":  _compute_scenario_effective_degree(primary) if primary else None,
+        }
+
+    # cross-timeframe summary(narrative 給 LLM)
+    out["cross_timeframe_summary"] = _compose_cross_timeframe_summary(out)
+    return out
+
+
+def _compose_cross_timeframe_summary(by_tf: dict[str, Any]) -> str:
+    """v3.37:多 timeframe degree 對照敘述。LLM 看到哪個 timeframe 給最強 anchor。"""
+    parts: list[str] = []
+    for tf in ("daily", "weekly", "monthly"):
+        info = by_tf.get(tf, {})
+        if not info.get("timeframe_present"):
+            parts.append(f"{tf}=無資料")
+            continue
+        degree = info.get("primary_effective_degree") or "Unknown"
+        count = info.get("scenario_count", 0)
+        parts.append(f"{tf}={degree}({count} scenarios)")
+    return " / ".join(parts)
 
 
 def _scenario_span_years(scenario: dict) -> float | None:

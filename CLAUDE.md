@@ -266,6 +266,166 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.37 — Multi-timeframe Neely(C3,跨 daily/weekly/monthly picker,2026-05-18)
+
+接 v3.36 hotfix(commit `a0a8a68`)production verify 揭露 root cause:即使 Neely
+看完整 6 年 history(287 monowaves vs 之前 84),Generator 邏輯只取「5 連續 monowaves」
+做 candidate → 5 連續 ≈ 35-50 天 span → **全部仍 SubMinuette degree**。
+
+real fix:對齊 spec §8.6 cross_timeframe_hints + Kalman v3.33 multi-horizon 哲學,
+neely_core 跑 **Daily + Weekly + Monthly 3 個 timeframe**。weekly/monthly 粒度下
+每個 monowave 涵蓋 3-5 週 / 3-6 月 → 5 連續就涵蓋 ~1.5 月 / 1-2 年 → degree 推高到
+Minute / Minor / Intermediate。
+
+### 動工範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/system/tw_cores/src/run_stock_cores.rs` | neely_core block 改 multi-timeframe loop:tf==Daily 入口時自動跑 Daily/Weekly/Monthly 三 timeframe;各自 dispatch_neely 寫獨立 structural_snapshots row(PK 含 timeframe column 自然共存) |
+| `mcp_server/_forecast.py` | `_extract_primary_and_top_scenarios` 跨 timeframe 收集 scenarios + tag `__timeframe__` + 統一 (degree DESC, power DESC, rules DESC) 排序;`_format_primary_scenario` 加 `timeframe` field;加 `_build_neely_by_timeframe` + `_compose_cross_timeframe_summary` 兩 helper;主 return dict 加 `neely_by_timeframe` field |
+| `tests/mcp_server/test_toolkit_v2.py` | `test_returns_required_keys` 加 `neely_by_timeframe` key;加 2 new tests(`test_v3_37_picker_promotes_monthly_minor_over_daily_subminuette` / `test_v3_37_backward_compat_daily_only`)|
+| `CLAUDE.md` | v3.37 章節 |
+
+### 對 3030 預期效果
+
+| Timeframe | monowave 數量 | 平均 span | 5 連續 candidate span | effective_degree |
+|---|---|---|---|---|
+| daily(現有)| ~287 | ~7-8 天 | ~35-50 天 | SubMinuette |
+| weekly(new)| ~50-80 | ~3-5 週 | ~3-4 月 | Minute |
+| monthly(new)| ~15-25 | ~3-6 月 | ~1.5-2.5 年 | **Minor / Intermediate** ✅ |
+
+picker 跨 timeframe 排序後 monthly Minor scenario 自然 promote 到 primary,取代
+daily SubMinuette。MCP output 含完整 `neely_by_timeframe` dict 給 LLM 看跨 timeframe
+一致性 + cross_timeframe_summary 敘述。
+
+### MCP output schema(v3.37 新增)
+
+```python
+{
+    # 既有欄(top-level primary 現在可能來自 monthly / weekly,不必然 daily)
+    "primary_scenario": {
+        "label": "...", "pattern_type": "Impulse",
+        "power_rating": "Bullish", "wave_count": 5,
+        "effective_degree": "Minor",                # 從 daily SubMinuette 變這
+        "wave_span_years": 5.5,                     # 從 0.14 變這
+        "timeframe": "monthly",                     # NEW: 來自哪 timeframe
+    },
+    "invalidation_price": 80.0,                     # 對齊 monthly primary anchor
+    # v3.37 新加
+    "neely_by_timeframe": {
+        "daily":   {"timeframe_present": True,  "scenario_count": 7,
+                    "primary_scenario": {...},   "primary_effective_degree": "SubMinuette"},
+        "weekly":  {"timeframe_present": True,  "scenario_count": 5,
+                    "primary_scenario": {...},   "primary_effective_degree": "Minute"},
+        "monthly": {"timeframe_present": True,  "scenario_count": 2,
+                    "primary_scenario": {...},   "primary_effective_degree": "Minor"},
+        "cross_timeframe_summary":
+            "daily=SubMinuette(7 scenarios) / weekly=Minute(5 scenarios) / monthly=Minor(2 scenarios)",
+    },
+    # 其他既有欄
+    "quality_caveat": {...},                        # 對 3030 多 timeframe 後應 is_usable=True
+    "scenario_staleness": {...},
+}
+```
+
+### 沙箱驗證
+
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release --workspace --no-fail-fast` ✅ **448 passed / 0 failed**
+- `pytest tests/mcp_server/test_toolkit_v2.py::TestV3_35Picker` ✅ **10 passed**(8 v3.35/v3.35.1 + 2 v3.37)
+- `pytest tests/mcp_server/test_toolkit_v2.py::TestNeelyForecastStructure` ✅ **4 passed**(0 regression)
+- `pytest tests/mcp_server/ tests/agg/ tests/cross_cores/` ✅ **185 passed / 1 skipped**(從 183 + 2 new v3.37)
+
+### user 本機 production verify(下輪 session)
+
+```powershell
+git pull
+cd rust_compute
+cargo build --release -p tw_cores
+cd ..
+
+# v3.37 multi-timeframe 對 weekly / monthly 是「首次跑」(之前 weekly/monthly 沒
+# neely structural_snapshots row)→ params_hash 同 daily(timeframe 不在 params_hash 內
+# 序列化 — timeframe 是 structural_snapshots PK 一部分)。
+# 既有 daily neely row 走 ON CONFLICT UPDATE 覆寫(不需 DELETE)
+# 新 weekly / monthly 走 INSERT
+
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+
+# 預期 wall time 加 ~80-100s(neely 從 80s → ~240s,3x);total ~13-15 min
+
+# 驗 multi-timeframe structural_snapshots 存在
+psql $env:DATABASE_URL -c "
+SELECT timeframe, COUNT(*) AS row_count
+FROM structural_snapshots
+WHERE core_name = 'neely_core'
+  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core')
+GROUP BY timeframe
+ORDER BY timeframe;
+"
+# 預期看到 daily / weekly / monthly 三 row(各 ~1266 stocks)
+
+# 驗 3030 monthly scenario span
+psql $env:DATABASE_URL -c "
+SELECT
+  ((s->'wave_tree'->>'end')::date - (s->'wave_tree'->>'start')::date) AS span_days,
+  s->>'power_rating' AS power, s->>'structure_label' AS label
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE stock_id='3030' AND core_name='neely_core'
+  AND timeframe = 'monthly'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE stock_id='3030' AND core_name='neely_core' AND timeframe='monthly')
+ORDER BY span_days DESC LIMIT 5;
+"
+# 預期 top scenario span_days > 730(2 年)
+
+# MCP 對 3030 驗 primary 來自 monthly
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast
+import json
+r = neely_forecast('3030','2026-05-15')
+print('primary timeframe:', r['primary_scenario']['timeframe'])
+print('primary degree:', r['primary_scenario']['effective_degree'])
+print('primary span_years:', r['primary_scenario']['wave_span_years'])
+print('cross_summary:', r['neely_by_timeframe']['cross_timeframe_summary'])
+print('is_usable:', r['quality_caveat']['is_usable'])
+"
+# 預期:primary timeframe = monthly(or weekly)
+#       primary degree = Minor / Intermediate / Primary
+#       primary span_years > 3.0
+#       is_usable = True
+```
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 collector.toml
+- params_hash 不變(timeframe 是 PK 不在 hash);新 weekly/monthly 走 INSERT,既有 daily 走 ON CONFLICT UPDATE
+- backward compat:既有 fixture 只 set daily → weekly/monthly entry timeframe_present=False,既有 4 NeelyForecastStructure tests + 8 v3.35/v3.35.1 picker tests 0 regression
+- Rollback:單 commit `git revert` 即可
+
+🟡 中:
+- **wall time 預估 +20-30%**(neely 80s × 3 = 240s,total ~10 → 13 min)。對齊
+  既有 compaction_timeout 機制,但若 weekly/monthly 對某些股 hit timeout 會看 error
+  summary
+- **monthly 對 newly-listed 股(< 6 yr history)可能 monowave 過少**(< 5 個就無
+  candidate)— graceful fallback(該 timeframe entry timeframe_present=True 但
+  scenario_count=0),不影響 daily
+
+🔴 高:
+- **無**
+
+### 後續(若 verify 揭露問題)
+
+- 若 weekly/monthly Forest_max_size=200 不夠用 → 加 per-timeframe config
+- 若 wall time 爆超(>20 min)→ 改 weekly/monthly 走 dirty queue(只跑 changed stocks)
+- 若 monthly 對短 history 股(IPO < 6 yr)大量噴 timeout → 加 min_bars check
+- 若 monthly primary 真的不出 Minor degree(Ch5 規則仍拒)→ 升 v3.38+ 改 Generator
+  partition logic(違反 spec 但對非標準急漲股可能必要)
+
+---
+
 ## v3.36 — Neely load_for_neely lookback hotfix(2026-05-18)
 
 接 v3.35.1 production verify(commit `25bcbe6`)後 user 跑 monowave_series SQL 揭露
