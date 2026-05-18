@@ -266,6 +266,125 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.35 — Neely-C-MCP picker:invalidation filter + degree-aware ordering(2026-05-18)
+
+接 v3.33 Kalman multi-horizon + v3.34 polish 收尾後,user 拍版動 v3.35+ Neely 修法。
+原 plan 文件提的「Neely-C Three Rounds degree-aware anchor」走 Rust Stage 8.5
+Compaction 改 5+ 天 — 但 Explore agent 揭露 **NEoWave 原書 + m3Spec 採「展示式森林」
+設計**(`output.rs:5-6` 註解明文「Forest 不選 primary,Aggregation Layer 處理」),
+Three Rounds 規格無「Round 2 應 prefer higher-degree」指令,degree promotion 是
+自然收斂結果。
+
+User 拍版走 **A 路線(Neely-C-MCP)** — 不動 Rust Three Rounds,picker 邏輯在 MCP 層,
+工程量 1 天而非 5+ 天,對齊 spec 設計。
+
+### 動工範圍(1 commit / branch `claude/continue-previous-work-xdKrl`,0 Rust 改動)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_forecast.py` | `_extract_primary_and_top_scenarios` 加 `current_price` 參數 + invalidation filter + degree-aware sort;`_format_primary_scenario` 加 `effective_degree` + `wave_span_years` field;`compute_neely_forecast` 把 current_price 提到 picker 之前 |
+| 同檔 helpers | 4 個新 helper:`_compute_scenario_effective_degree`(對齊 Stage 11 §13.3 表)/ `_degree_rank` / `_scenario_is_invalidated` / `_scenario_span_years` / `_parse_iso_date` |
+| `tests/mcp_server/test_toolkit_v2.py` | 加 `TestV3_35Picker` class:5 tests(prefer higher-degree / filter invalidated / all invalidated returns empty / backward compat no wave_tree / weaken-only not filtered)|
+| `CLAUDE.md` | v3.35 章節 |
+
+### 兩個核心 picker 邏輯
+
+**1. Invalidation filter**(只 `InvalidateScenario` action,Weaken/Promote 不算)
+```python
+# bullish scenario PriceBreakBelow(X) + current_price < X → 已破底 → 過濾
+# bearish scenario PriceBreakAbove(X) + current_price > X → 已破頂 → 過濾
+```
+
+**2. Degree-aware ordering**(對齊 NEoWave Stage 11 §13.3 Degree Ceiling 表)
+```python
+# 排序 key: (degree_rank DESC, power_rating_strength DESC, rules_passed_count DESC)
+# degree 從 scenario.wave_tree.start ~ end span_years 推算:
+#   < 1 yr   → SubMinuette  (rank 3)
+#   1-3 yr   → Minute       (rank 5)
+#   3-10 yr  → Minor        (rank 6)
+#   10-30 yr → Primary      (rank 8)
+#   30-100 yr→ Cycle        (rank 9)
+#   > 100 yr → Supercycle   (rank 10)
+```
+
+### 對 3030(德律,8 年漲 8 倍)預期效果
+
+| 場景 | v3.34 picker | v3.35 picker |
+|---|---|---|
+| 多 scenarios 同 Bullish power_rating | 取第一筆(undefined 排序)| degree 拆票 → 取長期 swing(Minor)|
+| 短期 swing IP=126(scenario A,1 月 span,SubMinuette)| primary | rank 3,排次 |
+| 長期主升 IP=80(scenario B,6 年 span,Minor)| 次選 | **rank 6 → primary** |
+| invalidation_price 顯示 | 126.28(已遠落後 current=395) | 80(對齊長期主升底部) |
+
+LLM 看到 primary_scenario:
+- `effective_degree: "Minor"`(而非 SubMinuette)
+- `wave_span_years: 6.3`(而非 0.5)
+- `invalidation_price: 80`(對齊長期主升 anchor,而非近期 swing)
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/test_toolkit_v2.py::TestV3_35Picker` ✅ **5 passed**
+- `pytest tests/mcp_server/test_toolkit_v2.py::TestNeelyForecast*` ✅ **9 既有 passed**(0 regression — 既有 fixture 無 wave_tree → effective_degree=None,fallback 走 power_rating)
+- `pytest tests/mcp_server/ tests/agg/ tests/cross_cores/` ✅ **180 passed / 1 skipped**(從 175 +5 new v3.35 tests)
+- 0 Rust / 0 alembic / 0 collector.toml
+
+### user 本機 production verify(下輪 session)
+
+```powershell
+git pull
+# v3.35 純 Python 改動,不需重編 / 不需 DELETE 資料 / 不需重跑 tw_cores
+# 直接 MCP 對話內測:
+
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast
+import json
+print(json.dumps(neely_forecast('3030','2026-05-15'), ensure_ascii=False, indent=2, default=str))
+"
+# 預期 primary_scenario:
+#   effective_degree = "Minor" or "Primary"(年級 anchor,而非 SubMinuette)
+#   wave_span_years > 3.0
+#   invalidation_price << current_price(對齊長期 anchor 而非近期 swing)
+```
+
+### 對齊 spec 設計
+
+- `output.rs:5-6` 明文「Forest 不選 primary,Aggregation Layer 處理」— picker 落
+  Aggregation Layer 是正確位置
+- spec §Three Rounds(neely_rules.md line 1198-1256)規定 degree promotion 是 Round 1-2
+  迭代自然收斂,**沒有明確「prefer higher-degree」指令** — 此屬 Aggregation 層判讀偏好,
+  不是 Core 邊界職責
+- `output.rs::Degree` enum 對齊 §13.3 Degree Ceiling 表;`degree/mod.rs::classify_degree`
+  既有 Stage 11 logic 是 reference
+
+### 風險
+
+🟢 低:
+- 0 Rust / 0 alembic / 0 collector.toml(純 Python MCP layer)
+- 既有 9 個 Neely tests + ~165 其他 Python tests 0 regression
+- backward compat:既有 fixture 無 wave_tree.start/end → effective_degree=None → fallback 走 power_rating sort(對齊 v3.34 行為)
+- Rollback:單 commit `git revert` 即可
+
+🟡 中:
+- **3030 真實 production verify 需 user 跑**:依賴 Rust 端 scenarios 是否帶不同 wave_tree
+  span 多 candidates。若 production scenario_forest 對 3030 真的只有「近期 swing」候選
+  (Three Rounds 真窮舉沒產長期主升 scenarios),picker 無效 — 那時就是 v3.35+ 才該動
+  Rust Three Rounds(對齊原 plan B 路線)。
+
+🔴 高:
+- **無**
+
+### Out of Scope(留 future)
+
+- **Rust Stage 8.5 真正改 Three Rounds**:對齊原 plan Neely-C(5+ 天)— 若 user
+  production verify 揭露 3030 scenario_forest 真的只有短 span candidates,需動
+- **per-scenario effective_degree 寫進 Rust output**:目前 MCP 算,將來可搬 Rust(對齊
+  Stage 11 §8.6 MonowaveSummary 同款 surface to Aggregation pattern)
+- **picker 對 weaken/promote triggers 的處理**:目前只看 InvalidateScenario;
+  WeakenScenario 可加 power_rating penalty(-1 級)— v3.36 議題
+
+---
+
 ## v3.34 — Kalman polish:short threshold + deviation_sigma floor(2026-05-18)
 
 接 v3.33 production verify(commit `ab067a5` push 後)user 跑 4-horizon 對 3030 / 2330

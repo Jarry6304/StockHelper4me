@@ -829,6 +829,176 @@ class TestNeelyForecastPayloadSize:
         )
 
 
+# ════════════════════════════════════════════════════════════
+# v3.35 Neely-C-MCP picker:invalidation filter + degree-aware ordering
+# ════════════════════════════════════════════════════════════
+
+def _scenario_with_dates(
+    *, scenario_id: str, power_rating: str, start: str, end: str,
+    rules_passed: int = 5, invalidation_below: float = 0.0,
+) -> dict:
+    """Helper:對齊 _bullish_scenario_fixture 但帶 wave_tree.start/end 給 degree 推算。"""
+    return {
+        "id": scenario_id,
+        "pattern_type": "Impulse",
+        "power_rating": power_rating,
+        "structure_label": f"5-wave from {start} to {end}",
+        "rules_passed_count": rules_passed,
+        "max_retracement": 0.80,
+        "expected_fib_zones": [
+            {"label": "fib_0.382", "low": 1100.0, "high": 1150.0, "source_ratio": 0.382},
+            {"label": "fib_0.618", "low": 1180.0, "high": 1220.0, "source_ratio": 0.618},
+            {"label": "fib_1.000", "low": 1300.0, "high": 1360.0, "source_ratio": 1.000},
+        ],
+        "invalidation_triggers": [
+            {
+                "trigger_type": {"PriceBreakBelow": invalidation_below},
+                "on_trigger": "InvalidateScenario",
+                "rule_reference": "R1",
+                "neely_page": "Ch3 p.3-12",
+            },
+        ],
+        "wave_tree": {
+            "label": scenario_id,
+            "start": start,
+            "end": end,
+            "children": [],
+        },
+    }
+
+
+class TestV3_35Picker:
+    """v3.35:invalidation filter + degree-aware ordering 對齊 NEoWave 展示式森林設計。"""
+
+    def test_picker_prefers_higher_degree_when_power_equal(self, monkeypatch):
+        """3030 case:2 個 Bullish scenarios,1 個 5 年 span(Minor)/ 1 個 6 月 span(SubMinuette)
+        應選 5 年 span 為 primary(degree 拆票 power_rating 同分)。"""
+        short_span = _scenario_with_dates(
+            scenario_id="short_recent",
+            power_rating="Bullish",
+            start="2025-11-01", end="2026-05-01",     # ~6 月 → SubMinuette
+            invalidation_below=120.0,
+        )
+        long_span = _scenario_with_dates(
+            scenario_id="long_secular",
+            power_rating="Bullish",
+            start="2020-01-01", end="2026-05-01",     # ~6 年 → Minor
+            invalidation_below=80.0,
+        )
+        _patch_agg_as_of_with_neely(
+            monkeypatch, scenarios=[short_span, long_span],
+            latest_close={"close": 395.0, "change_pct": 2.0, "prev_close": 387.0},
+        )
+        result = data_tools.neely_forecast("3030", "2026-05-15")
+        # primary 應是 long_secular(Minor degree)而非 short_recent(SubMinuette)
+        primary = result["primary_scenario"]
+        assert primary["effective_degree"] == "Minor", \
+            f"primary 應是 Minor degree(長期 span),實際 {primary['effective_degree']}"
+        assert "2020-01-01" in primary["label"]
+        # invalidation_price 應是 80.0(long_secular)而非 120.0(short_recent)
+        assert result["invalidation_price"] == 80.0
+        # wave_span_years ~6
+        assert primary["wave_span_years"] is not None
+        assert 5.5 < primary["wave_span_years"] < 7.0
+
+    def test_picker_filters_invalidated_bullish_scenario(self, monkeypatch):
+        """Bullish scenario invalidation_price=500,current_price=400 < 500 → invalidated → 過濾掉。"""
+        invalidated = _scenario_with_dates(
+            scenario_id="dead_scenario",
+            power_rating="StrongBullish",       # power 最強但已失效
+            start="2025-01-01", end="2026-04-01",
+            invalidation_below=500.0,
+        )
+        alive = _scenario_with_dates(
+            scenario_id="alive_scenario",
+            power_rating="Bullish",
+            start="2025-01-01", end="2026-04-01",
+            invalidation_below=100.0,
+        )
+        _patch_agg_as_of_with_neely(
+            monkeypatch, scenarios=[invalidated, alive],
+            latest_close={"close": 400.0, "change_pct": 1.0, "prev_close": 396.0},
+        )
+        result = data_tools.neely_forecast("TEST", "2026-05-15")
+        # invalidated 應被過濾 → primary 是 alive(雖然 power 較弱但 IP=100 未失效)
+        # invalidation_price 來自 alive(100.0)是最直接證據
+        assert result["invalidation_price"] == 100.0
+        # scenario_count = 1(只 alive 留下)
+        assert result["scenario_count"] == 1
+        # primary power_rating = Bullish(alive,非 StrongBullish)
+        assert result["primary_scenario"]["power_rating"] == "Bullish"
+
+    def test_picker_returns_empty_when_all_invalidated(self, monkeypatch):
+        """所有 scenarios 都被 invalidation filter 過濾 → primary=None。"""
+        dead1 = _scenario_with_dates(
+            scenario_id="dead_1", power_rating="Bullish",
+            start="2025-01-01", end="2026-04-01",
+            invalidation_below=500.0,
+        )
+        dead2 = _scenario_with_dates(
+            scenario_id="dead_2", power_rating="StrongBullish",
+            start="2025-01-01", end="2026-04-01",
+            invalidation_below=450.0,
+        )
+        _patch_agg_as_of_with_neely(
+            monkeypatch, scenarios=[dead1, dead2],
+            latest_close={"close": 400.0, "change_pct": 1.0, "prev_close": 396.0},
+        )
+        result = data_tools.neely_forecast("TEST", "2026-05-15")
+        # primary_scenario 走 _format_primary_scenario(None) → power_rating="Neutral"
+        assert result["primary_scenario"]["power_rating"] == "Neutral"
+        assert result["primary_scenario"]["effective_degree"] is None
+        assert result["scenario_count"] == 0
+
+    def test_v3_35_backward_compat_no_wave_tree_dates(self, monkeypatch):
+        """既有 fixture 沒 wave_tree → effective_degree=None,picker fallback 走 power_rating。
+
+        對齊既有 9 個 Neely tests 0 regression。
+        """
+        # _bullish_scenario_fixture() 沒帶 wave_tree
+        _patch_agg_as_of_with_neely(monkeypatch, scenarios=[_bullish_scenario_fixture()])
+        result = data_tools.neely_forecast("2330", "2026-05-13")
+        # 應 work,但 effective_degree=None
+        assert result["primary_scenario"]["effective_degree"] is None
+        assert result["primary_scenario"]["wave_span_years"] is None
+        # 其他 field 正常(對齊既有 test_returns_required_keys)
+        assert result["primary_scenario"]["power_rating"] == "Bullish"
+
+    def test_picker_invalidation_filter_only_acts_on_invalidate_action(self, monkeypatch):
+        """OnTriggerAction == WeakenScenario 不視為失效(只 InvalidateScenario 會過濾)。"""
+        weaken_only = {
+            "id": "weaken_only",
+            "pattern_type": "Impulse",
+            "power_rating": "Bullish",
+            "structure_label": "5-wave",
+            "rules_passed_count": 5,
+            "max_retracement": 0.80,
+            "expected_fib_zones": [],
+            "invalidation_triggers": [
+                {
+                    "trigger_type": {"PriceBreakBelow": 500.0},
+                    "on_trigger": "WeakenScenario",   # 不是 InvalidateScenario
+                    "rule_reference": "R2",
+                    "neely_page": "...",
+                },
+            ],
+            "wave_tree": {
+                "label": "weaken_only",
+                "start": "2024-01-01", "end": "2026-04-01",
+                "children": [],
+            },
+        }
+        _patch_agg_as_of_with_neely(
+            monkeypatch, scenarios=[weaken_only],
+            latest_close={"close": 400.0, "change_pct": 1.0, "prev_close": 396.0},
+        )
+        result = data_tools.neely_forecast("TEST", "2026-05-15")
+        # current 400 < 500 但 trigger 是 WeakenScenario,不過濾
+        assert result["scenario_count"] == 1
+        # primary 仍是 weaken_only(power Bullish + 唯一 scenario)
+        assert result["primary_scenario"]["power_rating"] == "Bullish"
+
+
 class TestPayloadSize:
     """Plan §Verify 第 §payload size 要求:每 tool < 5K tokens / chain < 15K。"""
 

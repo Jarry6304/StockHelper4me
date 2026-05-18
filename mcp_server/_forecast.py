@@ -13,11 +13,22 @@
 - 4 時間框架 fib ratio scaling 寫死(plan §Tool 1 第 2 點)
 - prob_up 公式寫死 constants(對齊 NEELY constants 寫死慣例)
 - 跨 cores 加權算機率 = Aggregation Layer 整合層責任(cores_overview §10.0)
+
+v3.35(2026-05-18)Neely-C-MCP picker upgrade:
+- Picker 加 invalidation filter(scenario PriceBreakBelow > current_price 或
+  PriceBreakAbove < current_price 視為失效,過濾掉)
+- Picker 排序加 degree-aware preference:(effective_degree DESC,power_rating DESC,
+  rules_passed_count DESC)。3030 case 短期 swing scenario 與長期主升 scenario
+  power_rating 同 → 改 degree 優先 → primary 變長期主升 corrective phase。
+- effective_degree 從 scenario.wave_tree.start/end 推算(對齊 Stage 11 Degree
+  Ceiling 表 m3Spec/neely_core_architecture.md §13.3)。
+- 對齊 spec「展示式森林」設計(output.rs:5-6 註解):picker 在 Aggregation Layer,
+  Rust Core 不選 primary。
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 # ────────────────────────────────────────────────────────────
@@ -90,18 +101,20 @@ def compute_neely_forecast(
         database_url=database_url,
     )
 
-    # 1. Primary scenario 從 neely structural 抽
-    primary, all_scenarios = _extract_primary_and_top_scenarios(snapshot, limit=5)
+    # 1. Current price(v3.26 修:直讀 price_daily;v3.35 提前到 picker 之前,
+    #    讓 picker 用 current_price 做 invalidation filter)
+    from mcp_server._price import fetch_latest_close_for_tool
+    price_info = fetch_latest_close_for_tool(stock_id, as_of, database_url=database_url)
+    current_price = price_info["close"] if price_info else _extract_current_price(snapshot)
+
+    # 2. Primary scenario:v3.35 picker 走 invalidation filter + degree-aware ordering
+    primary, all_scenarios = _extract_primary_and_top_scenarios(
+        snapshot, current_price=current_price, limit=5,
+    )
 
     # v3.28(2026-05-17):scenario_forest staleness check — neely_core 沒重 backfill
     # 時 invalidation_price 等欄會是過期 anchor;surface 給 LLM 知道
     scenario_staleness = _compute_scenario_staleness(snapshot, as_of)
-
-    # 2. Current price(v3.26 修:直讀 price_daily;原本走 ma_core series 但 relevant_cores
-    #    沒含 ma_core → 永遠 fallback 0.0;改 DB 直撈)
-    from mcp_server._price import fetch_latest_close_for_tool
-    price_info = fetch_latest_close_for_tool(stock_id, as_of, database_url=database_url)
-    current_price = price_info["close"] if price_info else _extract_current_price(snapshot)
 
     # 3. 4 時間框架價位區間
     forecasts = _build_forecasts(primary, current_price, snapshot, as_of)
@@ -172,8 +185,26 @@ def _compute_scenario_staleness(snapshot, as_of: date) -> dict[str, Any]:
 # Internal helpers
 # ────────────────────────────────────────────────────────────
 
-def _extract_primary_and_top_scenarios(snapshot, *, limit: int = 5) -> tuple[dict | None, list[dict]]:
-    """從 structural['neely_core@daily'] 取 scenario_forest,by power_rating 排序取 top-N。"""
+def _extract_primary_and_top_scenarios(
+    snapshot, *, current_price: float | None = None, limit: int = 5,
+) -> tuple[dict | None, list[dict]]:
+    """從 structural['neely_core@daily'] 取 scenario_forest,picker 選 primary。
+
+    v3.35 picker upgrade(對齊 NEoWave 展示式森林設計 + 解 3030 user bug):
+      1. 若 current_price 提供 → invalidation filter:
+         - 過 PriceBreakBelow > current_price(bullish scenario 已破底)
+         - 過 PriceBreakAbove < current_price(bearish scenario 已破頂)
+         - 只 filter OnTriggerAction == InvalidateScenario(WeakenScenario 保留)
+      2. 排序:(effective_degree DESC, power_rating DESC, rules_passed_count DESC)
+         - degree 從 wave_tree.start / end span 推算(對齊 Stage 11 §13.3)
+         - 解決 3030 case:短期 swing vs 長期主升 power_rating 同 → degree 拆票
+
+    v3.35 之前(v3.4 ~ v3.34):只 (power_rating, rules_count) 排序,無 invalidation filter,
+    無 degree-aware preference;3030 user 看到短期 swing 當 primary,IP=126.28 過舊。
+
+    Args:
+        current_price: 若 None,跳過 invalidation filter(向下相容 unit test)
+    """
     structural = snapshot.structural
     neely_row = None
     for key, row in structural.items():
@@ -188,16 +219,147 @@ def _extract_primary_and_top_scenarios(snapshot, *, limit: int = 5) -> tuple[dic
     if not isinstance(scenarios, list) or not scenarios:
         return None, []
 
-    # 排序:power_rating 絕對值大 → 強訊號 / passed_rules_count 多 → 可信度高
-    def _score(s: dict) -> tuple[int, int]:
+    # v3.35 step 1:invalidation filter(若 current_price 可用)
+    if current_price is not None and current_price > 0:
+        scenarios = [
+            s for s in scenarios
+            if not _scenario_is_invalidated(s, current_price)
+        ]
+        if not scenarios:
+            return None, []
+
+    # v3.35 step 2:degree-aware ordering
+    def _score(s: dict) -> tuple[int, int, int]:
+        degree_rank = _degree_rank(_compute_scenario_effective_degree(s))
         pr_strength = _power_rating_strength(s.get("power_rating"))
         rules_count = int(s.get("rules_passed_count") or 0)
-        return (pr_strength, rules_count)
+        return (degree_rank, pr_strength, rules_count)
 
     sorted_scenarios = sorted(scenarios, key=_score, reverse=True)
     top = sorted_scenarios[:limit]
     primary = top[0] if top else None
     return primary, top
+
+
+# ────────────────────────────────────────────────────────────
+# v3.35 picker helpers — degree-aware preference + invalidation filter
+# ────────────────────────────────────────────────────────────
+
+# Degree label → rank(Stage 11 §13.3 表 + spec output.rs::Degree enum 順序)。
+# 較大 degree → 較高 rank → 排序時優先。
+_DEGREE_RANK: dict[str, int] = {
+    "GrandSupercycle": 11,
+    "Supercycle":      10,
+    "Cycle":            9,
+    "Primary":          8,
+    "Intermediate":     7,
+    "Minor":            6,
+    "Minute":           5,
+    "Minuette":         4,
+    "SubMinuette":      3,
+    "Micro":            2,
+    "SubMicro":         1,
+}
+
+
+def _degree_rank(degree_label: str | None) -> int:
+    """Degree string → 整數 rank。None / 未知 → 0(fallback 不影響其他 sort key)。"""
+    if not degree_label:
+        return 0
+    return _DEGREE_RANK.get(degree_label, 0)
+
+
+def _compute_scenario_effective_degree(
+    scenario: dict, *, timeframe: str = "daily",
+) -> str | None:
+    """對齊 Stage 11 §13.3 Degree Ceiling 表,從 scenario.wave_tree.start/end 推算 degree。
+
+    Daily 閾值(spec rust degree/mod.rs::classify_degree):
+      - < 1 年   → SubMinuette
+      - 1-3 年   → Minute
+      - 3-10 年  → Minor
+      - 10-30 年 → Primary
+      - 30-100 年→ Cycle
+      - > 100 年 → Supercycle
+
+    Weekly / Monthly / Quarterly 走相同年數區間(spec timeframe 已轉成年級判定)。
+
+    Returns:
+        Degree string(對齊 Rust output.rs::Degree enum)or None(wave_tree.start/end 缺失)
+    """
+    wave_tree = scenario.get("wave_tree") or {}
+    start_str = wave_tree.get("start")
+    end_str   = wave_tree.get("end")
+    if not start_str or not end_str:
+        return None
+
+    try:
+        start = _parse_iso_date(start_str)
+        end   = _parse_iso_date(end_str)
+    except (ValueError, TypeError):
+        return None
+
+    if end < start:
+        return None
+    span_years = (end - start).days / 365.25
+
+    if span_years < 1.0:
+        return "SubMinuette"
+    if span_years < 3.0:
+        return "Minute"
+    if span_years < 10.0:
+        return "Minor"
+    if span_years < 30.0:
+        return "Primary"
+    if span_years < 100.0:
+        return "Cycle"
+    return "Supercycle"
+
+
+def _parse_iso_date(s: str | Any) -> date:
+    """ISO date string → date object(包含 date object pass-through)。"""
+    if isinstance(s, date):
+        return s
+    return datetime.fromisoformat(str(s)).date()
+
+
+def _scenario_is_invalidated(scenario: dict, current_price: float) -> bool:
+    """v3.35:檢查 scenario 是否已被 current_price 觸發 InvalidateScenario trigger。
+
+    對齊 Rust triggers/mod.rs:
+      - PriceBreakBelow(price): bullish scenario 跌破 price → invalidated
+      - PriceBreakAbove(price): bearish scenario 漲破 price → invalidated
+
+    只看 OnTriggerAction == "InvalidateScenario"(WeakenScenario / PromoteAlternative 不算)。
+    """
+    triggers = scenario.get("invalidation_triggers") or []
+    for t in triggers:
+        action = t.get("on_trigger")
+        # serde tagged enum 可能是 dict 或 str
+        if isinstance(action, dict):
+            action = next(iter(action.keys()), None)
+        if action != "InvalidateScenario":
+            continue
+
+        trigger_type = t.get("trigger_type")
+        if not isinstance(trigger_type, dict):
+            continue
+
+        if "PriceBreakBelow" in trigger_type:
+            try:
+                threshold = float(trigger_type["PriceBreakBelow"])
+                if current_price < threshold:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        elif "PriceBreakAbove" in trigger_type:
+            try:
+                threshold = float(trigger_type["PriceBreakAbove"])
+                if current_price > threshold:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
 
 
 def _power_rating_strength(rating: Any) -> int:
@@ -241,13 +403,19 @@ def _power_rating_label(rating: Any) -> str:
 
 
 def _format_primary_scenario(scenario: dict | None) -> dict[str, Any]:
-    """壓縮 primary scenario 成最小 LLM-friendly 摘要(避免回 raw scenario blob)。"""
+    """壓縮 primary scenario 成最小 LLM-friendly 摘要(避免回 raw scenario blob)。
+
+    v3.35 加 `effective_degree` + `wave_span_years`(picker 用)— LLM 看 primary 是
+    哪個 degree 級的 scenario(對 3030 預期看到 Minor / Primary,而非 SubMinuette)。
+    """
     if scenario is None:
         return {
-            "label":        None,
-            "pattern_type": None,
-            "power_rating": "Neutral",
-            "wave_count":   0,
+            "label":              None,
+            "pattern_type":       None,
+            "power_rating":       "Neutral",
+            "wave_count":         0,
+            "effective_degree":   None,
+            "wave_span_years":    None,
         }
     pattern_type = scenario.get("pattern_type")
     if isinstance(pattern_type, dict):
@@ -258,7 +426,6 @@ def _format_primary_scenario(scenario: dict | None) -> dict[str, Any]:
         pattern_label = "Unknown"
 
     # v3.28 修(2026-05-17):wave_count 從 structure_label parse(`"5-wave from mw27..."`)
-    # 原 `rules_passed_count` 是「通過 Neely 規則數」非波浪數,user bug report 揭露錯誤
     label = scenario.get("structure_label") or scenario.get("id") or ""
     wave_count = 0
     import re
@@ -266,12 +433,35 @@ def _format_primary_scenario(scenario: dict | None) -> dict[str, Any]:
     if m:
         wave_count = int(m.group(1))
 
+    # v3.35:degree + span surface
+    degree = _compute_scenario_effective_degree(scenario)
+    span_years = _scenario_span_years(scenario)
+
     return {
-        "label":        label or None,
-        "pattern_type": pattern_label,
-        "power_rating": _power_rating_label(scenario.get("power_rating")),
-        "wave_count":   wave_count,
+        "label":              label or None,
+        "pattern_type":       pattern_label,
+        "power_rating":       _power_rating_label(scenario.get("power_rating")),
+        "wave_count":         wave_count,
+        "effective_degree":   degree,
+        "wave_span_years":    round(span_years, 2) if span_years is not None else None,
     }
+
+
+def _scenario_span_years(scenario: dict) -> float | None:
+    """scenario.wave_tree.start ~ end 年數(LLM-friendly,_format_primary_scenario 用)。"""
+    wave_tree = scenario.get("wave_tree") or {}
+    start_str = wave_tree.get("start")
+    end_str = wave_tree.get("end")
+    if not start_str or not end_str:
+        return None
+    try:
+        start = _parse_iso_date(start_str)
+        end = _parse_iso_date(end_str)
+    except (ValueError, TypeError):
+        return None
+    if end < start:
+        return None
+    return (end - start).days / 365.25
 
 
 def _extract_current_price(snapshot) -> float:
