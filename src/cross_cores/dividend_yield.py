@@ -150,7 +150,7 @@ def run(
         # Hard filter
         excluded_reason: str | None = None
         if y < MIN_YIELD_PCT:
-            excluded_reason = "yield_below_4pct"
+            excluded_reason = "yield_below_threshold"   # MIN_YIELD_PCT(v3.32 已 3.0%)
         elif ret_12m is None or ret_12m < MAX_12M_DROP:
             excluded_reason = "yield_trap_falling_knife"
         elif years < MIN_PAYOUT_YEARS_5Y:
