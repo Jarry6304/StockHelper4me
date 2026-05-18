@@ -258,6 +258,34 @@ class TestKalmanTrend:
         assert result["regime"] is None
         assert "無 kalman_filter_core 資料" in result["narrative"]
 
+    def test_v3_30_reads_series_last_entry(self, monkeypatch):
+        """v3.30:Rust 寫入 `{stock_id, series: [...KalmanPoint], events}`,最新
+        state 在 `series[-1]`。原本 `val.get("smoothed_price")` 讀頂層 → 永遠 0
+        (production 2330 bug)。
+
+        確認:value.series[-1] 提供值 + 頂層無欄位 → 正確讀 latest state。
+        """
+        production_schema_value = {
+            "stock_id": "2330",
+            "timeframe": "Daily",
+            "series": [
+                {"date": "2026-05-13", "raw_close": 2200.0, "smoothed_price": 2180.0,
+                 "uncertainty": 12.0, "velocity": 0.5, "regime": "StableUp"},
+                {"date": "2026-05-14", "raw_close": 2230.0, "smoothed_price": 2200.0,
+                 "uncertainty": 11.5, "velocity": 0.6, "regime": "StableUp"},
+                {"date": "2026-05-15", "raw_close": 2265.0, "smoothed_price": 2225.0,
+                 "uncertainty": 11.0, "velocity": 0.7, "regime": "Accelerating"},
+            ],
+            "events": [],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=production_schema_value)
+        result = data_tools.kalman_trend("2330", "2026-05-15", lookback_days=180)
+        # 應該讀 series[-1] 的 2225 / 11.0 / 0.7 / Accelerating(不是頂層 missing → 0)
+        assert result["smoothed_price"] == 2225.0
+        assert result["uncertainty_band"] == [2214.0, 2236.0]
+        assert result["trend_velocity"] == 0.7
+        assert result["regime"] == "Accelerating"
+
     def test_payload_size_bounded(self, monkeypatch):
         _patch_agg_as_of(
             monkeypatch,

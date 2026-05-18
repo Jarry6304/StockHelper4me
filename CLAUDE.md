@@ -252,6 +252,130 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.30 — kalman series-last-entry read + render tools 暫隱藏(2026-05-17)
+
+接 v3.29 後 user 對 2330 跑完 9 個 MCP tool verify,揭露 2 個獨立 issue:
+
+### Bug A:`kalman_trend` 對 2330 smoothed/velocity/uncertainty 全 0
+
+**User 觀察**:
+- `current_price = 2265` ✅(v3.26 修法,price_daily 直撈)
+- `smoothed_price = 0` / `velocity = 0` / `uncertainty_band = [0, 0]` ❌
+
+**Root cause**:Rust `dispatch_indicator` 序列化整個 `KalmanFilterOutput` 寫進
+`indicator_values.value`,JSON 形如:
+```json
+{
+  "stock_id": "2330",
+  "timeframe": "Daily",
+  "series": [...每天 1 個 KalmanPoint...],
+  "events": [...]
+}
+```
+
+但 `mcp_server/_kalman.py` 自 v3.4 起讀 `val.get("smoothed_price")` 走頂層,
+production schema 頂層**沒有** `smoothed_price` 欄(這在 `series[-1]` 內)→
+所有數值 fallback 0,regime 永遠 `Sideway`。
+
+**屬 v3.4 自始就有的 silent bug**,因為:
+1. test fixture 一直 pass 頂層 schema(`{smoothed_price: ..., ...}`)→ 測試永遠綠
+2. production 行為「regime=Sideway / velocity=0」看起來像「停在盤整」合理
+3. 3030 / 2330 都中,但「stale data」推論掩蓋了 path bug 本質
+
+**修法**(`mcp_server/_kalman.py`):
+```python
+series = val.get("series") or []
+latest_state = series[-1] if series else val   # 頂層 fallback 保留給 test fixtures
+
+smoothed_price = float(latest_state.get("smoothed_price") or 0.0)
+velocity       = float(latest_state.get("velocity") or 0.0)
+uncertainty    = float(latest_state.get("uncertainty") or 0.0)
+regime         = str(latest_state.get("regime") or "Sideway")
+```
+
+向下相容:既有 4 test fixture(頂層 schema)走 fallback 路徑,0 regression。
+新 production schema(`series` 陣列)直接讀 `series[-1]`。
+
+### Bug B:6 個 render tools 全 silent fail(暫隱藏)
+
+**User 觀察**:`render_kline / render_chip / render_fundamental /
+render_environment / render_neely / render_facts_cloud` 6 支全部回:
+```
+outputSchema defined but no structured output returned
+```
+
+PNG 後端生成 pipeline silent fail。Function 仍可從 Python 直接呼叫(dashboard
+用),只是 MCP wrapper 拿不到 structured output → schema validation 炸。
+
+**處置**(`mcp_server/server.py`):
+- 暫註解 6 個 `mcp.tool(_render_tools.*)` 註冊
+- import line 也註解(避免 module load fail 影響 server 啟動)
+- 修好 PNG pipeline 後解開 6 行即可
+- functions 仍留在 `mcp_server.tools.render` — 不刪除
+
+**MCP toolkit 從 15 → 9 public tools**(暫時),修好 render 後 → 15。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/_kalman.py` | `series[-1]` 優先 + 頂層 fallback,4 個 state field 改讀 latest_state |
+| `mcp_server/server.py` | 6 個 render tool registration + import 註解;instructions 中文段 + docstring 同步更新 |
+| `tests/mcp_server/test_toolkit_v3.py` | 加 `test_v3_30_reads_series_last_entry`(production schema 對 2225 / 11.0 / 0.7 / Accelerating 應命中)|
+| `CLAUDE.md` | v3.30 章節 |
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/test_toolkit_v3.py::TestKalmanTrend` ✅ **5 passed**
+  (4 既有頂層 fixture + 1 new series schema)
+- `pytest tests/mcp_server/ tests/agg/ --ignore=test_render_tools` ✅
+  **117 passed / 1 skipped**(從 116 + 1 new)
+- 0 Rust / 0 alembic / 0 collector.toml(純 MCP layer fix + tool hide)
+
+### user 下次 session 自動套用
+
+```powershell
+git pull
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import kalman_trend
+import json
+print(json.dumps(kalman_trend('2330','2026-05-15'), ensure_ascii=False, indent=2, default=str))
+"
+# 應該看到:
+#   smoothed_price ~= 最新 series[-1] 平滑值(對 2330 約 ~2200-2260 區間)
+#   velocity ≠ 0(實際 Kalman 速度)
+#   uncertainty_band ≠ [0, 0](smoothed ± uncertainty)
+#   regime ≠ Sideway(若 2330 實際是 Accelerating / StableUp)
+```
+
+MCP Claude Desktop 重啟後,render tool 不再出現在工具清單(toolkit 從 15 → 9)。
+
+### Out of scope(留 future)
+
+- **Neely 2330 Fibonacci 839-997 vs current 2265 偏離**:user 觀察「情境顯然
+  是舊資料」,但 Neely scenario_forest 是 anchor 在「最後一個 major pivot」,
+  2330 從 2022 ~600 漲到 2026 2265 — 若 model 抓的 active pattern 起點是 2022,
+  Fibonacci 投影自然落在當時 retrace 區間。**屬模型行為,非路徑 bug**(對齊
+  output.rs `Scenario::expected_fib_zones` schema 確認)。v3.28 staleness 修法
+  已 surface;user 看 `scenario_staleness.is_stale` 即可判斷模型是否需重跑。
+- **render PNG pipeline 修復**:屬 dashboards 視覺化工程,本 PR 不動。修好後
+  解開 server.py 6 行 + import 即可恢復。
+- **更全面 indicator JSON path audit**:對齊 production 寫入慣例
+  (Rust `dispatch_indicator` 序列化整個 Output 結構),可 audit 其他 indicator
+  core 的 `_*.py` helper 是否同款讀錯路徑。
+
+### 風險
+
+🟢 低:
+- 純 1 函式 path 修正 + tool 註冊註解
+- 既有頂層 schema fallback 保證 4 個既有 test fixture 0 regression
+- 0 Rust / 0 alembic / 0 collector.toml / 0 dashboards
+- render functions 仍留模組內,dashboards 不受影響
+- Rollback:單 commit `git revert` 即可
+
+---
+
 ## v3.29 — risk_alert severity parser:`處置` / `注意` broad pattern(2026-05-17)
 
 接 v3.28 production verify(`tw_cores run-all --write` 重算 + Neely / Kalman
