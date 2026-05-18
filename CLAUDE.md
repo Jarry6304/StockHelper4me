@@ -13,12 +13,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores)。
 
-- **alembic head**:`c8d9e0f1g2h3`(v3.21 加 3 張 Silver derived:loan_collateral / block_trade / commodity_macro)
+- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;前 head `c8d9e0f1g2h3` v3.21 Silver derived)
 - **開發分支**:`claude/continue-previous-work-xdKrl` → 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **443 passed / 0 failed**
-- **MCP toolkit**:**9 public tools**(v3 5 + v3.22 4 new:loan_collateral / block_trade / risk_alert / commodity_macro)
+- **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens:`monthly_screen` / `quarterly_screen` / `annual_low_risk_screen` / `monthly_trigger_scan`)
 - **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**(7/7 over-fired EventKind = 6 校準 + 1 accepted baseline,v3.24 production verify:LoanCategoryConcentration 125.69 → 1.16/yr ✅,commodity_macro 0 → 105 events ✅)
+
+---
+
+## 2026-05-18 整日 verify chain(快速入口)
+
+今日 4 commit 全部 push 上 `claude/continue-previous-work-xdKrl`:
+- **v3.29** `4184d04` risk_alert `_parse_severity` 加 `處置 / 注意` broad pattern
+- **v3.30** `7f8d877` Kalman series-last-entry path fix + render tools 暫隱藏
+- **v3.31** `7b2eb98` MCP toolkit 9 → 4 consolidation(stock_snapshot)+ Kalman/Neely verify pipeline
+- **v3.32** `a365240` 10 new cross_cores builders + 4 MCP toolkit screens
+
+完整 verify chain 走 6 phase。**Phase A SQL diagnostic 是 blocking**(v3.32 F-Score
++ industry_adj_gp + dividend_yield 都需先確認 Bronze 資料);若 Phase A 全綠才走
+Phase B-F。詳見下方 §「下班後 verify 流水線」段(可從 git pull 直接拉這個版本看)。
 
 ---
 
@@ -249,6 +263,319 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v3.32 — 10 new cross_cores factor builders + 4 MCP toolkit screens(2026-05-18)
+
+接 v3.31 後 user 提出量化因子選型提案 v1.1(4 輪辯證後),要求 11 個 factor 落
+Layer 2.5 cross_cores + 4 個高 level MCP toolkit screen wrapper(對齊提案 §六)。
+
+### 動工拍版(2026-05-18)
+
+| 範圍 | 數量 |
+|---|---|
+| 新 cross_cores builders(magic_formula 已 done)| **10**(`persistent_momentum` / `revenue_momentum` / `institutional_concert` / `f_score` / `low_volatility` / `industry_adj_gp` / `long_term_low_vol` / `dividend_yield` / `mom_12_1` / `monthly_trigger`)|
+| alembic migration | **1**(`d9e0f1g2h3i4` 加 10 張表)|
+| 新 MCP toolkit screens(對齊提案 §六)| **4**(`monthly_screen` / `quarterly_screen` / `annual_low_risk_screen` / `monthly_trigger_scan`)|
+| MCP 暴露 toolkit 總數 | **8**(v3.31 4 + v3.32 4)|
+
+### 4 個 sub-toolkit 結構(對齊提案 §四)
+
+| Toolkit | 換倉頻率 | Builders | MCP wrapper |
+|---|---|---|---|
+| A(monthly)| 月 | persistent_momentum + revenue_momentum + institutional_concert + vol overlay | `monthly_screen(date, top_n)` |
+| B(quarterly)| 季 | f_score + low_volatility + industry_adj_gp | `quarterly_screen(date, top_n)` |
+| C(annual)| 年 | long_term_low_vol + dividend_yield + mom_12_1 | `annual_low_risk_screen(date, top_n)` |
+| Layer 5(monthly overlay)| 月 | monthly_trigger | `monthly_trigger_scan(date)` |
+
+### 設計細節
+
+- **0 Rust / 0 collector.toml**(純 Python builders + alembic + MCP wrappers + tests)
+- 既有 `CrossStockBuilder` Protocol 0 改動(magic_formula 是 template)
+- 共用 helper `src/cross_cores/_shared.py`(`fetch_universe_filter` / `assign_ranks` /
+  `compute_std` / `compute_returns_from_closes` / `fetch_close_series` 等)減少 10 個
+  builder 的 boilerplate
+- universe filter 對齊 magic_formula EXCLUDED_KEYWORDS + 加 `delisting_date IS NULL`
+  防 survivorship bias
+- F-Score 9 條件對齊 Piotroski 2000(放寬 ≥ 7 為 strong winner,對齊提案 v1.1)
+- Industry-Adj GP:per-industry median 減算(Asness-Frazzini-Pedersen QMJ 2014 conditional sort 概念)
+- Dividend Yield:三 hard filter(殖利率 ≥ 4% / 12M 報酬 > -20% / 5y ≥ 3y 配息)
+  + soft rank(殖利率高的好);yield trap 防護對齊提案 v1.1
+- Vol-managed overlay:per-stock 6M realized vol > 跨股均值 × 1.5 → detail.vol_managed_scale = 0.5
+  (Barroso-Santa-Clara 2015 JFE);非 hard cutoff,LLM 看 detail hint 自己判斷
+
+### 學術根據(提案 §十二 完整 reference list)
+
+- **A+ 等級**(台股本土 peer-reviewed):Chen-Chou-Hsieh 2023 JFM / Hung-Lu-Yang 2025 RQFA
+- **A 等級**(國際 OOS 含亞洲):Piotroski 2000 + Walkshäusl 2020 / Ang 2009 JFE /
+  Novy-Marx 2013 / Blitz-van Vliet 2007 / Boudoukh 2007 / Jegadeesh-Titman 1993
+- **B 等級**(risk overlay):Barroso-Santa-Clara 2015 / Daniel-Moskowitz 2016 momentum crash
+- **C 等級**(工程設計):Layer 5 trigger 架構 / 權重比例 / 過濾門檻
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `alembic/versions/2026_05_18_d9e0f1g2h3i4_v3_32_10_cross_cores_tables.py`(新)| 10 張 `*_ranked_derived` + 1 張 `monthly_trigger_signals_derived` 表 |
+| `src/cross_cores/_shared.py`(新)| universe filter / rank assign / std / returns / close series 共用 helper |
+| `src/cross_cores/{persistent_momentum,revenue_momentum,institutional_concert,f_score,low_volatility,industry_adj_gp,long_term_low_vol,dividend_yield,mom_12_1,monthly_trigger}.py`(各新)| 10 個 builder |
+| `src/cross_cores/orchestrator.py` | BUILDERS dict +10 entries(1 → 11)|
+| `mcp_server/_screens.py`(新)| 4 compute_*_screen() 內部走 fetch_cross_stock_ranked |
+| `mcp_server/tools/data.py` | 加 4 個 wrapper(monthly_screen / quarterly_screen / annual_low_risk_screen / monthly_trigger_scan)|
+| `mcp_server/server.py` | 4 行 `mcp.tool()` + docstring + instructions 8 tools |
+| `tests/cross_cores/test_v3_32_builders.py`(新)| 23 tests(shared helpers + 10 builder empty smoke + orchestrator + f_score logic)|
+| `tests/mcp_server/test_screens.py`(新)| 17 tests(4 screen × 3 tests + Layer 5 2 tests + public surface)|
+| `CLAUDE.md` | v3.32 章節 + Quick Reference tool 數 4 → 8 |
+| `README.md` | MCP toolkit 4 → 8 + cross_cores 11 builders 同步 |
+
+### 沙箱驗證
+
+- `pytest tests/cross_cores/ tests/mcp_server/ tests/agg/` ✅ **165 passed / 1 skipped**
+  (從 125 + 40 new = 23 cross_cores + 17 screens)
+- 0 Rust / 0 collector.toml(純 Python + alembic)
+- 既有 magic_formula 0 regression
+
+### user 下次 session 起點(production verify chain)
+
+**Phase A:Pre-impl SQL diagnostic**(必跑,blocking)
+
+```powershell
+git pull
+# A-1:F-Score 需要 9 個 financial_statement detail key 都存在
+psql $env:DATABASE_URL -c "
+SELECT DISTINCT jsonb_object_keys(detail) AS key
+  FROM financial_statement_derived
+ WHERE stock_id = '2330' AND type IN ('income','balance','cashflow')
+ ORDER BY key;
+"
+# 預期看到:營業收入合計 / 營業成本合計 / 本期淨利 / 流動資產 / 流動負債 /
+#          長期借款 / 資產總額 / 營業活動之現金流量 / 股本
+
+# A-2:industry_category populated %(B3 industry-adj GP 需 ≥ 80%)
+psql $env:DATABASE_URL -c "
+SELECT COUNT(*) AS total,
+       COUNT(industry_category) AS non_null,
+       (COUNT(industry_category)::float / COUNT(*) * 100)::numeric(5,2) AS pct
+  FROM stock_info_ref
+ WHERE market = 'TW' AND delisting_date IS NULL;
+"
+
+# A-3:valuation_daily_derived.dividend_yield populated %(C2 用)
+psql $env:DATABASE_URL -c "
+SELECT (COUNT(dividend_yield)::float / COUNT(*) * 100)::numeric(5,2) AS pct
+  FROM valuation_daily_derived
+ WHERE date = (SELECT MAX(date) FROM valuation_daily_derived) AND market = 'TW';
+"
+```
+
+**Phase B:alembic + phase 8 跑全市場**
+
+```powershell
+alembic upgrade head      # head: c8d9e0f1g2h3 → d9e0f1g2h3i4
+
+python src/main.py cross_cores phase 8 --full-rebuild
+# 預期 11 個 builder 全 OK(magic_formula + 10 new),
+# 每 builder rows_written ~1100-1300
+
+python src/main.py cross_cores phase 8 --builder f_score
+# 單 builder 跑(對齊既有 --builder 支援)
+```
+
+**Phase C:MCP 對 4 個 toolkit screen 驗**
+
+```powershell
+python -m mcp_server
+# Claude Desktop 對話內:
+#   "今天 monthly screen top 30"  → monthly_screen 內 3 個 factor + vol overlay
+#   "今天 quarterly screen"        → F-Score / Low Vol / Industry-Adj GP
+#   "今天 annual low risk screen"  → Long-Term Low Vol / Dividend Yield / 12-1 Mom
+#   "今天 monthly trigger scan"    → Positive / Negative triggers
+```
+
+**Phase D:跨 toolkit 重疊 stock 觀察**
+
+```sql
+WITH a AS (SELECT stock_id FROM persistent_momentum_ranked_derived
+            WHERE is_top_n AND date = '2026-05-15'),
+     b AS (SELECT stock_id FROM f_score_ranked_derived
+            WHERE is_top_n AND date = '2026-05-15'),
+     c AS (SELECT stock_id FROM long_term_low_vol_ranked_derived
+            WHERE is_top_n AND date = '2026-05-15')
+SELECT
+  (SELECT COUNT(*) FROM a) AS a_count,
+  (SELECT COUNT(*) FROM b) AS b_count,
+  (SELECT COUNT(*) FROM c) AS c_count,
+  (SELECT COUNT(*) FROM a INTERSECT SELECT * FROM b) AS a_inter_b;
+-- 預期:跨 toolkit 交集 ≤ 30%(若 > 50% 表 toolkit 高度重疊)
+```
+
+### 風險
+
+🟢 低:
+- 0 Rust(純 Python builders + alembic + tests)
+- 既有 cross_cores orchestrator / MCP helper / Silver schema 0 改動
+- Magic Formula 0 regression
+- 10 個 builder 各自獨立,1 個壞不影響其他
+- Rollback:單 commit `git revert` + `alembic downgrade -1`
+
+🟡 中:
+- **F-Score 9 條件 detail key 對齊 FinMind 中文 origin_name**:Phase A-1 SQL 揭露
+  若缺 key 需先擴 Bronze field_mapper(或在 _detail_get fallback chain 加新 key)
+- **Industry classification 覆蓋率**:< 80% → B3 fallback 用 sector proxy;< 60% 暫不上線
+- **vol-managed overlay**:6M monthly approximation,Barroso-Santa-Clara 2015 原版用
+  daily realized vol — 走 detail JSONB hint 非 hard cutoff
+
+🔴 高:
+- **McLean-Pontiff 2016 衰減**:published factor 平均 alpha 衰減 58%。本實作所有結果
+  **僅作 LLM screening reference**,**不直接 trade**。User 需另跑 walk-forward backtest
+  harness(提案 §十 prerequisite,本 PR 不含)
+
+### Out of scope(留 future,對齊提案 §十 實作優先序)
+
+- **Walk-forward backtest harness**(提案 §十 prerequisite)— 獨立 sprint
+- **Per-builder scheduling**(月/季/年 trigger)— V3 議題
+- **Workflow.toml 對 cross_cores 支援** — V3 議題
+- **Dirty queue 真正啟用 for cross_cores** — V3(schema 有 column 但 noop)
+- **Multi-factor composite portfolio**(提案 §三 資金配置 25/25/25/20)
+  — LLM 看 4 toolkit screens + magic_formula 自己 compose
+
+---
+
+## v3.31 — MCP toolkit 9 → 4 consolidation + Kalman/Neely verify pipeline(2026-05-17)
+
+接 v3.30 後 user 拍版砍 MCP 對 LLM 曝露 tool 數 9 → 4,**6 個 per-stock / market
+基本資料工具合進 1 個 `stock_snapshot(stock_id, date)`**;新增 verify pipeline
+(Python + SQL 雙軌)記入固定流水線。
+
+### 最終 4-tool 公開介面
+
+| Tool | 用途 |
+|---|---|
+| `neely_forecast(stock_id, date)` | Neely NEoWave 預測(不動) |
+| `kalman_trend(stock_id, date)` | Kalman 1-D regime(不動) |
+| `magic_formula_screen(date, top_n=30)` | Greenblatt 2005 跨股預測(不動) |
+| **`stock_snapshot(stock_id, date)`(新)** | 6-in-1 基本資料快照:health + loan + block + risk + market + commodity |
+
+被合併的 6 個 helper(`stock_health` / `market_context` /
+`loan_collateral_snapshot` / `block_trade_summary` / `risk_alert_status` /
+`commodity_macro_snapshot`)**仍留 `mcp_server.tools.data` 內 callable from
+Python**(dashboard / direct script 用),只是不再 `mcp.tool()` 註冊。
+
+### stock_snapshot 設計
+
+```python
+def stock_snapshot(stock_id, date, *, database_url=None) -> dict:
+    """6-in-1 個股當下快照。"""
+    return {
+        "stock_id":        stock_id,
+        "as_of":           date.isoformat(),
+        "health":          {... compute_stock_health 完整 dict ...},
+        "loan_collateral": {... compute_loan_collateral_snapshot ...},
+        "block_trade":     {... compute_block_trade_summary(30d) ...},
+        "risk_alert":      {... compute_risk_alert_status ...},
+        "market_context":  {... compute_market_context ...},
+        "commodity_macro": {... compute_commodity_macro_snapshot(["GOLD"]) ...},
+        "narrative":       "1-3 句 aggregated overall view",
+    }
+```
+
+**Graceful degradation**:每個 sub-section 用 try / except 包,某 helper 噴
+exception → 該 section 變 `{"error": "<msg>", "section": "<name>"}`,其他 5 個
+仍出。LLM 看 error key 知道哪段缺。
+
+**Payload**:user 拍版不 trim,~10KB / ~2.5K tokens(對齊各 sub-section ~1.5KB)。
+
+**narrative aggregator**:從 4 個主要 sub-section 各取 1 個 signal 串成 overall
+view(個股 health overall_score / 大盤 climate / 處置警示 / 借券集中)。
+
+### Verify pipeline(新 2 個檔)
+
+**A. `scripts/verify_mcp_kalman_neely.py`**(Python wrapper,對齊 verify_pr18_bronze.py 風格)
+
+per-stock assertions:
+- Kalman:`smoothed_price > 0` ∧ `velocity != 0` ∧ `indicator_staleness.is_stale == False`
+- Neely:`current_price > 0` ∧ `primary_scenario.wave_count > 0` ∧ `scenario_staleness.is_stale == False`
+
+```powershell
+python scripts/verify_mcp_kalman_neely.py                  # 預設 2330
+python scripts/verify_mcp_kalman_neely.py --stocks 2330,3030
+python scripts/verify_mcp_kalman_neely.py --as-of 2026-05-15
+```
+
+退碼 0=全綠 / 1=任一 [FAIL]。FAIL 時提示 root cause:
+- smoothed/velocity=0 → 拉 v3.30 path fix
+- is_stale=true → 跑 `tw_cores run-all --write`
+- wave_count=0 → 拉 v3.28 regex parse fix
+
+**B. `scripts/verify_mcp_kalman_neely.sql`**(對齊 maintain_facts_stats.sql phase 風格)
+
+直接看 Rust 寫進 DB 的真實內容(排除 MCP layer 干擾),2 phase:
+1. Kalman `indicator_values.value->'series'->-1` 揭露 latest state 真實值
+2. Neely `structural_snapshots.snapshot->'scenario_forest'->0` 揭露 W1 anchor 日期 + Fib zones
+
+`psql -v stock=3030 -f scripts/verify_mcp_kalman_neely.sql` 換股票。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `mcp_server/tools/data.py` | 加 `stock_snapshot()` wrapper(~80 行)+ `_compose_snapshot_narrative()` helper |
+| `mcp_server/server.py` | 5 行 `mcp.tool()` 註解掉 + 1 行 `mcp.tool(_data_tools.stock_snapshot)` 新增 + docstring + instructions 中文段更新 |
+| `scripts/verify_mcp_kalman_neely.py`(新)| argparse + per-stock loop + status table + 退碼 |
+| `scripts/verify_mcp_kalman_neely.sql`(新)| 2 phase + 解讀 comment |
+| `tests/mcp_server/test_stock_snapshot.py`(新)| 8 test:全綠 / 1 fail / 3 fail / 全 fail / payload / narrative / public surface ×2 |
+| `CLAUDE.md` | v3.31 章節 + helper 腳本清單 +2 行 + Quick Reference tool 數 9→4 |
+| `README.md` | tool 數同步(若有提及)|
+
+### 沙箱驗證
+
+- `pytest tests/mcp_server/test_stock_snapshot.py` ✅ **8 passed**
+- `pytest tests/mcp_server/ tests/agg/ --ignore=test_render_tools` ✅
+  **125 passed / 1 skipped**(從 117 → 125,+8 new)
+- `python scripts/verify_mcp_kalman_neely.py --help` ✅(argparse 結構對)
+- 0 Rust / 0 alembic / 0 collector.toml(純 MCP layer reshape)
+
+### user 下次 session 自動套用
+
+```powershell
+git pull
+# 1. 跑 Python verify(對 production data)
+python scripts/verify_mcp_kalman_neely.py --stocks 2330,3030
+# 預期(Kalman + Neely 兩個 column 都 [OK]):
+# Stock   Kalman    Neely     Notes
+# 2330    [OK]      [OK]      K:smoothed=2225 velocity=0.7 ... | N:price=2265 waves=5 ...
+# 3030    [OK]      [OK]      ...
+
+# 2. 跑 SQL spot-check(揭露 Rust 寫進 DB 的真實內容)
+psql $env:DATABASE_URL -v stock=2330 -f scripts/verify_mcp_kalman_neely.sql
+
+# 3. MCP server 對話內驗 4-tool 集合
+python -m mcp_server
+# Claude Desktop:
+#   "2330 完整快照"  → 1 個 stock_snapshot call 拿全 6 sub-section
+#   "2330 Neely 預測" / "Kalman 趨勢" / "今天 Magic Formula top 30"
+```
+
+### 風險
+
+🟢 低:
+- 0 Rust / 0 alembic / 0 collector.toml(純 MCP layer reshape)
+- 6 個 compute_* 主邏輯 0 改動,只是少了 MCP wrapper
+- Graceful degradation:1 sub-section helper 失敗,其他 5 個照出
+- 既有 117 tests 全綠;8 new tests pass
+- Rollback:單 commit `git revert` 即可
+
+🟡 中:
+- LLM 體驗變化 — 從 9 個 tool 名找對應 → 1 個 stock_snapshot 內找對應 sub-section
+- Payload ~10KB 對 MCP context budget 偏大,但 user 拍版可接受
+
+### Out of scope(留 v3.32+)
+
+- **render PNG pipeline 修復**(v3.30 backlog)
+- **Neely Fib zones 偏離 audit**(v3.30 backlog,verify SQL 揭露 W1 anchor 後決定)
+- **multi-stock batch stock_snapshot**(對齊 magic_formula_screen 跨股)
+- **per-section toggle**(kwargs 排除某 sub-section)
 
 ---
 
@@ -2607,6 +2934,221 @@ distinct stock_id,0 dirty → skip Rust dispatch 完整省 ~6 分鐘。對齊
 
 ---
 
+## 下班後 verify 流水線(2026-05-18 整日 4 commits)
+
+對應今日 v3.29 → v3.32。完整 6 phase,**Phase A 是 blocking gate**(v3.32 SQL
+diagnostic)。
+
+### Phase 0:準備環境
+
+```powershell
+cd C:\Users\jarry\source\repos\StockHelper4me
+(Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned)
+& .\.venv\Scripts\Activate.ps1
+$env:DATABASE_URL = "postgresql://twstock:twstock@localhost:5432/twstock"
+
+git fetch origin claude/continue-previous-work-xdKrl
+git checkout claude/continue-previous-work-xdKrl
+git pull
+git log --oneline -4
+# 預期看到:a365240 v3.32 / 7b2eb98 v3.31 / 7f8d877 v3.30 / 4184d04 v3.29
+```
+
+### Phase A:Pre-impl SQL diagnostic(blocking — v3.32)
+
+3 條 SQL 必跑。任一失敗就停下,先補資料再走 Phase B。
+
+```powershell
+# A-1:F-Score 9 條件需要的 detail key 是否都在 financial_statement_derived
+psql $env:DATABASE_URL -c "
+SELECT DISTINCT jsonb_object_keys(detail) AS key
+  FROM financial_statement_derived
+ WHERE stock_id = '2330' AND type IN ('income','balance','cashflow')
+   AND date >= '2024-01-01'
+ ORDER BY key
+ LIMIT 60;
+"
+# 期待至少看到:本期淨利(淨損)/ 營業收入合計 / 營業成本合計 /
+#               資產總額 / 流動資產 / 流動負債 / 長期借款 / 股本 /
+#               營業活動之現金流量
+# 若缺 → src/cross_cores/f_score.py 的 KEY_* fallback chain 需要再加新 key
+
+# A-2:industry_category populated %(v3.32 industry_adj_gp 需 ≥ 80%)
+psql $env:DATABASE_URL -c "
+SELECT COUNT(*) AS total,
+       COUNT(industry_category) AS non_null,
+       ROUND((COUNT(industry_category)::numeric / COUNT(*) * 100), 2) AS pct
+  FROM stock_info_ref
+ WHERE market = 'TW' AND delisting_date IS NULL;
+"
+# 期待 pct ≥ 80;< 80 → industry_adj_gp 可上但 industry median 不穩,留意 narrative
+
+# A-3:valuation_daily_derived.dividend_yield populated %(v3.32 dividend_yield 用)
+psql $env:DATABASE_URL -c "
+SELECT (COUNT(dividend_yield)::numeric / COUNT(*) * 100)::numeric(5,2) AS pct,
+       COUNT(*) AS total,
+       COUNT(dividend_yield) AS non_null
+  FROM valuation_daily_derived
+ WHERE date = (SELECT MAX(date) FROM valuation_daily_derived) AND market = 'TW';
+"
+# 期待 pct ≥ 90;< 90 → dividend_yield builder 會有較多 no_yield_data row
+```
+
+### Phase B:alembic + 跑 cross_cores phase 8 全市場(v3.32)
+
+```powershell
+# B-1:升級 schema
+alembic upgrade head
+# 期待 head: d9e0f1g2h3i4
+
+# B-2:驗證 11 張新表存在
+psql $env:DATABASE_URL -c "
+SELECT tablename FROM pg_tables
+ WHERE schemaname='public'
+   AND (tablename LIKE '%_ranked_derived' OR tablename LIKE 'monthly_trigger%')
+ ORDER BY tablename;
+"
+# 期待 11 張(magic_formula_ranked + v3.32 10 張)
+
+# B-3:跑全市場 cross_cores phase 8(11 個 builder 一起跑)
+python src/main.py cross_cores phase 8 --full-rebuild
+# 期待 11 個 builder 全部 status=ok;rows_written 規模 ~1100-1300/builder
+# (Layer 5 monthly_trigger 可能 < 100 因為 trigger 性質稀疏)
+
+# 想單獨跑 1 個 builder:
+# python src/main.py cross_cores phase 8 --builder f_score
+```
+
+### Phase C:資料驗證(v3.32 spot-check)
+
+```powershell
+# C-1:per builder row count
+psql $env:DATABASE_URL -c "
+SELECT 'magic_formula' AS b, COUNT(*) FROM magic_formula_ranked_derived WHERE date = (SELECT MAX(date) FROM magic_formula_ranked_derived)
+UNION ALL SELECT 'persistent_momentum', COUNT(*) FROM persistent_momentum_ranked_derived WHERE date = (SELECT MAX(date) FROM persistent_momentum_ranked_derived)
+UNION ALL SELECT 'revenue_momentum', COUNT(*) FROM revenue_momentum_ranked_derived WHERE date = (SELECT MAX(date) FROM revenue_momentum_ranked_derived)
+UNION ALL SELECT 'institutional_concert', COUNT(*) FROM institutional_concert_ranked_derived WHERE date = (SELECT MAX(date) FROM institutional_concert_ranked_derived)
+UNION ALL SELECT 'f_score', COUNT(*) FROM f_score_ranked_derived WHERE date = (SELECT MAX(date) FROM f_score_ranked_derived)
+UNION ALL SELECT 'low_volatility', COUNT(*) FROM low_volatility_ranked_derived WHERE date = (SELECT MAX(date) FROM low_volatility_ranked_derived)
+UNION ALL SELECT 'industry_adj_gp', COUNT(*) FROM industry_adj_gp_ranked_derived WHERE date = (SELECT MAX(date) FROM industry_adj_gp_ranked_derived)
+UNION ALL SELECT 'long_term_low_vol', COUNT(*) FROM long_term_low_vol_ranked_derived WHERE date = (SELECT MAX(date) FROM long_term_low_vol_ranked_derived)
+UNION ALL SELECT 'dividend_yield', COUNT(*) FROM dividend_yield_ranked_derived WHERE date = (SELECT MAX(date) FROM dividend_yield_ranked_derived)
+UNION ALL SELECT 'mom_12_1', COUNT(*) FROM mom_12_1_ranked_derived WHERE date = (SELECT MAX(date) FROM mom_12_1_ranked_derived)
+UNION ALL SELECT 'monthly_trigger', COUNT(*) FROM monthly_trigger_signals_derived WHERE date = (SELECT MAX(date) FROM monthly_trigger_signals_derived)
+ORDER BY b;
+"
+
+# C-2:每 builder eligible (excluded_reason IS NULL) %
+psql $env:DATABASE_URL -c "
+SELECT 'f_score' AS b,
+       COUNT(*) AS total,
+       COUNT(*) FILTER (WHERE excluded_reason IS NULL) AS eligible,
+       ROUND(COUNT(*) FILTER (WHERE excluded_reason IS NULL)::numeric / COUNT(*) * 100, 1) AS pct
+  FROM f_score_ranked_derived WHERE date = (SELECT MAX(date) FROM f_score_ranked_derived)
+UNION ALL SELECT 'dividend_yield',
+       COUNT(*), COUNT(*) FILTER (WHERE excluded_reason IS NULL),
+       ROUND(COUNT(*) FILTER (WHERE excluded_reason IS NULL)::numeric / COUNT(*) * 100, 1)
+  FROM dividend_yield_ranked_derived WHERE date = (SELECT MAX(date) FROM dividend_yield_ranked_derived);
+"
+# F-Score:eligible % 反映實際過 F-Score ≥ 7 的股數
+# Dividend Yield:eligible % 反映過 hard filter 的股數(yield ≥ 4% + 12M return > -20% + 5y ≥ 3y 配息)
+
+# C-3:跨 toolkit 重疊 stock 觀察(分散度)
+psql $env:DATABASE_URL -c "
+WITH a AS (SELECT stock_id FROM persistent_momentum_ranked_derived
+            WHERE is_top_n AND date = (SELECT MAX(date) FROM persistent_momentum_ranked_derived)),
+     b AS (SELECT stock_id FROM f_score_ranked_derived
+            WHERE is_top_n AND date = (SELECT MAX(date) FROM f_score_ranked_derived)),
+     c AS (SELECT stock_id FROM long_term_low_vol_ranked_derived
+            WHERE is_top_n AND date = (SELECT MAX(date) FROM long_term_low_vol_ranked_derived))
+SELECT
+  (SELECT COUNT(*) FROM a) AS a_count,
+  (SELECT COUNT(*) FROM b) AS b_count,
+  (SELECT COUNT(*) FROM c) AS c_count,
+  (SELECT COUNT(*) FROM (SELECT * FROM a INTERSECT SELECT * FROM b) x) AS a_inter_b,
+  (SELECT COUNT(*) FROM (SELECT * FROM a INTERSECT SELECT * FROM c) x) AS a_inter_c,
+  (SELECT COUNT(*) FROM (SELECT * FROM b INTERSECT SELECT * FROM c) x) AS b_inter_c;
+"
+# 期待跨 toolkit 交集 ≤ 30%(若 > 50% 表 toolkit 高度重疊 → 分散效果差)
+```
+
+### Phase D:Kalman / Neely 既有 verify(v3.30 + v3.31)
+
+```powershell
+# D-1:Python wrapper 跑 production data
+python scripts/verify_mcp_kalman_neely.py --stocks 2330,3030
+# 期待 Kalman + Neely 全 [OK]
+#   Stock  Kalman    Neely     Notes
+#   2330   [OK]      [OK]      K:smoothed=~2200 velocity=非0 | N:price=2265 waves=5
+#   3030   [OK]      [OK]      ...
+
+# D-2:SQL spot-check 直看 Rust 寫進 DB
+psql $env:DATABASE_URL -v stock=2330 -f scripts/verify_mcp_kalman_neely.sql
+# 期待:
+#   Phase 1 (Kalman):series_len > 1500;latest_kalman_state 含 raw_close /
+#                    smoothed_price / velocity / uncertainty / regime / date
+#   Phase 2 (Neely): scenario_count > 0;w1_start / w1_end 揭露 anchor 日期
+```
+
+### Phase E:MCP server 8 個 tool 對話內測
+
+```powershell
+# Claude Desktop 重啟讓它 reconnect MCP server,然後對話內測:
+python -m mcp_server  # 開 stdio
+
+# v3.31 4 個既有 tools
+#   "2330 Neely 預測"                   → neely_forecast
+#   "2330 Kalman 趨勢"                  → kalman_trend
+#   "今天 magic formula top 30"          → magic_formula_screen
+#   "2330 完整快照"                     → stock_snapshot(6-in-1)
+
+# v3.32 4 個新 cross-stock factor screens
+#   "今天 monthly screen top 30"         → monthly_screen(Toolkit A)
+#   "今天 quarterly screen"              → quarterly_screen(Toolkit B)
+#   "今天 annual low risk screen"        → annual_low_risk_screen(Toolkit C)
+#   "今天 monthly trigger scan"          → monthly_trigger_scan(Layer 5)
+
+# v3.29 應該回到正常(不再「未分類」)
+#   "3030 的 risk_alert 狀態"           → severity = "disposition"
+#                                          severity_label = "處置股(分盤撮合)"
+#                                          (走 stock_snapshot.risk_alert)
+```
+
+### Phase F:Python tests + 環境健康
+
+```powershell
+# F-1:既有 + v3.32 new tests 全綠
+pytest tests/cross_cores/ tests/mcp_server/ tests/agg/ --ignore=tests/mcp_server/test_render_tools.py -v
+# 期待 165 passed / 1 skipped(render 缺 fastmcp 是 pre-existing)
+
+# F-2:Rust workspace test(若想完整跑;v3.32 0 Rust 改動,可選)
+cd rust_compute
+cargo test --release --workspace --no-fail-fast 2>&1 | tail -5
+cd ..
+# 期待 443 passed / 0 failed
+```
+
+### 退出碼判定
+
+| Phase | 條件 | 行動 |
+|---|---|---|
+| A-1 | F-Score 9 key 全在 | ✅ 過 |
+| A-1 | 缺 1-2 key | 🟡 修 KEY_* fallback chain 後繼續 |
+| A-2 | industry_category pct ≥ 80% | ✅ 過 |
+| A-2 | < 80% | 🟡 industry_adj_gp 仍可上但 narrative 標 caveat |
+| A-3 | dividend_yield pct ≥ 90% | ✅ 過 |
+| A-3 | < 90% | 🟡 dividend_yield builder 多 no_yield_data row |
+| B-3 | 11 builder 全 status=ok | ✅ 過,進 C |
+| B-3 | 任 builder 失敗 | ❌ 看 logs 找 root cause |
+| C-3 | 跨 toolkit 交集 ≤ 30% | ✅ 分散 OK |
+| C-3 | 交集 > 50% | 🟡 toolkit 設計重疊,留意 |
+| D | Kalman + Neely 全 [OK] | ✅ |
+| D | 任一 [FAIL] | 看提示 — v3.30 path fix / v3.28 regex / tw_cores 重算 |
+| E | 8 個 tool 都有正確 response | ✅ |
+| F-1 | 165 passed | ✅ |
+
+---
+
 ## helper 腳本清單
 
 | 腳本 | 用途 | 範例 |
@@ -2627,6 +3169,8 @@ distinct stock_id,0 dirty → skip Rust dispatch 完整省 ~6 分鐘。對齊
 | `scripts/verify_event_kind_rate.sql` 🆕 v3.14 | per-EventKind 觸發率 verify(對齊 v1.32 ≤ 12/yr/stock 標準),4 sections:per-stock cores / market-level cores / Round 7 verify / milestone 4 variants 顯式(v3.18 加)| `psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql` |
 | `scripts/maintain_facts_stats.sql` 🆕 v3.19 | facts / indicator_values / structural_snapshots 三表 ANALYZE + VACUUM stats refresh;Round N DELETE+INSERT 後或 wall time 反常變慢時跑(便宜 ~50-200ms 換 query planner stats) | `psql $env:DATABASE_URL -f scripts/maintain_facts_stats.sql` |
 | `scripts/diagnose_slow_tw_cores.sql` 🆕 v3.19 | tw_cores 跑期間另開 psql 取樣:pg_stat_activity / lock waits / dedup query plan / pool saturation 4 phase + 解讀指南 | `psql $env:DATABASE_URL -f scripts/diagnose_slow_tw_cores.sql`(tw_cores 開跑後 30s) |
+| `scripts/verify_mcp_kalman_neely.py` 🆕 v3.31 | MCP Kalman + Neely 對 production 出值健康度 verify。per-stock check `smoothed_price > 0` / `velocity ≠ 0` / `wave_count > 0` / staleness。退碼 0=全綠 / 1=任一 FAIL,提示 root cause(v3.30 path fix / v3.28 regex parse / tw_cores 重算)| `python scripts/verify_mcp_kalman_neely.py --stocks 2330,3030` |
+| `scripts/verify_mcp_kalman_neely.sql` 🆕 v3.31 | 對 indicator_values / structural_snapshots 直接 SQL spot-check 揭露 Rust 寫進 DB 的真實內容(排除 MCP layer 干擾)2 phase + 解讀 comment | `psql $env:DATABASE_URL -v stock=2330 -f scripts/verify_mcp_kalman_neely.sql` |
 
 ---
 

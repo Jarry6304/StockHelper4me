@@ -1,9 +1,10 @@
 # StockHelper4me — tw-stock-collector
 
-> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + MCP toolkit 9 tools)。
+> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + Cross-Stock Cores 11 builders + MCP toolkit 8 tools)。
 
-**版本**:v3.25(alembic head `c8d9e0f1g2h3` / 2026-05-17)
-**狀態**:**Round 7 + Round 8 + Round 9 calibration 完整結算** ☕(2026-05-17 production verify 全綠)+ **5 sponsor-tier datasets 接入 + 4 new cores production-ready + 4 new MCP tools(toolkit 5→9)+ `market_context()` 整合 commodity_macro / risk_alert(8 components weights)+ price_limit 420× incremental 加速**;m2 大重構正式終結 ✅;M3 Cores **39 crates** production-ready;Aggregation Layer 4 Phase 全套;Rust workspace **443 tests passed / 0 failed**;Python tests **110 passed / 1 skipped**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
+**版本**:v3.32(alembic head `d9e0f1g2h3i4` / 2026-05-18)
+**驗證流水線**:今日 4 commits(v3.29 / v3.30 / v3.31 / v3.32)完整 verify chain 見 [CLAUDE.md §下班後 verify 流水線](CLAUDE.md#下班後-verify-流水線2026-05-18-整日-4-commits)(6 phase:env / SQL diagnostic / alembic+phase 8 / 資料 spot-check / Kalman-Neely verify / MCP 8 tools 對話內測 / pytest)
+**狀態**:**Round 7-9 calibration 完整結算** ☕ + **v3.31 MCP toolkit 9 → 4 consolidation(stock_snapshot 6-in-1)** + **v3.32 10 new cross_cores factor builders + 4 MCP screen wrappers**(對齊量化因子提案 v1.1:Toolkit A momentum + B value-quality + C low-risk + Layer 5 trigger overlay)。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**(magic_formula + v3.32 10 個);Aggregation Layer 4 Phase 全套;Rust workspace **443 tests passed / 0 failed**;Python tests **165 passed / 1 skipped**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
 
 ---
 
@@ -37,7 +38,7 @@
 | **Layer 2 Silver per-stock** | 13 個 `*_derived` SQL builder + 4 個 fwd 表(Rust)+ `price_limit_merge_events` | `python src/main.py silver phase 7a/7b/7c`(`silver/orchestrator.py`)|
 | **Layer 2.5 Cross-Stock Cores**(v3.5 R3 新)| 跨股 ranking(目前 1 個:`magic_formula_ranked_derived`)| `python src/main.py cross_cores phase 8`(`cross_cores/orchestrator.py`)|
 | **Layer 3 M3 Cores** | **39 crates** Rust workspace 全市場全核 dispatch(Wave / Indicator / Chip 8 / Fundamental / Environment 7 / System)| `tw_cores run-all --workflow workflows/tw_stock_standard.toml --write` |
-| **Layer 4 MCP / API 對外** | Aggregation Layer + Streamlit dashboards 6 tabs + FastMCP server **9 public tools**(v3.22 加 4) | `agg.as_of()` / `dashboards/aggregation.py` / `mcp_server/server.py` |
+| **Layer 4 MCP / API 對外** | Aggregation Layer + Streamlit dashboards 6 tabs + FastMCP server **8 public tools**(v3.31 4 個 + v3.32 4 個 cross-stock factor screens:monthly / quarterly / annual_low_risk / monthly_trigger) | `agg.as_of()` / `dashboards/aggregation.py` / `mcp_server/server.py` / `mcp_server/_screens.py` |
 
 ```
               FinMind / 外部資料
@@ -70,7 +71,7 @@
                     ▼
    ┌── Layer 4 MCP / API 對外 ──────────────────┐
    │   agg.as_of(stock_id, date) read-only API  │
-   │   + 6 dashboards tabs + MCP 5 tools        │
+   │   + 6 dashboards tabs + MCP 8 tools        │
    └────────────────────────────────────────────┘
 ```
 
@@ -136,7 +137,7 @@ StockHelper4me/
 │   └── tw_stock_standard.toml       # 35 cores workflow(dispatch via tw_cores run-all --workflow)
 ├── workflows/tw_stock_standard.toml # 39 cores workflow(v3.21 +4 entries)
 ├── dashboards/aggregation.py        # Streamlit 6 tabs(K-line / Chip / Fund / Env / Neely / Facts)
-├── mcp_server/                      # FastMCP stdio server(v3.22 9 public tools + helpers)
+├── mcp_server/                      # FastMCP stdio server(v3.32:8 public tools = v3.31 4 + v3.32 4 cross-stock factor screens)
 │   ├── _loan_collateral / _block_trade / _risk_alert / _commodity_macro  # v3.22 加 4 helper modules
 ├── scripts/                         # verifier / inspect / reverse-pivot 工具
 ├── docs/
@@ -393,6 +394,31 @@ v3.24 Round 9 calibration + commodity_macro builder fix:
       - commodity_macro Silver builder order_by fix(market-level Bronze pattern)
       - 4 new cores 全部 production-ready,觸發率合理
       - wall time 806s → 738s(-8.5%)
+v3.25 market_context() 整合 commodity_macro / risk_alert(8 components)
+v3.26 MCP current_price bug fix:3 helper 直讀 price_daily,不依賴 indicator_latest
+v3.27 MCP toolkit metadata.kind 統一修(event_kind 優先 + kind fallback)
+v3.28 neely wave_count regex parse + scenario / indicator staleness surface
+v3.29 risk_alert _parse_severity 加 處置 / 注意 broad pattern + condition kwarg
+v3.30 kalman series-last-entry 修(production smoothed=0 silent bug)
+      + 6 個 render tools 暫隱藏(PNG 後端 silent fail)
+v3.31 MCP toolkit 9 → 4 consolidation:
+      - neely_forecast / kalman_trend / magic_formula_screen 不動
+      - 新 stock_snapshot(stock_id, date)合併 6 個基本資料 tool
+      - 6 個被合併的 helper 仍 callable from Python(dashboard 用)
+      - 新 verify pipeline:scripts/verify_mcp_kalman_neely.py + .sql
+      - tests 117 → 125 passed
+v3.32 10 new cross_cores factor builders + 4 MCP toolkit screens(2026-05-18):
+      Cross-Stock Cores 從 1 → 11 builders;對齊量化因子提案 v1.1
+      - Toolkit A 月度:persistent_momentum + revenue_momentum
+        + institutional_concert + vol-managed overlay
+      - Toolkit B 季度:f_score(Piotroski ≥ 7)+ low_volatility 252d
+        + industry_adj_gp(Novy-Marx 2013 + industry median)
+      - Toolkit C 年度:long_term_low_vol 36M + dividend_yield(yield trap filter)
+        + mom_12_1
+      - Layer 5:monthly_trigger(positive/negative conviction adjustment)
+      - alembic head c8d9e0f1g2h3 → d9e0f1g2h3i4(10 張 ranked + 1 signals)
+      - MCP toolkit 4 → 8 public tools
+      - tests 125 → 165 passed(+23 cross_cores + 17 screens)
 ```
 
 ---
@@ -402,7 +428,8 @@ v3.24 Round 9 calibration + commodity_macro builder fix:
 ```bash
 # Python tests(agg + silver + cross_cores + mcp_server)
 pytest tests/agg/                       # 39 passed / 1 skipped(pandas 未裝)
-pytest tests/mcp_server/                # 33+ passed(v3.22 toolkit_v3 24 cases)
+pytest tests/mcp_server/                # 100+ passed(v3.32 +17 screens cases)
+pytest tests/cross_cores/               # 30+ passed(v3.32 +23 builder cases)
 pytest tests/                           # 全套 unit test
 
 # Rust workspace tests(39 crates / 443 passed / 0 failed)
