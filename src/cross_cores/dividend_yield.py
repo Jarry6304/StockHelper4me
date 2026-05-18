@@ -44,7 +44,10 @@ UPSTREAM_TABLES = [
 ]
 
 TOP_N = 30
-MIN_YIELD_PCT = 4.0           # 殖利率 ≥ 4%
+# v3.32 hotfix(2026-05-18 production):MIN_YIELD_PCT 4.0 → 3.0
+# 原 4% 在 2024-2026 台股漲多環境下 0 個 stock 過(production verify 揭露)。
+# 對齊台股 2025 平均現金殖利率 ~3-3.5%;3.0% 仍嚴於 SPX dividend yield 1.5%。
+MIN_YIELD_PCT = 3.0           # 殖利率 ≥ 3%(原 4% 過嚴)
 MAX_12M_DROP = -20.0          # 12M 報酬 > -20%
 MIN_PAYOUT_YEARS_5Y = 3       # 5 年至少 3 年配息
 

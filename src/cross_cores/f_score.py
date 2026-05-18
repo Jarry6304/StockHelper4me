@@ -41,7 +41,11 @@ OUTPUT_TABLE    = "f_score_ranked_derived"
 UPSTREAM_TABLES = ["financial_statement_derived", "stock_info_ref"]
 
 TOP_N = 30
-F_SCORE_MIN = 7   # 對齊提案 v1.1(原 Piotroski 2000 ≥ 8)
+# v3.32 hotfix(2026-05-18 production):F_SCORE_MIN 7 → 6
+# 原 7 在台股 production 揭露 eligible = 18(0.6% of 3057),信號太稀疏。
+# Walkshäusl (2020) JAM 國際 OOS(含台灣)證明 ≥ 6 仍有 alpha,且 cutoff 邊際
+# alpha 在 5→6→7 平緩 — 收下 6 換 universe size。
+F_SCORE_MIN = 6   # ≥ 6(對齊 Walkshäusl 2020 台股 OOS;原 Piotroski 2000 ≥ 8)
 
 # detail JSONB key fallback chains(對齊 magic_formula.py 風格)
 KEY_NET_INCOME    = ("本期淨利（淨損）", "本期淨利(淨損)", "本期淨利", "淨利", "NetIncome")
