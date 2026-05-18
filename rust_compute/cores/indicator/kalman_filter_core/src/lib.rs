@@ -107,21 +107,24 @@ impl Default for KalmanFilterParams {
 }
 
 /// v3.33 default 4 horizons:
-///   short      Q=1e-1  halflife ~31  bars(~6 週)  threshold 0.005  min_dur 3
+///   short      Q=1e-1  halflife ~31  bars(~6 週)  threshold 0.003  min_dur 3
 ///   medium     Q=1e-2  halflife ~99  bars(~5 月)  threshold 0.002  min_dur 5
 ///   long       Q=1e-3  halflife ~310 bars(~1.2 年)threshold 0.0015 min_dur 5
 ///   ultra_long Q=1e-5  halflife ~3100 bars(~12 年)threshold 0.001  min_dur 5
 ///
 /// velocity_threshold scaling rationale:Q 大 → smoothed 跟 raw 更緊 → velocity 自然大
 /// (high-Q daily smoothed velocity ~ daily return ~ 1-5%);threshold 0.001 對 short
-/// horizon 等於所有 trending bars 都 fire → 改用 0.005 過濾。對齊 v3.4 r2 對 Q=1e-5
-/// + threshold=0.001 (~ vel_pct 1-3 sigma) production 校準的同邏輯。
+/// horizon 等於所有 trending bars 都 fire → 改用 per-horizon threshold 過濾。
+///
+/// **v3.34 calibration**(2026-05-18):3030 short horizon velocity=-1.445/day(0.36%)
+/// 被 threshold=0.005 歸 Sideway — 此 velocity 已有明顯方向。改 0.003(0.3%/day,
+/// 對齊台股 daily return 1σ noise floor ≈ 0.5-1%/day 中位)。
 pub fn default_horizons() -> Vec<KalmanFilterHorizon> {
     vec![
         KalmanFilterHorizon {
             label: "short".to_string(),
             process_noise_q: 1e-1,
-            velocity_threshold_pct: 0.005,
+            velocity_threshold_pct: 0.003,
             min_regime_duration_days: 3,
         },
         KalmanFilterHorizon {

@@ -45,6 +45,23 @@ _REGIME_LABELS: dict[str, str] = {
 }
 
 
+# v3.34(2026-05-18):Kalman P_t|t 自我估計對長 series 過於樂觀(收斂到極小,
+# e.g. 3030 ultra_long uncertainty=0.06 對 smoothed=158.59 → deviation 4138σ)。
+# 對 LLM 體驗誤導 — 看起來像極端 outlier 但其實是 P 收斂塌掉。
+#
+# Fix:對 deviation_sigma / uncertainty_band 計算施 1% noise floor —
+# `effective_uncertainty = max(uncertainty, |smoothed_price| × 0.01)`,對齊
+# Bork & Petersen (2014) R=(0.01·p)² 量綱;同時保留 Rust 端 P_t|t 原值給其他
+# consumer(dashboards / 直接讀 indicator_values 的 script)看真實 Kalman 信心。
+_UNCERTAINTY_FLOOR_PCT: float = 0.01      # = 1% of smoothed_price
+
+
+def _effective_uncertainty(uncertainty: float, smoothed_price: float) -> float:
+    """對齊 v3.34:1% smoothed_price floor。避免 P 收斂塌掉導致 deviation 飆天。"""
+    floor = abs(smoothed_price) * _UNCERTAINTY_FLOOR_PCT
+    return max(uncertainty, floor)
+
+
 def compute_kalman_trend(
     stock_id: str,
     as_of: date,
@@ -136,11 +153,13 @@ def compute_kalman_trend(
     uncertainty     = float(latest_state.get("uncertainty") or 0.0)
     regime          = str(latest_state.get("regime") or "Sideway")
 
-    band_lo = smoothed_price - uncertainty
-    band_hi = smoothed_price + uncertainty
+    # v3.34:1% smoothed_price floor 避免 P 收斂塌掉
+    eff_unc = _effective_uncertainty(uncertainty, smoothed_price)
+    band_lo = smoothed_price - eff_unc
+    band_hi = smoothed_price + eff_unc
     deviation_sigma = (
-        (raw_close - smoothed_price) / uncertainty
-        if uncertainty > 1e-9 else 0.0
+        (raw_close - smoothed_price) / eff_unc
+        if eff_unc > 1e-9 else 0.0
     )
 
     # v3.33:per-horizon 摘要(每個 horizon 重算自己的 deviation_sigma)
@@ -207,9 +226,11 @@ def _build_kalman_by_horizon(horizons_raw: list, raw_close: float) -> dict[str, 
         uncertainty = float(last.get("uncertainty") or 0.0)
         velocity = float(last.get("velocity") or 0.0)
         regime = str(last.get("regime") or "Sideway")
+        # v3.34:1% smoothed_price floor(同頂層 deviation 算法)
+        eff_unc = _effective_uncertainty(uncertainty, smoothed)
         dev = (
-            (raw_close - smoothed) / uncertainty
-            if uncertainty > 1e-9 else 0.0
+            (raw_close - smoothed) / eff_unc
+            if eff_unc > 1e-9 else 0.0
         )
         out[label] = {
             "Q":                _round(float(h.get("process_noise_q") or 0.0), 6),

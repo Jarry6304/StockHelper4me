@@ -223,10 +223,11 @@ class TestKalmanTrend:
         assert result["smoothed_price"] == 1220.3
         assert result["regime"] == "StableUp"
         assert result["regime_label"] == "穩定上漲"
-        # uncertainty_band = smoothed ± uncertainty
-        assert result["uncertainty_band"] == [1211.8, 1228.8]
-        # deviation = (1234.5 - 1220.3) / 8.5 ≈ 1.67
-        assert abs(result["deviation_sigma"] - 1.67) < 0.05
+        # v3.34:effective_uncertainty = max(8.5, 1220.3 × 0.01) = max(8.5, 12.203) = 12.203
+        # uncertainty_band = smoothed ± effective = [1208.10, 1232.50]
+        assert result["uncertainty_band"] == [1208.1, 1232.5]
+        # v3.34:deviation = (1234.5 - 1220.3) / 12.203 ≈ 1.16
+        assert abs(result["deviation_sigma"] - 1.16) < 0.05
 
     def test_recent_regime_changes_extracted(self, monkeypatch):
         as_of = date(2026, 5, 15)
@@ -282,7 +283,9 @@ class TestKalmanTrend:
         result = data_tools.kalman_trend("2330", "2026-05-15", lookback_days=180)
         # 應該讀 series[-1] 的 2225 / 11.0 / 0.7 / Accelerating(不是頂層 missing → 0)
         assert result["smoothed_price"] == 2225.0
-        assert result["uncertainty_band"] == [2214.0, 2236.0]
+        # v3.34:effective_uncertainty = max(11.0, 2225 × 0.01) = max(11.0, 22.25) = 22.25
+        # band = [2225 - 22.25, 2225 + 22.25] = [2202.75, 2247.25]
+        assert result["uncertainty_band"] == [2202.75, 2247.25]
         assert result["trend_velocity"] == 0.7
         assert result["regime"] == "Accelerating"
 
@@ -451,6 +454,64 @@ class TestKalmanTrend:
         assert cons["all_aligned"] is True
         assert cons["majority_count"] == 4
         assert "高度一致" in cons["summary"]
+
+    def test_v3_34_uncertainty_floor_compresses_extreme_deviation(self, monkeypatch):
+        """v3.34:Kalman P 收斂塌掉時(uncertainty < 1% × smoothed)套 1% floor,
+        避免 deviation_sigma 飆到天文數字(production 3030 ultra_long 4138σ bug)。
+
+        Fixture 模擬 3030 production state(uncertainty=0.06 vs smoothed=158.59,
+        實際 P/p ratio = 0.04%,遠低於 1% 量綱)。
+        """
+        # 對齊 production verify Phase D 揭露的數字
+        production_3030 = {
+            "stock_id": "3030", "timeframe": "Daily", "primary_horizon": "medium",
+            "series": [{"date": "2026-05-15", "raw_close": 395.0,
+                        "smoothed_price": 158.59, "uncertainty": 0.06,
+                        "velocity": 0.7247, "regime": "Accelerating"}],
+            "events": [],
+            "horizons": [
+                {"label": "ultra_long", "process_noise_q": 1e-5, "halflife_bars": 3099.0,
+                 "velocity_threshold_pct": 0.001, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 158.59, "uncertainty": 0.06,
+                                 "velocity": 0.7247, "regime": "Accelerating"},
+                 "event_count": 14},
+            ],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=production_3030)
+        result = data_tools.kalman_trend("3030", "2026-05-15")
+
+        # 頂層 deviation:effective_unc = max(0.06, 158.59 × 0.01) = 1.586
+        # deviation = (395.0 - 158.59) / 1.586 ≈ 149.07σ(原本 4138σ)
+        assert abs(result["deviation_sigma"] - 149.07) < 1.0, \
+            f"v3.34 deviation 應 ~149σ(從 4138σ 壓下),實際 {result['deviation_sigma']}"
+
+        # uncertainty_band 也走 floor:[158.59 - 1.586, 158.59 + 1.586] = [157.00, 160.18]
+        assert result["uncertainty_band"] == [157.0, 160.18]
+
+        # ultra_long horizon dev 也走 floor
+        ultra = result["kalman_by_horizon"]["ultra_long"]
+        assert abs(ultra["deviation_sigma"] - 149.07) < 1.0, \
+            f"v3.34 ultra_long deviation 應 ~149σ,實際 {ultra['deviation_sigma']}"
+
+    def test_v3_34_floor_no_op_when_uncertainty_above_pct(self, monkeypatch):
+        """v3.34:當 uncertainty 已大於 1% × smoothed 時,floor no-op,deviation 不變。
+
+        Fixture:smoothed=100, uncertainty=5(= 5% > 1%)→ floor=1 < 5,不生效。
+        Deviation = (110-100)/5 = 2.0σ(正常 Kalman 行為)。
+        """
+        normal_value = {
+            "stock_id": "TEST", "timeframe": "Daily",
+            "series": [{"date": "2026-05-15", "raw_close": 110.0,
+                        "smoothed_price": 100.0, "uncertainty": 5.0,
+                        "velocity": 0.5, "regime": "StableUp"}],
+            "events": [],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=normal_value)
+        result = data_tools.kalman_trend("TEST", "2026-05-15")
+        # 5 > 1% × 100 = 1.0,floor no-op
+        assert abs(result["deviation_sigma"] - 2.0) < 0.01
+        assert result["uncertainty_band"] == [95.0, 105.0]
 
     def test_v3_33_backward_compat_no_horizons_field(self, monkeypatch):
         """舊 schema(無 horizons array)應 graceful:kalman_by_horizon = {}。
