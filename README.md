@@ -1,9 +1,9 @@
 # StockHelper4me — tw-stock-collector
 
-> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + MCP toolkit 9 tools)。
+> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + MCP toolkit 4 tools)。
 
-**版本**:v3.25(alembic head `c8d9e0f1g2h3` / 2026-05-17)
-**狀態**:**Round 7 + Round 8 + Round 9 calibration 完整結算** ☕(2026-05-17 production verify 全綠)+ **5 sponsor-tier datasets 接入 + 4 new cores production-ready + 4 new MCP tools(toolkit 5→9)+ `market_context()` 整合 commodity_macro / risk_alert(8 components weights)+ price_limit 420× incremental 加速**;m2 大重構正式終結 ✅;M3 Cores **39 crates** production-ready;Aggregation Layer 4 Phase 全套;Rust workspace **443 tests passed / 0 failed**;Python tests **110 passed / 1 skipped**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
+**版本**:v3.31(alembic head `c8d9e0f1g2h3` / 2026-05-17)
+**狀態**:**Round 7 + Round 8 + Round 9 calibration 完整結算** ☕ + **5 sponsor-tier datasets 接入 + 4 new cores production-ready + MCP toolkit 9 → 4 consolidation(stock_snapshot 6-in-1)+ Kalman series-path bug 修(v3.30)+ render tools 暫隱藏 + Neely/Kalman verify pipeline 入流水線(v3.31)**;m2 大重構正式終結 ✅;M3 Cores **39 crates** production-ready;Aggregation Layer 4 Phase 全套;Rust workspace **443 tests passed / 0 failed**;Python tests **125 passed / 1 skipped**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
 
 ---
 
@@ -37,7 +37,7 @@
 | **Layer 2 Silver per-stock** | 13 個 `*_derived` SQL builder + 4 個 fwd 表(Rust)+ `price_limit_merge_events` | `python src/main.py silver phase 7a/7b/7c`(`silver/orchestrator.py`)|
 | **Layer 2.5 Cross-Stock Cores**(v3.5 R3 新)| 跨股 ranking(目前 1 個:`magic_formula_ranked_derived`)| `python src/main.py cross_cores phase 8`(`cross_cores/orchestrator.py`)|
 | **Layer 3 M3 Cores** | **39 crates** Rust workspace 全市場全核 dispatch(Wave / Indicator / Chip 8 / Fundamental / Environment 7 / System)| `tw_cores run-all --workflow workflows/tw_stock_standard.toml --write` |
-| **Layer 4 MCP / API 對外** | Aggregation Layer + Streamlit dashboards 6 tabs + FastMCP server **9 public tools**(v3.22 加 4) | `agg.as_of()` / `dashboards/aggregation.py` / `mcp_server/server.py` |
+| **Layer 4 MCP / API 對外** | Aggregation Layer + Streamlit dashboards 6 tabs + FastMCP server **4 public tools**(v3.31 consolidation:neely / kalman / magic_formula / stock_snapshot 6-in-1) | `agg.as_of()` / `dashboards/aggregation.py` / `mcp_server/server.py` |
 
 ```
               FinMind / 外部資料
@@ -70,7 +70,7 @@
                     ▼
    ┌── Layer 4 MCP / API 對外 ──────────────────┐
    │   agg.as_of(stock_id, date) read-only API  │
-   │   + 6 dashboards tabs + MCP 5 tools        │
+   │   + 6 dashboards tabs + MCP 4 tools        │
    └────────────────────────────────────────────┘
 ```
 
@@ -136,7 +136,7 @@ StockHelper4me/
 │   └── tw_stock_standard.toml       # 35 cores workflow(dispatch via tw_cores run-all --workflow)
 ├── workflows/tw_stock_standard.toml # 39 cores workflow(v3.21 +4 entries)
 ├── dashboards/aggregation.py        # Streamlit 6 tabs(K-line / Chip / Fund / Env / Neely / Facts)
-├── mcp_server/                      # FastMCP stdio server(v3.22 9 public tools + helpers)
+├── mcp_server/                      # FastMCP stdio server(v3.31:4 public tools — neely / kalman / magic_formula / stock_snapshot 6-in-1)
 │   ├── _loan_collateral / _block_trade / _risk_alert / _commodity_macro  # v3.22 加 4 helper modules
 ├── scripts/                         # verifier / inspect / reverse-pivot 工具
 ├── docs/
@@ -393,6 +393,19 @@ v3.24 Round 9 calibration + commodity_macro builder fix:
       - commodity_macro Silver builder order_by fix(market-level Bronze pattern)
       - 4 new cores 全部 production-ready,觸發率合理
       - wall time 806s → 738s(-8.5%)
+v3.25 market_context() 整合 commodity_macro / risk_alert(8 components)
+v3.26 MCP current_price bug fix:3 helper 直讀 price_daily,不依賴 indicator_latest
+v3.27 MCP toolkit metadata.kind 統一修(event_kind 優先 + kind fallback)
+v3.28 neely wave_count regex parse + scenario / indicator staleness surface
+v3.29 risk_alert _parse_severity 加 處置 / 注意 broad pattern + condition kwarg
+v3.30 kalman series-last-entry 修(production smoothed=0 silent bug)
+      + 6 個 render tools 暫隱藏(PNG 後端 silent fail)
+v3.31 MCP toolkit 9 → 4 consolidation:
+      - neely_forecast / kalman_trend / magic_formula_screen 不動
+      - 新 stock_snapshot(stock_id, date)合併 6 個基本資料 tool
+      - 6 個被合併的 helper 仍 callable from Python(dashboard 用)
+      - 新 verify pipeline:scripts/verify_mcp_kalman_neely.py + .sql
+      - tests 117 → 125 passed
 ```
 
 ---
@@ -402,7 +415,7 @@ v3.24 Round 9 calibration + commodity_macro builder fix:
 ```bash
 # Python tests(agg + silver + cross_cores + mcp_server)
 pytest tests/agg/                       # 39 passed / 1 skipped(pandas 未裝)
-pytest tests/mcp_server/                # 33+ passed(v3.22 toolkit_v3 24 cases)
+pytest tests/mcp_server/                # 80+ passed(v3.31 +8 stock_snapshot cases)
 pytest tests/                           # 全套 unit test
 
 # Rust workspace tests(39 crates / 443 passed / 0 failed)
