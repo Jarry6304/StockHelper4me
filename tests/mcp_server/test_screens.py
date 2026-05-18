@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -208,6 +209,77 @@ class TestMonthlyTriggerScan:
 # ════════════════════════════════════════════════════════════
 # Public surface
 # ════════════════════════════════════════════════════════════
+
+
+class TestMonthlyTriggerScanV332Hotfix:
+    """v3.32 hotfix:加 stock_id filter + top_n_per_type 防 payload 爆量。"""
+
+    def _mock_with_500_signals(self, monkeypatch, stock_filter: str | None = None):
+        """Mock 500 signals 模擬 production-like 規模(原 user 報 ~464 / ~94KB)。"""
+        signal_date = date(2026, 5, 15)
+        cur = MagicMock()
+        cur.fetchone.return_value = {"d": signal_date}
+        # 300 positive + 200 negative,covers user's 464 scale
+        rows = []
+        for i in range(300):
+            rows.append({
+                "stock_id": f"{1000 + i:04d}", "trigger_type": "positive",
+                "revenue_yoy_pct": 30.0 + (i % 50), "institutional_20d": 1e6,
+                "shares_outstanding": 1e9, "institutional_pct": 0.001,
+                "action_hint": "increase_20pct",
+                "detail": {"rationale": f"row {i}"},
+                "stock_name": f"Co {i}", "industry_category": "電子業",
+            })
+        for i in range(200):
+            rows.append({
+                "stock_id": f"{2000 + i:04d}", "trigger_type": "negative",
+                "revenue_yoy_pct": -20.0 - (i % 30), "institutional_20d": -1e6,
+                "shares_outstanding": 1e9, "institutional_pct": -0.002,
+                "action_hint": "decrease_50pct",
+                "detail": {"rationale": f"neg row {i}"},
+                "stock_name": f"Co {i}", "industry_category": "電子業",
+            })
+        if stock_filter:
+            rows = [r for r in rows if r["stock_id"] == stock_filter]
+        cur.fetchall.return_value = rows
+        cur.__enter__ = lambda self: self
+        cur.__exit__ = lambda *a: False
+        conn = MagicMock()
+        conn.cursor.return_value = cur
+        conn.close = MagicMock()
+        from mcp_server import _screens
+        monkeypatch.setattr(_screens, "get_connection", lambda *a, **kw: conn)
+        return cur, conn
+
+    def test_default_summary_mode_truncates(self, monkeypatch):
+        """無 stock_id → 預設 top 20 per type;counts 仍回 total。"""
+        self._mock_with_500_signals(monkeypatch)
+        result = data_tools.monthly_trigger_scan("2026-05-15")
+        # truncate 到 top 20 each
+        assert len(result["positive_triggers"]) == 20
+        assert len(result["negative_triggers"]) == 20
+        # counts 仍是 total(不被截斷)
+        assert result["counts"]["positive_total"] == 300
+        assert result["counts"]["negative_total"] == 200
+        # narrative 提到 truncate
+        assert "truncate" in result["narrative"] or "top 20" in result["narrative"]
+
+    def test_stock_id_filter_returns_all_matching(self, monkeypatch):
+        """指定 stock_id → 只回該股 trigger(典型 0-2 筆)。"""
+        self._mock_with_500_signals(monkeypatch, stock_filter="1005")
+        result = data_tools.monthly_trigger_scan("2026-05-15", stock_id="1005")
+        assert result["stock_filter"] == "1005"
+        # 1005 在 positive 內 (idx 5)
+        assert len(result["positive_triggers"]) == 1
+        assert result["positive_triggers"][0]["stock_id"] == "1005"
+        assert "1005 命中 positive" in result["narrative"]
+
+    def test_payload_size_bounded(self, monkeypatch):
+        """500 signal scale 下 payload 必 ≤ 20KB(remediation v3.32 user bug)。"""
+        self._mock_with_500_signals(monkeypatch)
+        result = data_tools.monthly_trigger_scan("2026-05-15")
+        n = len(json.dumps(result, ensure_ascii=False))
+        assert n < 20_000, f"payload {n} bytes 超 budget(user 報 94KB 必須 < 20KB)"
 
 
 class TestScreensPublicSurface:

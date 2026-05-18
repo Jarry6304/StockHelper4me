@@ -221,6 +221,27 @@ class TestStockSnapshot:
         assert "9999" in result["narrative"]
 
 
+class TestStockSnapshotV332Hotfix:
+    """v3.32 hotfix:overall_score 是 float 時 narrative 不該炸。"""
+
+    def test_float_overall_score_no_format_error(self):
+        """user production:overall_score = 35.5(float)→ 原 :+d 炸 ValueError。"""
+        health_with_float_score = {
+            **_HEALTH_OK,
+            "overall_score": 35.5,    # float,非 int
+        }
+        patches = _patch_all_helpers(health=health_with_float_score)
+        for p in patches: p.start()
+        try:
+            result = data_tools.stock_snapshot("2330", "2026-05-15")
+        finally:
+            for p in reversed(patches): p.stop()
+        # 不應 raise ValueError(Unknown format code 'd' for object of type 'float')
+        assert "narrative" in result
+        # narrative 含格式化後的整數表示(+36 不是 +35.5)
+        assert "+36" in result["narrative"] or "+35" in result["narrative"]
+
+
 class TestStockSnapshotPublicSurface:
 
     def test_stock_snapshot_callable(self):
