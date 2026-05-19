@@ -266,6 +266,86 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.2 — P1.2 Ch9 advisory + Ch12 Waterfall/Localized(2026-05-19)
+
+接 v4.1 P1.1 後動工 P1.2(plan 文件 §「Milestone P1.2」)。補完 Ch9 / Ch12 advisory
+規則,讓 spec-only enum variants 全部有 dispatch。**advisory mode**:不參與 scenario filter,
+僅 寫 `Scenario.advisory_findings` 給 LLM 看。
+
+### 動工項目(1 commit / 6 task / branch `claude/continue-previous-work-xdKrl`)
+
+| # | 工作 | 動作 |
+|---|---|---|
+| 7 | Ch9 Independent Rule advisory(spec 1973-1974) | 新 `check_independent_rule(scenario)`:scenario 啟動 ≥ 2 NEoWave 章節 → Info advisory「規則互不干涉」;`rule_chapter()` helper 對 RuleId enum 推導章節 |
+| 8 | Ch9 Simultaneous Occurrence advisory(spec 1976-1977) | 新 `check_simultaneous_occurrence(scenario)`:Impulse pattern 預期 Ch5_Essential R1-R7 全 passed;< 7 個 → Warning advisory「未同時齊備」;= 7 個 → Info「情境齊備」 |
+| 9 | Ch9 Exception Aspect 2 dispatch(spec 1988-1990) | 新 `detect_exception_aspect_2(scenario)`:Trendline Touchpoints Strong + Diagonal pattern → 觸發 `Ch9_Exception_Aspect2 { triggered_new_rule: "Terminal Impulse (Diagonal)" }` |
+| 10 | Ch9 Exception Aspect 1 Multiwave 補完 | `exception_aspect_1_situation` 加 Multiwave 結尾分支:Combination Triple* / RunningCorrection → `ExceptionSituation::MultiwaveEnd` |
+| 11 | Ch12 Waterfall Effect ±5% | **新 module** `fibonacci/waterfall.rs`:Trending Impulse + W3/W1 > 2.618 + 5% 或 W5/max(W1,W3) > 2.618 + 5% → Strong advisory「加速 cascade」;否則 Info |
+| 12 | Ch12 Localized Progress Label Changes | **新 module** `advanced_rules/ch12_localized.rs`:3 種觸發 case(Impulse in_triangle_context / compacted_base=Five 含複雜 labels / awaiting_l_label)→ Info advisory「label 局部變動」 |
+
+### 範圍
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/ch9.rs` | 加 4 個新 fn(`check_independent_rule` / `check_simultaneous_occurrence` / `detect_exception_aspect_2` / `count_active_chapters` + `rule_chapter` helpers);`exception_aspect_1_situation` 加 Multiwave 結尾分支(Combination Triple* / RunningCorrection → MultiwaveEnd);**+8 new tests** |
+| `rust_compute/cores/wave/neely_core/src/fibonacci/waterfall.rs` | **新檔** — `check_waterfall_effect()` + `waterfall_threshold()`(2.618 × 1.05 = 2.7489) + 5 unit tests |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/ch12_localized.rs` | **新檔** — `detect_localized_changes()` 3 case 偵測 + 4 unit tests |
+| `rust_compute/cores/wave/neely_core/src/fibonacci/mod.rs` | 加 `pub mod waterfall;` 註冊 |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | 加 `pub mod ch12_localized;` 註冊 + `run()` 內接入 6 個新 advisory check |
+| `rust_compute/cores/wave/neely_core/src/fibonacci/projection.rs` | line 19 註解 update:Waterfall「**v4.2 P1.2 已啟用**」(原「留 P11+」)|
+| `CLAUDE.md` | v4.2 章節(本段) |
+
+**0 alembic / 0 collector.toml / 0 Python / advisory mode → 0 scenario forest filter 行為改變**。
+
+### 沙箱驗證
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release -p neely_core` ✅ **307 passed / 0 failed**(從 v4.1 288 → +19 new)
+- `cargo test --release --workspace --no-fail-fast` ✅ **480 passed / 0 failed**(v4.1 baseline 461 → +19)
+
+### 風險
+
+🟢 低:
+- advisory 不參與 scenario filter,production behavior 變化僅 `advisory_findings` 多 entries
+- LLM 看 narrative 多訊號(章節獨立性 / Simultaneous 齊備度 / Exception Aspect 2 觸發 / Waterfall cascade / Localized adjustments)
+- 既有 P1.1 / v3.38 tests 0 regression
+- params_hash 不變(Scenario 結構不改);user 重跑 tw_cores 走 ON CONFLICT UPDATE 覆寫
+- Rollback:單 commit `git revert` 即可
+
+### user 本機(下次 session 起點)
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+
+# 重跑 tw_cores 讓新 advisory 寫入 scenario.advisory_findings
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+
+# 確認新 advisory 在 production 出現
+psql $env:DATABASE_URL -c "
+SELECT
+  jsonb_array_length(s->'advisory_findings') AS finding_count,
+  s->'advisory_findings' AS findings
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE stock_id='2330' AND core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE stock_id='2330' AND core_name='neely_core' AND timeframe='daily')
+  AND timeframe='daily'
+LIMIT 3;
+"
+# 預期 finding_count 略升(v4.1 ~5 → v4.2 +4~6 個 new advisory:
+# Ch9_Simultaneous / Ch12_WaterfallEffect / Ch12_LocalizedChanges / Ch9_Independent
+# / Ch9_Exception_Aspect2 (Diagonal 時))
+```
+
+### 下個 milestone(P1.3 Ch11 wave-by-wave)
+
+接著 P1.3 Ch11 Wave-by-Wave 5 個 sub-PR(Trending Impulse / Terminal Impulse / Flat 七變體
+/ Zigzag / Triangle 九變體 ~2,650 LoC)。詳見 plan 文件 §「Milestone P1.3」。
+
+---
+
 ## v4.1 — P1.1 Neely M3SPEC alignment Quick Wins(2026-05-19)
 
 接 v3.38 收尾後動工 v4.0 Plan(15 真闕漏 / 4 milestones / ~5,340 LoC),
