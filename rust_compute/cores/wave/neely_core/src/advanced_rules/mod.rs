@@ -84,6 +84,11 @@ pub fn run(scenarios: &mut [Scenario], classified: &[ClassifiedMonowave]) {
             scenario, classified,
         ));
 
+        // v4.3c P1.3c:Ch11 Flat 七變體 wave-a/b/c 規則
+        findings.extend(crate::validator::ch11_flat_variants::analyze(
+            scenario, classified,
+        ));
+
         // 寫入 advisory_findings(此處 set,需在 Independent / Exception Aspect 2 之前)
         scenario.advisory_findings = findings;
 

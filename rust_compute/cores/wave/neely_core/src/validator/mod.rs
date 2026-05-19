@@ -39,6 +39,8 @@ pub mod zigzag_rules;
 pub mod ch11_trending_impulse;
 /// v4.3b P1.3b:Ch11 Terminal Impulse Wave-by-Wave 變體規則(對應 Diagonal pattern)
 pub mod ch11_terminal_impulse;
+/// v4.3c P1.3c:Ch11 Flat 七變體 wave-a/b/c 規則
+pub mod ch11_flat_variants;
 
 /// 單條規則對 candidate 的判定結果。
 #[derive(Debug, Clone)]

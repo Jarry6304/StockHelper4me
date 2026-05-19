@@ -1185,6 +1185,8 @@ pub enum FlatVariant {
     CFailure,
     /// B-Failure Flat — b 未達 38.2% × a
     BFailure,
+    /// Double Failure — b 弱(61.8-81% × a)且 c 也未完全回測 b(spec line 2240-2263,v4.3c 新)
+    DoubleFailure,
     /// Irregular Failure — Irregular + C-Failure 雙條件
     IrregularFailure,
     /// Double Flat — 連續兩個 Flat 由 X-wave 連結

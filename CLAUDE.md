@@ -266,6 +266,44 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.3c — P1.3c Ch11 Flat 七變體 wave-a/b/c 規則(2026-05-19)
+
+接 v4.3b P1.3b 後動工 P1.3c — Ch11 Flat 全部 7 變體 wave-a/b/c 規則。
+**Advisory mode**;對應 `NeelyPatternType::Flat { sub_kind: FlatKind }`。
+
+### 範圍(1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_flat_variants.rs` | **新檔** — `analyze()` 主入口 + `flat_kind_to_variant()` mapping + 7 analyzers(B-Failure / C-Failure / Common / Double Failure / Elongated / Irregular(+StrongB)/ Irregular Failure);**+8 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/output.rs` | `FlatVariant` enum 加 `DoubleFailure` variant(原僅 8 variant,補完 9 個) |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_flat_variants;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `ch11_flat_variants::analyze()` 呼叫 |
+| `CLAUDE.md` | v4.3c 章節 |
+
+### 7 變體規則核心覆蓋(對齊 spec 2195-2321)
+
+| Variant | 核心規則 |
+|---|---|
+| **B-Failure** | b 在 61.8-81% × a / c ≥ 61.8% × b / c 必完全回測 b |
+| **C-Failure** | c < b(本變體定義)/ c < 61.8% × b 視為極罕 / c ≈ 61.8% × a |
+| **Common** | b ∈ [81%, 100%] × a / c 必完全回測 b / c 稍微超越 a 不超 10-20% |
+| **Double Failure** | b ≤ 81% × a / c 必未完全回測 b(定義) |
+| **Elongated** | b ≥ 61.8% × a(a/b 相似)/ c 必遠大於 a(c > 100%, 通常 > 150%) |
+| **Irregular**(+StrongB) | b > a 但 ≤ 138.2% × a / c 必完全回測 b |
+| **Irregular Failure** | b > 138.2% × a(定義)/ c 不可完全回測 b |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **333 passed / 0 failed**(v4.3b 325 → +8)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### 下個 sub-PR(P1.3d Zigzag + Appendix B 項 F)
+
+接著 P1.3d — Zigzag wave-a/b/c 進階規則 + Appendix B 項 F(Zigzag c 在 Triangle 內例外),spec line 2323-2345。
+
+---
+
 ## v4.3b — P1.3b Ch11 Terminal Impulse wave-by-wave(2026-05-19)
 
 接 v4.3a P1.3a 後動工 P1.3b — Ch11 Terminal Impulse(原 Elliott Diagonal Triangle)
