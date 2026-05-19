@@ -126,8 +126,13 @@ fn cat_4a_i(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
         if m3_partial {
             add_or_promote(cands, StructureLabel::F3, Certainty::Primary);
             add_or_promote(cands, StructureLabel::S5, Certainty::Primary);
-            // m2 含 > 3 monowaves — [缺資料]:Polywave 偵測需 Compaction(P6)
-            // best-guess:暫不觸發
+            // **v4.7.2 G1.2**:m2 polywave 偵測從 Compaction 反查
+            // (Pass 1 polywave_size=0 → false;Pass 2 在 Compaction 後有真實值)
+            if let Some(m2) = ctx.m2 {
+                if is_polywave(m2) {
+                    add_or_promote(cands, StructureLabel::L5, Certainty::Possible);
+                }
+            }
             if let Some(m0) = ctx.m0 {
                 if let Some(m_minus_1) = ctx.m_minus_1 {
                     if magnitude(m0) < magnitude(m_minus_1) && magnitude(m0) < magnitude(m1) {
@@ -625,7 +630,13 @@ fn cat_4e_i_ii(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>, 
         if m2_slow {
             add_or_promote(cands, StructureLabel::F3, Certainty::Primary);
         }
-        // Branch 6:m0 為 polywave → add x:c3 [缺資料 polywave 偵測,P6+]
+        // Branch 6:m0 為 polywave → add x:c3
+        // **v4.7.2 G1.2**:m0 polywave 偵測從 Compaction 反查
+        if let Some(m0) = ctx.m0 {
+            if is_polywave(m0) {
+                add_or_promote(cands, StructureLabel::XC3, Certainty::Possible);
+            }
+        }
         // Branch 7:m(-1) ≤ 61.8% m0 → add x:c3
         if m_neg_1_short {
             add_or_promote(cands, StructureLabel::XC3, Certainty::Primary);

@@ -55,34 +55,88 @@ pub fn post_validate(
         };
     }
 
-    match scenario.pattern_type {
+    match &scenario.pattern_type {
         NeelyPatternType::Impulse => validate_impulse(scenario, classified, post_pattern),
         NeelyPatternType::Diagonal { sub_kind } => {
-            validate_terminal_impulse(scenario, classified, post_pattern, sub_kind)
+            validate_terminal_impulse(scenario, classified, post_pattern, *sub_kind)
         }
         NeelyPatternType::Triangle { sub_kind } => {
-            validate_triangle(scenario, classified, post_pattern, sub_kind)
+            validate_triangle(scenario, classified, post_pattern, *sub_kind)
         }
         NeelyPatternType::Zigzag { .. } | NeelyPatternType::Flat { .. } => {
             validate_correction(scenario, classified, post_pattern)
         }
-        NeelyPatternType::Combination { .. } => {
-            // Combination Ch6 規則 spec 未細列,留 P9 接 Ch8 Complex Polywaves
+        NeelyPatternType::Combination { sub_kinds } => {
+            // **v4.7.3 G1.3**:Combination Ch6 Stage 2 — 整合 ch8_xwave + ch8_multiwave detection
+            //   - DoubleThree* / TripleThree* → 末段必為 Flat/Triangle(spec 1862-1869)
+            //   - DoubleZigzag / DoubleCombination → 末段為 Zigzag/Flat
+            //   - 用 sub_kinds 推 Stage 2 pending_conditions(取代純 placeholder)
+            let mut pending: Vec<String> = Vec::new();
+            for k in sub_kinds {
+                use crate::output::CombinationKind;
+                match k {
+                    CombinationKind::DoubleThree
+                    | CombinationKind::DoubleThreeCombination
+                    | CombinationKind::DoubleThreeRunning => pending.push(
+                        format!("{:?}:末段預期 Flat/Triangle(spec 1862-1869 Ch8 X-wave 連結)", k),
+                    ),
+                    CombinationKind::TripleThree
+                    | CombinationKind::TripleThreeCombination
+                    | CombinationKind::TripleThreeRunning => pending.push(
+                        format!("{:?}:三段 X-wave 串接,末段預期 Triangle(spec Ch8 Multiwave)", k),
+                    ),
+                    _ => pending.push(format!("{:?}:末段預期 corrective(spec Ch8)", k)),
+                }
+            }
+            // 整合 ch8_xwave / ch8_multiwave 已寫入 scenario.advisory_findings 的內容
+            // (v4.4 P1.4 final 已 dispatch),這裡 surface 為 pending_conditions
+            for finding in &scenario.advisory_findings {
+                if matches!(
+                    finding.rule_id,
+                    crate::output::RuleId::Ch8_XWave_InternalStructure
+                        | crate::output::RuleId::Ch8_Multiwave_Construction
+                ) {
+                    pending.push(format!("[Ch8 advisory] {}", finding.message));
+                }
+            }
             PostValidationReport {
                 scenario_id: scenario.id.clone(),
                 pattern_complete: true,
-                pending_conditions: vec!["Combination Ch6 規則留 P9 Ch8 補完".to_string()],
+                pending_conditions: pending,
             }
         }
         NeelyPatternType::RunningCorrection => {
-            // RunningCorrection 的 Ch6 兩階段確認:後續 Impulse > 161.8% × 前一同向 Impulse
-            // (對齊 spec line 2035)— 完整 polywave 嵌套偵測留 P9 接 Ch8 Complex Polywaves
+            // **v4.7.3 G1.3**:RunningCorrection Stage 2 真實化
+            //   spec line 2024-2037:RunningCorrection 後續必為延伸 Impulse(常達 161.8-261.8%)
+            //   - 對齊 scenario.power_rating(±3 favor continuation)
+            //   - 整合 advisory_findings(Ch6/Ch8 已寫入的 follow-up 預測)
+            let mut pending: Vec<String> = vec![
+                format!(
+                    "後續預期延伸 Impulse > 161.8% × 同向 Impulse(spec 2024-2037);\
+                     scenario.power_rating = {:?} → {} continuation 趨勢",
+                    scenario.power_rating,
+                    match scenario.power_rating {
+                        crate::output::PowerRating::StrongBullish
+                        | crate::output::PowerRating::StrongBearish => "強",
+                        crate::output::PowerRating::Bullish
+                        | crate::output::PowerRating::Bearish => "中",
+                        _ => "弱",
+                    }
+                ),
+            ];
+            for finding in &scenario.advisory_findings {
+                use crate::output::RuleId;
+                if matches!(
+                    finding.rule_id,
+                    RuleId::Ch6_Correction_BLarge_Stage2 | RuleId::Ch8_Multiwave_Construction
+                ) {
+                    pending.push(format!("[advisory] {}", finding.message));
+                }
+            }
             PostValidationReport {
                 scenario_id: scenario.id.clone(),
                 pattern_complete: true,
-                pending_conditions: vec![
-                    "RunningCorrection Ch6 後續 Impulse > 161.8% 驗證留 P9 接 polywave 嵌套".to_string(),
-                ],
+                pending_conditions: pending,
             }
         }
     }
@@ -642,6 +696,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         }
     }
 

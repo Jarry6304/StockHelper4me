@@ -28,7 +28,7 @@
 //   - 細項對齊 m3Spec/neely_rules.md 1042-1062 行「Pre-Constructive Logic 細部技術備註」
 
 use crate::monowave::ClassifiedMonowave;
-use crate::output::{OhlcvBar, StructureLabelCandidate};
+use crate::output::{OhlcvBar, Scenario, StructureLabelCandidate};
 
 pub mod context;
 pub mod predicates;
@@ -59,6 +59,47 @@ pub fn run(classified: &mut [ClassifiedMonowave], bars: &[OhlcvBar]) {
     for i in 0..classified.len() {
         let cands = compute_candidates_at(classified, bars, i);
         classified[i].structure_label_candidates = cands;
+    }
+}
+
+/// **v4.7.2 G1.2(2026-05-19)**:從 Compaction forest 反查 polywave 規模,
+/// 標記每個 base classified monowave 的 `polywave_size`。
+///
+/// 邏輯:
+///   - 對 forest 內每個 Level-N+ scenario(wave_tree.children.len() > 0):
+///     - 對該 scenario 範圍內的每個 base monowave classified[i]
+///       (classified[i].monowave.start_date >= scenario.wave_tree.start AND
+///        classified[i].monowave.end_date <= scenario.wave_tree.end):
+///       - polywave_size = max(current, scenario.wave_tree.children.len())
+///
+/// 對齊 spec line 1042-1062「m_N 含 > 3 sub-monowaves」(`polywave_size > 3`
+/// 由 `is_polywave` helper 判定);Compaction Three Rounds 將相鄰多個 monowaves
+/// aggregated 為一個 wave_tree.children entry,當 children 數 > 3 時對應 region
+/// 即視為「polywave region」。
+///
+/// **2-pass 設計**(對齊 plan §G1.2):
+///   - Stage 0 Pre-Constructive Pass 1 → 所有 polywave_size = 0 → rule 1/4/5/6/7
+///     polywave checks 全 false(走 (B) 分支,= v4.6 行為)
+///   - Stage 8 Compaction 跑完 → 呼叫此 fn 設 polywave_size
+///   - Stage 0 Pre-Constructive Pass 2 → polywave checks 反查真實值 → 可走 (A) 分支
+pub fn populate_polywave_sizes(
+    classified: &mut [ClassifiedMonowave],
+    forest: &[Scenario],
+) {
+    for scenario in forest {
+        let n_children = scenario.wave_tree.children.len();
+        if n_children == 0 {
+            continue; // Level-0 base scenario,無 polywave 資訊
+        }
+        let start = scenario.wave_tree.start;
+        let end = scenario.wave_tree.end;
+        for c in classified.iter_mut() {
+            if c.monowave.start_date >= start && c.monowave.end_date <= end {
+                if n_children > c.polywave_size {
+                    c.polywave_size = n_children;
+                }
+            }
+        }
     }
 }
 
@@ -128,6 +169,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         }
     }
 
@@ -171,5 +213,181 @@ mod tests {
         let cands = &classified[2].structure_label_candidates;
         assert_eq!(cands.len(), 1);
         assert!(matches!(cands[0].label, StructureLabel::Five));
+    }
+
+    // v4.7.2 G1.2 populate_polywave_sizes tests --------------------------
+
+    fn make_scenario_polywave(
+        start_date: chrono::NaiveDate,
+        end_date: chrono::NaiveDate,
+        n_children: usize,
+    ) -> crate::output::Scenario {
+        use crate::output::{
+            ComplexityLevel, NeelyPatternType, PostBehavior, PowerRating, RoundState,
+            StructuralFacts, WaveNode,
+        };
+        let children: Vec<WaveNode> = (0..n_children)
+            .map(|i| WaveNode {
+                label: format!("c{}", i),
+                start: start_date,
+                end: end_date,
+                children: Vec::new(),
+            })
+            .collect();
+        crate::output::Scenario {
+            id: "test".to_string(),
+            wave_tree: WaveNode {
+                label: "agg".to_string(),
+                start: start_date,
+                end: end_date,
+                children,
+            },
+            pattern_type: NeelyPatternType::Impulse,
+            initial_direction: MonowaveDirection::Up,
+            compacted_base_label: StructureLabel::Five,
+            structure_label: "agg".to_string(),
+            complexity_level: ComplexityLevel::Simple,
+            power_rating: PowerRating::Neutral,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
+            passed_rules: Vec::new(),
+            deferred_rules: Vec::new(),
+            rules_passed_count: 0,
+            deferred_rules_count: 0,
+            invalidation_triggers: Vec::new(),
+            expected_fib_zones: Vec::new(),
+            structural_facts: StructuralFacts::default(),
+            advisory_findings: Vec::new(),
+            in_triangle_context: false,
+            awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
+        }
+    }
+
+    fn cmw_at_dates(
+        start_date: chrono::NaiveDate,
+        end_date: chrono::NaiveDate,
+    ) -> ClassifiedMonowave {
+        ClassifiedMonowave {
+            monowave: Monowave {
+                start_date,
+                end_date,
+                start_price: 100.0,
+                end_price: 110.0,
+                direction: MonowaveDirection::Up,
+                bar_indices: (0, 0),
+            },
+            atr_at_start: 1.0,
+            metrics: ProportionMetrics {
+                magnitude: 10.0,
+                duration_bars: 5,
+                atr_relative: 1.0,
+                slope_vs_45deg: 1.0,
+            },
+            structure_label_candidates: Vec::new(),
+            polywave_size: 0,
+        }
+    }
+
+    #[test]
+    fn populate_polywave_sizes_marks_covered_classified() {
+        // 3 classified monowaves covering Jan 1-15
+        let mut classified = vec![
+            cmw_at_dates(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            ),
+            cmw_at_dates(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 6).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            ),
+            cmw_at_dates(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 11).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+            ),
+        ];
+        // 1 Level-N scenario with 5 children covering Jan 1-15
+        let forest = vec![make_scenario_polywave(
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+            5,
+        )];
+        populate_polywave_sizes(&mut classified, &forest);
+        // 3 base monowaves should all be marked with polywave_size=5
+        for c in &classified {
+            assert_eq!(c.polywave_size, 5, "covered base monowave should be marked");
+        }
+    }
+
+    #[test]
+    fn populate_polywave_sizes_skips_level_0_scenarios() {
+        let mut classified = vec![cmw_at_dates(
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        )];
+        // Level-0 scenario (no children)
+        let forest = vec![make_scenario_polywave(
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            0,
+        )];
+        populate_polywave_sizes(&mut classified, &forest);
+        assert_eq!(classified[0].polywave_size, 0, "Level-0 不應寫入 polywave_size");
+    }
+
+    #[test]
+    fn populate_polywave_sizes_keeps_max_when_multiple_levels() {
+        let mut classified = vec![cmw_at_dates(
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        )];
+        // 兩個 scenarios:Level-1(3 children)和 Level-2(5 children)
+        let forest = vec![
+            make_scenario_polywave(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                3,
+            ),
+            make_scenario_polywave(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                5,
+            ),
+        ];
+        populate_polywave_sizes(&mut classified, &forest);
+        assert_eq!(classified[0].polywave_size, 5, "應取 max children count");
+    }
+
+    #[test]
+    fn populate_polywave_sizes_does_not_mark_out_of_range_base() {
+        let mut classified = vec![cmw_at_dates(
+            chrono::NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 2, 5).unwrap(),
+        )];
+        // Scenario range 跟 base monowave 不重疊
+        let forest = vec![make_scenario_polywave(
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            5,
+        )];
+        populate_polywave_sizes(&mut classified, &forest);
+        assert_eq!(classified[0].polywave_size, 0, "範圍外不應 mark");
+    }
+
+    #[test]
+    fn is_polywave_threshold_check() {
+        use super::predicates::is_polywave;
+        let mut c = cmw_at_dates(
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        );
+        assert!(!is_polywave(&c), "polywave_size=0 → false");
+        c.polywave_size = 3;
+        assert!(!is_polywave(&c), "polywave_size=3 不算 polywave (> 3 才算)");
+        c.polywave_size = 4;
+        assert!(is_polywave(&c), "polywave_size=4 → true");
     }
 }

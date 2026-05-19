@@ -131,24 +131,41 @@ fn analyze_0_b(scenario: &Scenario, waves: &[ClassifiedMonowave]) -> AdvisoryFin
         waves.last().unwrap().monowave.end_date,
     );
     let c_end = waves.last().unwrap().monowave.end_price;
-    // Zigzag c-wave 絕不可剛好觸碰平行線(spec 1356)— 本 PR 簡化為「突破 0-B 線」報告
+    // Zigzag c-wave 絕不可剛好觸碰平行線(spec 1356)
     let line_str = line_y.map_or("無法計算".to_string(), |y| format!("{:.2}", y));
-    let breached = line_y.is_some_and(|y| match scenario.initial_direction {
-        MonowaveDirection::Up => c_end < y,
-        MonowaveDirection::Down => c_end > y,
-        _ => false,
-    });
-    let severity = if breached {
-        AdvisorySeverity::Warning // 0-B 線被穿破 → c-wave 與更大形態幾乎結束(spec 1357)
+
+    // **v4.7.3 G1.3**:加 epsilon tolerance,區分「觸碰」vs「突破」
+    // - epsilon = 0.5%(對齊 spec 「絕不可剛好觸碰」的精度容忍 — 太小會誤判,太大會 miss)
+    // - touch: |c_end - y| <= epsilon × y → Strong signal「Triangle 形成」(spec 1356-1358)
+    // - breach: 越過 epsilon 範圍且方向錯 → Warning(c-wave 與更大形態幾乎結束;spec 1357)
+    // - clear:c-wave 在線同側且離線 ≥ epsilon → Info
+    const TOUCH_EPSILON_PCT: f64 = 0.005; // 0.5%
+    let (severity, touch_label) = if let Some(y) = line_y {
+        let abs_diff = (c_end - y).abs();
+        let touched = abs_diff <= y.abs() * TOUCH_EPSILON_PCT;
+        let breached = match scenario.initial_direction {
+            MonowaveDirection::Up => c_end < y - y.abs() * TOUCH_EPSILON_PCT,
+            MonowaveDirection::Down => c_end > y + y.abs() * TOUCH_EPSILON_PCT,
+            _ => false,
+        };
+        if touched {
+            // spec 1356:剛好觸碰 → Triangle 形成訊號(Strong)
+            (AdvisorySeverity::Strong, "touched")
+        } else if breached {
+            // spec 1357:突破 → c-wave 與更大形態幾乎結束(Warning)
+            (AdvisorySeverity::Warning, "breached")
+        } else {
+            (AdvisorySeverity::Info, "clear")
+        }
     } else {
-        AdvisorySeverity::Info
+        (AdvisorySeverity::Info, "no_line")
     };
     AdvisoryFinding {
         rule_id: RuleId::Ch5_Channeling_0B,
         severity,
         message: format!(
-            "0-B trendline at c.end:{};c.end_price={:.2}(穿破={})",
-            line_str, c_end, breached
+            "0-B trendline at c.end:{};c.end_price={:.2}(state={})",
+            line_str, c_end, touch_label
         ),
     }
 }

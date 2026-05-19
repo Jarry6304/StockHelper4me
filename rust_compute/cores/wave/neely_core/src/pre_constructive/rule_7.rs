@@ -27,11 +27,25 @@ pub fn run(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
 // ---------------------------------------------------------------------------
 
 fn cond_7a(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
+    // **v4.7.2 G1.2**:m2 polywave 偵測從 Compaction 反查
+    if let Some(m2) = ctx.m2 {
+        if is_polywave(m2) {
+            cond_7a_a(ctx, cands);
+            return;
+        }
+    }
     cond_7a_b(ctx, cands);
 }
 
+/// **v4.7.2 G1.2**:Condition 7a 子分支 (A):m2 含 > 3 monowaves
+/// 對齊 spec(細節留 V4.x);通用 add :L5 / :L3 of Possible。
+fn cond_7a_a(_ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
+    add_or_promote(cands, StructureLabel::L5, Certainty::Possible);
+    add_or_promote(cands, StructureLabel::L3, Certainty::Possible);
+}
+
 fn cond_7a_b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
-    // (B) m2 ≤ 3 monowaves(預設,polywave 偵測 [缺資料])
+    // (B) m2 ≤ 3 monowaves(對應 polywave_size ≤ 3)
 
     // Branch 1:(任何環境) → add :L5(高機率)
     add_or_promote(cands, StructureLabel::L5, Certainty::Primary);

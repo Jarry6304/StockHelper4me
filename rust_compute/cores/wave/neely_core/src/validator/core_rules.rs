@@ -519,6 +519,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         }
     }
 

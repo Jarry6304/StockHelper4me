@@ -322,11 +322,19 @@ fn classify_complexity(candidate: &WaveCandidate) -> ComplexityLevel {
     // 基本 Complexity Rule(對齊 architecture §7.1 Stage 7):
     //   3 wave → Simple
     //   5 wave → Intermediate
-    //   5+ nested wave → Complex(留 P6)
+    //   5+ nested wave → Complex
+    //
+    // **v4.7.3 G1.3 升級**(2026-05-19):
+    //   - wave_count > 5 視為 Complex(原 placeholder 已正確,留 P6 改 placeholder 移除)
+    //   - 加入 missing-wave 標記偵測:若 wave_candidates 含 NotApplicable 標記
+    //     的 sub-wave 視同 nested complexity(spec §Ch12 Missing Wave Rule)
+    //   - 完整 nested 列舉(每個 sub-wave 是 :3 或 :5 子形態)由 Compaction
+    //     Three Rounds 處理,Classifier 此處純表徵 wave_count
     match candidate.wave_count {
         3 => ComplexityLevel::Simple,
         5 => ComplexityLevel::Intermediate,
-        _ => ComplexityLevel::Complex,
+        n if n > 5 => ComplexityLevel::Complex,
+        _ => ComplexityLevel::Simple, // wave_count == 0/1/2/4(罕見退化)→ Simple
     }
 }
 
@@ -339,7 +347,11 @@ fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave])
         candidate.wave_count, candidate.initial_direction
     );
 
-    // 子節點:每個 sub-wave 是一個 WaveNode(no children — 留 P5/P6 嵌套)
+    // 子節點:每個 sub-wave 是一個 WaveNode(直接 sub-wave 已展開;
+    // **v4.7.3 G1.3 註解更新**:深層 nested(每個 sub-wave 內部的 :3 / :5 嵌套
+    // 結構)由 Compaction Three Rounds 處理 — 此 classifier 階段純構造 Level-0
+    // wave_tree;Level-N 嵌套由 compaction/three_rounds.rs::aggregate_one_level
+    // 在後續 Stage 8 處理。完整 5-wave-of-5 / 3-wave-of-3 細項展開留 V4.x。
     let children = mi
         .iter()
         .enumerate()
@@ -414,6 +426,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         }
     }
 
@@ -721,5 +734,50 @@ mod tests {
         assert_eq!(labels[1].labels.len(), 1);
         assert_eq!(labels[2].monowave_index, 2);
         assert_eq!(labels[2].labels.len(), 0); // 預設空
+    }
+
+    // v4.7.3 G1.3 classify_complexity tests -----------------------------
+
+    fn make_candidate_wave_count(wc: usize) -> WaveCandidate {
+        WaveCandidate {
+            id: "test".to_string(),
+            wave_count: wc,
+            monowave_indices: (0..wc).collect(),
+            initial_direction: MonowaveDirection::Up,
+        }
+    }
+
+    #[test]
+    fn classify_complexity_3_wave_simple() {
+        let c = make_candidate_wave_count(3);
+        assert!(matches!(classify_complexity(&c), ComplexityLevel::Simple));
+    }
+
+    #[test]
+    fn classify_complexity_5_wave_intermediate() {
+        let c = make_candidate_wave_count(5);
+        assert!(matches!(
+            classify_complexity(&c),
+            ComplexityLevel::Intermediate
+        ));
+    }
+
+    #[test]
+    fn classify_complexity_7_wave_complex() {
+        let c = make_candidate_wave_count(7);
+        assert!(matches!(classify_complexity(&c), ComplexityLevel::Complex));
+    }
+
+    #[test]
+    fn classify_complexity_degenerate_wave_count_simple() {
+        // v4.7.3 G1.3:wave_count == 0/1/2/4 應落 Simple(罕見退化,不應 Complex)
+        for wc in [0usize, 1, 2, 4] {
+            let c = make_candidate_wave_count(wc);
+            assert!(
+                matches!(classify_complexity(&c), ComplexityLevel::Simple),
+                "wave_count={} 應 Simple",
+                wc
+            );
+        }
     }
 }

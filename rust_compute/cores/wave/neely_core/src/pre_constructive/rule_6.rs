@@ -29,8 +29,22 @@ pub fn run(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
 // ---------------------------------------------------------------------------
 
 fn cond_6a(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
-    // [缺資料] m2 polywave 偵測 → (B) 分支
+    // **v4.7.2 G1.2**:m2 polywave 偵測從 Compaction 反查
+    if let Some(m2) = ctx.m2 {
+        if is_polywave(m2) {
+            cond_6a_a(ctx, cands);
+            return;
+        }
+    }
     cond_6a_b(ctx, cands);
+}
+
+/// **v4.7.2 G1.2**:Condition 6a 子分支 (A):m2 含 > 3 monowaves
+///
+/// 對齊 spec(細節留 V4.x);通用 add :L5 / :L3 of Possible。
+fn cond_6a_a(_ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
+    add_or_promote(cands, StructureLabel::L5, Certainty::Possible);
+    add_or_promote(cands, StructureLabel::L3, Certainty::Possible);
 }
 
 fn cond_6a_b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
@@ -154,8 +168,16 @@ fn cond_6b_b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
                 }
             }
         }
-        // Branch 5:m1 慢於自身時間被回測 AND m2 含 ≥ 3 monowaves [缺資料]
-        //   → add :c3 — Phase 2 不觸發
+        // Branch 5:m1 慢於自身時間被回測 AND m2 含 ≥ 3 monowaves
+        //   → add :c3
+        // **v4.7.2 G1.2**:m2 polywave 從 Compaction 反查
+        if is_polywave(m2) {
+            let m1_slow = duration(m2) > duration(m1)
+                && retracement_pct(&m1.monowave, &m2.monowave) >= 1.0;
+            if m1_slow {
+                add_or_promote(cands, StructureLabel::C3, Certainty::Possible);
+            }
+        }
         // Branch 6:m2 在自身時間內被完全回測 AND m0 not shortest AND market returns
         //   → add :sL3
         if completely_retraced_within_time(m2, m3) {

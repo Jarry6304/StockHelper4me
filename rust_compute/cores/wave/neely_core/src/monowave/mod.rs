@@ -34,6 +34,15 @@ pub struct ClassifiedMonowave {
     /// Ch3 Pre-Constructive Logic 標出的 Structure Label 候選清單(Stage 0)。
     /// Stage 2 結束時為空,Stage 0 跑完後填入 ~1-6 個候選。
     pub structure_label_candidates: Vec<StructureLabelCandidate>,
+    /// **v4.7.2 G1.2(2026-05-19)**:Compaction 後標記此 Level-0 base monowave
+    /// 所屬區域的 polywave 規模(= covering Level-N scenario.wave_tree.children.len())。
+    ///
+    /// - Stage 2 / Stage 0 Pass 1:預設 0(無 Compaction 資訊)
+    /// - Stage 8 Compaction 跑完後 Pass 2:walk forest 找含此 base monowave 的
+    ///   Level-N+ scenario,取 max(wave_tree.children.len()) 作為此值
+    /// - Pre-Constructive `is_polywave(m) == polywave_size > 3` 對齊 spec
+    ///   「m_N 含 > 3 sub-monowaves」polywave 判定
+    pub polywave_size: usize,
 }
 
 /// Stage 1+2 統合 entry。
@@ -85,6 +94,7 @@ pub fn classify_monowaves(
                 atr_at_start,
                 metrics,
                 structure_label_candidates: Vec::new(),
+                polywave_size: 0, // v4.7.2 G1.2 Pass 2 (post-Compaction) 才填
             }
         })
         .collect()
