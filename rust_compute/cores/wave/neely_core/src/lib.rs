@@ -291,7 +291,8 @@ impl WaveCore for NeelyCore {
         //    對齊 m3Spec/neely_core_architecture.md §7.1 Stage 0
         //    spec 把這 stage 編號為「Stage 0」是 Pipeline 邏輯位置(Stage 2 之後 / Stage 3 之前)
         let stage_0_start = Instant::now();
-        pre_constructive::run(&mut classified);
+        // v4.6 G3.1:pass bars for intraday-aware predicates (m1_endpoint_broken_by_m2)
+        pre_constructive::run(&mut classified, &input.bars);
         stage_elapsed.insert(
             "stage_0_preconstructive".to_string(),
             stage_0_start.elapsed().as_micros() as u64,

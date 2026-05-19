@@ -292,6 +292,7 @@ mod tests {
             start_price: sp,
             end_price: ep,
             direction: dir,
+            bar_indices: (0, 0),
         }
     }
 

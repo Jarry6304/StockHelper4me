@@ -247,6 +247,7 @@ mod tests {
                 start_price: start_p,
                 end_price: end_p,
                 direction: dir,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {

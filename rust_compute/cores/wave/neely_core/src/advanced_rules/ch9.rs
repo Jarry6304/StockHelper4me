@@ -353,6 +353,7 @@ mod tests {
                 } else {
                     MonowaveDirection::Down
                 },
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {

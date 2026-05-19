@@ -60,6 +60,7 @@ mod tests {
                 start_price: start_p,
                 end_price: end_p,
                 direction: dir,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -85,7 +86,7 @@ mod tests {
             cmw(25.0, 30.0, MonowaveDirection::Up, 5, 20),  // index 5 = m1 (mag 5)
             cmw(30.0, 28.0, MonowaveDirection::Down, 2, 26),// index 6 = m2
         ];
-        let ctx = MonowaveContext::build(&classified, 5).expect("應建立");
+        let ctx = MonowaveContext::build(&classified, &[], 5).expect("應建立");
         let mut cands: Vec<StructureLabelCandidate> = Vec::new();
         add_l5_if_fifth_of_fifth(&ctx, &mut cands);
         assert!(cands.is_empty(), "m1 非最長,不應加 L5");
@@ -98,7 +99,7 @@ mod tests {
             cmw(100.0, 120.0, MonowaveDirection::Up, 5, 1),
             cmw(120.0, 115.0, MonowaveDirection::Down, 3, 7),
         ];
-        let ctx = MonowaveContext::build(&classified, 0).expect("應建立");
+        let ctx = MonowaveContext::build(&classified, &[], 0).expect("應建立");
         let mut cands: Vec<StructureLabelCandidate> = Vec::new();
         add_l5_if_fifth_of_fifth(&ctx, &mut cands);
         assert!(cands.is_empty(), "context 缺 m_minus_*,不應加 L5");

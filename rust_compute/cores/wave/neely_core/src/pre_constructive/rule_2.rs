@@ -385,6 +385,7 @@ mod tests {
                 start_price: start_p,
                 end_price: end_p,
                 direction: dir,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -406,7 +407,7 @@ mod tests {
             cmw(80.0, 90.0, MonowaveDirection::Up, 5),      // m1 mag 10 (m0/m1 = 2.0)
             cmw(90.0, 85.5, MonowaveDirection::Down, 5),    // m2 mag 4.5 (m2/m1 = 0.45)
         ];
-        let ctx = MonowaveContext::build(&classified, 2).expect("build");
+        let ctx = MonowaveContext::build(&classified, &[], 2).expect("build");
         let mut cands = Vec::new();
         run(&ctx, &mut cands);
         assert!(cands.iter().any(|c| matches!(c.label, StructureLabel::Five)));
@@ -421,7 +422,7 @@ mod tests {
             cmw(97.0, 107.0, MonowaveDirection::Up, 5),    // m1 mag 10
             cmw(107.0, 102.0, MonowaveDirection::Down, 3), // m2 mag 5
         ];
-        let ctx = MonowaveContext::build(&classified, 2).expect("build");
+        let ctx = MonowaveContext::build(&classified, &[], 2).expect("build");
         let mut cands = Vec::new();
         run(&ctx, &mut cands);
         assert!(cands.iter().any(|c| matches!(c.label, StructureLabel::Five)));

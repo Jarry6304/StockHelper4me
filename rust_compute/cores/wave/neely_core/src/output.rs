@@ -518,6 +518,13 @@ pub struct WaveNode {
 
 /// Monowave — Neely Core 對外暴露的 raw 結構(§8.1)。
 /// 細節欄位於 monowave/ sub-module 實作時補完。
+///
+/// **v4.6(2026-05-19)Group 3.1**:加 `bar_indices: (usize, usize)` 對應
+/// `start_date`/`end_date` 在原始 bars slice 的 bar index 區間。供 Stage 0
+/// Pre-Constructive `m1_endpoint_broken_by_m2` 等需要 intraday OHLC reference
+/// 的 predicate 用(避開重新 walk bars 找日期)。`#[serde(default)]` 標記為
+/// 未來 Deserialize 預留(目前 Monowave 只 Serialize 寫 JSONB,Python 端走 dict
+/// access,不走 Rust 反序列化)。
 #[derive(Debug, Clone, Serialize)]
 pub struct Monowave {
     pub start_date: NaiveDate,
@@ -525,6 +532,10 @@ pub struct Monowave {
     pub start_price: f64,
     pub end_price: f64,
     pub direction: MonowaveDirection,
+    /// v4.6:對應 `start_date`/`end_date` 在 bars slice 的 index 區間
+    /// (含 start 含 end)。`(0, 0)` 為退化值(無 bar 對應)。
+    #[serde(default)]
+    pub bar_indices: (usize, usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

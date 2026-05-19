@@ -138,6 +138,7 @@ mod tests {
                 start_price: 100.0,
                 end_price: if dir == MonowaveDirection::Up { 110.0 } else { 90.0 },
                 direction: dir,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
