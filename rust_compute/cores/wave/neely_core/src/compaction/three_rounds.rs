@@ -80,6 +80,11 @@ fn try_aggregate_5(
     window_start: usize,
     monowaves: &[Monowave],
 ) -> Option<Scenario> {
+    // v4.8 G1.3 partial Stage 3-4 rerun:邊界波 retracement 超極端 Fib² 範圍 → reject
+    if boundary_retracement_extreme(window, monowaves) {
+        return None;
+    }
+
     let labels: Vec<StructureLabel> = window.iter().map(|s| s.compacted_base_label).collect();
     let dirs: Vec<MonowaveDirection> = window.iter().map(|s| s.initial_direction).collect();
 
@@ -129,6 +134,11 @@ fn try_aggregate_3(
     window_start: usize,
     monowaves: &[Monowave],
 ) -> Option<Scenario> {
+    // v4.8 G1.3 partial Stage 3-4 rerun:邊界波 retracement 超極端 Fib² 範圍 → reject
+    if boundary_retracement_extreme(window, monowaves) {
+        return None;
+    }
+
     let labels: Vec<StructureLabel> = window.iter().map(|s| s.compacted_base_label).collect();
     let dirs: Vec<MonowaveDirection> = window.iter().map(|s| s.initial_direction).collect();
 
@@ -282,12 +292,55 @@ fn ratio_in_range(a: f64, b: f64, min: f64, max: f64) -> bool {
     ratio >= min && ratio <= max
 }
 
+/// **v4.8 G1.3 partial rerun**:邊界波 retracement 超出極端 Fib² 範圍 → reject 整段 aggregation。
+///
+/// 對齊 spec line 1249-1251 完整實作:Stage 3-4 partial rerun ≈ 對 aggregation 結果
+/// 套用「邊界波 retracement 必落典型 Fibonacci 區段」rules,違反 → reject(不寫進 next_level)。
+///
+/// 兩階段 threshold(分別對應 advisory vs reject):
+/// - Mild abnormal:ratio < 0.382 或 > 2.618 → 寫 Info advisory(走 build_round_advisories)
+/// - Extreme abnormal:ratio < **0.236** 或 > **4.236**(Fib² 範圍外)→ **reject aggregation**
+///
+/// 0.236 = 1/4.236,4.236 = 2.618 × 1.618(Fib²)— 對齊 spec 對「不可能的 retracement」上限。
+fn boundary_retracement_extreme(window: &[Scenario], monowaves: &[Monowave]) -> bool {
+    if window.len() < 2 {
+        return false;
+    }
+    let first = window.first().unwrap();
+    let second = &window[1];
+    let last = window.last().unwrap();
+    let second_to_last = &window[window.len() - 2];
+
+    let boundary_pairs = [(first, second), (second_to_last, last)];
+    const EXTREME_LOW: f64 = 0.236; // 1 / 4.236
+    const EXTREME_HIGH: f64 = 4.236; // 2.618 × 1.618 (Fib²)
+
+    for (a, b) in &boundary_pairs {
+        if let (Some(mag_a), Some(mag_b)) = (
+            scenario_price_magnitude(a, monowaves),
+            scenario_price_magnitude(b, monowaves),
+        ) {
+            if mag_a > 1e-9 && mag_b > 1e-9 {
+                let ratio = mag_b / mag_a;
+                if ratio < EXTREME_LOW || ratio > EXTREME_HIGH {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// v4.4a:構造 Compaction advisory 列(含 Round 2 動作 B 邊界波重評)。
 ///
 /// 對齊 spec line 1249-1251「Round 2 動作 B 邊界波 m(-1)/m(+1) Retracement Rules 重評」:
 /// 當 aggregation 完成,對 window 的首尾 scenario(邊界波 m(-1)/m(+1))做 retracement 比例
-/// 評估,若超出典型 Fibonacci 比例範圍 → 寫 Info advisory 標示「Round 2 邊界 retracement
-/// 重評啟動」(spec 1249-1251 行 minimal 實作;部分 Stage 3-4 candidate rerun 留 V4.x)。
+/// 評估,若超出典型 Fibonacci 比例範圍 [0.382, 2.618] → 寫 Info advisory 標示「Round 2 邊界
+/// retracement 重評啟動」。
+///
+/// **v4.8 G1.3 升級**:更極端的 retracement(< 0.236 或 > 4.236 Fib²)由
+/// `boundary_retracement_extreme` 在 try_aggregate_* 處 short-circuit reject,
+/// 不進入此 fn(故 advisory 對應「[0.382, 2.618] 外但仍在 [0.236, 4.236] 內」mild 區段)。
 fn build_round_advisories(
     window: &[Scenario],
     label_prefix: &str,
@@ -639,5 +692,95 @@ mod tests {
         ];
         let result = aggregate_one_level(&scenarios, &[]);
         assert!(result.is_empty(), "無 monowave + time 不 similar → 不 aggregate");
+    }
+
+    // v4.8 G1.3 boundary retracement reject tests --------------------------
+
+    fn mk_mw(start: &str, end: &str, sp: f64, ep: f64, dir: MonowaveDirection) -> Monowave {
+        use chrono::NaiveDate;
+        Monowave {
+            start_date: NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap(),
+            end_date: NaiveDate::parse_from_str(end, "%Y-%m-%d").unwrap(),
+            start_price: sp,
+            end_price: ep,
+            direction: dir,
+            bar_indices: (0, 0),
+        }
+    }
+
+    #[test]
+    fn boundary_retracement_extreme_rejects_aggregation_when_first_pair_too_low() {
+        // window 5 段 Trending Impulse pattern;monowaves 提供使 first/second 比 = 0.2 < 0.236
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-15"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
+            mk_scenario("d", StructureLabel::Three, MonowaveDirection::Down, "2026-01-25", "2026-01-30"),
+            mk_scenario("e", StructureLabel::Five, MonowaveDirection::Up, "2026-01-30", "2026-02-10"),
+        ];
+        // monowaves:a 大 mag(50)/ b 極短(10)→ 比 = 10/50 = 0.2 < 0.236 → reject
+        let monowaves = vec![
+            mk_mw("2026-01-01", "2026-01-10", 100.0, 150.0, MonowaveDirection::Up),
+            mk_mw("2026-01-10", "2026-01-15", 150.0, 140.0, MonowaveDirection::Down),
+            mk_mw("2026-01-15", "2026-01-25", 140.0, 190.0, MonowaveDirection::Up),
+            mk_mw("2026-01-25", "2026-01-30", 190.0, 180.0, MonowaveDirection::Down),
+            mk_mw("2026-01-30", "2026-02-10", 180.0, 230.0, MonowaveDirection::Up),
+        ];
+        let result = aggregate_one_level(&scenarios, &monowaves);
+        let impulse = result
+            .iter()
+            .find(|s| matches!(s.pattern_type, NeelyPatternType::Impulse));
+        assert!(
+            impulse.is_none(),
+            "first/second mag ratio = 0.2 < 0.236 → reject(Round 2 動作 B partial rerun)"
+        );
+    }
+
+    #[test]
+    fn boundary_retracement_normal_keeps_aggregation() {
+        // window 5 段 Impulse;monowaves 提供 mag 接近 → 比落 [0.236, 4.236] → 不 reject
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-15"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
+            mk_scenario("d", StructureLabel::Three, MonowaveDirection::Down, "2026-01-25", "2026-01-30"),
+            mk_scenario("e", StructureLabel::Five, MonowaveDirection::Up, "2026-01-30", "2026-02-10"),
+        ];
+        // 所有 mag 接近 10 → ratio ≈ 1.0 在 [0.236, 4.236] 內
+        let monowaves = vec![
+            mk_mw("2026-01-01", "2026-01-10", 100.0, 110.0, MonowaveDirection::Up),
+            mk_mw("2026-01-10", "2026-01-15", 110.0, 105.0, MonowaveDirection::Down),
+            mk_mw("2026-01-15", "2026-01-25", 105.0, 115.0, MonowaveDirection::Up),
+            mk_mw("2026-01-25", "2026-01-30", 115.0, 110.0, MonowaveDirection::Down),
+            mk_mw("2026-01-30", "2026-02-10", 110.0, 120.0, MonowaveDirection::Up),
+        ];
+        let result = aggregate_one_level(&scenarios, &monowaves);
+        let impulse = result
+            .iter()
+            .find(|s| matches!(s.pattern_type, NeelyPatternType::Impulse));
+        assert!(
+            impulse.is_some(),
+            "normal boundary retracement → 仍 aggregate"
+        );
+    }
+
+    #[test]
+    fn boundary_retracement_extreme_rejects_zigzag_when_last_pair_too_high() {
+        // 3-pattern Zigzag;monowaves 提供 d/c 比 = 50/10 = 5 > 4.236 → reject
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-15"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
+        ];
+        let monowaves = vec![
+            mk_mw("2026-01-01", "2026-01-10", 100.0, 110.0, MonowaveDirection::Up),
+            mk_mw("2026-01-10", "2026-01-15", 110.0, 100.0, MonowaveDirection::Down),
+            mk_mw("2026-01-15", "2026-01-25", 100.0, 150.0, MonowaveDirection::Up), // mag 50
+        ];
+        let result = aggregate_one_level(&scenarios, &monowaves);
+        let zigzag = result
+            .iter()
+            .find(|s| matches!(s.pattern_type, NeelyPatternType::Zigzag { .. }));
+        assert!(zigzag.is_none(), "last pair ratio 50/10 = 5 > 4.236 → reject");
     }
 }
