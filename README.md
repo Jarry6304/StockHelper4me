@@ -2,9 +2,9 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + Cross-Stock Cores 11 builders + MCP toolkit 8 tools)。
 
-**版本**:**v4.7**(alembic head `d9e0f1g2h3i4` 不變 / 2026-05-19,v4.5 G2 + v4.6 G3 + **v4.7 G1 完整收尾 — M3SPEC 闕漏補完 8 sub-PR 全部 production-verified**)
+**版本**:**v4.8**(alembic head `d9e0f1g2h3i4` 不變 / 2026-05-19,v4.7 G1 完整收尾 + **v4.8 進階兩項 — Construction axis 5-variant + Round 2 boundary partial rerun**)
 **測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)5 phase 流水線:Environment check / Sandbox unit tests / Schema health / Production verify / MCP smoke test。完整 verify chain 見 [CLAUDE.md §下班後 verify 流水線](CLAUDE.md)
-**狀態**:**M3SPEC 闕漏補完 8 sub-PR 完整收尾 + P0 Gate verified** ☕ — Group 1 polywave 嵌套依賴鏈(2-pass Pre-Constructive + Compaction-aware polywave_size + Pattern Isolation validation + Channeling touch epsilon + Post-validator Stage 2)全部 production-verified;全市場 1266 stocks P0 Gate 全綠(max forest_size=196 / p95=28 / overflow=0 / wall time 648s)。**v4.0 P1.1-P1.4 + v4.5 G2 + v4.6 G3 + v4.7 G1** 共 **17 commits / ~7,300 LoC**。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**;Aggregation Layer 4 Phase 全套;**Rust workspace 567 tests passed / 0 failed**(v4.4 baseline 528 → +39);**Python tests 165+ passed**;1266 stocks × 36 cores / wall time ~11 min / facts ~5.2M(VACUUM 後)
+**狀態**:**M3SPEC 闕漏補完 + Out-of-Scope backlog Items 1+2 完整收尾** ☕☕ — v4.7 G1 8 sub-PR P0 Gate verified + v4.8 進階(Construction axis 5 variants Flat/Zigzag/Triangle/Impulsive/GenericCorrective + Round 2 動作 B partial Stage 3-4 rerun reject extreme boundary retracement)。全市場 1266 stocks G1 P0 Gate 全綠(max forest_size=196 / p95=28 / overflow=0)。**v4.0 P1.1-P1.4 + v4.5 G2 + v4.6 G3 + v4.7 G1 + v4.8 backlog** 共 **18 commits / ~7,900 LoC**。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**;Aggregation Layer 4 Phase 全套;**Rust workspace 578 tests passed / 0 failed**(v4.4 baseline 528 → +50);**Python tests 165+ passed**;1266 stocks × 36 cores / wall time ~11 min / facts ~5.2M(VACUUM 後)
 
 ---
 
@@ -602,6 +602,51 @@ cargo test --release --workspace: 567 passed / 0 failed
 +39 new tests / ~2,650 LoC across 9 commits
 ```
 
+### v4.8 — Out-of-Scope backlog Items 1+2 完整收尾(2026-05-19,1 commit / 11 new tests)
+
+```
+背景:v4.7 G1 收尾後 plan §Out of Scope 列 4 項留 V4.x,本 PR 清掃 Item 1+2:
+  - Item 1:Round 2 動作 B partial Stage 3-4 rerun(原 advisory-only)
+  - Item 2:Construction axis 完整 Flat/Zigzag/Triangle 內部分類(原 Impulsive/Corrective 二分)
+  - Item 3+4(classifier nested 深層展開 + Pre-Constructive Pass 1/2 diagnostics union)留真正 V4.x
+
+v4.8 (bbb41bb) — Construction axis full + Round 2 boundary partial rerun:
+  - validator/wave_rules.rs::ConstructionKind:Impulsive / Corrective(2 variants)
+    → **5 variants**:Impulsive / FlatCorrective / ZigzagCorrective /
+    TriangleCorrective / GenericCorrective
+    對齊 spec 1311-1319 行 W2/W4 Construction 完整類型
+    - Impulsive:含 :5 系列(Five/F5/L5/S5/SL5)
+    - FlatCorrective:含 F3 + C3 + L3 三連標(Flat :3 = F3-C3-L3)
+    - ZigzagCorrective:含 :3 + L5/S5 terminal(Zigzag 5-3-5)
+    - TriangleCorrective:含 ≥ 2 C3/SL3(Triangle 3-3-3-3-3)
+    - GenericCorrective:其他 :3(Combination / XC3 / BC3 / BF3)
+    Alternation 規則:k2 == k4 → Fail(現在能區分 Flat-vs-Flat 與 Flat-vs-Zigzag)
+  - compaction/three_rounds.rs::boundary_retracement_extreme(window, monowaves):
+    對 window first/second + second_to_last/last 兩對 boundary 取
+    scenario_price_magnitude 比對;ratio 超 [0.236, 4.236] Fib² 範圍 → return true
+  - try_aggregate_5 + try_aggregate_3 開頭 short-circuit reject:
+    extreme boundary → return None,直接拒絕 aggregation
+  - 對應 spec line 1249-1251 完整實作:Stage 3-4 partial rerun = 邊界波
+    retracement 必落 Fib² 範圍,違反 → aggregation 拒絕
+  - 兩階段 threshold:
+    - Mild [0.236, 0.382] ∪ [2.618, 4.236] → Info advisory(既有)
+    - Extreme < 0.236 或 > 4.236 → **REJECT**(v4.8 新)
+
+  +11 new tests:
+  - wave_rules:8 (5 ConstructionKind variants + 1 no-primary +
+    2 alternation Flat-vs-Zigzag/Flat)
+  - compaction:3 (extreme first pair reject + normal keep +
+    extreme last pair reject for zigzag)
+
+驗證:
+- cargo test --release --workspace: 578 passed / 0 failed
+  (v4.7 baseline 567 → +11)
+
+留 V4.x(plan §Out of Scope items 3 + 4):
+- Classifier 深層 nested 列舉(wave_tree.children 仍只一層)
+- Pre-Constructive Pass 1 vs Pass 2 diagnostics union
+```
+
 ---
 
 ## 8. 測試流水線
@@ -630,7 +675,7 @@ DRY_RUN=1         ./scripts/test_pipeline.sh          # 計畫模式
 | Phase | 用途 | 需 PG | 預估時間 |
 |---|---|---|---|
 | **0** Environment check | Python venv / Rust toolchain / .env / psql / tw_cores binary | ❌ | 數秒 |
-| **1** Sandbox unit tests | Rust workspace(567 tests,v4.7 後)+ Python pytest agg/mcp/cross_cores(165+) | ❌ | ~5-8 分鐘 |
+| **1** Sandbox unit tests | Rust workspace(578 tests,v4.8 後)+ Python pytest agg/mcp/cross_cores(165+) | ❌ | ~5-8 分鐘 |
 | **2** Schema health | alembic head + M3 表 row counts + 11 cross_cores tables | ✅ | < 5 秒 |
 | **3** Production verify | facts stats(VACUUM)+ per-EventKind rate + **Neely forest_size P0 Gate**(v4.4a acceptance:max ≤ 200,p95 < 180) | ✅ | ~1 分鐘 |
 | **4** MCP smoke test | `verify_mcp_kalman_neely.py` 對 2330 / 3030 + 8 toolkit 公開介面 importable | ✅ | ~30 秒 |
@@ -646,7 +691,7 @@ pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py   # 100+
 pytest tests/cross_cores/               # 30+ passed
 pytest tests/                           # 全套 unit test
 
-# Rust workspace tests(39 crates / 567 passed / 0 failed,v4.7 後)
+# Rust workspace tests(39 crates / 578 passed / 0 failed,v4.8 後)
 cd rust_compute && cargo test --release --workspace --no-fail-fast
 ```
 
