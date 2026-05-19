@@ -254,8 +254,9 @@ Invoke-Phase 3 "Production verify(per-EventKind rate / forest_size / facts stats
         $forestOut = psql $env:DATABASE_URL -f $forestSqlFile 2>&1 | Out-String
         Write-Host $forestOut
 
-        # 解析 max_count(從 psql 表格格式抽 "p50 | p95 | p99 | max | scenario_count" 那一行)
-        $maxMatch = $forestOut | Select-String "(\d+)\s+\|\s+\d+\s*$"
+        # 解析 max_count(從 psql 表格格式抽 max | scenario_count 那一行)
+        # 用單引號避開 $" 在 double-quoted string 內被當變數內插起點(PS 5.1 解析失控)
+        $maxMatch = $forestOut | Select-String -Pattern '(\d+)\s+\|\s+\d+\s*$'
         if ($maxMatch) {
             $maxCount = [int] $maxMatch.Matches[0].Groups[1].Value
             if ($maxCount -le 200) {
