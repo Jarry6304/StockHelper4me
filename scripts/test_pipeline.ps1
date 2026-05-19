@@ -240,14 +240,14 @@ Invoke-Phase 3 "Production verify(per-EventKind rate / forest_size / facts stats
         Write-Warn "scripts/maintain_facts_stats.sql 不存在 — skip"
     }
 
-    Write-Step "Per-EventKind 觸發率(target <= 12/yr/stock)"
+    Write-Step 'Per-EventKind 觸發率(target at most 12/yr/stock)'
     if (Test-Path "$RepoRoot\scripts\verify_event_kind_rate.sql") {
         psql $env:DATABASE_URL -f "$RepoRoot\scripts\verify_event_kind_rate.sql" 2>&1 | Out-String | Write-Host
     } else {
         Write-Warn "scripts/verify_event_kind_rate.sql 不存在 — skip"
     }
 
-    Write-Step "P0 Gate - Neely forest_size 分布(v4.4a 後 acceptance: max <= 200, p95 below 180)"
+    Write-Step 'P0 Gate - Neely forest_size 分布(v4.4a 後 acceptance: max at most 200, p95 below 180)'
     # 改用外部 SQL file 避開 PowerShell here-string parser 問題
     $forestSqlFile = "$RepoRoot\scripts\_forest_size_p0_gate.sql"
     if (Test-Path $forestSqlFile) {
@@ -259,9 +259,9 @@ Invoke-Phase 3 "Production verify(per-EventKind rate / forest_size / facts stats
         if ($maxMatch) {
             $maxCount = [int] $maxMatch.Matches[0].Groups[1].Value
             if ($maxCount -le 200) {
-                Write-Pass "forest_size max = $maxCount <= 200 (cap held)"
+                Write-Pass "forest_size max = $maxCount (cap 200 held)"
             } else {
-                Write-Warn "forest_size max = $maxCount > 200 - consider BeamSearchFallback.k recalibration"
+                Write-Warn "forest_size max = $maxCount over 200 - consider BeamSearchFallback.k recalibration"
             }
         }
     } else {
