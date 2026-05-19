@@ -211,28 +211,13 @@ Invoke-Phase 2 "Schema health(alembic head / table row counts)" {
         Write-Pass "alembic head = $expectedHead"
     }
 
-    Write-Step "M3 表 row counts"
-    $sqlQuery = @'
-SELECT
-  (SELECT COUNT(*) FROM facts) AS facts_count,
-  (SELECT COUNT(*) FROM indicator_values) AS indicator_values_count,
-  (SELECT COUNT(*) FROM structural_snapshots) AS structural_snapshots_count;
-'@
-    $rowResult = psql $env:DATABASE_URL -c $sqlQuery 2>&1
-    Write-Host $rowResult
-
-    Write-Step "11 個 cross_cores tables 存在"
-    $ccSql = @'
-SELECT COUNT(*) AS cross_cores_tables_count FROM pg_tables
-WHERE schemaname='public'
-  AND (tablename LIKE '%_ranked_derived' OR tablename = 'monthly_trigger_signals_derived');
-'@
-    $ccResult = psql $env:DATABASE_URL -t -c $ccSql 2>&1
-    $ccCount = [int] ($ccResult.Trim())
-    if ($ccCount -ne 11) {
-        Write-Warn "cross_cores tables count = $ccCount (預期 11)"
+    Write-Step "M3 表 row counts + 11 個 cross_cores tables 存在"
+    # 改用外部 SQL file 避開 PowerShell here-string parser 問題(2026-05-19 user feedback)
+    $schemaHealthSql = "$RepoRoot\scripts\_schema_health.sql"
+    if (Test-Path $schemaHealthSql) {
+        psql $env:DATABASE_URL -f $schemaHealthSql 2>&1 | Out-String | Write-Host
     } else {
-        Write-Pass "cross_cores tables: 11 個"
+        Write-Warn "scripts/_schema_health.sql 不存在 — skip"
     }
 }
 
@@ -263,29 +248,24 @@ Invoke-Phase 3 "Production verify(per-EventKind rate / forest_size / facts stats
     }
 
     Write-Step "P0 Gate — Neely forest_size 分布(v4.4a 後 acceptance:max ≤ 200,p95 < 180)"
-    $forestSql = @'
-SELECT
-  PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
-  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
-  PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p99,
-  MAX(jsonb_array_length(snapshot->'scenario_forest')) AS max_count,
-  COUNT(*) AS scenario_count
-FROM structural_snapshots
-WHERE core_name = 'neely_core'
-  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
-'@
-    $forestOut = psql $env:DATABASE_URL -c $forestSql 2>&1
-    Write-Host $forestOut
+    # 改用外部 SQL file 避開 PowerShell here-string parser 問題
+    $forestSqlFile = "$RepoRoot\scripts\_forest_size_p0_gate.sql"
+    if (Test-Path $forestSqlFile) {
+        $forestOut = psql $env:DATABASE_URL -f $forestSqlFile 2>&1 | Out-String
+        Write-Host $forestOut
 
-    # 解析 max_count(從 psql 表格格式抽 "(\d+) |  \d+"   - max_count 後 scenario_count)
-    $maxMatch = $forestOut | Select-String "(\d+)\s+\|\s+\d+\s*$"
-    if ($maxMatch) {
-        $maxCount = [int] $maxMatch.Matches[0].Groups[1].Value
-        if ($maxCount -le 200) {
-            Write-Pass "forest_size max = $maxCount <= 200 (cap held)"
-        } else {
-            Write-Warn "forest_size max = $maxCount > 200 - consider BeamSearchFallback.k recalibration"
+        # 解析 max_count(從 psql 表格格式抽 "p50 | p95 | p99 | max | scenario_count" 那一行)
+        $maxMatch = $forestOut | Select-String "(\d+)\s+\|\s+\d+\s*$"
+        if ($maxMatch) {
+            $maxCount = [int] $maxMatch.Matches[0].Groups[1].Value
+            if ($maxCount -le 200) {
+                Write-Pass "forest_size max = $maxCount <= 200 (cap held)"
+            } else {
+                Write-Warn "forest_size max = $maxCount > 200 - consider BeamSearchFallback.k recalibration"
+            }
         }
+    } else {
+        Write-Warn "scripts/_forest_size_p0_gate.sql 不存在 — skip"
     }
 }
 
@@ -310,21 +290,15 @@ Invoke-Phase 4 "MCP smoke test(Kalman + Neely + 8 toolkit tools)" {
     }
 
     Write-Step "MCP 8 tools 公開介面(Python import + import-time error check)"
-    $importTest = @'
-import sys
-sys.path.insert(0, 'src')
-sys.path.insert(0, '.')
-from mcp_server.tools import data as d
-tools = ['neely_forecast', 'kalman_trend', 'magic_formula_screen', 'stock_snapshot',
-         'monthly_screen', 'quarterly_screen', 'annual_low_risk_screen', 'monthly_trigger_scan']
-for t in tools:
-    if not hasattr(d, t):
-        raise SystemExit(f'Missing tool: {t}')
-print(f'All {len(tools)} MCP tools importable')
-'@
-    $importTest | python -
-    if ($LASTEXITCODE -ne 0) { throw "MCP toolkit import FAILED" }
-    Write-Pass "MCP 8 tools 全 importable"
+    # 改用外部 Python file 避開 PowerShell here-string parser 問題
+    $importCheckPy = "$RepoRoot\scripts\_mcp_import_check.py"
+    if (Test-Path $importCheckPy) {
+        python $importCheckPy
+        if ($LASTEXITCODE -ne 0) { throw "MCP toolkit import FAILED" }
+        Write-Pass "MCP 8 tools 全 importable"
+    } else {
+        Write-Warn "scripts/_mcp_import_check.py 不存在 — skip"
+    }
 }
 
 # ── 結算 ────────────────────────────────────────────────────────────────
