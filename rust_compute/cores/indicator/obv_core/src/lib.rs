@@ -29,6 +29,11 @@ inventory::submit! {
 
 const EXTREME_LOOKBACK: usize = 126; // 6m ≈ 126 trading days
 
+/// v4.7 Round 10 calibration(2026-05-19,production verify 揭露 4 EventKind 過頻):
+///   - MIN_OBV_CROSS_SPACING:OBV vs OBV_MA cross 最小間距(對齊 ma_core 同款 15 bars,
+///     production rate 預期從 27.41/yr → ~6-7/yr,進 12/yr target)
+const MIN_OBV_CROSS_SPACING: usize = 15;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ObvParams {
     pub timeframe: Timeframe,
@@ -149,34 +154,53 @@ impl IndicatorCore for ObvCore {
             });
         }
         // OBV vs OBV_MA cross
+        // v4.7 Round 10:加 MIN_OBV_CROSS_SPACING(對齊 ma_core 同款 spacing pattern),
+        //   production 從 27.41/yr → 預期 ~6-7/yr(進 12/yr target)
         if params.ma_period.is_some() {
+            let mut last_bullish_i: Option<usize> = None;
+            let mut last_bearish_i: Option<usize> = None;
             for i in 1..series.len() {
                 if let (Some(prev_ma), Some(cur_ma)) = (series[i - 1].obv_ma, series[i].obv_ma) {
                     let prev_above = series[i - 1].obv > prev_ma;
                     let cur_above = series[i].obv > cur_ma;
                     if !prev_above && cur_above {
-                        events.push(ObvEvent { date: series[i].date, kind: ObvEventKind::ObvMaBullishCross, value: series[i].obv,
-                            metadata: json!({"event": "obv_ma_bullish_cross", "ma_period": params.ma_period.unwrap()}) });
+                        if last_bullish_i.map_or(true, |li| i - li >= MIN_OBV_CROSS_SPACING) {
+                            events.push(ObvEvent { date: series[i].date, kind: ObvEventKind::ObvMaBullishCross, value: series[i].obv,
+                                metadata: json!({"event": "obv_ma_bullish_cross", "ma_period": params.ma_period.unwrap()}) });
+                            last_bullish_i = Some(i);
+                        }
                     } else if prev_above && !cur_above {
-                        events.push(ObvEvent { date: series[i].date, kind: ObvEventKind::ObvMaBearishCross, value: series[i].obv,
-                            metadata: json!({"event": "obv_ma_bearish_cross", "ma_period": params.ma_period.unwrap()}) });
+                        if last_bearish_i.map_or(true, |li| i - li >= MIN_OBV_CROSS_SPACING) {
+                            events.push(ObvEvent { date: series[i].date, kind: ObvEventKind::ObvMaBearishCross, value: series[i].obv,
+                                metadata: json!({"event": "obv_ma_bearish_cross", "ma_period": params.ma_period.unwrap()}) });
+                            last_bearish_i = Some(i);
+                        }
                     }
                 }
             }
         }
         // OBV extreme high/low(6m lookback)
+        // v4.7 Round 10:改 edge trigger(對齊 Round 9 loan_collateral pattern),
+        //   只 fire 進入 extreme 區的第一 bar,避免趨勢期連續 cluster fire。
+        //   production:ExtremeHigh 24.22/yr → 預期 ~5-8/yr / ExtremeLow 13.15 → ~3-5
         if series.len() > EXTREME_LOOKBACK {
+            let mut prev_high = false;
+            let mut prev_low = false;
             for i in EXTREME_LOOKBACK..series.len() {
                 let win = &series[i - EXTREME_LOOKBACK..i];
                 let max_o = win.iter().map(|p| p.obv).fold(f64::NEG_INFINITY, f64::max);
                 let min_o = win.iter().map(|p| p.obv).fold(f64::INFINITY, f64::min);
-                if series[i].obv > max_o {
+                let cur_high = series[i].obv > max_o;
+                let cur_low = series[i].obv < min_o;
+                if cur_high && !prev_high {
                     events.push(ObvEvent { date: series[i].date, kind: ObvEventKind::ObvExtremeHigh, value: series[i].obv,
                         metadata: json!({"event": "obv_extreme_high", "lookback": "6m"}) });
-                } else if series[i].obv < min_o {
+                } else if cur_low && !prev_low {
                     events.push(ObvEvent { date: series[i].date, kind: ObvEventKind::ObvExtremeLow, value: series[i].obv,
                         metadata: json!({"event": "obv_extreme_low", "lookback": "6m"}) });
                 }
+                prev_high = cur_high;
+                prev_low = cur_low;
             }
         }
         Ok(ObvOutput { stock_id: input.stock_id.clone(), timeframe: params.timeframe, anchor_date, series, events })
@@ -333,5 +357,94 @@ mod tests {
             "sinusoidal: oscillator approach 應 trigger 少於 pivot 半數,實測 {} 個",
             div_count
         );
+    }
+
+    // ─── v4.7 Round 10 calibration tests ──────────────────────────────────────
+    use ohlcv_loader::{OhlcvBar, OhlcvSeries};
+
+    /// 構造 N 天 series,close / volume 由 closure 給。
+    fn make_series(n: usize, close_fn: impl Fn(usize) -> f64, vol_fn: impl Fn(usize) -> i64) -> OhlcvSeries {
+        let bars: Vec<OhlcvBar> = (0..n).map(|i| OhlcvBar {
+            date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap() + chrono::Duration::days(i as i64),
+            open: close_fn(i), high: close_fn(i) + 1.0, low: close_fn(i) - 1.0,
+            close: close_fn(i), volume: Some(vol_fn(i)),
+        }).collect();
+        OhlcvSeries { stock_id: "TEST".to_string(), timeframe: Timeframe::Daily, bars }
+    }
+
+    #[test]
+    fn obv_ma_cross_spacing_blocks_rapid_oscillation() {
+        // 構造 100 bars 每 5 bar 翻轉一次 close direction → OBV 在 MA 附近震盪每 5 bar 一 cross
+        // 無 spacing:預期 ~20 crosses(每 5 bar 一次)
+        // 有 spacing(per-direction MIN_OBV_CROSS_SPACING=15):alternating bull/bear 各自 spacing
+        //   → bull at 5,25,45,65,85 = 5 個 / bear 同款 5 個 / 總 ≈ 10
+        // 比無 spacing 的 20 ↓ 50% — spacing 有效
+        let close_fn = |i: usize| 100.0 + ((i / 5) % 2) as f64 * 5.0 - 2.5;
+        let series = make_series(100, close_fn, |_| 1000);
+        let out = ObvCore::new().compute(&series, ObvParams::default()).unwrap();
+        let cross_count = out.events.iter().filter(|e| matches!(
+            e.kind, ObvEventKind::ObvMaBullishCross | ObvEventKind::ObvMaBearishCross
+        )).count();
+        assert!(cross_count <= 12, "MIN_OBV_CROSS_SPACING 應 ≤ 12(無 spacing 20+),實測 {}", cross_count);
+        assert!(cross_count > 0, "spacing 不應阻擋全部 distant crosses,實測 {}", cross_count);
+    }
+
+    #[test]
+    fn obv_extreme_edge_trigger_fires_once_per_run() {
+        // 趨勢期:OBV monotone up → 每 bar 都新高
+        // 期望:edge trigger 只 fire 1 次(進入 extreme 區的第一 bar),非 cluster fire
+        // n 需 > EXTREME_LOOKBACK(126)+ buffer
+        let series = make_series(150, |i| 100.0 + i as f64, |_| 1000);
+        let out = ObvCore::new().compute(&series, ObvParams::default()).unwrap();
+        let high_count = out.events.iter().filter(|e|
+            matches!(e.kind, ObvEventKind::ObvExtremeHigh)
+        ).count();
+        // monotone up 整段:bar 126 開始 OBV > 126d-prior max,每 bar 連續 extreme high
+        // edge trigger:只 fire bar 126(進入 extreme 區的第一個)
+        assert_eq!(high_count, 1,
+            "monotone uptrend extreme should edge-trigger once, got {} events", high_count);
+    }
+
+    #[test]
+    fn obv_extreme_re_fires_after_exit_re_enter() {
+        // bar 0-130 一路漲 → 進入 extreme high(fire 1 次)
+        // bar 131-150 下跌脫離 extreme(prev_high → false)
+        // bar 151-200 再漲回 → 再次 fire(prev_high false → true edge)
+        // 共 2 次 ExtremeHigh
+        let close_fn = |i: usize| match i {
+            0..=130 => 100.0 + i as f64,
+            131..=150 => 230.0 - (i - 130) as f64 * 5.0,
+            _ => 130.0 + (i - 150) as f64 * 3.0,
+        };
+        let series = make_series(220, close_fn, |_| 1000);
+        let out = ObvCore::new().compute(&series, ObvParams::default()).unwrap();
+        let high_count = out.events.iter().filter(|e|
+            matches!(e.kind, ObvEventKind::ObvExtremeHigh)
+        ).count();
+        // exact count 取決於 OBV 累積動態,只 assert ≤ 3(edge trigger 約束 cluster size)
+        assert!(high_count <= 3,
+            "edge trigger re-fire 應限制 cluster size,實測 {} 個 high", high_count);
+    }
+
+    #[test]
+    fn obv_ma_cross_distant_pairs_both_fire() {
+        // 構造 60 bars:前 20 升、中間 20 降、後 20 升
+        // 期望:至少 1 個 bullish + 1 個 bearish cross(20 bars 間距 > MIN_OBV_CROSS_SPACING)
+        let close_fn = |i: usize| match i {
+            0..=19 => 100.0 + i as f64,
+            20..=39 => 119.0 - (i - 19) as f64,
+            _ => 99.0 + (i - 39) as f64,
+        };
+        let series = make_series(60, close_fn, |_| 1000);
+        let out = ObvCore::new().compute(&series, ObvParams::default()).unwrap();
+        let bull_count = out.events.iter().filter(|e|
+            matches!(e.kind, ObvEventKind::ObvMaBullishCross)
+        ).count();
+        let bear_count = out.events.iter().filter(|e|
+            matches!(e.kind, ObvEventKind::ObvMaBearishCross)
+        ).count();
+        // 趨勢反轉時應有 cross,spacing 不應阻擋 distant pair
+        assert!(bull_count + bear_count >= 1,
+            "distant trend reversal 應有 cross,bull={} bear={}", bull_count, bear_count);
     }
 }

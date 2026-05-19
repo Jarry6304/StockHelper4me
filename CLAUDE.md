@@ -268,6 +268,87 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.7 — Round 10 calibration + test_pipeline.ps1 polish(2026-05-19)
+
+接 v4.4 production verify 揭露 obv_core 4 個 EventKind 超 12/yr,動工 Round 10
+calibration + 2 個 wrapper script cosmetic 修正。
+
+### 3 個 task
+
+**Task 1: obv_core Round 10 calibration**
+
+Production verify(user 第八次跑 Phase 3)揭露:
+
+| EventKind | rate/yr | 修法 |
+|---|---|---|
+| `ObvMaBullishCross` 27.41 | 對齊 ma_core,加 `MIN_OBV_CROSS_SPACING = 15`(per-direction)|
+| `ObvMaBearishCross` 27.29 | 同上 |
+| `ObvExtremeHigh` 24.22 | 改 **edge trigger**(對齊 Round 9 loan_collateral pattern):`cur_high && !prev_high` 才 fire |
+| `ObvExtremeLow` 13.15 | 同上(`cur_low && !prev_low`)|
+
+預期 production rate(本機 verify 待 user 跑):
+- ObvMaBullishCross/BearishCross → ~6-7/yr(對齊 ma_core 6.51)
+- ObvExtremeHigh → ~5-8/yr
+- ObvExtremeLow → ~3-5/yr
+
+**Task 2: alembic head 解析 cosmetic bug**
+
+`alembic current` 輸出 3 行(2 INFO + 1 head)。原 wrapper 用
+`$alembicOut -notmatch $expectedHead` 對 string array 行為奇怪,顯示 false warning。
+改 `Out-String` 拉成單字串 + `[regex]::Escape()` 比對。
+
+**Task 3: PSQL 中文 output 在 PS 5.1 console 亂碼**
+
+PS 5.1 console codepage = CP950,psql output UTF-8 → 亂碼。三段防衛:
+1. `cmd /c chcp 65001` 改 Windows console codepage 為 UTF-8
+2. `[Console]::OutputEncoding = UTF-8` PS 端解碼為 UTF-8
+3. `$env:PGCLIENTENCODING = 'UTF8'` psql 端輸出 UTF-8
+
+對 PS 7 無害(預設已 UTF-8)。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/indicator/obv_core/src/lib.rs` | 加 `MIN_OBV_CROSS_SPACING = 15` const;OBV MA cross 加 `last_bullish_i / last_bearish_i` spacing(對齊 ma_core);ExtremeHigh/Low 改 edge trigger(`prev_high` / `prev_low` 狀態);+4 new tests |
+| `scripts/test_pipeline.ps1` | 加 `chcp 65001` + UTF-8 OutputEncoding + PGCLIENTENCODING UTF8;alembic head 解析改 Out-String + regex match |
+| `CLAUDE.md` | v4.7 章節 |
+
+### 沙箱驗證
+
+- `cargo test --release -p obv_core` ✅ **10 passed**(從 6 → +4 new Round 10 tests)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release --workspace --no-fail-fast` ✅ **532 passed / 0 failed**
+  (v4.4 baseline 528 → +4)
+
+### user 本機 production verify(下次跑)
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+
+# DELETE obv_core 既有 facts(params_hash 變動 → 視為 stale)
+psql $env:DATABASE_URL -c "DELETE FROM facts WHERE source_core = 'obv_core';"
+
+# 重跑(只 obv_core params_hash 變,其他 cores dedup 不重算)
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+
+# verify per-EventKind rate
+.\scripts\test_pipeline.ps1 -OnlyPhase 3
+```
+
+預期 Round 10 後 obv_core 4 個 EventKind 全 ≤ 12/yr,進入 target band。
+
+### 風險
+
+🟢 低:
+- 純 const tweak + spacing/edge trigger 加 logic
+- 0 alembic / 0 collector.toml / 0 Python
+- 既有 6 個 obv_core test margin 充足(divergence 邏輯不動)
+- Rollback:單 commit `git revert`
+
+---
+
 ## v4.4 — P1.4b+c+d Ch8 X-wave / Multiwave + Ch6 Stage 2(2026-05-19)
 
 P1.4 收尾 commit。合併 P1.4b(Ch8 X-wave)+ P1.4c(Ch8 Multiwave)+ P1.4d(Ch6
