@@ -18,9 +18,9 @@
 //     回新生 Level-N+1 scenarios(空 vec = 已收斂)
 
 use crate::output::{
-    AdvisoryFinding, AdvisorySeverity, ComplexityLevel, MonowaveDirection, NeelyPatternType,
-    PostBehavior, PowerRating, RoundState, RuleId, Scenario, StructuralFacts, StructureLabel,
-    WaveNode, ZigzagKind,
+    AdvisoryFinding, AdvisorySeverity, ComplexityLevel, Monowave, MonowaveDirection,
+    NeelyPatternType, PostBehavior, PowerRating, RoundState, RuleId, Scenario, StructuralFacts,
+    StructureLabel, WaveNode, ZigzagKind,
 };
 use crate::power_rating;
 
@@ -43,7 +43,7 @@ const SB_MAX_RATIO: f64 = 2.618;
 /// 過濾條件:相鄰波必須 pass `similarity_and_balance`(price 或 time 相似其一)。
 ///
 /// 空輸入 / 太少 scenarios → 空 vec(收斂)。
-pub fn aggregate_one_level(scenarios: &[Scenario]) -> Vec<Scenario> {
+pub fn aggregate_one_level(scenarios: &[Scenario], monowaves: &[Monowave]) -> Vec<Scenario> {
     if scenarios.len() < 3 {
         return Vec::new();
     }
@@ -54,7 +54,7 @@ pub fn aggregate_one_level(scenarios: &[Scenario]) -> Vec<Scenario> {
     if scenarios.len() >= 5 {
         for start in 0..=scenarios.len() - 5 {
             let window = &scenarios[start..start + 5];
-            if let Some(new_scenario) = try_aggregate_5(window, start) {
+            if let Some(new_scenario) = try_aggregate_5(window, start, monowaves) {
                 aggregated.push(new_scenario);
             }
         }
@@ -63,7 +63,7 @@ pub fn aggregate_one_level(scenarios: &[Scenario]) -> Vec<Scenario> {
     // 3-pattern 比對(Zigzag / Flat)
     for start in 0..=scenarios.len() - 3 {
         let window = &scenarios[start..start + 3];
-        if let Some(new_scenario) = try_aggregate_3(window, start) {
+        if let Some(new_scenario) = try_aggregate_3(window, start, monowaves) {
             aggregated.push(new_scenario);
         }
     }
@@ -75,7 +75,11 @@ pub fn aggregate_one_level(scenarios: &[Scenario]) -> Vec<Scenario> {
 // 5-pattern 比對(Trending Impulse / Triangle)
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn try_aggregate_5(window: &[Scenario], window_start: usize) -> Option<Scenario> {
+fn try_aggregate_5(
+    window: &[Scenario],
+    window_start: usize,
+    monowaves: &[Monowave],
+) -> Option<Scenario> {
     let labels: Vec<StructureLabel> = window.iter().map(|s| s.compacted_base_label).collect();
     let dirs: Vec<MonowaveDirection> = window.iter().map(|s| s.initial_direction).collect();
 
@@ -87,19 +91,20 @@ fn try_aggregate_5(window: &[Scenario], window_start: usize) -> Option<Scenario>
         StructureLabel::Three,
         StructureLabel::Five,
     ];
-    if labels == trending_pattern && alternating(&dirs) && all_pairs_pass_sb(window) {
+    if labels == trending_pattern && alternating(&dirs) && all_pairs_pass_sb(window, monowaves) {
         return Some(build_aggregated(
             window,
             window_start,
             StructureLabel::Five,
             NeelyPatternType::Impulse,
             "L_TrendingImpulse",
+            monowaves,
         ));
     }
 
     // Triangle:全 :_3 (5 段都是 corrective);相鄰波方向交替
     let triangle_all_three = labels.iter().all(|l| *l == StructureLabel::Three);
-    if triangle_all_three && alternating(&dirs) && all_pairs_pass_sb(window) {
+    if triangle_all_three && alternating(&dirs) && all_pairs_pass_sb(window, monowaves) {
         return Some(build_aggregated(
             window,
             window_start,
@@ -108,6 +113,7 @@ fn try_aggregate_5(window: &[Scenario], window_start: usize) -> Option<Scenario>
                 sub_kind: crate::output::TriangleKind::Contracting,
             },
             "L_Triangle",
+            monowaves,
         ));
     }
 
@@ -118,7 +124,11 @@ fn try_aggregate_5(window: &[Scenario], window_start: usize) -> Option<Scenario>
 // 3-pattern 比對(Zigzag / Flat)
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn try_aggregate_3(window: &[Scenario], window_start: usize) -> Option<Scenario> {
+fn try_aggregate_3(
+    window: &[Scenario],
+    window_start: usize,
+    monowaves: &[Monowave],
+) -> Option<Scenario> {
     let labels: Vec<StructureLabel> = window.iter().map(|s| s.compacted_base_label).collect();
     let dirs: Vec<MonowaveDirection> = window.iter().map(|s| s.initial_direction).collect();
 
@@ -128,7 +138,7 @@ fn try_aggregate_3(window: &[Scenario], window_start: usize) -> Option<Scenario>
         StructureLabel::Three,
         StructureLabel::Five,
     ];
-    if labels == zigzag_pattern && alternating(&dirs) && all_pairs_pass_sb(window) {
+    if labels == zigzag_pattern && alternating(&dirs) && all_pairs_pass_sb(window, monowaves) {
         return Some(build_aggregated(
             window,
             window_start,
@@ -137,6 +147,7 @@ fn try_aggregate_3(window: &[Scenario], window_start: usize) -> Option<Scenario>
                 sub_kind: ZigzagKind::Single,
             },
             "L_Zigzag",
+            monowaves,
         ));
     }
 
@@ -146,7 +157,7 @@ fn try_aggregate_3(window: &[Scenario], window_start: usize) -> Option<Scenario>
         StructureLabel::Three,
         StructureLabel::Five,
     ];
-    if labels == flat_pattern && alternating(&dirs) && all_pairs_pass_sb(window) {
+    if labels == flat_pattern && alternating(&dirs) && all_pairs_pass_sb(window, monowaves) {
         return Some(build_aggregated(
             window,
             window_start,
@@ -155,6 +166,7 @@ fn try_aggregate_3(window: &[Scenario], window_start: usize) -> Option<Scenario>
                 sub_kind: crate::output::FlatKind::Common,
             },
             "L_Flat",
+            monowaves,
         ));
     }
 
@@ -177,9 +189,9 @@ fn alternating(dirs: &[MonowaveDirection]) -> bool {
     true
 }
 
-fn all_pairs_pass_sb(window: &[Scenario]) -> bool {
+fn all_pairs_pass_sb(window: &[Scenario], monowaves: &[Monowave]) -> bool {
     for i in 1..window.len() {
-        if !similarity_and_balance(&window[i - 1], &window[i]) {
+        if !similarity_and_balance(&window[i - 1], &window[i], monowaves) {
             return false;
         }
     }
@@ -188,9 +200,9 @@ fn all_pairs_pass_sb(window: &[Scenario]) -> bool {
 
 /// Similarity & Balance:相鄰波在 price magnitude 或 time duration 維度其一相似即可
 /// (對齊 spec §Rule of Similarity & Balance 1189-1197)。
-fn similarity_and_balance(a: &Scenario, b: &Scenario) -> bool {
-    let price_a = scenario_price_magnitude(a);
-    let price_b = scenario_price_magnitude(b);
+fn similarity_and_balance(a: &Scenario, b: &Scenario, monowaves: &[Monowave]) -> bool {
+    let price_a = scenario_price_magnitude(a, monowaves);
+    let price_b = scenario_price_magnitude(b, monowaves);
     let time_a = scenario_time_days(a);
     let time_b = scenario_time_days(b);
 
@@ -200,16 +212,60 @@ fn similarity_and_balance(a: &Scenario, b: &Scenario) -> bool {
     price_similar || time_similar
 }
 
-fn scenario_price_magnitude(s: &Scenario) -> f64 {
-    // wave_tree 的 children 對應 sub-wave;若空(Level-0),用 1.0 placeholder
-    // (Level-0 scenario 預設未填 price magnitude;Similarity & Balance 對 Level-0
-    // 退化為「只看 time」,對 Level-1+ 才嚴格)
+/// **v4.4a 修法**(原 placeholder 用 wave_tree.children.len() — spec line 204-213 留 P1.4 改):
+/// 從 scenario.wave_tree.start / end 日期反查 monowaves,取真實 |end_price - start_price|。
+/// 若 monowaves 找不到對應 → fallback 用 children.len()(維持 v3.7 行為,避免 Level-0 為 0 卡死)
+fn scenario_price_magnitude(s: &Scenario, monowaves: &[Monowave]) -> f64 {
+    // Level-0 / Level-N 都先試 monowave 反查(對 Level-0:從 wave_tree.start/end 取 raw price)
+    let start_price = find_price_at_date(s.wave_tree.start, monowaves, /*use_end=*/ false);
+    let end_price = find_price_at_date(s.wave_tree.end, monowaves, /*use_end=*/ true);
+
+    if let (Some(start_p), Some(end_p)) = (start_price, end_price) {
+        let mag = (end_p - start_p).abs();
+        if mag > 1e-9 {
+            return mag;
+        }
+    }
+
+    // Fallback:對 Level-N 用 children.len() 維持 v3.7 行為;Level-0 用 1.0
     if s.wave_tree.children.is_empty() {
         1.0
     } else {
-        // 取 first child label 長度作 proxy(placeholder — production 應接 monowave price)
         s.wave_tree.children.len() as f64
     }
+}
+
+/// 從 monowaves 列表反查指定 date 對應的 price。
+///
+/// 邏輯:
+/// - 找 monowave.start_date == date → 回 start_price
+/// - 否則找 monowave.end_date == date → 回 end_price
+/// - 否則 None
+/// - `use_end`:當兩 monowave 都符合 date 時的偏好(start time 取 start_price / end time 取 end_price)
+fn find_price_at_date(
+    date: chrono::NaiveDate,
+    monowaves: &[Monowave],
+    use_end: bool,
+) -> Option<f64> {
+    // 先試精確匹配 start_date / end_date
+    for mw in monowaves {
+        if !use_end && mw.start_date == date {
+            return Some(mw.start_price);
+        }
+        if use_end && mw.end_date == date {
+            return Some(mw.end_price);
+        }
+    }
+    // 再試另一方向(date 可能匹配相鄰 monowave 的 end / start)
+    for mw in monowaves {
+        if !use_end && mw.end_date == date {
+            return Some(mw.end_price);
+        }
+        if use_end && mw.start_date == date {
+            return Some(mw.start_price);
+        }
+    }
+    None
 }
 
 fn scenario_time_days(s: &Scenario) -> f64 {
@@ -225,13 +281,73 @@ fn ratio_in_range(a: f64, b: f64, min: f64, max: f64) -> bool {
     ratio >= min && ratio <= max
 }
 
+/// v4.4a:構造 Compaction advisory 列(含 Round 2 動作 B 邊界波重評)。
+///
+/// 對齊 spec line 1249-1251「Round 2 動作 B 邊界波 m(-1)/m(+1) Retracement Rules 重評」:
+/// 當 aggregation 完成,對 window 的首尾 scenario(邊界波 m(-1)/m(+1))做 retracement 比例
+/// 評估,若超出典型 Fibonacci 比例範圍 → 寫 Info advisory 標示「Round 2 邊界 retracement
+/// 重評啟動」(spec 1249-1251 行 minimal 實作;部分 Stage 3-4 candidate rerun 留 V4.x)。
+fn build_round_advisories(
+    window: &[Scenario],
+    label_prefix: &str,
+    monowaves: &[Monowave],
+) -> Vec<AdvisoryFinding> {
+    let mut findings = vec![AdvisoryFinding {
+        rule_id: RuleId::Ch7_Compaction_Reassessment,
+        severity: AdvisorySeverity::Info,
+        message: format!(
+            "Compaction Level-N+1 aggregated from {} sub-scenarios (label_prefix={})",
+            window.len(),
+            label_prefix
+        ),
+    }];
+
+    // Round 2 動作 B:邊界波 retracement Rules 重評(spec line 1249-1251)
+    if window.len() >= 2 {
+        let first = window.first().unwrap();
+        let second = &window[1];
+        let last = window.last().unwrap();
+        let second_to_last = &window[window.len() - 2];
+
+        let boundary_pairs = [
+            ("m(-1) / m1(left boundary)", first, second),
+            ("m(N) / m(N-1)(right boundary)", second_to_last, last),
+        ];
+
+        for (label, a, b) in &boundary_pairs {
+            let mag_a = scenario_price_magnitude(a, monowaves);
+            let mag_b = scenario_price_magnitude(b, monowaves);
+            if mag_a > 1e-9 && mag_b > 1e-9 {
+                let ratio = mag_b / mag_a;
+                let typical_range = (0.382, 2.618);
+                if ratio < typical_range.0 || ratio > typical_range.1 {
+                    findings.push(AdvisoryFinding {
+                        rule_id: RuleId::Ch4_Round2_Compaction,
+                        severity: AdvisorySeverity::Info,
+                        message: format!(
+                            "Ch4 Round 2 動作 B:邊界波 {} retracement ratio = {:.3}(超出典型 [0.382, 2.618])— 邊界 retracement Rules 重評啟動(spec line 1249-1251)",
+                            label, ratio
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    findings
+}
+
 /// 建構新生 Level-N+1 scenario(整段已 compact)。
+///
+/// v4.4a:接受 monowaves 參數,在 advisory_findings 加 Round 2 動作 B 邊界波 retracement
+/// 重評提示(對齊 spec line 1249-1251)。
 fn build_aggregated(
     window: &[Scenario],
     window_start: usize,
     base_label: StructureLabel,
     pattern_type: NeelyPatternType,
     label_prefix: &str,
+    monowaves: &[Monowave],
 ) -> Scenario {
     let first = window.first().expect("aggregate window non-empty");
     let last = window.last().expect("aggregate window non-empty");
@@ -269,15 +385,7 @@ fn build_aggregated(
         invalidation_triggers: Vec::new(),
         expected_fib_zones: Vec::new(),
         structural_facts: StructuralFacts::default(),
-        advisory_findings: vec![AdvisoryFinding {
-            rule_id: RuleId::Ch7_Compaction_Reassessment,
-            severity: AdvisorySeverity::Info,
-            message: format!(
-                "Compaction Level-N+1 aggregated from {} sub-scenarios (label_prefix={})",
-                window.len(),
-                label_prefix
-            ),
-        }],
+        advisory_findings: build_round_advisories(window, label_prefix, monowaves),
         in_triangle_context: in_triangle,
         awaiting_l_label: false,
         monowave_structure_labels: Vec::new(),
@@ -365,7 +473,7 @@ mod tests {
             mk_scenario("d", StructureLabel::Three, MonowaveDirection::Down, "2026-01-25", "2026-01-30"),
             mk_scenario("e", StructureLabel::Five, MonowaveDirection::Up, "2026-01-30", "2026-02-10"),
         ];
-        let result = aggregate_one_level(&scenarios);
+        let result = aggregate_one_level(&scenarios, &[]);
         // 應該有 1 個 5-pattern Trending Impulse
         let impulse_count = result
             .iter()
@@ -389,7 +497,7 @@ mod tests {
             mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-15"),
             mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
         ];
-        let result = aggregate_one_level(&scenarios);
+        let result = aggregate_one_level(&scenarios, &[]);
         let zigzag = result
             .iter()
             .find(|s| matches!(s.pattern_type, NeelyPatternType::Zigzag { .. }));
@@ -407,7 +515,7 @@ mod tests {
             mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-15"),
             mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
         ];
-        let result = aggregate_one_level(&scenarios);
+        let result = aggregate_one_level(&scenarios, &[]);
         let flat = result
             .iter()
             .find(|s| matches!(s.pattern_type, NeelyPatternType::Flat { .. }));
@@ -422,7 +530,7 @@ mod tests {
             mk_scenario("b", StructureLabel::Three, MonowaveDirection::Up, "2026-01-10", "2026-01-15"),
             mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
         ];
-        let result = aggregate_one_level(&scenarios);
+        let result = aggregate_one_level(&scenarios, &[]);
         assert!(result.is_empty(), "同方向不應 aggregate");
     }
 
@@ -435,7 +543,7 @@ mod tests {
             "2026-01-01",
             "2026-01-10",
         )];
-        let result = aggregate_one_level(&scenarios);
+        let result = aggregate_one_level(&scenarios, &[]);
         assert!(result.is_empty(), "少於 3 個 scenario 不應 aggregate");
     }
 
@@ -446,7 +554,7 @@ mod tests {
             mk_scenario("b", StructureLabel::Three, MonowaveDirection::Neutral, "2026-01-10", "2026-01-15"),
             mk_scenario("c", StructureLabel::Five, MonowaveDirection::Down, "2026-01-15", "2026-01-25"),
         ];
-        let result = aggregate_one_level(&scenarios);
+        let result = aggregate_one_level(&scenarios, &[]);
         assert!(result.is_empty(), "Neutral 方向 break alternating");
     }
 
@@ -458,7 +566,7 @@ mod tests {
             mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-11", "2026-01-12"),
             mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-12", "2026-01-22"),
         ];
-        let result = aggregate_one_level(&scenarios);
+        let result = aggregate_one_level(&scenarios, &[]);
         // 10/1 = 10 ratio > 2.618;1/10 = 0.1 < 0.382 → time 不 similar
         // price 全部 1.0(empty children)→ price 永遠 similar
         // 所以結果視 price OR time:price similar → 仍 aggregate

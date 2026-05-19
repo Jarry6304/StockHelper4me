@@ -266,6 +266,74 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.4a — P1.4a Ch4 Level-0 真 magnitude + Round 2 動作 B(2026-05-19)
+
+P1.4 系列第一個 commit。修 `scenario_price_magnitude` 從 `wave_tree.children.len()`
+placeholder 改用真實 monowave price lookup + 加 Ch4 Round 2 動作 B 邊界波 retracement
+重評 advisory。
+
+### 範圍(1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/lib.rs` | 提前構建 `monowave_series` 給 compaction 用(原 line 469,移到 line 388 前) |
+| `rust_compute/cores/wave/neely_core/src/compaction/mod.rs` | `compact()` signature 加 `monowaves: &[Monowave]` 參數 |
+| `rust_compute/cores/wave/neely_core/src/compaction/exhaustive.rs` | `compact()` signature 同步加 |
+| `rust_compute/cores/wave/neely_core/src/compaction/three_rounds.rs` | `aggregate_one_level` / `try_aggregate_*` / `all_pairs_pass_sb` / `similarity_and_balance` / `scenario_price_magnitude` / `build_aggregated` 全部 signature 加 `monowaves: &[Monowave]`;**新** `find_price_at_date` helper + **新** `build_round_advisories` helper(含 Round 2 動作 B advisory) |
+| `CLAUDE.md` | v4.4a 章節 |
+
+### 主要 fix
+
+1. **真 magnitude lookup**(`scenario_price_magnitude`):
+   - 從 `wave_tree.children.len()` placeholder 改為 `find_price_at_date()` 反查 monowaves
+   - 對 Level-0 / Level-N scenario 都先試 monowave 反查,fallback 用 children.len() 維持 v3.7 行為
+   - 對應 spec line 204-213 的 placeholder note
+
+2. **Round 2 動作 B advisory**(`build_round_advisories`):
+   - 對齊 spec line 1249-1251「Round 2 動作 B 邊界波 m(-1)/m(+1) Retracement Rules 重評」
+   - 邊界 retracement ratio < 0.382 或 > 2.618 → Info advisory `Ch4_Round2_Compaction`
+   - 留 V4.x 細化:部分 Stage 3-4 candidate rerun(spec 1249-1251 完整實作)
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **349 passed / 0 failed**(P1.3e baseline 不變;
+  既有 17 個 compaction tests 全部更新呼叫 `&[]` empty monowaves slice 維持行為一致)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### ⚠️ P0 Gate 校準(user 本機,P1.4 收尾後跑)
+
+> **真實 monowave magnitude 改變 Similarity & Balance pass 率** → `forest_size` 分布可能改變。
+> 對齊 plan v4.0 §P1.4 風險:**P1.4 收尾後必跑** user 本機 P0 Gate。
+
+P0 Gate 驗證指令(P1.4 整個 milestone 完工後跑):
+
+```powershell
+git pull
+cd rust_compute
+cargo clean -p neely_core -p tw_cores
+cargo build --release -p tw_cores
+.\target\release\tw_cores.exe run-all --write
+cd ..
+
+# forest_size 分布觀察(對齊 architecture §10 forest_max_size=200 cap)
+psql $env:DATABASE_URL -c "
+SELECT
+  PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
+  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
+  MAX(jsonb_array_length(snapshot->'scenario_forest'))                                        AS max_count
+FROM structural_snapshots
+WHERE core_name = 'neely_core'
+  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
+"
+# acceptance:max ≤ 200(cap 不破),p95 < 180
+```
+
+### 下個 commit(P1.4b+c+d 合併)
+
+接下來 P1.4b + P1.4c + P1.4d 合併一個 commit(Ch8 X-wave / Multiwave + Ch6 Stage 2 接 Ch8)。
+
+---
+
 ## v4.3e — P1.3e Ch11 Triangle 9 變體 wave-a-e 規則(2026-05-19)
 
 P1.3 系列最後 sub-PR。動工 Ch11 Triangle 9 變體 × wave-a/b/c/d/e 進階規則。

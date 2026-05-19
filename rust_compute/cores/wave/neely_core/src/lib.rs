@@ -386,8 +386,10 @@ impl WaveCore for NeelyCore {
         );
 
         // ── Stage 8:Compaction(M3 PR-5,簡化 pass-through + Forest 上限保護)
+        // v4.4a:提前構建 monowave_series 給 compaction(Level-0 magnitude 真實 lookup)
+        let monowave_series_for_compaction: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
         let stage_8_start = Instant::now();
-        let compaction_result = compaction::compact(scenarios, cfg);
+        let compaction_result = compaction::compact(scenarios, &monowave_series_for_compaction, cfg);
         stage_elapsed.insert(
             "stage_8_compaction".to_string(),
             stage_8_start.elapsed().as_micros() as u64,
