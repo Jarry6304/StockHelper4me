@@ -103,15 +103,17 @@ fn rule_equality(
 
 /// Ch5_Alternation { Construction }:W2 與 W4 的 Construction 軸不同。
 ///
-/// 演算法:
+/// 演算法(**v4.8 Construction axis full classification**,2026-05-19):
 ///   1. 取 W2(mi[1])與 W4(mi[3])的 structure_label_candidates
-///   2. 抽出各自的 ":3" Construction type:
-///      - Flat 特徵:含 F3 + C3 + L3 序列(本 PR 簡化為 c3 為 dominant)
-///      - Zigzag 特徵:含 Five(:5) 或 F5 / L5
-///      - Triangle 特徵:含 c3 序列(較難從單一 monowave 判斷)
-///   3. 簡化判定:W2/W4 的 dominant 標籤類型若相同 → Fail(缺 Alternation)
-///      若不同 → Pass
-///   4. 若任一 monowave 無 Structure Label(Stage 0 未填)→ NotApplicable
+///   2. 抽出各自的 Construction 完整類型(對齊 spec 1311-1319 行):
+///      - **Impulsive**:含 :5 系列(Five / F5 / L5 / S5 / SL5)→ impulse 結構
+///      - **FlatCorrective**:含 F3 + C3 + L3 三連標(Flat 5-3-5 之 :3 = F3-C3-L3)
+///      - **ZigzagCorrective**:含 :3 系列 +(L5 OR S5)terminal(Zigzag 之 :3 wave
+///        終結含 :5,W2/W4 為 Zigzag 時 sole label 含 L5/S5)
+///      - **TriangleCorrective**:含多重 C3 或 SL3 標記(Triangle 之 3-3-3-3-3 各段純 :c3)
+///      - **GenericCorrective**:其他 :3 系列(Combination / XC3 / BC3 / BF3 等)
+///   3. Alternation 判定:k2 == k4 → Fail(缺 Alternation)/ k2 ≠ k4 → Pass
+///   4. 若任一 monowave 無 Structure Label → NotApplicable
 fn rule_alternation_construction(
     candidate: &WaveCandidate,
     classified: &[ClassifiedMonowave],
@@ -130,7 +132,7 @@ fn rule_alternation_construction(
         return RuleResult::NotApplicable(rid);
     }
 
-    // 抽出各 monowave 的 "Construction" 類型 — 簡化為「含哪種 :5 系列 vs :3 系列」
+    // v4.8 Construction axis full classification(spec 1311-1319)
     let w2_kind = dominant_construction_kind(w2_labels);
     let w4_kind = dominant_construction_kind(w4_labels);
 
@@ -138,7 +140,7 @@ fn rule_alternation_construction(
         (Some(k2), Some(k4)) if k2 == k4 => RuleResult::Fail(RuleRejection {
             candidate_id: candidate.id.clone(),
             rule_id: rid,
-            expected: "Alternation(Construction):W2 與 W4 須不同 Construction 類型".to_string(),
+            expected: "Alternation(Construction):W2 與 W4 須不同 Construction 類型(Flat/Zigzag/Triangle/Impulsive/GenericCorrective)".to_string(),
             actual: format!(
                 "W2 = {:?}, W4 = {:?}(同 Construction → 缺 Alternation)",
                 k2, k4
@@ -151,19 +153,29 @@ fn rule_alternation_construction(
     }
 }
 
-/// 簡化 Construction 類型分類:
-///   Impulsive(:5 系列)/ Corrective(:3 系列)/ Mixed
+/// **v4.8 Construction axis full classification** — 對齊 spec 1311-1319 行
+/// W2/W4 Construction 完整類型(Flat/Zigzag/Triangle/Impulsive/GenericCorrective)。
+///
+/// 5 variants:
+/// - `Impulsive`:含 :5 系列(Five / F5 / L5 / S5 / SL5)— wave 為 5-wave impulse
+/// - `FlatCorrective`:含 F3 + C3 + L3 三連標(Flat :3 = F3-C3-L3 序列)
+/// - `ZigzagCorrective`:含 :3 系列 + (L5 OR S5) terminal(Zigzag 5-3-5)
+/// - `TriangleCorrective`:含多重 C3 或 SL3(Triangle 3-3-3-3-3 各段 :c3)
+/// - `GenericCorrective`:其他 :3 系列(Combination / XC3 / BC3 / BF3)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConstructionKind {
     Impulsive,
-    Corrective,
+    FlatCorrective,
+    ZigzagCorrective,
+    TriangleCorrective,
+    GenericCorrective,
 }
 
 fn dominant_construction_kind(
     labels: &[crate::output::StructureLabelCandidate],
 ) -> Option<ConstructionKind> {
     use crate::output::Certainty;
-    // 只看 Primary
+    // 只看 Primary candidates
     let primary: Vec<&crate::output::StructureLabelCandidate> = labels
         .iter()
         .filter(|c| matches!(c.certainty, Certainty::Primary))
@@ -171,37 +183,74 @@ fn dominant_construction_kind(
     if primary.is_empty() {
         return None;
     }
-    let has_five = primary.iter().any(|c| {
+
+    let has_pure_five = primary.iter().any(|c| {
         matches!(
             c.label,
-            StructureLabel::Five
-                | StructureLabel::F5
-                | StructureLabel::L5
-                | StructureLabel::UnknownFive
-                | StructureLabel::S5
-                | StructureLabel::SL5
+            StructureLabel::Five | StructureLabel::F5 | StructureLabel::UnknownFive
         )
     });
-    let has_three = primary.iter().any(|c| {
+    let has_five_terminal = primary.iter().any(|c| {
         matches!(
             c.label,
-            StructureLabel::Three
-                | StructureLabel::F3
-                | StructureLabel::C3
-                | StructureLabel::L3
-                | StructureLabel::UnknownThree
-                | StructureLabel::SL3
-                | StructureLabel::XC3
-                | StructureLabel::BC3
-                | StructureLabel::BF3
+            StructureLabel::L5 | StructureLabel::S5 | StructureLabel::SL5
+        )
+    });
+    let has_f3 = primary
+        .iter()
+        .any(|c| matches!(c.label, StructureLabel::F3 | StructureLabel::BF3));
+    let has_c3 = primary
+        .iter()
+        .any(|c| matches!(c.label, StructureLabel::C3 | StructureLabel::BC3 | StructureLabel::XC3));
+    let has_l3 = primary
+        .iter()
+        .any(|c| matches!(c.label, StructureLabel::L3 | StructureLabel::SL3));
+    let c3_count = primary
+        .iter()
+        .filter(|c| matches!(c.label, StructureLabel::C3 | StructureLabel::SL3))
+        .count();
+    let has_three_generic = primary.iter().any(|c| {
+        matches!(
+            c.label,
+            StructureLabel::Three | StructureLabel::UnknownThree
         )
     });
 
-    match (has_five, has_three) {
-        (true, false) => Some(ConstructionKind::Impulsive),
-        (false, true) => Some(ConstructionKind::Corrective),
-        (true, true) | (false, false) => None, // 混合 / 無 — N/A
+    let has_any_five = has_pure_five || has_five_terminal;
+    let has_any_three =
+        has_f3 || has_c3 || has_l3 || has_three_generic;
+
+    // 純 :5(無 :3 系列)→ Impulsive
+    if has_pure_five && !has_any_three {
+        return Some(ConstructionKind::Impulsive);
     }
+
+    // 含 :3 系列 + 含 :5 terminal(L5/S5)→ Zigzag(spec:Zigzag 5-3-5 結尾含 L5)
+    if has_five_terminal && has_any_three {
+        return Some(ConstructionKind::ZigzagCorrective);
+    }
+
+    // 含 F3 + C3 + L3 三連 → Flat(spec: Flat :3 = F3-C3-L3 序列)
+    if has_f3 && has_c3 && has_l3 {
+        return Some(ConstructionKind::FlatCorrective);
+    }
+
+    // 含多重 C3 / SL3(≥ 2)→ Triangle(spec: Triangle 3-3-3-3-3 各段純 :c3)
+    if c3_count >= 2 {
+        return Some(ConstructionKind::TriangleCorrective);
+    }
+
+    // 其他 :3 系列(Combination / XC3-only / BC3 等)→ Generic
+    if has_any_three && !has_any_five {
+        return Some(ConstructionKind::GenericCorrective);
+    }
+
+    // 純 :5(無 :3 但含 terminal :5)→ 仍歸 Impulsive
+    if has_any_five {
+        return Some(ConstructionKind::Impulsive);
+    }
+
+    None
 }
 
 #[inline]
@@ -335,5 +384,103 @@ mod tests {
             rule_alternation_construction(&candidate, &classified),
             RuleResult::NotApplicable(_)
         ));
+    }
+
+    // v4.8 Construction axis full classification tests --------------------
+
+    #[test]
+    fn construction_kind_pure_five_is_impulsive() {
+        use crate::output::{Certainty, StructureLabelCandidate};
+        let labels = vec![StructureLabelCandidate {
+            label: StructureLabel::Five,
+            certainty: Certainty::Primary,
+        }];
+        assert_eq!(dominant_construction_kind(&labels), Some(ConstructionKind::Impulsive));
+    }
+
+    #[test]
+    fn construction_kind_f3_c3_l3_triplet_is_flat() {
+        use crate::output::{Certainty, StructureLabelCandidate};
+        let labels = vec![
+            StructureLabelCandidate { label: StructureLabel::F3, certainty: Certainty::Primary },
+            StructureLabelCandidate { label: StructureLabel::C3, certainty: Certainty::Primary },
+            StructureLabelCandidate { label: StructureLabel::L3, certainty: Certainty::Primary },
+        ];
+        assert_eq!(dominant_construction_kind(&labels), Some(ConstructionKind::FlatCorrective));
+    }
+
+    #[test]
+    fn construction_kind_three_plus_l5_terminal_is_zigzag() {
+        // Zigzag wave-c labelled L5 with parent :3 = ZigzagCorrective
+        use crate::output::{Certainty, StructureLabelCandidate};
+        let labels = vec![
+            StructureLabelCandidate { label: StructureLabel::L5, certainty: Certainty::Primary },
+            StructureLabelCandidate { label: StructureLabel::C3, certainty: Certainty::Primary },
+        ];
+        assert_eq!(dominant_construction_kind(&labels), Some(ConstructionKind::ZigzagCorrective));
+    }
+
+    #[test]
+    fn construction_kind_multiple_c3_is_triangle() {
+        // Triangle 3-3-3-3-3 各段 c3 → 多重 C3 / SL3 → TriangleCorrective
+        use crate::output::{Certainty, StructureLabelCandidate};
+        let labels = vec![
+            StructureLabelCandidate { label: StructureLabel::C3, certainty: Certainty::Primary },
+            StructureLabelCandidate { label: StructureLabel::SL3, certainty: Certainty::Primary },
+        ];
+        assert_eq!(dominant_construction_kind(&labels), Some(ConstructionKind::TriangleCorrective));
+    }
+
+    #[test]
+    fn construction_kind_single_xc3_is_generic_corrective() {
+        // Combination 之 x:c3 標籤(單一)→ GenericCorrective
+        use crate::output::{Certainty, StructureLabelCandidate};
+        let labels = vec![StructureLabelCandidate {
+            label: StructureLabel::XC3,
+            certainty: Certainty::Primary,
+        }];
+        assert_eq!(dominant_construction_kind(&labels), Some(ConstructionKind::GenericCorrective));
+    }
+
+    #[test]
+    fn construction_kind_no_primary_returns_none() {
+        use crate::output::{Certainty, StructureLabelCandidate};
+        let labels = vec![StructureLabelCandidate {
+            label: StructureLabel::Five,
+            certainty: Certainty::Possible, // 非 Primary
+        }];
+        assert_eq!(dominant_construction_kind(&labels), None);
+    }
+
+    #[test]
+    fn alternation_passes_when_flat_vs_zigzag() {
+        // W2 = Flat (F3+C3+L3), W4 = Zigzag (C3 + L5 terminal) → Alternation ✓
+        let (classified, candidate) = make_5wave(
+            [10.0, 5.0, 20.0, 5.0, 10.0],
+            [
+                vec![],
+                vec![StructureLabel::F3, StructureLabel::C3, StructureLabel::L3],
+                vec![],
+                vec![StructureLabel::C3, StructureLabel::L5],
+                vec![],
+            ],
+        );
+        assert!(rule_alternation_construction(&candidate, &classified).is_pass());
+    }
+
+    #[test]
+    fn alternation_fails_when_flat_vs_flat() {
+        // W2 = Flat, W4 = Flat → 缺 Alternation
+        let (classified, candidate) = make_5wave(
+            [10.0, 5.0, 20.0, 5.0, 10.0],
+            [
+                vec![],
+                vec![StructureLabel::F3, StructureLabel::C3, StructureLabel::L3],
+                vec![],
+                vec![StructureLabel::F3, StructureLabel::C3, StructureLabel::L3],
+                vec![],
+            ],
+        );
+        assert!(rule_alternation_construction(&candidate, &classified).is_fail());
     }
 }
