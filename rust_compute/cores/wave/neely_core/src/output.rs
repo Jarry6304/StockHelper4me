@@ -176,6 +176,10 @@ pub enum EmulationKind {
     /// spec line 2191-2321:Elongated Flat wave-c 可達 138.2%+ × wave-a,
     /// 視覺上似 Zigzag(wave-c 顯著延伸超過 wave-a 端點)
     FlatAsZigzag,
+    /// **v4.5.4**:Combination(DoubleThree* / TripleThree*)偽裝 Trending Impulse
+    /// spec line 1905-1906:Running Combination 內含 :3 corrective 段在退化條件下
+    /// 被誤判為 5-wave Impulse;與 RunningDoubleThreeAsImpulse 區別在不限 Running 變體
+    CombinationAsImpulse,
     /// 通用 — 視覺上 X 但結構為 Y
     Generic,
 }

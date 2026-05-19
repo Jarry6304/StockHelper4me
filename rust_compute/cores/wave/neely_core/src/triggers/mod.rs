@@ -23,7 +23,11 @@
 // **v4.5.3(2026-05-19)Group 2.3 Triangle triggers**:
 //   - Contracting / Limiting Triangle wave-e 收斂線突破 → `InvalidateScenario`
 //     (Expanding Triangle 本 PR 不加 wave-e trigger,屬未來細化)
-// **Combination**:trigger 規則留後續 sub-PR(G2.4)
+// **v4.5.4(2026-05-19)Group 2.4 Combination + RunningCorrection triggers**:
+//   - Combination 末段反向破 wave-a 起點 → `InvalidateScenario`
+//   - RunningCorrection 末段反向破 wave-a 起點 → `InvalidateScenario`
+//   - 同時加 `CombinationAsImpulse` emulation(spec 1905-1906 一般化)
+//   - Match arm 變 exhaustive(移除 `_ => {}` catch-all)
 
 use crate::output::{
     FlatVariant, Monowave, MonowaveDirection, NeelyPatternType, OnTriggerAction, RuleId, Scenario,
@@ -175,8 +179,36 @@ pub fn build_triggers(scenario: &Scenario, monowaves: &[Monowave]) -> Vec<Trigge
                 }
             }
         }
-        // Combination / RunningCorrection:留後續 sub-PR(G2.4)
-        _ => {}
+        NeelyPatternType::Combination { .. } => {
+            // v4.5.4 — Combination 末段反向破 wave-a 起點 → InvalidateScenario
+            // (Combination 整體應維持向 wave-a 方向延展,wave-x 串接但不退回起點;
+            //  對齊 spec line 1862-1869 Ch8 Combination 定義)
+            if let Some(wave_a) = scenario.wave_tree.children.first() {
+                let wave_a_start = find_wave_start_price(wave_a, monowaves);
+                triggers.push(Trigger {
+                    trigger_type: directional_break(is_up, wave_a_start),
+                    on_trigger: OnTriggerAction::InvalidateScenario,
+                    rule_reference: RuleId::Ch8_XWave_InternalStructure,
+                    neely_page:
+                        "neely_rules.md §Ch8 Combination 末段不退回 wave-a 起點(1862-1869 行)"
+                            .to_string(),
+                });
+            }
+        }
+        NeelyPatternType::RunningCorrection => {
+            // v4.5.4 — RunningCorrection:後續 Impulse > 161.8%(spec 2024-2037);
+            // 反向 invalidation 觸發點同 Combination(末段不退起點)
+            if let Some(wave_a) = scenario.wave_tree.children.first() {
+                let wave_a_start = find_wave_start_price(wave_a, monowaves);
+                triggers.push(Trigger {
+                    trigger_type: directional_break(is_up, wave_a_start),
+                    on_trigger: OnTriggerAction::InvalidateScenario,
+                    rule_reference: RuleId::Ch6_Correction_BLarge_Stage2,
+                    neely_page: "neely_rules.md §RunningCorrection 後續 Impulse(2024-2037 行)"
+                        .to_string(),
+                });
+            }
+        }
     }
 
     triggers
@@ -592,6 +624,50 @@ mod tests {
         let triggers = build_triggers(&s, &monowaves);
         // Expanding Triangle 本 PR 暫不加 wave-e 突破 trigger
         assert!(triggers.is_empty());
+    }
+
+    // v4.5.4 Combination + RunningCorrection triggers tests ---------------
+
+    #[test]
+    fn combination_up_gets_wave_a_invalidate_trigger() {
+        let s = make_scenario(
+            NeelyPatternType::Combination {
+                sub_kinds: vec![CombinationKind::DoubleZigzag],
+            },
+            MonowaveDirection::Up,
+            vec![("a".into(), "2026-01-01", "2026-01-05")],
+        );
+        let monowaves = vec![mw(
+            "2026-01-01", "2026-01-05", 50.0, 60.0, MonowaveDirection::Up,
+        )];
+        let triggers = build_triggers(&s, &monowaves);
+        assert_eq!(triggers.len(), 1);
+        assert!(matches!(
+            triggers[0].on_trigger,
+            OnTriggerAction::InvalidateScenario
+        ));
+        match triggers[0].trigger_type {
+            TriggerType::PriceBreakBelow(p) => assert!((p - 50.0).abs() < 1e-9),
+            _ => panic!("expected PriceBreakBelow(50.0) for Combination wave-a"),
+        }
+    }
+
+    #[test]
+    fn running_correction_down_gets_wave_a_invalidate_trigger() {
+        let s = make_scenario(
+            NeelyPatternType::RunningCorrection,
+            MonowaveDirection::Down,
+            vec![("a".into(), "2026-01-01", "2026-01-05")],
+        );
+        let monowaves = vec![mw(
+            "2026-01-01", "2026-01-05", 200.0, 180.0, MonowaveDirection::Down,
+        )];
+        let triggers = build_triggers(&s, &monowaves);
+        assert_eq!(triggers.len(), 1);
+        match triggers[0].trigger_type {
+            TriggerType::PriceBreakAbove(p) => assert!((p - 200.0).abs() < 1e-9),
+            _ => panic!("expected PriceBreakAbove(200.0) for Down RunningCorrection"),
+        }
     }
 
     #[test]

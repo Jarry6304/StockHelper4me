@@ -17,6 +17,10 @@
 //
 // **v4.5.2(2026-05-19)Group 2.2 補完 Flat emulation**:
 //   6. FlatAsZigzag(spec 2191-2321 Elongated):Flat wave-c > 138.2% × wave-a → 似 Zigzag
+//
+// **v4.5.4(2026-05-19)Group 2.4 補完 Combination emulation**:
+//   7. CombinationAsImpulse(spec 1905-1906 一般化):DoubleThree*/TripleThree* + 5/7 children → 似 Impulse
+//   Match arm 變 exhaustive(移除 `_ => {}` catch-all)
 
 use crate::monowave::ClassifiedMonowave;
 use crate::output::{
@@ -84,8 +88,14 @@ fn detect_for_scenario(
                 suspects.push(s);
             }
         }
-        // Combination / RunningCorrection:留後續 sub-PR(G2.4)
-        _ => {}
+        // v4.5.4 — Combination 偽裝 Trending Impulse
+        NeelyPatternType::Combination { .. } => {
+            if let Some(s) = check_combination_as_impulse(scenario, classified) {
+                suspects.push(s);
+            }
+        }
+        // RunningCorrection:暫不偵測 emulation(spec 對 RunningCorrection 視覺辨識度高)
+        NeelyPatternType::RunningCorrection => {}
     }
 
     suspects
@@ -281,6 +291,47 @@ fn check_flat_as_zigzag(
                  視覺上可能被誤判為 Zigzag(spec 2191-2321 Elongated Flat 區段)",
                 scenario.id,
                 mag_c / mag_a
+            ),
+        })
+    } else {
+        None
+    }
+}
+
+/// v4.5.4 — 偵測 7:Combination 偽裝 Trending Impulse(spec 1905-1906 一般化)。
+///
+/// 辨識:
+///   - scenario.pattern_type == Combination(任 DoubleThree* / TripleThree* sub_kind)
+///   - wave_tree.children.len() 等於 5 或 7(對齊 5-wave 表象;wave-x 串接 5 或 7 段)
+///   - 與 RunningDoubleThreeAsImpulse 區別:本偵測不限 W3 含 :3 標記,
+///     而是純結構(Combination + 表象 5 段)的偽裝警示
+fn check_combination_as_impulse(
+    scenario: &Scenario,
+    _classified: &[ClassifiedMonowave],
+) -> Option<EmulationSuspect> {
+    let child_count = scenario.wave_tree.children.len();
+    let is_running_combo = match &scenario.pattern_type {
+        NeelyPatternType::Combination { sub_kinds } => sub_kinds.iter().any(|k| {
+            matches!(
+                k,
+                crate::output::CombinationKind::DoubleThree
+                    | crate::output::CombinationKind::DoubleThreeCombination
+                    | crate::output::CombinationKind::DoubleThreeRunning
+                    | crate::output::CombinationKind::TripleThree
+                    | crate::output::CombinationKind::TripleThreeCombination
+                    | crate::output::CombinationKind::TripleThreeRunning
+            )
+        }),
+        _ => false,
+    };
+    if is_running_combo && (child_count == 5 || child_count == 7) {
+        Some(EmulationSuspect {
+            scenario_id: Some(scenario.id.clone()),
+            kind: EmulationKind::CombinationAsImpulse,
+            message: format!(
+                "Scenario[{}] DoubleThree*/TripleThree* Combination 含 {} 段 — \
+                 視覺上可能被誤判為 5/7-wave Trending Impulse(spec 1905-1906 一般化)",
+                scenario.id, child_count
             ),
         })
     } else {
@@ -555,5 +606,48 @@ mod tests {
         assert!(!suspects
             .iter()
             .any(|s| matches!(s.kind, EmulationKind::FlatAsZigzag)));
+    }
+
+    // v4.5.4 CombinationAsImpulse tests -----------------------------------
+
+    #[test]
+    fn double_three_with_five_children_yields_combination_as_impulse_suspect() {
+        let scenario = make_scenario(
+            NeelyPatternType::Combination {
+                sub_kinds: vec![CombinationKind::DoubleThree],
+            },
+            vec![
+                wave_node(0, 5),
+                wave_node(5, 5),
+                wave_node(10, 5),
+                wave_node(15, 5),
+                wave_node(20, 5),
+            ],
+        );
+        let suspects = detect_for_scenario(&scenario, &[]);
+        assert!(suspects
+            .iter()
+            .any(|s| matches!(s.kind, EmulationKind::CombinationAsImpulse)));
+    }
+
+    #[test]
+    fn double_zigzag_combination_does_not_yield_emulation() {
+        // DoubleZigzag is a Table A small-x combination, not a DoubleThree* variant
+        let scenario = make_scenario(
+            NeelyPatternType::Combination {
+                sub_kinds: vec![CombinationKind::DoubleZigzag],
+            },
+            vec![
+                wave_node(0, 5),
+                wave_node(5, 5),
+                wave_node(10, 5),
+                wave_node(15, 5),
+                wave_node(20, 5),
+            ],
+        );
+        let suspects = detect_for_scenario(&scenario, &[]);
+        assert!(!suspects
+            .iter()
+            .any(|s| matches!(s.kind, EmulationKind::CombinationAsImpulse)));
     }
 }
