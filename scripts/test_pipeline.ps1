@@ -212,21 +212,21 @@ Invoke-Phase 2 "Schema health(alembic head / table row counts)" {
     }
 
     Write-Step "M3 表 row counts"
-    $sqlQuery = @"
+    $sqlQuery = @'
 SELECT
   (SELECT COUNT(*) FROM facts) AS facts_count,
   (SELECT COUNT(*) FROM indicator_values) AS indicator_values_count,
   (SELECT COUNT(*) FROM structural_snapshots) AS structural_snapshots_count;
-"@
+'@
     $rowResult = psql $env:DATABASE_URL -c $sqlQuery 2>&1
     Write-Host $rowResult
 
     Write-Step "11 個 cross_cores tables 存在"
-    $ccSql = @"
+    $ccSql = @'
 SELECT COUNT(*) AS cross_cores_tables_count FROM pg_tables
 WHERE schemaname='public'
   AND (tablename LIKE '%_ranked_derived' OR tablename = 'monthly_trigger_signals_derived');
-"@
+'@
     $ccResult = psql $env:DATABASE_URL -t -c $ccSql 2>&1
     $ccCount = [int] ($ccResult.Trim())
     if ($ccCount -ne 11) {
@@ -263,7 +263,7 @@ Invoke-Phase 3 "Production verify(per-EventKind rate / forest_size / facts stats
     }
 
     Write-Step "P0 Gate — Neely forest_size 分布(v4.4a 後 acceptance:max ≤ 200,p95 < 180)"
-    $forestSql = @"
+    $forestSql = @'
 SELECT
   PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
   PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
@@ -273,18 +273,18 @@ SELECT
 FROM structural_snapshots
 WHERE core_name = 'neely_core'
   AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
-"@
+'@
     $forestOut = psql $env:DATABASE_URL -c $forestSql 2>&1
     Write-Host $forestOut
 
-    # 解析 max_count
+    # 解析 max_count(從 psql 表格格式抽 "(\d+) |  \d+"   - max_count 後 scenario_count)
     $maxMatch = $forestOut | Select-String "(\d+)\s+\|\s+\d+\s*$"
     if ($maxMatch) {
         $maxCount = [int] $maxMatch.Matches[0].Groups[1].Value
         if ($maxCount -le 200) {
-            Write-Pass "forest_size max = $maxCount ≤ 200(cap 守住)"
+            Write-Pass "forest_size max = $maxCount <= 200 (cap held)"
         } else {
-            Write-Warn "forest_size max = $maxCount > 200 — 考慮 BeamSearchFallback.k 重校"
+            Write-Warn "forest_size max = $maxCount > 200 - consider BeamSearchFallback.k recalibration"
         }
     }
 }
@@ -310,7 +310,7 @@ Invoke-Phase 4 "MCP smoke test(Kalman + Neely + 8 toolkit tools)" {
     }
 
     Write-Step "MCP 8 tools 公開介面(Python import + import-time error check)"
-    $importTest = @"
+    $importTest = @'
 import sys
 sys.path.insert(0, 'src')
 sys.path.insert(0, '.')
@@ -321,7 +321,7 @@ for t in tools:
     if not hasattr(d, t):
         raise SystemExit(f'Missing tool: {t}')
 print(f'All {len(tools)} MCP tools importable')
-"@
+'@
     $importTest | python -
     if ($LASTEXITCODE -ne 0) { throw "MCP toolkit import FAILED" }
     Write-Pass "MCP 8 tools 全 importable"
