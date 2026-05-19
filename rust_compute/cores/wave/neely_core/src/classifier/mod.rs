@@ -347,18 +347,23 @@ fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave])
         candidate.wave_count, candidate.initial_direction
     );
 
-    // 子節點:每個 sub-wave 是一個 WaveNode(直接 sub-wave 已展開;
-    // **v4.7.3 G1.3 註解更新**:深層 nested(每個 sub-wave 內部的 :3 / :5 嵌套
-    // 結構)由 Compaction Three Rounds 處理 — 此 classifier 階段純構造 Level-0
-    // wave_tree;Level-N 嵌套由 compaction/three_rounds.rs::aggregate_one_level
-    // 在後續 Stage 8 處理。完整 5-wave-of-5 / 3-wave-of-3 細項展開留 V4.x。
+    // 子節點:每個 sub-wave 是一個 WaveNode。
+    //
+    // **v4.9 Item 3 nested label enrichment**(2026-05-19):
+    //   - WaveNode.label 嵌入結構標籤 hint(從 structure_label_candidates Primary 抽出)
+    //   - 格式:`W{N}:{Label}{:Direction}` 例 "W1:L5↑" / "W2:C3↓" / 無 Primary → "W1↑"
+    //   - Compaction Level-N+1 走 `wave_tree.clone()` 直接繼承 children 含這些 hint label,
+    //     深層嵌套(:3 / :5 子形態)自動透過遞迴展開可見於 JSONB output
+    //   - **Children empty 仍保留**:Level-0 base monowaves atomic,無 finer-resolution
+    //     sub-structure 可展開;LLM 看 label 即知此 Wn 的 spec 標籤
     let children = mi
         .iter()
         .enumerate()
         .map(|(i, &idx)| {
             let mw = &classified[idx].monowave;
+            let label = format_wave_node_label(i + 1, idx, classified);
             WaveNode {
-                label: format!("W{}", i + 1),
+                label,
                 start: mw.start_date,
                 end: mw.end_date,
                 children: Vec::new(),
@@ -371,6 +376,42 @@ fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave])
         start,
         end,
         children,
+    }
+}
+
+/// **v4.9 Item 3 helper**:構造 sub-wave `WaveNode.label` 含結構標籤 hint。
+///
+/// 格式:
+/// - 有 Primary structure label → `"W{n}:{Label}{:Direction}"` 例 "W1:L5↑" / "W3:Five↓"
+/// - 無 Primary → `"W{n}{Direction}"` 例 "W1↑"
+/// - Direction:Up → ↑;Down → ↓;Neutral → ·
+///
+/// 對齊 spec § Pre-Constructive Logic — 把 Stage 0 標的結構標籤
+/// 透過 WaveNode.label 暴露給 Compaction / Aggregation Layer / LLM context。
+fn format_wave_node_label(
+    wave_num: usize,
+    classified_idx: usize,
+    classified: &[ClassifiedMonowave],
+) -> String {
+    use crate::output::{Certainty, MonowaveDirection};
+    let cmw = &classified[classified_idx];
+
+    let dir_sym = match cmw.monowave.direction {
+        MonowaveDirection::Up => "↑",
+        MonowaveDirection::Down => "↓",
+        MonowaveDirection::Neutral => "·",
+    };
+
+    // 從 structure_label_candidates 抽 Primary label hint
+    let label_hint = cmw
+        .structure_label_candidates
+        .iter()
+        .find(|c| matches!(c.certainty, Certainty::Primary))
+        .map(|c| format!(":{:?}", c.label));
+
+    match label_hint {
+        Some(hint) => format!("W{}{}{}", wave_num, hint, dir_sym),
+        None => format!("W{}{}", wave_num, dir_sym),
     }
 }
 
@@ -404,7 +445,8 @@ mod tests {
     use crate::candidates::WaveCandidate;
     use crate::monowave::ProportionMetrics;
     use crate::output::{
-        CombinationKind, FlatKind, Monowave, MonowaveDirection, TriangleKind,
+        Certainty, CombinationKind, FlatKind, Monowave, MonowaveDirection, StructureLabelCandidate,
+        TriangleKind,
     };
     use chrono::NaiveDate;
 
@@ -779,5 +821,77 @@ mod tests {
                 wc
             );
         }
+    }
+
+    // v4.9 Item 3 format_wave_node_label tests ----------------------------
+
+    fn cmw_with_label_dir(
+        labels: Vec<(StructureLabel, Certainty)>,
+        dir: MonowaveDirection,
+    ) -> ClassifiedMonowave {
+        let candidates = labels
+            .into_iter()
+            .map(|(l, c)| StructureLabelCandidate {
+                label: l,
+                certainty: c,
+            })
+            .collect();
+        ClassifiedMonowave {
+            monowave: Monowave {
+                start_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                end_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                start_price: 100.0,
+                end_price: 110.0,
+                direction: dir,
+                bar_indices: (0, 0),
+            },
+            atr_at_start: 1.0,
+            metrics: ProportionMetrics {
+                magnitude: 10.0,
+                duration_bars: 5,
+                atr_relative: 1.0,
+                slope_vs_45deg: 1.0,
+            },
+            structure_label_candidates: candidates,
+            polywave_size: 0,
+        }
+    }
+
+    #[test]
+    fn format_wave_node_label_with_primary_l5_up() {
+        let classified = vec![cmw_with_label_dir(
+            vec![(StructureLabel::L5, Certainty::Primary)],
+            MonowaveDirection::Up,
+        )];
+        let label = format_wave_node_label(1, 0, &classified);
+        assert_eq!(label, "W1:L5↑");
+    }
+
+    #[test]
+    fn format_wave_node_label_with_primary_c3_down() {
+        let classified = vec![cmw_with_label_dir(
+            vec![(StructureLabel::C3, Certainty::Primary)],
+            MonowaveDirection::Down,
+        )];
+        let label = format_wave_node_label(3, 0, &classified);
+        assert_eq!(label, "W3:C3↓");
+    }
+
+    #[test]
+    fn format_wave_node_label_falls_back_when_no_primary() {
+        // 只有 Possible certainty,沒 Primary → 不加 hint
+        let classified = vec![cmw_with_label_dir(
+            vec![(StructureLabel::L5, Certainty::Possible)],
+            MonowaveDirection::Up,
+        )];
+        let label = format_wave_node_label(2, 0, &classified);
+        assert_eq!(label, "W2↑");
+    }
+
+    #[test]
+    fn format_wave_node_label_no_candidates_neutral_uses_dot() {
+        let classified = vec![cmw_with_label_dir(vec![], MonowaveDirection::Neutral)];
+        let label = format_wave_node_label(5, 0, &classified);
+        assert_eq!(label, "W5·");
     }
 }
