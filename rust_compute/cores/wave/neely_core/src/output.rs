@@ -172,6 +172,10 @@ pub enum EmulationKind {
     /// spec line 2337-2342:典型 Zigzag wave-c ∈ [61.8%, 161.8%] × wave-a;
     /// truncated wave-c(< 100% × wave-a)視覺上似 Flat C-Failure
     ZigzagAsFlatFailure,
+    /// **v4.5.2**:Flat 偽裝 Zigzag(Elongated Flat 之 wave-c 過長)
+    /// spec line 2191-2321:Elongated Flat wave-c 可達 138.2%+ × wave-a,
+    /// 視覺上似 Zigzag(wave-c 顯著延伸超過 wave-a 端點)
+    FlatAsZigzag,
     /// 通用 — 視覺上 X 但結構為 Y
     Generic,
 }

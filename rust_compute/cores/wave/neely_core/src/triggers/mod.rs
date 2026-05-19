@@ -17,11 +17,14 @@
 // **v4.5.1(2026-05-19)Group 2.1 Zigzag triggers**:
 //   - Zigzag wave-b 不可完全回測 wave-a → `InvalidateScenario`
 //   - Zigzag wave-c 不過 wave-a 起點(c-wave 退化)→ `WeakenScenario`
-// **Flat / Triangle / Combination**:trigger 規則留後續 sub-PR(G2.2-G2.4)
+// **v4.5.2(2026-05-19)Group 2.2 Flat triggers**:
+//   - Flat wave-c 不過 wave-a 起點 → `InvalidateScenario`
+//   - Expanded Flat (Irregular*/Elongated) wave-b 端點突破反向 → `WeakenScenario`
+// **Triangle / Combination**:trigger 規則留後續 sub-PR(G2.3 / G2.4)
 
 use crate::output::{
-    Monowave, MonowaveDirection, NeelyPatternType, OnTriggerAction, RuleId, Scenario, Trigger,
-    TriggerType, WaveAbc, WaveNode,
+    FlatVariant, Monowave, MonowaveDirection, NeelyPatternType, OnTriggerAction, RuleId, Scenario,
+    Trigger, TriggerType, WaveAbc, WaveNode,
 };
 
 /// 從 Scenario + monowave_series 推算 invalidation triggers。
@@ -105,11 +108,67 @@ pub fn build_triggers(scenario: &Scenario, monowaves: &[Monowave]) -> Vec<Trigge
                 });
             }
         }
-        // Flat / Triangle / Combination / RunningCorrection:留後續 sub-PR(G2.2 / G2.3 / G2.4)
+        NeelyPatternType::Flat { sub_kind } => {
+            // v4.5.2 — Ch11_Flat_Variant_Rules wave-c:wave-c 不過 wave-a 起點
+            // (對齊 spec line 2208:Common Flat wave-c ≥ 100% × b 且 ≥ 38.2% × a)
+            if let Some(wave_a) = scenario.wave_tree.children.first() {
+                let wave_a_start = find_wave_start_price(wave_a, monowaves);
+                triggers.push(Trigger {
+                    trigger_type: directional_break(is_up, wave_a_start),
+                    on_trigger: OnTriggerAction::InvalidateScenario,
+                    rule_reference: RuleId::Ch11_Flat_Variant_Rules {
+                        variant: flat_variant_from_kind(*sub_kind),
+                        wave: WaveAbc::C,
+                    },
+                    neely_page: "neely_rules.md §Flat wave-c 規則(2208 行;wave-c 不過 wave-a 起點)"
+                        .to_string(),
+                });
+            }
+            // v4.5.2 — Expanded Flat(Irregular* / Elongated)wave-b 端點突破反向 → WeakenScenario
+            if matches!(
+                sub_kind,
+                crate::output::FlatKind::Irregular
+                    | crate::output::FlatKind::IrregularStrongB
+                    | crate::output::FlatKind::Elongated
+            ) {
+                if let Some(wave_b) = scenario.wave_tree.children.get(1) {
+                    let wave_b_end = find_wave_end_price(wave_b, monowaves);
+                    triggers.push(Trigger {
+                        trigger_type: directional_break(is_up, wave_b_end),
+                        on_trigger: OnTriggerAction::WeakenScenario,
+                        rule_reference: RuleId::Ch11_Flat_Variant_Rules {
+                            variant: flat_variant_from_kind(*sub_kind),
+                            wave: WaveAbc::B,
+                        },
+                        neely_page: "neely_rules.md §Expanded Flat wave-b 端點(2235-2240 行)"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        // Triangle / Combination / RunningCorrection:留後續 sub-PR(G2.3 / G2.4)
         _ => {}
     }
 
     triggers
+}
+
+/// 將 FlatKind 轉成對應 FlatVariant(Ch11 規則 RuleId 用)。
+///
+/// FlatKind(8 variant)→ FlatVariant(10 variant)mapping:
+/// IrregularStrongB → StrongB(FlatVariant 用 StrongB 命名);其餘 1:1 對映。
+fn flat_variant_from_kind(kind: crate::output::FlatKind) -> FlatVariant {
+    use crate::output::FlatKind;
+    match kind {
+        FlatKind::Common => FlatVariant::Common,
+        FlatKind::BFailure => FlatVariant::BFailure,
+        FlatKind::CFailure => FlatVariant::CFailure,
+        FlatKind::DoubleFailure => FlatVariant::DoubleFailure,
+        FlatKind::Irregular => FlatVariant::Irregular,
+        FlatKind::IrregularStrongB => FlatVariant::StrongB,
+        FlatKind::IrregularFailure => FlatVariant::IrregularFailure,
+        FlatKind::Elongated => FlatVariant::Elongated,
+    }
 }
 
 /// 對 Forest 中所有 Scenario 套 triggers,直接更新 invalidation_triggers 欄位。
@@ -369,6 +428,62 @@ mod tests {
         )];
         let triggers = build_triggers(&s, &monowaves);
         assert_eq!(triggers.len(), 1);
+    }
+
+    // v4.5.2 Flat triggers tests ------------------------------------------
+
+    #[test]
+    fn flat_common_up_gets_wave_c_break_below_wave_a_start() {
+        let s = make_scenario(
+            NeelyPatternType::Flat {
+                sub_kind: FlatKind::Common,
+            },
+            MonowaveDirection::Up,
+            vec![
+                ("a".into(), "2026-01-01", "2026-01-05"),
+                ("b".into(), "2026-01-06", "2026-01-10"),
+                ("c".into(), "2026-01-11", "2026-01-15"),
+            ],
+        );
+        let monowaves = vec![
+            mw("2026-01-01", "2026-01-05", 100.0, 110.0, MonowaveDirection::Up),
+            mw("2026-01-06", "2026-01-10", 110.0, 101.0, MonowaveDirection::Down),
+            mw("2026-01-11", "2026-01-15", 101.0, 112.0, MonowaveDirection::Up),
+        ];
+        let triggers = build_triggers(&s, &monowaves);
+        // Common Flat 只生 wave-c (Invalidate) trigger,不生 Expanded wave-b WeakenTrigger
+        assert_eq!(triggers.len(), 1);
+        match triggers[0].trigger_type {
+            TriggerType::PriceBreakBelow(p) => assert!((p - 100.0).abs() < 1e-9),
+            _ => panic!("expected PriceBreakBelow(100.0) for Flat wave-c"),
+        }
+    }
+
+    #[test]
+    fn flat_irregular_up_gets_wave_b_weaken_plus_wave_c_invalidate() {
+        let s = make_scenario(
+            NeelyPatternType::Flat {
+                sub_kind: FlatKind::Irregular,
+            },
+            MonowaveDirection::Up,
+            vec![
+                ("a".into(), "2026-01-01", "2026-01-05"),
+                ("b".into(), "2026-01-06", "2026-01-10"),
+                ("c".into(), "2026-01-11", "2026-01-15"),
+            ],
+        );
+        let monowaves = vec![
+            mw("2026-01-01", "2026-01-05", 100.0, 110.0, MonowaveDirection::Up),
+            mw("2026-01-06", "2026-01-10", 110.0, 98.0, MonowaveDirection::Down),
+            mw("2026-01-11", "2026-01-15", 98.0, 115.0, MonowaveDirection::Up),
+        ];
+        let triggers = build_triggers(&s, &monowaves);
+        assert_eq!(triggers.len(), 2);
+        // 第二個是 wave-b WeakenScenario @ wave-b.end = 98.0
+        assert!(matches!(
+            triggers[1].on_trigger,
+            OnTriggerAction::WeakenScenario
+        ));
     }
 
     #[test]
