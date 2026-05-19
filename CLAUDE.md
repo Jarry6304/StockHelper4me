@@ -266,6 +266,41 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.3d — P1.3d Ch11 Zigzag wave-a/b/c + Appendix B 項 F(2026-05-19)
+
+接 v4.3c P1.3c 後動工 P1.3d — Ch11 Zigzag wave-a/b/c 進階規則 + Appendix B 項 F
+(Zigzag c 在 Triangle 內例外)。**Advisory mode**;對應 `NeelyPatternType::Zigzag`。
+
+### 範圍(1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_zigzag.rs` | **新檔** — `analyze()` + wave-a/b/c 規則 + Triangle 內例外處理;**+7 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_zigzag;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `ch11_zigzag::analyze()` 呼叫 |
+| `CLAUDE.md` | v4.3d 章節 |
+
+### 規則覆蓋(spec line 2323-2345 + Appendix B 項 F)
+
+| Wave | 規則 |
+|---|---|
+| **a** | b 回測 ≥ 81% × a → Missing Wave Rule 警告(spec line 2329) |
+| **b** | 61.8-81% 區間 → 內部 wave-a 警告;≤ 61.8% → Info(spec line 2328-2332)|
+| **c**(non-Triangle) | c ∈ [61.8%, 161.8%] × a;超出 → Warning;> 161.8% → Elongated Zigzag(spec line 2337-2342) |
+| **c**(in_triangle_context = true)| 範圍放寬;超出 → Strong「Triangle 形成訊號」(Appendix B 項 F + spec 2338-2342) |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **340 passed / 0 failed**(v4.3c 333 → +7)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### 下個 sub-PR(P1.3e Triangle 9 變體)
+
+P1.3e — Triangle 9 變體 × wave-a-e 完整規則 ~900 LoC(P1.3 最後一個 sub-PR),
+spec line 2346-2485。
+
+---
+
 ## v4.3c — P1.3c Ch11 Flat 七變體 wave-a/b/c 規則(2026-05-19)
 
 接 v4.3b P1.3b 後動工 P1.3c — Ch11 Flat 全部 7 變體 wave-a/b/c 規則。
