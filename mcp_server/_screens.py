@@ -327,12 +327,20 @@ def compute_annual_low_risk_screen(
 def compute_monthly_trigger_scan(
     as_of: date,
     *,
+    stock_id: str | None = None,
+    top_n_per_type: int = 20,
     database_url: str | None = None,
 ) -> dict[str, Any]:
-    """Layer 5:Positive(YoY > 30% + 法人買超)/ Negative(YoY < -20% + 法人賣超) triggers。"""
+    """Layer 5:Positive(YoY > 30% + 法人買超)/ Negative(YoY < -20% + 法人賣超) triggers。
+
+    v3.32 hotfix(2026-05-18 production):原預設全攤 464 triggers → ~94KB,超 MCP
+    context 限制被 Claude Desktop 自動轉檔。修法:
+      - 加 stock_id kwarg → 只回該股 trigger(典型 0-2 個)
+      - 不傳 stock_id 時走 summary 模式:預設只回 top N(按 |revenue_yoy_pct| 排序)
+        per trigger_type + counts,避免 payload 爆量
+    """
     conn = get_connection(database_url)
     try:
-        # 直 SELECT(不走 ranked helper,因為 trigger schema 不同)
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT MAX(date) AS d FROM monthly_trigger_signals_derived WHERE market = 'TW' AND date <= %s",
@@ -345,14 +353,22 @@ def compute_monthly_trigger_scan(
                 "as_of":   as_of.isoformat(),
                 "toolkit": "Layer_5_monthly_trigger",
                 "signal_date": None,
+                "stock_filter": stock_id,
+                "counts": {"positive_total": 0, "negative_total": 0},
                 "positive_triggers": [],
                 "negative_triggers": [],
                 "narrative": "無 Layer 5 trigger 訊號(尚未跑 monthly_trigger builder 或 backfill)。",
             }
 
+        # SQL:可選 stock_id filter + 統計 count
+        sql_filter = "AND t.stock_id = %s" if stock_id else ""
+        params: list[Any] = [signal_date]
+        if stock_id:
+            params.append(stock_id)
+
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT t.stock_id, t.trigger_type,
                        t.revenue_yoy_pct, t.institutional_20d,
                        t.shares_outstanding, t.institutional_pct,
@@ -361,14 +377,14 @@ def compute_monthly_trigger_scan(
                   FROM monthly_trigger_signals_derived t
                   LEFT JOIN stock_info_ref s
                     ON s.market = t.market AND s.stock_id = t.stock_id
-                 WHERE t.market = 'TW' AND t.date = %s
+                 WHERE t.market = 'TW' AND t.date = %s {sql_filter}
                 """,
-                [signal_date],
+                params,
             )
             rows = cur.fetchall()
 
-        positives = []
-        negatives = []
+        positives_all = []
+        negatives_all = []
         for r in rows:
             item = {
                 "stock_id":           r["stock_id"],
@@ -380,22 +396,52 @@ def compute_monthly_trigger_scan(
                 "rationale":          (r.get("detail") or {}).get("rationale"),
             }
             if r["trigger_type"] == "positive":
-                positives.append(item)
+                positives_all.append(item)
             else:
-                negatives.append(item)
+                negatives_all.append(item)
+
+        pos_total = len(positives_all)
+        neg_total = len(negatives_all)
+
+        # 若指定 stock_id → 全回(典型 0-2 筆,payload 小);否則按 yoy 排序取 top N
+        if stock_id:
+            positives = positives_all
+            negatives = negatives_all
+        else:
+            positives = sorted(
+                positives_all, key=lambda x: x.get("revenue_yoy_pct") or 0, reverse=True,
+            )[:top_n_per_type]
+            negatives = sorted(
+                negatives_all, key=lambda x: x.get("revenue_yoy_pct") or 0,
+            )[:top_n_per_type]
     finally:
         conn.close()
+
+    narrative = (
+        f"Layer 5 trigger 偵測:positive {pos_total} 個 / negative {neg_total} 個"
+    )
+    if stock_id:
+        in_pos = any(t.get("stock_id") == stock_id for t in positives_all)
+        in_neg = any(t.get("stock_id") == stock_id for t in negatives_all)
+        if in_pos:
+            narrative += f";{stock_id} 命中 positive trigger"
+        elif in_neg:
+            narrative += f";{stock_id} 命中 negative trigger"
+        else:
+            narrative += f";{stock_id} 未命中任何 trigger"
+    else:
+        narrative += f";已 truncate 至 top {top_n_per_type} per type(完整清單請帶 stock_id 過濾)"
+    narrative += "(僅 conviction adjustment hint,不獨立配資)。"
 
     return {
         "as_of":             as_of.isoformat(),
         "signal_date":       signal_date.isoformat(),
         "toolkit":           "Layer_5_monthly_trigger",
+        "stock_filter":      stock_id,
+        "counts":            {"positive_total": pos_total, "negative_total": neg_total},
         "positive_triggers": positives,
         "negative_triggers": negatives,
-        "narrative":         (
-            f"Layer 5 trigger 偵測:positive {len(positives)} 個 / negative "
-            f"{len(negatives)} 個(僅 conviction adjustment hint,不獨立配資)。"
-        ),
+        "narrative":         narrative,
     }
 
 

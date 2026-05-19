@@ -26,14 +26,37 @@ pub async fn run_stock_cores(
     const STOCK_LOOKBACK_QUARTERS: i32 = 6 * 4 + 4;
 
     // ---- 1. Wave: neely_core(走 structural_snapshots,不寫 indicator_values)----
+    //
+    // v3.37(2026-05-18)multi-timeframe Neely:
+    // 對齊 spec §8.6 cross_timeframe_hints + Kalman v3.33 multi-horizon 同款設計哲學
+    // (同 input 跑多 resolution → LLM 看跨 timeframe 一致性)。
+    //
+    // tf 為 Daily(default 入口)時自動跑 Daily + Weekly + Monthly 三 timeframe;
+    // 各自寫成獨立 structural_snapshots row(PK 含 timeframe column,自動共存)。
+    // load_for_neely 對各 timeframe 套 6-yr floor(v3.36 hotfix),所以 weekly/monthly
+    // 都能涵蓋 ~6 年完整 history。
+    //
+    // 對 3030 long-history 股票預期:
+    //   - daily monowave ~7-8 天/個 → 5 連續 ~50 天 span → SubMinuette degree
+    //   - weekly monowave ~3-5 週/個 → 5 連續 ~1.5 月 span → Minute degree
+    //   - monthly monowave ~3-6 月/個 → 5 連續 ~1-2 年 span → Minor / Intermediate
+    //
+    // 其他指定 timeframe(--timeframe weekly / monthly)走 user 顯式設定,不 3x
     if filter.is_enabled("neely_core") {
-        let mut neely_params = neely_core::NeelyCoreParams::default();
-        neely_params.timeframe = tf;
-        match ohlcv_loader::load_for_neely(pool, stock_id, &neely_params).await {
-            Ok(series) => summary.push(dispatch_neely(pool, stock_id, &series, neely_params, write).await),
-            Err(e) => summary.push(loader_err_summary(
-                "neely_core", stock_id, "load_for_neely", &e,
-            )),
+        let neely_timeframes: Vec<Timeframe> = if tf == Timeframe::Daily {
+            vec![Timeframe::Daily, Timeframe::Weekly, Timeframe::Monthly]
+        } else {
+            vec![tf]
+        };
+        for nt in neely_timeframes {
+            let mut neely_params = neely_core::NeelyCoreParams::default();
+            neely_params.timeframe = nt;
+            match ohlcv_loader::load_for_neely(pool, stock_id, &neely_params).await {
+                Ok(series) => summary.push(dispatch_neely(pool, stock_id, &series, neely_params, write).await),
+                Err(e) => summary.push(loader_err_summary(
+                    "neely_core", stock_id, "load_for_neely", &e,
+                )),
+            }
         }
     }
 

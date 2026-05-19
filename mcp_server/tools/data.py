@@ -589,7 +589,7 @@ def _compose_snapshot_narrative(
         s = health.get("overall_score")
         if isinstance(s, (int, float)):
             tone = "偏多" if s > 20 else "偏空" if s < -20 else "中性"
-            parts.append(f"{stock_id} 個股健康度 {s:+d}({tone})")
+            parts.append(f"{stock_id} 個股健康度 {s:+.0f}({tone})")
 
     # 大盤 climate
     if isinstance(market, dict) and "overall_climate" in market:
@@ -695,6 +695,8 @@ def annual_low_risk_screen(
 
 def monthly_trigger_scan(
     date: str,
+    stock_id: str | None = None,
+    top_n_per_type: int = 20,
     *,
     database_url: str | None = None,
 ) -> dict[str, Any]:
@@ -704,15 +706,25 @@ def monthly_trigger_scan(
       - Positive trigger:月營收 YoY > +30% + 過去 20D 法人累積買超 → 部位 +20% hint
       - Negative trigger:月營收 YoY < -20% + 法人賣超 > 流通股數 1% → 部位 -50% hint
 
+    v3.32 hotfix(2026-05-18):原全攤 ~400+ triggers → ~94KB payload 爆量。修法:
+      - stock_id(可選):指定某股,只回該股 trigger(0-2 筆,payload 小)
+      - top_n_per_type(預設 20):全市場 scan 時 per trigger_type 取 yoy 最強 N 個
+        (counts 仍回 total 不被截斷)
+
     底層因子 A 級(Hung-Lu-Yang 2025 月營收揭露 alpha + Sias 2004),
     Trigger 架構 C 級(自創 conviction adjustment),需實盤驗證。
 
     Returns:
-        {as_of, signal_date, toolkit, positive_triggers: [...], negative_triggers: [...], narrative}
+        {as_of, signal_date, toolkit, stock_filter, counts: {positive_total, negative_total},
+         positive_triggers: [...], negative_triggers: [...], narrative}
     """
     from mcp_server._screens import compute_monthly_trigger_scan
 
-    return compute_monthly_trigger_scan(_parse_date(date), database_url=database_url)
+    return compute_monthly_trigger_scan(
+        _parse_date(date),
+        stock_id=stock_id, top_n_per_type=top_n_per_type,
+        database_url=database_url,
+    )
 
 
 # ────────────────────────────────────────────────────────────

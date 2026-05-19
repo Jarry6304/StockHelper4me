@@ -223,10 +223,11 @@ class TestKalmanTrend:
         assert result["smoothed_price"] == 1220.3
         assert result["regime"] == "StableUp"
         assert result["regime_label"] == "穩定上漲"
-        # uncertainty_band = smoothed ± uncertainty
-        assert result["uncertainty_band"] == [1211.8, 1228.8]
-        # deviation = (1234.5 - 1220.3) / 8.5 ≈ 1.67
-        assert abs(result["deviation_sigma"] - 1.67) < 0.05
+        # v3.34:effective_uncertainty = max(8.5, 1220.3 × 0.01) = max(8.5, 12.203) = 12.203
+        # uncertainty_band = smoothed ± effective = [1208.10, 1232.50]
+        assert result["uncertainty_band"] == [1208.1, 1232.5]
+        # v3.34:deviation = (1234.5 - 1220.3) / 12.203 ≈ 1.16
+        assert abs(result["deviation_sigma"] - 1.16) < 0.05
 
     def test_recent_regime_changes_extracted(self, monkeypatch):
         as_of = date(2026, 5, 15)
@@ -282,7 +283,9 @@ class TestKalmanTrend:
         result = data_tools.kalman_trend("2330", "2026-05-15", lookback_days=180)
         # 應該讀 series[-1] 的 2225 / 11.0 / 0.7 / Accelerating(不是頂層 missing → 0)
         assert result["smoothed_price"] == 2225.0
-        assert result["uncertainty_band"] == [2214.0, 2236.0]
+        # v3.34:effective_uncertainty = max(11.0, 2225 × 0.01) = max(11.0, 22.25) = 22.25
+        # band = [2225 - 22.25, 2225 + 22.25] = [2202.75, 2247.25]
+        assert result["uncertainty_band"] == [2202.75, 2247.25]
         assert result["trend_velocity"] == 0.7
         assert result["regime"] == "Accelerating"
 
@@ -301,7 +304,243 @@ class TestKalmanTrend:
         )
         result = data_tools.kalman_trend("2330", "2026-05-15")
         n = len(json.dumps(result, ensure_ascii=False))
-        assert n < 3_000, f"payload {n} bytes 超 budget 3 KB"
+        # v3.33:加 kalman_by_horizon + cross_horizon_consistency,放寬到 4 KB
+        assert n < 4_000, f"payload {n} bytes 超 budget 4 KB"
+
+    # ════════════════════════════════════════════════════════════
+    # v3.33 — multi-horizon
+    # ════════════════════════════════════════════════════════════
+
+    def test_v3_33_parses_horizons_array(self, monkeypatch):
+        """v3.33:Rust 寫 `horizons: [...4]` array,MCP 拆成 kalman_by_horizon dict
+        by label。每 entry 含 Q / halflife_bars / smoothed_price / regime 等。"""
+        production_schema = {
+            "stock_id": "3030",
+            "timeframe": "Daily",
+            "primary_horizon": "medium",
+            "series": [
+                {"date": "2026-05-15", "raw_close": 395.0, "smoothed_price": 320.0,
+                 "uncertainty": 12.0, "velocity": 0.5, "regime": "StableUp"},
+            ],
+            "events": [],
+            "horizons": [
+                {"label": "short", "process_noise_q": 0.1, "halflife_bars": 31.0,
+                 "velocity_threshold_pct": 0.005, "min_regime_duration_days": 3,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 388.0, "uncertainty": 5.0,
+                                 "velocity": 1.5, "regime": "Accelerating"},
+                 "event_count": 8},
+                {"label": "medium", "process_noise_q": 0.01, "halflife_bars": 99.0,
+                 "velocity_threshold_pct": 0.002, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 320.0, "uncertainty": 12.0,
+                                 "velocity": 0.5, "regime": "StableUp"},
+                 "event_count": 5},
+                {"label": "long", "process_noise_q": 0.001, "halflife_bars": 310.0,
+                 "velocity_threshold_pct": 0.0015, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 220.0, "uncertainty": 30.0,
+                                 "velocity": 0.2, "regime": "StableUp"},
+                 "event_count": 3},
+                {"label": "ultra_long", "process_noise_q": 1e-5, "halflife_bars": 3100.0,
+                 "velocity_threshold_pct": 0.001, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 159.0, "uncertainty": 80.0,
+                                 "velocity": 0.05, "regime": "Sideway"},
+                 "event_count": 1},
+            ],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=production_schema)
+        result = data_tools.kalman_trend("3030", "2026-05-15")
+
+        # 結構檢查
+        assert "kalman_by_horizon" in result
+        assert "primary_horizon" in result
+        assert result["primary_horizon"] == "medium"
+
+        by_h = result["kalman_by_horizon"]
+        assert set(by_h.keys()) == {"short", "medium", "long", "ultra_long"}
+
+        # short horizon:Q=0.1 / halflife=31 / smoothed=388 / regime=Accelerating
+        assert by_h["short"]["Q"] == 0.1
+        assert by_h["short"]["halflife_bars"] == 31
+        assert by_h["short"]["smoothed_price"] == 388.0
+        assert by_h["short"]["regime"] == "Accelerating"
+        assert by_h["short"]["regime_label"] == "加速上漲"
+        assert by_h["short"]["event_count"] == 8
+
+        # ultra_long:smoothed=159(完全不追)
+        assert by_h["ultra_long"]["smoothed_price"] == 159.0
+        assert by_h["ultra_long"]["regime"] == "Sideway"
+
+        # 頂層 backward compat:medium horizon
+        assert result["smoothed_price"] == 320.0
+        assert result["regime"] == "StableUp"
+
+    def test_v3_33_cross_horizon_consistency_summary(self, monkeypatch):
+        """4 horizon regime 一致性摘要:all_aligned + majority_regime + summary。"""
+        # 對 3030(德律):short/medium/long 都 StableUp,只 ultra_long Sideway → majority 3/4
+        production_schema = {
+            "stock_id": "3030",
+            "timeframe": "Daily",
+            "primary_horizon": "medium",
+            "series": [{"date": "2026-05-15", "raw_close": 395.0,
+                        "smoothed_price": 320.0, "uncertainty": 12.0,
+                        "velocity": 0.5, "regime": "StableUp"}],
+            "events": [],
+            "horizons": [
+                {"label": "short", "process_noise_q": 0.1, "halflife_bars": 31.0,
+                 "velocity_threshold_pct": 0.005, "min_regime_duration_days": 3,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 388.0, "uncertainty": 5.0,
+                                 "velocity": 1.5, "regime": "StableUp"},
+                 "event_count": 5},
+                {"label": "medium", "process_noise_q": 0.01, "halflife_bars": 99.0,
+                 "velocity_threshold_pct": 0.002, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 320.0, "uncertainty": 12.0,
+                                 "velocity": 0.5, "regime": "StableUp"},
+                 "event_count": 4},
+                {"label": "long", "process_noise_q": 0.001, "halflife_bars": 310.0,
+                 "velocity_threshold_pct": 0.0015, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 220.0, "uncertainty": 30.0,
+                                 "velocity": 0.2, "regime": "StableUp"},
+                 "event_count": 2},
+                {"label": "ultra_long", "process_noise_q": 1e-5, "halflife_bars": 3100.0,
+                 "velocity_threshold_pct": 0.001, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 159.0, "uncertainty": 80.0,
+                                 "velocity": 0.05, "regime": "Sideway"},
+                 "event_count": 1},
+            ],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=production_schema)
+        result = data_tools.kalman_trend("3030", "2026-05-15")
+
+        cons = result["cross_horizon_consistency"]
+        assert cons["all_aligned"] is False
+        assert cons["majority_regime"] == "StableUp"
+        assert cons["majority_count"] == 3
+        assert cons["total_horizons"] == 4
+        # narrative 含「跨 horizon」摘要
+        assert "跨 horizon" in result["narrative"]
+
+    def test_v3_33_all_aligned_when_all_same_regime(self, monkeypatch):
+        """4 horizon 全 StableUp → all_aligned=True + summary 「高度一致」。"""
+        all_up = {
+            "stock_id": "2330", "timeframe": "Daily", "primary_horizon": "medium",
+            "series": [{"date": "2026-05-15", "raw_close": 2265.0,
+                        "smoothed_price": 2200.0, "uncertainty": 10.0,
+                        "velocity": 1.0, "regime": "StableUp"}],
+            "events": [],
+            "horizons": [
+                {"label": lbl, "process_noise_q": q, "halflife_bars": hl,
+                 "velocity_threshold_pct": 0.001, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 2265.0,
+                                 "smoothed_price": 2200.0, "uncertainty": 10.0,
+                                 "velocity": 1.0, "regime": "StableUp"},
+                 "event_count": 0}
+                for (lbl, q, hl) in [
+                    ("short", 0.1, 31.0), ("medium", 0.01, 99.0),
+                    ("long", 0.001, 310.0), ("ultra_long", 1e-5, 3100.0),
+                ]
+            ],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=all_up)
+        result = data_tools.kalman_trend("2330", "2026-05-15")
+
+        cons = result["cross_horizon_consistency"]
+        assert cons["all_aligned"] is True
+        assert cons["majority_count"] == 4
+        assert "高度一致" in cons["summary"]
+
+    def test_v3_34_uncertainty_floor_compresses_extreme_deviation(self, monkeypatch):
+        """v3.34:Kalman P 收斂塌掉時(uncertainty < 1% × smoothed)套 1% floor,
+        避免 deviation_sigma 飆到天文數字(production 3030 ultra_long 4138σ bug)。
+
+        Fixture 模擬 3030 production state(uncertainty=0.06 vs smoothed=158.59,
+        實際 P/p ratio = 0.04%,遠低於 1% 量綱)。
+        """
+        # 對齊 production verify Phase D 揭露的數字
+        production_3030 = {
+            "stock_id": "3030", "timeframe": "Daily", "primary_horizon": "medium",
+            "series": [{"date": "2026-05-15", "raw_close": 395.0,
+                        "smoothed_price": 158.59, "uncertainty": 0.06,
+                        "velocity": 0.7247, "regime": "Accelerating"}],
+            "events": [],
+            "horizons": [
+                {"label": "ultra_long", "process_noise_q": 1e-5, "halflife_bars": 3099.0,
+                 "velocity_threshold_pct": 0.001, "min_regime_duration_days": 5,
+                 "series_last": {"date": "2026-05-15", "raw_close": 395.0,
+                                 "smoothed_price": 158.59, "uncertainty": 0.06,
+                                 "velocity": 0.7247, "regime": "Accelerating"},
+                 "event_count": 14},
+            ],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=production_3030)
+        result = data_tools.kalman_trend("3030", "2026-05-15")
+
+        # 頂層 deviation:effective_unc = max(0.06, 158.59 × 0.01) = 1.586
+        # deviation = (395.0 - 158.59) / 1.586 ≈ 149.07σ(原本 4138σ)
+        assert abs(result["deviation_sigma"] - 149.07) < 1.0, \
+            f"v3.34 deviation 應 ~149σ(從 4138σ 壓下),實際 {result['deviation_sigma']}"
+
+        # uncertainty_band 也走 floor:[158.59 - 1.586, 158.59 + 1.586] = [157.00, 160.18]
+        assert result["uncertainty_band"] == [157.0, 160.18]
+
+        # ultra_long horizon dev 也走 floor
+        ultra = result["kalman_by_horizon"]["ultra_long"]
+        assert abs(ultra["deviation_sigma"] - 149.07) < 1.0, \
+            f"v3.34 ultra_long deviation 應 ~149σ,實際 {ultra['deviation_sigma']}"
+
+    def test_v3_34_floor_no_op_when_uncertainty_above_pct(self, monkeypatch):
+        """v3.34:當 uncertainty 已大於 1% × smoothed 時,floor no-op,deviation 不變。
+
+        Fixture:smoothed=100, uncertainty=5(= 5% > 1%)→ floor=1 < 5,不生效。
+        Deviation = (110-100)/5 = 2.0σ(正常 Kalman 行為)。
+        """
+        normal_value = {
+            "stock_id": "TEST", "timeframe": "Daily",
+            "series": [{"date": "2026-05-15", "raw_close": 110.0,
+                        "smoothed_price": 100.0, "uncertainty": 5.0,
+                        "velocity": 0.5, "regime": "StableUp"}],
+            "events": [],
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=normal_value)
+        result = data_tools.kalman_trend("TEST", "2026-05-15")
+        # 5 > 1% × 100 = 1.0,floor no-op
+        assert abs(result["deviation_sigma"] - 2.0) < 0.01
+        assert result["uncertainty_band"] == [95.0, 105.0]
+
+    def test_v3_33_backward_compat_no_horizons_field(self, monkeypatch):
+        """舊 schema(無 horizons array)應 graceful:kalman_by_horizon = {}。
+
+        對 production 過渡期 — Rust 已升 v3.33 但部分 stock 的 indicator_value
+        還是 v3.30 schema(沒 horizons array,只 series)。MCP 仍要 work。
+        """
+        v3_30_only_schema = {
+            "stock_id": "2330", "timeframe": "Daily",
+            "series": [
+                {"date": "2026-05-15", "raw_close": 2265.0,
+                 "smoothed_price": 2225.0, "uncertainty": 11.0,
+                 "velocity": 0.7, "regime": "Accelerating"},
+            ],
+            "events": [],
+            # 注意:沒 horizons key
+        }
+        _patch_agg_as_of(monkeypatch, indicator_value=v3_30_only_schema)
+        result = data_tools.kalman_trend("2330", "2026-05-15")
+
+        # 頂層 backward compat 工作
+        assert result["smoothed_price"] == 2225.0
+        assert result["regime"] == "Accelerating"
+        # multi-horizon 結構是空但 keys 存在(graceful)
+        assert result["kalman_by_horizon"] == {}
+        cons = result["cross_horizon_consistency"]
+        assert cons["all_aligned"] is None
+        assert cons["majority_count"] == 0
+        assert cons["total_horizons"] == 0
 
 
 class TestToolkitV3PublicSurface:

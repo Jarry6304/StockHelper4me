@@ -75,29 +75,35 @@ pub async fn load_daily(
 
 /// 從 price_weekly_fwd 讀最近 N 週。
 ///
-/// price_weekly_fwd PK = (market, stock_id, year, week);本 loader 只篩 stock_id,
-/// 用 (year, week) 排序倒推最近 N 週。week 對應週末日期由 Silver builder 已寫入 date 欄位。
+/// **v3.37 fix(2026-05-18)**:原本 SQL 用 `date` column 但 price_weekly_fwd 沒有
+/// (PK = (market, stock_id, year, week))。改用 (year, week) ORDER BY DESC LIMIT N
+/// 取最近 N 週,然後 outer query reverse → ASC(NeelyCore Stage 1 monowave
+/// detector 期待時序遞增)。date 從 `make_date(year, 1, 1) + (week-1)*7` 合成。
 pub async fn load_weekly(
     pool: &PgPool,
     stock_id: &str,
     lookback_weeks: i32,
 ) -> Result<OhlcvSeries> {
-    // price_weekly_fwd 不一定有 date 欄,部分 schema 用 (year, week);
-    // 假設 date 欄存在(對齊 Silver builder),否則本 query 需改 (year, week) 推算
     let rows: Vec<FwdBarRow> = sqlx::query_as(
         r#"
-        SELECT date,
-               open::float8  AS open,
-               high::float8  AS high,
-               low::float8   AS low,
-               close::float8 AS close,
-               volume
-        FROM price_weekly_fwd
-        WHERE stock_id = $1
-          AND is_dirty = FALSE
-          AND date >= (CURRENT_DATE - ($2::int * 7))
-          AND open IS NOT NULL AND high IS NOT NULL
-          AND low IS NOT NULL AND close IS NOT NULL
+        WITH ordered AS (
+            SELECT
+                make_date(year, 1, 1) + INTERVAL '1 day' * ((week - 1) * 7) AS date,
+                open::float8  AS open,
+                high::float8  AS high,
+                low::float8   AS low,
+                close::float8 AS close,
+                volume
+            FROM price_weekly_fwd
+            WHERE stock_id = $1
+              AND is_dirty = FALSE
+              AND open IS NOT NULL AND high IS NOT NULL
+              AND low IS NOT NULL AND close IS NOT NULL
+            ORDER BY year DESC, week DESC
+            LIMIT $2::int
+        )
+        SELECT date::date AS date, open, high, low, close, volume
+        FROM ordered
         ORDER BY date ASC
         "#,
     )
@@ -111,6 +117,10 @@ pub async fn load_weekly(
 }
 
 /// 從 price_monthly_fwd 讀最近 N 月。
+///
+/// **v3.37 fix(2026-05-18)**:同 load_weekly,price_monthly_fwd PK=(market,stock_id,
+/// year, month) 沒 date column。改用 (year, month) ORDER BY DESC LIMIT N 取最近 N 月,
+/// outer reverse → ASC。date 用 `make_date(year, month, 1)` 合成(月初代表性日期)。
 pub async fn load_monthly(
     pool: &PgPool,
     stock_id: &str,
@@ -118,18 +128,24 @@ pub async fn load_monthly(
 ) -> Result<OhlcvSeries> {
     let rows: Vec<FwdBarRow> = sqlx::query_as(
         r#"
-        SELECT date,
-               open::float8  AS open,
-               high::float8  AS high,
-               low::float8   AS low,
-               close::float8 AS close,
-               volume
-        FROM price_monthly_fwd
-        WHERE stock_id = $1
-          AND is_dirty = FALSE
-          AND date >= (CURRENT_DATE - ($2::int * 31))
-          AND open IS NOT NULL AND high IS NOT NULL
-          AND low IS NOT NULL AND close IS NOT NULL
+        WITH ordered AS (
+            SELECT
+                make_date(year, month, 1) AS date,
+                open::float8  AS open,
+                high::float8  AS high,
+                low::float8   AS low,
+                close::float8 AS close,
+                volume
+            FROM price_monthly_fwd
+            WHERE stock_id = $1
+              AND is_dirty = FALSE
+              AND open IS NOT NULL AND high IS NOT NULL
+              AND low IS NOT NULL AND close IS NOT NULL
+            ORDER BY year DESC, month DESC
+            LIMIT $2::int
+        )
+        SELECT date::date AS date, open, high, low, close, volume
+        FROM ordered
         ORDER BY date ASC
         "#,
     )
@@ -142,10 +158,29 @@ pub async fn load_monthly(
     Ok(rows_to_series(stock_id, Timeframe::Monthly, rows))
 }
 
-/// 輔助函式:依 NeelyCore.warmup_periods(params) 自動載入足量 OHLCV。
+/// 輔助函式:依 timeframe 自動載入足量 OHLCV(NeelyCore 用)。
 ///
-/// Daily / Weekly / Monthly 對應 warmup * 1.2 (緩衝 20%) 量的歷史。
-/// 對齊 cores_overview §3.4 / §7.3。
+/// **v3.38(2026-05-18)user 拍版 per-forecast-horizon spec**:
+///   支援 1m / 3m / 6m forecast 三 horizon(drop 1y),統一資料窗口拉取:
+///   - Daily   = 1,500 bars(~6 yr,覆蓋 6m forecast `daily_bars_required=1500`)
+///   - Weekly  = 300 bars(~6 yr,覆蓋 6m forecast `weekly_bars_required=300`)
+///   - Monthly = 60 bars(~5 yr,對齊 user 拍版「年級評估不期待精準,monthly 只給
+///     long-anchor reference」+ 6m forecast `monthly_bars_required=60`)
+///   - Quarterly = warmup_buffered.max(72)(spec 外保留 floor)
+///
+/// **背景**:v3.36 hotfix 把 daily 推到 6 yr 是為了長 history 股(3030)長 degree
+/// scenarios,但 user audit + spec(neely_core_architecture §13.3)揭露 Daily 1-3 yr
+/// 對應 Minute degree(剛好是 1m-6m horizon);**長 degree anchor 走 weekly/monthly Neely
+/// 而非過度延伸 daily**(對齊 v3.37 multi-timeframe 設計 + NEoWave 原書「各 timeframe
+/// 負責自己 degree」哲學)。
+///
+/// v3.36 daily 6 yr 統計上 ok(對齊 user spec daily_bars_required=1500),保留;
+/// v3.36 monthly 144 bars 縮減為 60(對齊 user spec)。
+///
+/// MCP layer 用 `daily_bars` / `weekly_bars` / `monthly_bars` actual count 走 degradation
+/// logic(per-forecast-horizon `degree_uncertain` / `no_6m` / `insufficient_history`)。
+///
+/// 對齊 cores_overview §3.4 / §7.3 + m3Spec/neely_core_architecture.md §5.4 §8.6 §13.3。
 pub async fn load_for_neely(
     pool: &PgPool,
     stock_id: &str,
@@ -154,8 +189,16 @@ pub async fn load_for_neely(
     use fact_schema::WaveCore;
     let core = NeelyCore::new();
     let warmup = core.warmup_periods(params);
-    // 1.2x 緩衝(對齊 §7.3)
-    let lookback = (warmup as f64 * 1.2).ceil() as i32;
+    // 1.2x 緩衝(對齊 §7.3 原規格,Quarterly fallback 用)
+    let warmup_buffered = (warmup as f64 * 1.2).ceil() as i32;
+
+    // v3.38 user 拍版 fixed table(對齊 per-forecast-horizon spec 完整 6m 需求)
+    let lookback = match params.timeframe {
+        Timeframe::Daily     => 1500,                       // ~6 yr,6m forecast daily_bars_required
+        Timeframe::Weekly    => 300,                        // ~6 yr,6m forecast weekly_bars_required
+        Timeframe::Monthly   => 60,                         // ~5 yr,6m forecast monthly_bars_required
+        Timeframe::Quarterly => warmup_buffered.max(72),    // Quarterly 不在 user spec,保留 6 yr floor
+    };
 
     match params.timeframe {
         Timeframe::Daily => load_daily(pool, stock_id, lookback).await,

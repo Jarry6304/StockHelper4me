@@ -1,9 +1,25 @@
-# Kalman Filter Core 規格(卡爾曼濾波 — 1-D 趨勢平滑)
+# Kalman Filter Core 規格(卡爾曼濾波 — multi-horizon 1-D 趨勢平滑)
 
-> **版本**:r1(v3.4 上線時立稿,2026-05-15)
+> **版本**:r2(v3.33 multi-horizon refactor,2026-05-18)
 > **位置**:`rust_compute/cores/indicator/kalman_filter_core/`
 > **上游 Silver**:`price_daily_fwd`(僅 close;OHLCV-based,對齊 atr/rsi 等)
 > **優先級**:P3(對齊 P1 經典 indicator + P3 P3 statistical / state-space 子類)
+
+## r2 修訂摘要(2026-05-18)
+
+v3.33 — 從 single horizon(Q=1e-5,~12 年 halflife)改 **multi-horizon 4 個並行 recursion**。
+對非平穩急漲股(如 3030 8 年漲 8 倍)single horizon smoothed 永遠落後 raw 數倍;
+multi-horizon 各自獨立跑,LLM 看 4 horizon 一致性判讀訊號信心。
+
+| Horizon | Q | Halflife | 對應期 | velocity_threshold | min_dur |
+|---|---|---|---|---|---|
+| **short** | 1e-1 | ~31 bars | 6 週 | 0.005 | 3 |
+| **medium**(primary) | 1e-2 | ~99 bars | 5 月 | 0.002 | 5 |
+| **long** | 1e-3 | ~310 bars | 1.2 年 | 0.0015 | 5 |
+| **ultra_long** | 1e-5 | ~3100 bars | 12 年 | 0.001 | 5 |
+
+facts(EventKind transition)**只從 primary horizon 產**,保留 ≤ 12/yr/stock production 行為。
+其他 horizon 訊號走 `indicator_values.value.horizons[].series_last`,LLM 自己讀。
 
 ## 一、本文件範圍
 
@@ -42,41 +58,60 @@ v3.4 r1 採 1-D(state = price scalar)。理由:
 - 關鍵欄位:`close`(其他 OHLCV 也存在,本 core 只用 close)
 - 載入器:`shared/ohlcv_loader/load_daily`,提供 `OhlcvSeries`
 
-## 四、Params
+## 四、Params(v3.33 multi-horizon)
 
 ```rust
+pub struct KalmanFilterHorizon {
+    pub label: String,                     // "short" / "medium" / "long" / "ultra_long"
+    pub process_noise_q: f64,
+    pub velocity_threshold_pct: f64,
+    pub min_regime_duration_days: usize,
+}
+
 pub struct KalmanFilterParams {
     pub timeframe: Timeframe,              // Daily
-    pub process_noise_q: f64,              // 預設 1e-5
-    pub measurement_noise_rel: f64,        // 預設 0.01
-    pub warmup_days: usize,                // 預設 60
-    pub velocity_threshold_pct: f64,       // 預設 0.001(0.1%/day)
+    pub measurement_noise_rel: f64,        // 預設 0.01(4 horizons 共用)
+    pub warmup_days: usize,                // 預設 60(共用)
+    pub horizons: Vec<KalmanFilterHorizon>,    // v3.33:預設 4 horizons
+    pub primary_horizon: String,           // 預設 "medium"
 }
 ```
 
-### 4.1 Reference + 預設值依據(user 拍版 2026-05-15)
+### 4.1 Default 4 horizons(v3.33 拍版 2026-05-18)
 
-- **Q=1e-5**:`process_noise`,越小 → smoothed_price 越平滑。對齊
-  Roncalli, T. (2013). *Lectures on Risk Management*. CRC Press, §11.2
-  個股 trend filter 推薦範圍 1e-5 ~ 1e-3。
-- **R = (0.01 × mean_price)²**:`measurement_noise` 相對 price 比例化,
-  對齊 Bork & Petersen (2014). "Trends in stock prices?" Working Paper
-  推薦做法。日動 1% 是台股日報酬率標準差的數量級。
-- **warmup_days=60**:Kalman state 收斂在 30-60 bars 內,60 保守。對齊
-  Roncalli 2013 推薦 30-60 day warmup,避免前期 state noise 觸發 phantom events。
-- **velocity_threshold_pct=0.001**:`|smoothed velocity / smoothed price| <
-  0.1%` 判 Sideway(對齊台股日均報酬 ~0.05% 的 2x);此值需 production
-  calibration 校準。
+| label | Q | halflife_bars | velocity_threshold | min_regime_dur |
+|---|---|---|---|---|
+| short      | 1e-1 | ~31  | 0.005 | 3 |
+| medium     | 1e-2 | ~99  | 0.002 | 5 |
+| long       | 1e-3 | ~310 | 0.0015 | 5 |
+| ultra_long | 1e-5 | ~3100 | 0.001 | 5 |
 
-### 4.2 Reference 經典文獻
+**halflife 公式**:`halflife_bars ≈ 9.8 / sqrt(Q)`(對 R=(0.01·p)² 配方,production calibration)。
+
+**velocity_threshold scaling rationale**:
+- Q 越大 → smoothed 對 raw 跟得越緊 → daily velocity 自然越大(short horizon
+  daily smoothed velocity ~ daily return ~ 1-5%)
+- 原 0.001(0.1%)對 short horizon 等於每天都 fire → 改 0.005 過濾噪音
+- 對 ultra_long(Q=1e-5)保留 0.001(對齊 v3.4 r2 production calibration)
+
+### 4.2 Reference + 文獻
 
 - **Kalman, R. E.** (1960). "A new approach to linear filtering and prediction
-  problems." *Transactions of the ASME — Journal of Basic Engineering*,
-  82(1), 35–45. 原始 paper,公式 2.4(Predict)+ 2.7(Update)1-D 退化版。
+  problems." *Trans. ASME — Journal of Basic Engineering*, 82(1), 35–45.
+  原始 paper,公式 2.4(Predict)+ 2.7(Update)1-D 退化版。
 - **Roncalli, T.** (2013). *Lectures on Risk Management*. CRC Press, §11.2.
-  個股 trend filter 應用,Q / R 推薦範圍。
+  個股 trend filter 應用,**Q ∈ [1e-5, 1e-3] 推薦範圍對應不同 horizon**
+  (v3.33 將範圍擴成 1e-5 ~ 1e-1 4 horizons)。
 - **Bork, L. & Petersen, A.M.** (2014). "Trends in stock prices?" Working
   Paper. relative R formulation。
+- **R = (0.01 × mean_price)²**:相對 price 比例化,4 horizons 共用。日動 1%
+  是台股日報酬率標準差的數量級。
+- **warmup_days=60**:Kalman state 收斂在 30-60 bars 內,60 保守。對齊
+  Roncalli 2013 推薦 30-60 day warmup,4 horizons 共用此 warmup。
+
+### 4.3 Reference 經典文獻(歸併至 §4.2)
+
+> v3.33 已合併文獻清單到 §4.2 多 horizon segment。本段保留歷史交叉鏈接。
 
 ## 五、warmup_periods
 
@@ -89,14 +124,26 @@ fn warmup_periods(&self, params: &KalmanFilterParams) -> usize {
 預設 60。Pass 3 transition events 在 warmup 結束後才產(對齊 Roncalli 2013
 state convergence)。
 
-## 六、Output
+## 六、Output(v3.33 multi-horizon)
 
 ```rust
 pub struct KalmanFilterOutput {
     pub stock_id: String,
     pub timeframe: Timeframe,
-    pub series: Vec<KalmanPoint>,
-    pub events: Vec<KalmanEvent>,
+    pub primary_horizon: String,                  // 預設 "medium"
+    pub series: Vec<KalmanPoint>,                 // primary horizon 完整 series(backward compat v3.30)
+    pub events: Vec<KalmanEvent>,                 // primary horizon events(= facts source)
+    pub horizons: Vec<KalmanHorizonOutput>,       // 4 horizons latest state + event_count
+}
+
+pub struct KalmanHorizonOutput {
+    pub label: String,
+    pub process_noise_q: f64,
+    pub halflife_bars: f64,                       // 9.8 / sqrt(Q)
+    pub velocity_threshold_pct: f64,
+    pub min_regime_duration_days: usize,
+    pub series_last: Option<KalmanPoint>,         // 每 horizon 自己的最末 state
+    pub event_count: usize,                       // 該 horizon transition 次數(facts 不寫)
 }
 
 pub struct KalmanPoint {
@@ -154,25 +201,50 @@ Decelerating 是個雙向類別:上漲動能在消退 / 下跌動能在減速(�
 
 ## 七、計算策略
 
-### 7.1 Kalman recursion(1-D)
+### 7.1 Kalman recursion(1-D)— v3.33 multi-horizon
+
+對同一 OhlcvSeries,**對每個 horizon 各自跑一次** 1-D Kalman recursion(共用 R,Q
+per-horizon)。
 
 ```rust
-// 初始化
-let mut x = bars[0].close;       // x_0
-let mut p = R;                   // P_0(信任 measurement)
+fn compute_kalman_recursion(bars: &[OhlcvBar], q: f64, r: f64) -> Vec<KalmanPoint> {
+    let mut x = bars[0].close;       // x_0
+    let mut p = r;                   // P_0(信任 measurement)
+    let mut series = Vec::with_capacity(bars.len());
+    let mut prev_x: Option<f64> = None;
+    for bar in bars {
+        // Predict
+        let x_pred = x;              // constant-state model
+        let p_pred = p + q;
+        // Update
+        let z = bar.close;
+        let k = p_pred / (p_pred + r);
+        x = x_pred + k * (z - x_pred);
+        p = (1.0 - k) * p_pred;
 
-for bar in bars {
-    // Predict
-    let x_pred = x;              // 趨勢 model:x_t = x_{t-1}(constant velocity 假設 in Pass 1 simplified)
-    let p_pred = p + Q;
-    // Update
-    let z = bar.close;
-    let k = p_pred / (p_pred + R);
-    x = x_pred + k * (z - x_pred);
-    p = (1.0 - k) * p_pred;
-    // emit x as smoothed_price, p.sqrt() as uncertainty
+        let velocity = prev_x.map(|prev| x - prev).unwrap_or(0.0);
+        prev_x = Some(x);
+        series.push(KalmanPoint { date: bar.date, raw_close: z,
+            smoothed_price: x, uncertainty: p.sqrt(), velocity,
+            regime: Regime::Sideway });   // placeholder
+    }
+    series
 }
 ```
+
+4 horizons 並行跑,result 寫進 `horizons: Vec<KalmanHorizonOutput>`:
+
+```rust
+for horizon in &params.horizons {
+    let series = compute_kalman_recursion(bars, horizon.process_noise_q, r);
+    let series = classify_series_regimes(series, horizon.velocity_threshold_pct);
+    let events = detect_events_run_length(&series, warmup, horizon.min_regime_duration_days);
+    // ... 寫進 horizon_outputs
+}
+```
+
+**Top-level `series` / `events`** 對齊 primary horizon(預設 "medium"),保留 v3.30
+series-last-entry path fix 的 backward compat。
 
 ### 7.2 Velocity / Acceleration
 
