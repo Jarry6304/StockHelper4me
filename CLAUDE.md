@@ -11,16 +11,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
-Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment)。
+Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3)。
 
-- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.4 無 schema migration)
-- **開發分支**:`claude/continue-previous-work-xdKrl` → PR 合 main
+- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.6 無 schema migration)
+- **開發分支**:`claude/neely-m3spec-completion-4l4dT`(v4.5+v4.6) → PR 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
-- **Rust tests**:39 crates / **528 passed / 0 failed**(v4.4 後;v3.38 baseline 448 → +80 v4.x tests across 9 commits)
+- **Rust tests**:39 crates / **549 passed / 0 failed**(v4.6 後;v4.4 baseline 528 → +21 v4.5+v4.6 tests across 5 commits)
 - **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
 - **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
-- **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神(Ch11 = pattern characteristic 非 invariant);**P0 Gate 校準** user 本機跑 `tw_cores run-all --write` 後驗 forest_size(max ≤ 200,p95 < 180)
+- **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏 P1.1-P1.4 全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神
+- **v4.5 + v4.6**(2026-05-19):M3SPEC 闕漏補完 Group 2(4 sub-PR corrective triggers + emulation)+ Group 3(Monowave bar_indices + m1_endpoint_broken_by_m2 real impl);**Group 1 polywave 嵌套依賴鏈 3 sub-PR 留下次 session**(需全市場 P0 Gate)
 
 ---
 
@@ -268,10 +269,10 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
-## v4.7 — Round 10 calibration + test_pipeline.ps1 polish(2026-05-19)
+## v4.7 — Round 10 obv_core calibration + test_pipeline.ps1 polish(2026-05-19)
 
-接 v4.4 production verify 揭露 obv_core 4 個 EventKind 超 12/yr,動工 Round 10
-calibration + 2 個 wrapper script cosmetic 修正。
+接 v4.6 後動工 v4.4 production verify 揭露的 obv_core 4 個 EventKind 超 12/yr,
++ 2 個 test_pipeline.ps1 cosmetic 修正。
 
 ### 3 個 task
 
@@ -310,16 +311,15 @@ PS 5.1 console codepage = CP950,psql output UTF-8 → 亂碼。三段防衛:
 
 | 檔 | 動作 |
 |---|---|
-| `rust_compute/cores/indicator/obv_core/src/lib.rs` | 加 `MIN_OBV_CROSS_SPACING = 15` const;OBV MA cross 加 `last_bullish_i / last_bearish_i` spacing(對齊 ma_core);ExtremeHigh/Low 改 edge trigger(`prev_high` / `prev_low` 狀態);+4 new tests |
+| `rust_compute/cores/indicator/obv_core/src/lib.rs` | 加 `MIN_OBV_CROSS_SPACING = 15` const;OBV MA cross 加 `last_bullish_i / last_bearish_i` spacing;ExtremeHigh/Low 改 edge trigger;+4 new tests |
 | `scripts/test_pipeline.ps1` | 加 `chcp 65001` + UTF-8 OutputEncoding + PGCLIENTENCODING UTF8;alembic head 解析改 Out-String + regex match |
-| `CLAUDE.md` | v4.7 章節 |
+| `CLAUDE.md` | v4.7 章節(本段) |
 
 ### 沙箱驗證
 
 - `cargo test --release -p obv_core` ✅ **10 passed**(從 6 → +4 new Round 10 tests)
 - `cargo build --release -p tw_cores` ✅ 0 warnings
-- `cargo test --release --workspace --no-fail-fast` ✅ **532 passed / 0 failed**
-  (v4.4 baseline 528 → +4)
+- `cargo test --release --workspace --no-fail-fast` ✅ **532 passed / 0 failed**(v4.4 baseline 528 → +4 obv_core;與 v4.6 549 不同 branch 並排 — main merge 後 553)
 
 ### user 本機 production verify(下次跑)
 
@@ -330,10 +330,7 @@ cd rust_compute && cargo build --release -p tw_cores && cd ..
 # DELETE obv_core 既有 facts(params_hash 變動 → 視為 stale)
 psql $env:DATABASE_URL -c "DELETE FROM facts WHERE source_core = 'obv_core';"
 
-# 重跑(只 obv_core params_hash 變,其他 cores dedup 不重算)
 cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
-
-# verify per-EventKind rate
 .\scripts\test_pipeline.ps1 -OnlyPhase 3
 ```
 
@@ -346,6 +343,185 @@ cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
 - 0 alembic / 0 collector.toml / 0 Python
 - 既有 6 個 obv_core test margin 充足(divergence 邏輯不動)
 - Rollback:單 commit `git revert`
+
+---
+
+## v4.6 — Group 3 Monowave bar_indices + m1_endpoint_broken_by_m2 real impl(2026-05-19)
+
+接 v4.5 Group 2 4 sub-PR 收尾後動工 Group 3(對應 plan §G3 唯一 sub-PR,完整
+Group 3 範圍)。對齊 `m3Spec/neely_rules.md` line 247-249 + `neely_core_architecture.md`
+§3.1「需 OHLC reference 串接的 predicates」,把 Pre-Constructive Stage 0 的
+`m1_endpoint_broken_by_m2` 從 hardcoded `false` placeholder 改為真實 intraday
+OHLC extremum 比對。
+
+### 範圍(1 commit / branch `claude/neely-m3spec-completion-4l4dT`)
+
+| 檔 | 動作 |
+|---|---|
+| `output.rs` | `Monowave` struct 加 `bar_indices: (usize, usize)` 欄位 + `#[serde(default)]`(對應 start_date/end_date 在 bars slice 的 index 區間;`(0, 0)` 退化值) |
+| `monowave/pure_close.rs` | `detect_monowaves()` 兩處 Monowave 構造寫真實 `bar_indices = (start_idx, extreme_idx)` |
+| `monowave/mod.rs` | `classify_monowaves()` override `bar_indices = (start_idx, end_idx)` 確保 caller 切換 bars slice 時對齊 |
+| `pre_constructive/context.rs` | `MonowaveContext` 加 `bars: &'a [OhlcvBar]` 欄位 + `build()` signature 加 bars 參數 |
+| `pre_constructive/predicates.rs` | `m1_endpoint_broken_by_m2` 從 `(_m1, _m2) -> false` placeholder 升 `(m1, m2, bars: &[OhlcvBar]) -> bool` 真實實作:m1.Up → m2 期間任一 `bar.high > m1.end_price` / m1.Down → `bar.low < m1.end_price` / Neutral / 退化保險 → false;**+7 unit tests** |
+| `pre_constructive/mod.rs` | `run()` signature 加 `bars: &[OhlcvBar]` thread to MonowaveContext::build |
+| `pre_constructive/rule_4.rs` | caller 改傳 `(m1, m2, ctx.bars)` |
+| `lib.rs` | `pre_constructive::run(&mut classified, &input.bars)` |
+| 32 既有 test fixtures(neely_core) | Bulk-update 38 sites 加 `bar_indices: (0, 0)` placeholder |
+| `trendline_core/src/lib.rs` | 1 個 Monowave 構造同款補 |
+
+**0 alembic / 0 collector.toml / 0 Python / 0 dispatch 行為改變的硬中斷**(predicate 真實值會略影響 Pre-Constructive Stage 0 結果,但不阻塞 scenario 生成)。
+
+### 沙箱驗證
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo test --release -p neely_core --lib` ✅ **376 passed / 0 failed**(v4.5.4 369 → +7 G3.1 predicate tests)
+- `cargo test --release --workspace` ✅ **549 passed / 0 failed**
+
+### user 本機 production verify(3 檔 manual review)
+
+對齊 plan §Group 3 Verification(沙箱 + 3 檔 P0 Gate,**不需全市場 P0**)。
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+
+# v4.6 Monowave struct 改 schema → params_hash 變動,既有 structural_snapshots
+# 走 ON CONFLICT UPDATE 覆寫(不需 DELETE)
+.\rust_compute\target\release\tw_cores.exe run-all --write
+
+# 1. 驗 bar_indices 在 JSONB 寫進真實值(非 (0,0))
+psql $env:DATABASE_URL -c "
+SELECT stock_id,
+       jsonb_array_length(snapshot->'monowave_series') AS mw_count,
+       snapshot->'monowave_series'->0->'bar_indices' AS first_mw_indices
+FROM structural_snapshots
+WHERE stock_id IN ('2330','3030','1101')
+  AND core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core')
+ORDER BY stock_id;
+"
+# 預期 first_mw_indices 為 [start_idx, end_idx] 真實值(非 [0, 0])
+
+# 2. MCP neely_forecast 對 2330/3030/1101 驗 forecast 仍可用
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast
+for sid in ['2330','3030','1101']:
+    r = neely_forecast(sid,'2026-05-15')
+    print(f'{sid}: scenarios={len(r[\"forecasts\"])} primary_pattern={r[\"primary_scenario\"][\"pattern_type\"]}')
+"
+```
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml
+- `#[serde(default)]` 保 JSONB 向下相容(若未來加 Deserialize derive)
+- m1_endpoint_broken_by_m2 從 false 變 true 屬罕見場景(spec 明示只在 5th Ext 5th wave),production scenario_forest 略縮(預期正向,Pre-Constructive 加 x:c3 → Validator 可能拒 false candidates)
+- Rollback:單 commit `git revert`(Monowave 加新欄位 + serde(default),既有 JSONB 反序列化視為 (0, 0))
+
+### Group 1(下次 session)
+
+Plan §Group 1 留 3 sub-PR(~1,800 LoC):
+1. G1.1 Compaction Level-0 真實 price + Pattern Isolation validation
+2. G1.2 Pre-Constructive polywave + Construction axis + Power Rating in_triangle
+3. G1.3 Round 2 邊界波重評 + Channeling touch + Post-validator Stage 2 + Classifier nested
+
+需全市場 P0 Gate(1266 stocks)校準 forest_size 分布。
+
+---
+
+## v4.5 — Group 2 Corrective Pattern Triggers + Emulation(2026-05-19)
+
+接 v4.4 P1.4 收尾後動工 Group 2(對應 plan §Group 2,4 sub-PR / ~1,360 LoC)。
+對齊 `m3Spec/neely_rules.md` Ch11 各 corrective pattern wave-by-wave 規則,把
+原本 4 corrective patterns(Zigzag/Flat/Triangle/Combination)在 triggers/mod.rs
++ emulation/mod.rs 留 `_ => {}` 的 placeholder 全部補完。
+
+### 4 sub-PR commits
+
+| Sub-PR | Commit | 範圍 |
+|---|---|---|
+| v4.5.1 Zigzag | `5439c2a` | triggers wave-b/c + ZigzagAsFlatFailure emulation |
+| v4.5.2 Flat | `2ed54ec` | triggers wave-c + Expanded Flat wave-b + FlatAsZigzag emulation + flat_variant_from_kind |
+| v4.5.3 Triangle | `366bc45` | Contracting/Limiting wave-e trigger(Expanding 暫不加)|
+| v4.5.4 Combination + RunningCorrection | `460e235` | wave-a invalidate + CombinationAsImpulse emulation + match exhaustive |
+
+### 範圍(4 commits / branch `claude/neely-m3spec-completion-4l4dT`)
+
+| 檔 | 動作 |
+|---|---|
+| `output.rs::EmulationKind` | +3 variants:`ZigzagAsFlatFailure`(v4.5.1)/ `FlatAsZigzag`(v4.5.2)/ `CombinationAsImpulse`(v4.5.4) |
+| `triggers/mod.rs` | 加 4 corrective patterns + RunningCorrection 共 5 個 match arm;移除 `_ => {}` catch-all(match exhaustive 覆蓋 7 個 NeelyPatternType variants);+8 unit tests |
+| `triggers/mod.rs` helpers | `flat_variant_from_kind`(FlatKind 8 → FlatVariant 10) + `triangle_variant_default`(TriangleKind 3 → TriangleVariant 9) |
+| `emulation/mod.rs` | 加 Zigzag/Flat/Combination/RunningCorrection match arms(RunningCorrection 為 noop);移除 catch-all;+6 unit tests |
+| `emulation/mod.rs` helpers | `check_zigzag_as_flat_failure` / `check_flat_as_zigzag` / `check_combination_as_impulse` |
+
+### 規則覆蓋(spec line ref)
+
+| Pattern | Trigger 規則(spec) |
+|---|---|
+| **Zigzag** | wave-b 不可完全回測 wave-a(2328-2332)→ InvalidateScenario;wave-c 不過 wave-b 端點(2337-2342)→ WeakenScenario |
+| **Flat** | wave-c 不過 wave-a 起點(2208)→ InvalidateScenario;Expanded Flat(Irregular*/Elongated)wave-b 端點突破反向(2235-2240)→ WeakenScenario |
+| **Triangle**(Contracting/Limiting) | wave-e 突破 wave-c 端點(2453)→ InvalidateScenario |
+| **Combination** | 末段反向破 wave-a 起點(1862-1869)→ InvalidateScenario |
+| **RunningCorrection** | 同上(2024-2037)→ InvalidateScenario |
+
+| Pattern | Emulation 規則(spec) |
+|---|---|
+| **Zigzag** | wave-c < 100% × wave-a → 似 Flat C-Failure(2337-2342) |
+| **Flat** | wave-c ≥ 138.2% × wave-a → 似 Zigzag(2191-2321 Elongated) |
+| **Combination** | DoubleThree*/TripleThree* + 5/7 children → 似 5/7-wave Trending Impulse(1905-1906 一般化) |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core --lib` ✅ **369 passed / 0 failed**(v4.4 baseline 355 → +14)
+- `cargo test --release --workspace` ✅ **542 passed / 0 failed**(v4.4 baseline 528 → +14)
+- Match arm 變 exhaustive — 未來新增 NeelyPatternType variant 時 compiler 強制此處更新(預防 silent bug)
+
+### user 本機 production verify
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+.\rust_compute\target\release\tw_cores.exe run-all --write
+psql $env:DATABASE_URL -f scripts/maintain_facts_stats.sql
+
+# 驗新增 trigger/emulation 寫進 scenario_forest JSONB
+psql $env:DATABASE_URL -c "
+SELECT stock_id, s->>'pattern_type' AS pattern,
+       jsonb_array_length(s->'invalidation_triggers') AS trigger_count,
+       jsonb_array_length(s->'emulation_suspects') AS emul_count
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE stock_id='2330' AND core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core')
+LIMIT 10;
+"
+# 預期:Zigzag/Flat/Triangle/Combination scenarios 之前 trigger_count=0 → 現在 1-2 個
+```
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml
+- Corrective scenarios 之前走 catch-all 不生 trigger / emulation,本系列 PR 加增益
+- Forest filter 不變(triggers 是 LLM context,不縮 scenario_forest;emulation 是 advisory)
+- Rollback:單 commit `git revert`(每 sub-PR 獨立 commit)
+
+### Group 2 → Group 3 收尾總計(plan §Group 2 + Group 3)
+
+| Sub-PR | Tests added | Commit |
+|---|---|---|
+| v4.5.1 Zigzag | +4 | `5439c2a` |
+| v4.5.2 Flat | +4 | `2ed54ec` |
+| v4.5.3 Triangle | +2 | `366bc45` |
+| v4.5.4 Combination | +4 | `460e235` |
+| v4.6 G3.1 Monowave bar_indices | +7 | `cc053d6` |
+| **Total** | **+21** | **5 commits** |
+
+Plan §Group 1(polywave 嵌套依賴鏈,3 sub-PR / ~1,800 LoC)留下次 session;需全市場
+P0 Gate 校準 forest_size 分布。
 
 ---
 

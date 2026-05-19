@@ -69,6 +69,9 @@ pub fn classify_monowaves(
             );
             let mut classified_mw = mw;
             classified_mw.direction = new_direction;
+            // v4.6 G3.1:確保 bar_indices 對齊本 caller 的 bars slice
+            // (detect_monowaves 已寫入,但 classify 重算以防 caller 切換 bars)
+            classified_mw.bar_indices = (start_idx, end_idx);
 
             // Stage 2-B:Rule of Proportion — 算 metrics
             let metrics = proportion::compute_proportion_metrics(

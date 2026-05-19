@@ -237,25 +237,45 @@ pub fn m2_breaches_2_4_line_within_m1_time(
 /// 「突破」= m2 在 m1 方向延伸後,end_price 進一步超越 m1.end_price。
 /// 但 spec 用法是「m1 端點被 m2 突破」當 m1 為 5th Ext 的 5th wave 場景,
 /// 即 m2 進一步突破 m1 終點(同 m1 方向繼續),這是不尋常的;
-/// 解讀為:m2 與 m1 同方向,且 m2 終點超過 m1 終點。
+/// 解讀為:在 m2 的 retracement 過程中,某時刻 intraday extreme 觸到或
+/// 超過 m1 終點之外(以 m1 方向延伸看)。
 ///
-/// 但 m2 必然是 m1 的逆向(否則不會是新 monowave)。所以實際語意應為:
-/// 在 m2 的 retracement 過程中,某時刻價格觸到或超過 m1 終點之外。
+/// **v4.6 G3.1 真實實作(2026-05-19)**:用 m2.bar_indices 在 bars slice 內
+/// 走 intraday high/low extremum:
+///   - `m1.direction == Up`:m2 期間任一 `bar.high > m1.end_price` → true
+///   - `m1.direction == Down`:m2 期間任一 `bar.low < m1.end_price` → true
+///   - `m1.direction == Neutral`:false(spec 對 Neutral monowave 不適用)
 ///
-/// 簡化詮釋(本 PR best-guess):**m2 的「extreme」價超過 m1 終點**(以 m1 方向延伸看)
-/// 由於我們的 Monowave 只記 start/end 而非中間 extreme,以 end_price 近似判斷。
-/// 完整語意需 Phase 3 完整 OHLC reference 串接(留 P5/P10 改善)。
+/// 對齊 spec line 247-249(neely_rules.md §Pre-Constructive Logic 細部技術備註)+
+/// architecture §3.1「需 OHLC reference 串接的 predicates」。
 ///
-/// 本 PR best-guess:m2.end 在 m1 同方向上是否超過 m1.end 的對角(即 m2 比 m1 走更遠)
-/// = m2 end_price 表現得像繼續 m1 方向走。實際 m2 是逆向 monowave,
-/// 因此這個 predicate 在 spec 中通常為 false(很罕見場景)。
-/// 留 false 為 default,後續 OHLC reference 串接時補完。
-pub fn m1_endpoint_broken_by_m2(_m1: &ClassifiedMonowave, _m2: &ClassifiedMonowave) -> bool {
-    // [缺資料欄位]:需要 m2 期間的 intraday extreme(non-trivial,需 OHLC bars 對應日期區間)
-    // 公式:m1.direction 是 Up 時,m2 期間任一 bar.high > m1.end_price → true
-    //       m1.direction 是 Down 時,m2 期間任一 bar.low < m1.end_price → true
-    // 本 PR 留 false placeholder;P5 加 OHLC reference 後實作。
-    false
+/// 退化保險(回 false 不阻塞 Stage 0):
+/// - `bars` 為空
+/// - `m2.bar_indices.1 >= bars.len()`(越界)
+/// - `m2.bar_indices.0 > m2.bar_indices.1`(無效 range)
+/// - 舊 JSONB 反序列化時 `bar_indices` 為 `(0, 0)` 退化值
+pub fn m1_endpoint_broken_by_m2(
+    m1: &ClassifiedMonowave,
+    m2: &ClassifiedMonowave,
+    bars: &[crate::output::OhlcvBar],
+) -> bool {
+    let (m2_start_idx, m2_end_idx) = m2.monowave.bar_indices;
+    if bars.is_empty()
+        || m2_end_idx >= bars.len()
+        || m2_start_idx > m2_end_idx
+        || (m2_start_idx == 0 && m2_end_idx == 0)
+    {
+        return false;
+    }
+    let m1_end_price = m1.monowave.end_price;
+    let range = &bars[m2_start_idx..=m2_end_idx];
+
+    use crate::output::MonowaveDirection;
+    match m1.monowave.direction {
+        MonowaveDirection::Up => range.iter().any(|b| b.high > m1_end_price),
+        MonowaveDirection::Down => range.iter().any(|b| b.low < m1_end_price),
+        MonowaveDirection::Neutral => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +367,7 @@ mod tests {
                 start_price: start_p,
                 end_price: end_p,
                 direction: dir,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -445,6 +466,7 @@ mod tests {
                 start_price: 85.0,
                 end_price: 90.0,
                 direction: MonowaveDirection::Up,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -462,6 +484,7 @@ mod tests {
                 start_price: 95.0,
                 end_price: 100.0,
                 direction: MonowaveDirection::Up,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -479,6 +502,7 @@ mod tests {
                 start_price: 100.0,
                 end_price: 120.0,
                 direction: MonowaveDirection::Up,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -496,6 +520,7 @@ mod tests {
                 start_price: 120.0,
                 end_price: 105.0,
                 direction: MonowaveDirection::Down,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -507,5 +532,124 @@ mod tests {
             structure_label_candidates: Vec::new(),
         };
         assert!(m2_breaches_2_4_line_within_m1_time(&m_neg_2, &m_0, &m_1, &m_2));
+    }
+
+    // v4.6 G3.1 m1_endpoint_broken_by_m2 真實實作 tests ---------------------
+
+    use crate::output::OhlcvBar;
+
+    fn bar(o: f64, h: f64, l: f64, c: f64) -> OhlcvBar {
+        OhlcvBar {
+            date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            open: o,
+            high: h,
+            low: l,
+            close: c,
+            volume: None,
+        }
+    }
+
+    fn cmw_with_idx(
+        start_p: f64,
+        end_p: f64,
+        dir: MonowaveDirection,
+        idx: (usize, usize),
+    ) -> ClassifiedMonowave {
+        let mut c = cmw(start_p, end_p, dir, 5);
+        c.monowave.bar_indices = idx;
+        c
+    }
+
+    #[test]
+    fn m1_endpoint_broken_up_returns_true_when_intraday_high_exceeds_m1_end() {
+        // m1: Up 100→110(end=110);m2: bar_indices (5, 8)
+        // bars[5..=8] 含某 bar.high > 110 → true
+        let m1 = cmw_with_idx(100.0, 110.0, MonowaveDirection::Up, (0, 5));
+        let m2 = cmw_with_idx(110.0, 105.0, MonowaveDirection::Down, (5, 8));
+        let bars = vec![
+            bar(100.0, 102.0, 99.0, 101.0),  // 0
+            bar(101.0, 105.0, 100.0, 104.0), // 1
+            bar(104.0, 108.0, 103.0, 107.0), // 2
+            bar(107.0, 110.0, 106.0, 109.0), // 3
+            bar(109.0, 110.5, 108.0, 110.0), // 4
+            bar(110.0, 110.5, 108.0, 108.0), // 5 (m2 start)
+            bar(108.0, 109.0, 106.0, 107.0), // 6
+            bar(107.0, 111.5, 106.0, 106.0), // 7 ← high=111.5 > m1.end=110 → break!
+            bar(106.0, 107.0, 104.0, 105.0), // 8 (m2 end)
+        ];
+        assert!(m1_endpoint_broken_by_m2(&m1, &m2, &bars));
+    }
+
+    #[test]
+    fn m1_endpoint_broken_up_returns_false_when_intraday_high_never_exceeds() {
+        // m1: Up 100→110;m2 期間 intraday high 全部 ≤ 110 → false
+        let m1 = cmw_with_idx(100.0, 110.0, MonowaveDirection::Up, (0, 5));
+        let m2 = cmw_with_idx(110.0, 105.0, MonowaveDirection::Down, (5, 8));
+        let bars = vec![
+            bar(100.0, 102.0, 99.0, 101.0),
+            bar(101.0, 105.0, 100.0, 104.0),
+            bar(104.0, 108.0, 103.0, 107.0),
+            bar(107.0, 110.0, 106.0, 109.0),
+            bar(109.0, 110.0, 108.0, 110.0),
+            bar(110.0, 110.0, 108.0, 108.0), // 5 (m2 start)
+            bar(108.0, 109.0, 106.0, 107.0),
+            bar(107.0, 109.5, 106.0, 106.0),
+            bar(106.0, 107.0, 104.0, 105.0), // 8 (m2 end)
+        ];
+        assert!(!m1_endpoint_broken_by_m2(&m1, &m2, &bars));
+    }
+
+    #[test]
+    fn m1_endpoint_broken_down_returns_true_when_intraday_low_below_m1_end() {
+        // m1: Down 200→180;m2: bar_indices (5, 8) 期間 intraday low < 180 → true
+        let m1 = cmw_with_idx(200.0, 180.0, MonowaveDirection::Down, (0, 5));
+        let m2 = cmw_with_idx(180.0, 190.0, MonowaveDirection::Up, (5, 8));
+        let bars = vec![
+            bar(200.0, 201.0, 198.0, 199.0),
+            bar(199.0, 199.0, 195.0, 196.0),
+            bar(196.0, 196.0, 190.0, 192.0),
+            bar(192.0, 192.0, 185.0, 187.0),
+            bar(187.0, 187.0, 180.0, 181.0),
+            bar(180.0, 184.0, 180.0, 184.0),
+            bar(184.0, 187.0, 178.0, 182.0), // 6 ← low=178 < m1.end=180 → break!
+            bar(182.0, 188.0, 181.0, 187.0),
+            bar(187.0, 191.0, 186.0, 190.0),
+        ];
+        assert!(m1_endpoint_broken_by_m2(&m1, &m2, &bars));
+    }
+
+    #[test]
+    fn m1_endpoint_broken_returns_false_for_neutral_direction() {
+        // Neutral m1 → 直接 false(spec 不適用)
+        let m1 = cmw_with_idx(100.0, 105.0, MonowaveDirection::Neutral, (0, 5));
+        let m2 = cmw_with_idx(105.0, 100.0, MonowaveDirection::Down, (5, 8));
+        let bars = vec![bar(0.0, 999.0, 0.0, 0.0); 10];
+        assert!(!m1_endpoint_broken_by_m2(&m1, &m2, &bars));
+    }
+
+    #[test]
+    fn m1_endpoint_broken_returns_false_when_bars_empty() {
+        // bars 為空 → 退化保險 false
+        let m1 = cmw_with_idx(100.0, 110.0, MonowaveDirection::Up, (0, 5));
+        let m2 = cmw_with_idx(110.0, 105.0, MonowaveDirection::Down, (5, 8));
+        assert!(!m1_endpoint_broken_by_m2(&m1, &m2, &[]));
+    }
+
+    #[test]
+    fn m1_endpoint_broken_returns_false_when_bar_indices_out_of_range() {
+        // m2.bar_indices.1 >= bars.len() → 退化保險 false
+        let m1 = cmw_with_idx(100.0, 110.0, MonowaveDirection::Up, (0, 5));
+        let m2 = cmw_with_idx(110.0, 105.0, MonowaveDirection::Down, (5, 100));
+        let bars = vec![bar(100.0, 200.0, 50.0, 100.0); 10];
+        assert!(!m1_endpoint_broken_by_m2(&m1, &m2, &bars));
+    }
+
+    #[test]
+    fn m1_endpoint_broken_returns_false_when_bar_indices_degenerate_zero_zero() {
+        // 舊 JSONB 反序列化 bar_indices=(0, 0) → 視為退化保險 false
+        let m1 = cmw_with_idx(100.0, 110.0, MonowaveDirection::Up, (0, 5));
+        let m2 = cmw_with_idx(110.0, 105.0, MonowaveDirection::Down, (0, 0));
+        let bars = vec![bar(100.0, 200.0, 50.0, 100.0); 10];
+        assert!(!m1_endpoint_broken_by_m2(&m1, &m2, &bars));
     }
 }

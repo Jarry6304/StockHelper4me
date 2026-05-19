@@ -4,7 +4,9 @@
 // 結構:5 Conditions(a-e)× 3 Categories(i/ii/iii based on m3/m2)
 //
 // Headline 通用:每個 m1 都需先檢查「m1 端點被 m2 突破嗎?」→ add x:c3
-// (P2 PR best-guess:m1_endpoint_broken_by_m2 placeholder 返 false,留 P5/P10)
+//
+// **v4.6 G3.1**:`m1_endpoint_broken_by_m2` 改為真實實作(用 m2.bar_indices
+// 在 ctx.bars 內走 intraday high/low extremum,對齊 spec line 247-249)。
 
 use super::context::MonowaveContext;
 use super::fifth_of_fifth_detector::add_l5_if_fifth_of_fifth;
@@ -19,7 +21,7 @@ pub fn run(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
     // 通用前置:m1 端點被 m2 突破 → consider x:c3
     let m1_broken = ctx
         .m2
-        .is_some_and(|m2| m1_endpoint_broken_by_m2(m1, m2));
+        .is_some_and(|m2| m1_endpoint_broken_by_m2(m1, m2, ctx.bars));
 
     let cat = ctx.m2.and_then(|m2| ctx.m3.map(|m3| categorize(m3, m2)));
 
@@ -63,7 +65,7 @@ fn cond_4a(
     ctx: &MonowaveContext,
     cands: &mut Vec<StructureLabelCandidate>,
     cat: Option<Category>,
-    _m1_broken: bool,
+    _m1_broken: bool, // v4.6 G3.1 已實作 m1_endpoint_broken_by_m2,4a Headline 暫不引用
 ) {
     let m1 = ctx.m1;
     match cat {

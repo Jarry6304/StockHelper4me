@@ -2,9 +2,9 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + Cross-Stock Cores 11 builders + MCP toolkit 8 tools)。
 
-**版本**:**v4.4**(alembic head `d9e0f1g2h3i4` / 2026-05-19,v4.0 → v4.4 Neely M3SPEC alignment 9 commits 全收尾)
+**版本**:**v4.6**(alembic head `d9e0f1g2h3i4` 不變 / 2026-05-19,v4.5 Group 2 corrective triggers + emulation 4 sub-PR + v4.6 Group 3 Monowave bar_indices + m1_endpoint_broken_by_m2 real impl)
 **測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)5 phase 流水線:Environment check / Sandbox unit tests / Schema health / Production verify / MCP smoke test。完整 verify chain 見 [CLAUDE.md §下班後 verify 流水線](CLAUDE.md)
-**狀態**:**v4.0 Neely M3SPEC alignment 完整收尾** ☕ — 15 真闕漏 + 2 簡化降級全部 dispatch(P1.1 ~ P1.4 / 9 modules / ~5,500 LoC / +80 tests)+ **v3.31 MCP toolkit 9 → 4 consolidation(stock_snapshot 6-in-1)** + **v3.32 10 new cross_cores factor builders + 4 MCP screen wrappers**。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**;Aggregation Layer 4 Phase 全套;**Rust workspace 528 tests passed / 0 failed**;**Python tests 165+ passed**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
+**狀態**:**M3SPEC 闕漏補完 Group 2 + Group 3 完成** ☕ — Zigzag/Flat/Triangle/Combination 4 corrective patterns 全部具備 invalidation triggers + emulation 偵測;Monowave struct 加 `bar_indices: (usize, usize)` + Pre-Constructive `m1_endpoint_broken_by_m2` 從 hardcoded false 升真實 intraday OHLC extremum 比對。**v4.0 Neely M3SPEC alignment P1.1-P1.4 完整收尾** ☕(15 真闕漏 / P1.1-P1.4 / 9 modules / ~5,500 LoC)+ **v3.31 MCP toolkit 9 → 4 consolidation(stock_snapshot 6-in-1)** + **v3.32 10 new cross_cores factor builders + 4 MCP screen wrappers**。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**;Aggregation Layer 4 Phase 全套;**Rust workspace 549 tests passed / 0 failed**(v4.4 baseline 528 → +21 across G2+G3);**Python tests 165+ passed**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
 
 ---
 
@@ -498,6 +498,57 @@ P0 Gate 校準(user 本機 P1.4 後必跑):
 - 若 p95 > 180 → 重校 BeamSearchFallback.k
 ```
 
+### v4.5 → v4.6(2026-05-19 M3SPEC 闕漏補完 Group 2 + Group 3,5 commits)
+
+```
+背景:v4.0 → v4.4 收尾後仍有 15 真闕漏(報告 §)分組:
+  - Group 2(corrective triggers / emulation,4 sub-PR / ~1,360 LoC)
+  - Group 3(OHLC reference 串接,1 sub-PR / ~300 LoC)
+  - Group 1(Polywave 嵌套依賴鏈,3 sub-PR / ~1,800 LoC,需全市場 P0)
+
+v4.5 Group 2 corrective patterns 4 sub-PR(5439c2a → 460e235):
+  v4.5.1 Zigzag triggers + ZigzagAsFlatFailure emulation
+       - triggers/mod.rs:wave-b 不可完全回測 wave-a → InvalidateScenario
+         wave-c 不過 wave-b 端點 → WeakenScenario
+       - emulation/mod.rs:wave-c < 100% × wave-a → 似 Flat C-Failure
+       - EmulationKind +1 variant(ZigzagAsFlatFailure)
+  v4.5.2 Flat triggers + FlatAsZigzag emulation
+       - triggers:wave-c 不過 wave-a 起點 + Expanded Flat wave-b 端點突破
+       - emulation:wave-c ≥ 138.2% × wave-a (Elongated) → 似 Zigzag
+       - EmulationKind +1 variant(FlatAsZigzag)
+       - flat_variant_from_kind helper(FlatKind 8 → FlatVariant 10 mapping)
+  v4.5.3 Triangle triggers(Contracting/Limiting wave-e)
+       - Contracting/Limiting wave-e 突破 wave-c 端點 → InvalidateScenario
+         (Expanding 本 PR 暫不加,屬未來細化)
+       - triangle_variant_default helper
+  v4.5.4 Combination + RunningCorrection triggers + CombinationAsImpulse emulation
+       - Combination 末段反向破 wave-a 起點 → InvalidateScenario
+       - RunningCorrection 同款 → InvalidateScenario
+       - DoubleThree* / TripleThree* + 5/7 children → 似 Trending Impulse
+       - EmulationKind +1 variant(CombinationAsImpulse)
+       - Match arm 變 exhaustive(移除 catch-all `_ => {}`,覆蓋全 7 variants)
+
+v4.6 Group 3 G3.1 Monowave bar_indices + m1_endpoint_broken_by_m2(cc053d6):
+  - Monowave struct +`bar_indices: (usize, usize)` + #[serde(default)]
+    對應 start_date/end_date 在 bars slice 的 index 區間
+  - monowave/pure_close.rs detect_monowaves:populate 真實 (start_idx, extreme_idx)
+  - monowave/mod.rs classify_monowaves:override 對齊 caller bars slice
+  - MonowaveContext +`bars: &'a [OhlcvBar]` 欄位
+  - pre_constructive/predicates.rs::m1_endpoint_broken_by_m2 真實實作:
+    m1.direction Up → m2 期間 bar.high > m1.end_price → true
+    m1.direction Down → m2 期間 bar.low < m1.end_price → true
+    退化保險(empty bars / 越界 / (0,0))→ false
+  - pre_constructive/rule_4.rs caller:傳 ctx.bars
+  - lib.rs:pre_constructive::run(&mut classified, &input.bars)
+  - 38 sites bulk-update test fixtures 加 bar_indices: (0, 0)
+  - 7 new predicates tests
+
+驗證:
+- cargo test --release -p neely_core --lib: 376 passed / 0 failed
+- cargo test --release --workspace: 549 passed / 0 failed(v4.4 baseline 528 → +21)
+- Group 1 留下次 session(需全市場 P0 Gate;對齊 plan 文件)
+```
+
 ---
 
 ## 8. 測試流水線
@@ -526,7 +577,7 @@ DRY_RUN=1         ./scripts/test_pipeline.sh          # 計畫模式
 | Phase | 用途 | 需 PG | 預估時間 |
 |---|---|---|---|
 | **0** Environment check | Python venv / Rust toolchain / .env / psql / tw_cores binary | ❌ | 數秒 |
-| **1** Sandbox unit tests | Rust workspace(528 tests)+ Python pytest agg/mcp/cross_cores(165+) | ❌ | ~5-8 分鐘 |
+| **1** Sandbox unit tests | Rust workspace(549 tests,v4.6 後)+ Python pytest agg/mcp/cross_cores(165+) | ❌ | ~5-8 分鐘 |
 | **2** Schema health | alembic head + M3 表 row counts + 11 cross_cores tables | ✅ | < 5 秒 |
 | **3** Production verify | facts stats(VACUUM)+ per-EventKind rate + **Neely forest_size P0 Gate**(v4.4a acceptance:max ≤ 200,p95 < 180) | ✅ | ~1 分鐘 |
 | **4** MCP smoke test | `verify_mcp_kalman_neely.py` 對 2330 / 3030 + 8 toolkit 公開介面 importable | ✅ | ~30 秒 |
@@ -542,7 +593,7 @@ pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py   # 100+
 pytest tests/cross_cores/               # 30+ passed
 pytest tests/                           # 全套 unit test
 
-# Rust workspace tests(39 crates / 528 passed / 0 failed,v4.4 後)
+# Rust workspace tests(39 crates / 549 passed / 0 failed,v4.6 後)
 cd rust_compute && cargo test --release --workspace --no-fail-fast
 ```
 

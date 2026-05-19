@@ -219,6 +219,7 @@ fn cond_1b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
                 start_price: m1.monowave.start_price,
                 end_price: m3.monowave.end_price,
                 direction: m1.monowave.direction,
+                bar_indices: (0, 0),
             },
             &m4.monowave,
         ) >= 1.0
@@ -354,6 +355,7 @@ mod tests {
                 start_price: start_p,
                 end_price: end_p,
                 direction: dir,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -376,7 +378,7 @@ mod tests {
             cmw(90.0, 100.0, MonowaveDirection::Up, 5),      // m1 (mag 10, m0/m1 = 2.0 > 1.618)
             cmw(100.0, 99.0, MonowaveDirection::Down, 2),    // m2 (mag 1, m2/m1 = 0.1 < 0.382)
         ];
-        let ctx = MonowaveContext::build(&classified, 2).expect("build ctx");
+        let ctx = MonowaveContext::build(&classified, &[], 2).expect("build ctx");
         let mut cands = Vec::new();
         run(&ctx, &mut cands);
         assert_eq!(cands.len(), 1);
@@ -394,7 +396,7 @@ mod tests {
             cmw(95.0, 105.0, MonowaveDirection::Up, 5),    // m1 (mag 10)
             cmw(105.0, 103.0, MonowaveDirection::Down, 6), // m2 (mag 2 < 0.382 * 10, dur 6 ≥ 5)
         ];
-        let ctx = MonowaveContext::build(&classified, 2).expect("build ctx");
+        let ctx = MonowaveContext::build(&classified, &[], 2).expect("build ctx");
         let mut cands = Vec::new();
         run(&ctx, &mut cands);
         assert!(cands.iter().any(|c| matches!(c.label, StructureLabel::Five)));

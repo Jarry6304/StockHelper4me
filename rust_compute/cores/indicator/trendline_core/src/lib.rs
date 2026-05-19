@@ -534,6 +534,7 @@ mod tests {
                 start_price: if k == 0 { 100.0 } else { prices[k - 1] },
                 end_price: prices[k],
                 direction: MonowaveDirection::Down,
+                bar_indices: (0, 0),
             })
             .collect();
         let input = TrendlineInput {

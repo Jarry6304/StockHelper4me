@@ -220,6 +220,7 @@ fn cond_7d(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
                     start_price: m_minus_2.monowave.start_price,
                     end_price: m2.monowave.end_price,
                     direction: m_minus_2.monowave.direction,
+                    bar_indices: (0, 0),
                 },
                 &m3.monowave,
             ) >= FIB_618;

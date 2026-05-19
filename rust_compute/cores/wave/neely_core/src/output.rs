@@ -154,6 +154,9 @@ pub struct MissingWaveSuspect {
 // ---------------------------------------------------------------------------
 
 /// Emulation 類型 — 視覺上相似但實際結構不同的 pattern 偽裝。
+///
+/// **v4.5.1(2026-05-19)**:加 `ZigzagAsFlatFailure` variant,對齊
+/// `m3Spec/neely_rules.md` 2337-2342 行 Zigzag wave-c 規則。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum EmulationKind {
     /// Running Double Three Combination 偽裝 1st Wave Extension Impulse
@@ -165,6 +168,18 @@ pub enum EmulationKind {
     TriangleAsFailure,
     /// Trending Impulse with 1st Extension 偽裝 Terminal Impulse(wave-2/4 overlap 灰色地帶)
     FirstExtAsTerminal,
+    /// **v4.5.1**:Zigzag 偽裝 Flat C-Failure(wave-c 未過 wave-a 端點)
+    /// spec line 2337-2342:典型 Zigzag wave-c ∈ [61.8%, 161.8%] × wave-a;
+    /// truncated wave-c(< 100% × wave-a)視覺上似 Flat C-Failure
+    ZigzagAsFlatFailure,
+    /// **v4.5.2**:Flat 偽裝 Zigzag(Elongated Flat 之 wave-c 過長)
+    /// spec line 2191-2321:Elongated Flat wave-c 可達 138.2%+ × wave-a,
+    /// 視覺上似 Zigzag(wave-c 顯著延伸超過 wave-a 端點)
+    FlatAsZigzag,
+    /// **v4.5.4**:Combination(DoubleThree* / TripleThree*)偽裝 Trending Impulse
+    /// spec line 1905-1906:Running Combination 內含 :3 corrective 段在退化條件下
+    /// 被誤判為 5-wave Impulse;與 RunningDoubleThreeAsImpulse 區別在不限 Running 變體
+    CombinationAsImpulse,
     /// 通用 — 視覺上 X 但結構為 Y
     Generic,
 }
@@ -503,6 +518,13 @@ pub struct WaveNode {
 
 /// Monowave — Neely Core 對外暴露的 raw 結構(§8.1)。
 /// 細節欄位於 monowave/ sub-module 實作時補完。
+///
+/// **v4.6(2026-05-19)Group 3.1**:加 `bar_indices: (usize, usize)` 對應
+/// `start_date`/`end_date` 在原始 bars slice 的 bar index 區間。供 Stage 0
+/// Pre-Constructive `m1_endpoint_broken_by_m2` 等需要 intraday OHLC reference
+/// 的 predicate 用(避開重新 walk bars 找日期)。`#[serde(default)]` 標記為
+/// 未來 Deserialize 預留(目前 Monowave 只 Serialize 寫 JSONB,Python 端走 dict
+/// access,不走 Rust 反序列化)。
 #[derive(Debug, Clone, Serialize)]
 pub struct Monowave {
     pub start_date: NaiveDate,
@@ -510,6 +532,10 @@ pub struct Monowave {
     pub start_price: f64,
     pub end_price: f64,
     pub direction: MonowaveDirection,
+    /// v4.6:對應 `start_date`/`end_date` 在 bars slice 的 index 區間
+    /// (含 start 含 end)。`(0, 0)` 為退化值(無 bar 對應)。
+    #[serde(default)]
+    pub bar_indices: (usize, usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
