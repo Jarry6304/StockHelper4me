@@ -20,11 +20,14 @@
 // **v4.5.2(2026-05-19)Group 2.2 Flat triggers**:
 //   - Flat wave-c 不過 wave-a 起點 → `InvalidateScenario`
 //   - Expanded Flat (Irregular*/Elongated) wave-b 端點突破反向 → `WeakenScenario`
-// **Triangle / Combination**:trigger 規則留後續 sub-PR(G2.3 / G2.4)
+// **v4.5.3(2026-05-19)Group 2.3 Triangle triggers**:
+//   - Contracting / Limiting Triangle wave-e 收斂線突破 → `InvalidateScenario`
+//     (Expanding Triangle 本 PR 不加 wave-e trigger,屬未來細化)
+// **Combination**:trigger 規則留後續 sub-PR(G2.4)
 
 use crate::output::{
     FlatVariant, Monowave, MonowaveDirection, NeelyPatternType, OnTriggerAction, RuleId, Scenario,
-    Trigger, TriggerType, WaveAbc, WaveNode,
+    Trigger, TriangleWave, TriggerType, WaveAbc, WaveNode,
 };
 
 /// 從 Scenario + monowave_series 推算 invalidation triggers。
@@ -146,7 +149,33 @@ pub fn build_triggers(scenario: &Scenario, monowaves: &[Monowave]) -> Vec<Trigge
                 }
             }
         }
-        // Triangle / Combination / RunningCorrection:留後續 sub-PR(G2.3 / G2.4)
+        NeelyPatternType::Triangle { sub_kind } => {
+            // v4.5.3 — Ch11_Triangle_Variant_Rules wave-e:
+            //   - Contracting / Limiting:wave-e ≤ wave-c(spec line 2453)
+            //   - Expanding:wave-e > wave-d 為定義(本 PR 暫不加 expanding wave-e trigger)
+            if scenario.wave_tree.children.len() >= 5 {
+                let wave_c = &scenario.wave_tree.children[2];
+                let wave_c_end = find_wave_end_price(wave_c, monowaves);
+                // 收斂線突破:Contracting Triangle wave-e 不過 wave-c 端點 → 突破即無效
+                if matches!(
+                    sub_kind,
+                    crate::output::TriangleKind::Contracting
+                        | crate::output::TriangleKind::Limiting
+                ) {
+                    triggers.push(Trigger {
+                        trigger_type: directional_break(is_up, wave_c_end),
+                        on_trigger: OnTriggerAction::InvalidateScenario,
+                        rule_reference: RuleId::Ch11_Triangle_Variant_Rules {
+                            variant: triangle_variant_default(*sub_kind),
+                            wave: TriangleWave::E,
+                        },
+                        neely_page: "neely_rules.md §Triangle wave-e ≤ wave-c(2453 行)"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        // Combination / RunningCorrection:留後續 sub-PR(G2.4)
         _ => {}
     }
 
@@ -168,6 +197,18 @@ fn flat_variant_from_kind(kind: crate::output::FlatKind) -> FlatVariant {
         FlatKind::IrregularStrongB => FlatVariant::StrongB,
         FlatKind::IrregularFailure => FlatVariant::IrregularFailure,
         FlatKind::Elongated => FlatVariant::Elongated,
+    }
+}
+
+/// 將 TriangleKind 轉成 TriangleVariant 的 default(本 PR 暫用 Horizontal*;
+/// 完整 9-variant 分類已在 ch11_triangle_variants.rs 內 classify_variant,
+/// 但 trigger build 路徑暫不接 monowave magnitude 算 ratio,維持 placeholder)。
+fn triangle_variant_default(kind: crate::output::TriangleKind) -> crate::output::TriangleVariant {
+    use crate::output::{TriangleKind, TriangleVariant};
+    match kind {
+        TriangleKind::Contracting => TriangleVariant::HorizontalNonLimiting,
+        TriangleKind::Expanding => TriangleVariant::HorizontalExpanding,
+        TriangleKind::Limiting => TriangleVariant::HorizontalLimiting,
     }
 }
 
@@ -484,6 +525,73 @@ mod tests {
             triggers[1].on_trigger,
             OnTriggerAction::WeakenScenario
         ));
+    }
+
+    // v4.5.3 Triangle triggers tests --------------------------------------
+
+    #[test]
+    fn contracting_triangle_up_gets_wave_e_break_below_wave_c_end() {
+        let s = make_scenario(
+            NeelyPatternType::Triangle {
+                sub_kind: TriangleKind::Contracting,
+            },
+            MonowaveDirection::Up,
+            vec![
+                ("a".into(), "2026-01-01", "2026-01-05"),
+                ("b".into(), "2026-01-06", "2026-01-10"),
+                ("c".into(), "2026-01-11", "2026-01-15"),
+                ("d".into(), "2026-01-16", "2026-01-20"),
+                ("e".into(), "2026-01-21", "2026-01-25"),
+            ],
+        );
+        let monowaves = vec![
+            mw("2026-01-01", "2026-01-05", 100.0, 110.0, MonowaveDirection::Up),
+            mw("2026-01-06", "2026-01-10", 110.0, 103.0, MonowaveDirection::Down),
+            mw("2026-01-11", "2026-01-15", 103.0, 108.0, MonowaveDirection::Up),
+            mw("2026-01-16", "2026-01-20", 108.0, 105.0, MonowaveDirection::Down),
+            mw("2026-01-21", "2026-01-25", 105.0, 107.0, MonowaveDirection::Up),
+        ];
+        let triggers = build_triggers(&s, &monowaves);
+        assert_eq!(triggers.len(), 1);
+        match triggers[0].trigger_type {
+            TriggerType::PriceBreakBelow(p) => assert!((p - 108.0).abs() < 1e-9),
+            _ => panic!("expected PriceBreakBelow(108.0) for Contracting Triangle wave-e"),
+        }
+        assert!(matches!(
+            triggers[0].on_trigger,
+            OnTriggerAction::InvalidateScenario
+        ));
+    }
+
+    #[test]
+    fn expanding_triangle_does_not_emit_wave_e_trigger() {
+        let s = make_scenario(
+            NeelyPatternType::Triangle {
+                sub_kind: TriangleKind::Expanding,
+            },
+            MonowaveDirection::Up,
+            vec![
+                ("a".into(), "2026-01-01", "2026-01-05"),
+                ("b".into(), "2026-01-06", "2026-01-10"),
+                ("c".into(), "2026-01-11", "2026-01-15"),
+                ("d".into(), "2026-01-16", "2026-01-20"),
+                ("e".into(), "2026-01-21", "2026-01-25"),
+            ],
+        );
+        let monowaves: Vec<Monowave> = (0..5)
+            .map(|i| {
+                mw(
+                    &format!("2026-01-{:02}", 1 + i * 5),
+                    &format!("2026-01-{:02}", 5 + i * 5),
+                    100.0 + i as f64,
+                    105.0 + i as f64,
+                    MonowaveDirection::Up,
+                )
+            })
+            .collect();
+        let triggers = build_triggers(&s, &monowaves);
+        // Expanding Triangle 本 PR 暫不加 wave-e 突破 trigger
+        assert!(triggers.is_empty());
     }
 
     #[test]
