@@ -154,6 +154,9 @@ pub struct MissingWaveSuspect {
 // ---------------------------------------------------------------------------
 
 /// Emulation 類型 — 視覺上相似但實際結構不同的 pattern 偽裝。
+///
+/// **v4.5.1(2026-05-19)**:加 `ZigzagAsFlatFailure` variant,對齊
+/// `m3Spec/neely_rules.md` 2337-2342 行 Zigzag wave-c 規則。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum EmulationKind {
     /// Running Double Three Combination 偽裝 1st Wave Extension Impulse
@@ -165,6 +168,10 @@ pub enum EmulationKind {
     TriangleAsFailure,
     /// Trending Impulse with 1st Extension 偽裝 Terminal Impulse(wave-2/4 overlap 灰色地帶)
     FirstExtAsTerminal,
+    /// **v4.5.1**:Zigzag 偽裝 Flat C-Failure(wave-c 未過 wave-a 端點)
+    /// spec line 2337-2342:典型 Zigzag wave-c ∈ [61.8%, 161.8%] × wave-a;
+    /// truncated wave-c(< 100% × wave-a)視覺上似 Flat C-Failure
+    ZigzagAsFlatFailure,
     /// 通用 — 視覺上 X 但結構為 Y
     Generic,
 }

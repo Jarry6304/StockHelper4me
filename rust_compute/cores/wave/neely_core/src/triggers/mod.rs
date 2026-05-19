@@ -1,7 +1,7 @@
 // triggers — Stage 10c:Invalidation Triggers 生成
 //
 // 對齊 m3Spec/neely_core_architecture.md §7.1 Stage 10c + §9.4 OnTriggerAction
-//       + m3Spec/neely_rules.md §Impulsion + §Overlap Rule
+//       + m3Spec/neely_rules.md §Impulsion + §Overlap Rule + Ch11 Zigzag(2328-2342 行)
 //
 // 設計原則(architecture §9.4):
 //   - on_trigger 不引入機率語意,只有 InvalidateScenario / WeakenScenario / PromoteAlternative
@@ -13,11 +13,15 @@
 //       * Ch5_Overlap_Trending trigger:`PriceBreakBelow(W2.end_price)`(W4 不進入 W2 區)
 //   - Impulse Down:對稱方向(`PriceBreakAbove`)
 //   - Diagonal:只生 Ch5_Essential(3) trigger(Overlap_Trending 在 Diagonal 已 fail)
-//   - Zigzag / Flat / Triangle / Combination:trigger 規則留後續 PR 完整 Ch12
+//
+// **v4.5.1(2026-05-19)Group 2.1 Zigzag triggers**:
+//   - Zigzag wave-b 不可完全回測 wave-a → `InvalidateScenario`
+//   - Zigzag wave-c 不過 wave-a 起點(c-wave 退化)→ `WeakenScenario`
+// **Flat / Triangle / Combination**:trigger 規則留後續 sub-PR(G2.2-G2.4)
 
 use crate::output::{
     Monowave, MonowaveDirection, NeelyPatternType, OnTriggerAction, RuleId, Scenario, Trigger,
-    TriggerType, WaveNode,
+    TriggerType, WaveAbc, WaveNode,
 };
 
 /// 從 Scenario + monowave_series 推算 invalidation triggers。
@@ -73,7 +77,35 @@ pub fn build_triggers(scenario: &Scenario, monowaves: &[Monowave]) -> Vec<Trigge
                 });
             }
         }
-        // Zigzag / Flat / Triangle / Combination:留後續 PR 動工(Ch12 Fibonacci/Waterfall + Ch5 變體規則)
+        NeelyPatternType::Zigzag { .. } => {
+            // v4.5.1 — Ch11_Zigzag_WaveByWave wave-b:wave-b 不可完全回測 wave-a 起點
+            // (對齊 spec line 2328-2332:Zigzag wave-b 典型 ≤ 81% × wave-a,
+            //  超過 100% 直接破 wave-a 起點即非 Zigzag)
+            if let Some(wave_a) = scenario.wave_tree.children.first() {
+                let wave_a_start = find_wave_start_price(wave_a, monowaves);
+                triggers.push(Trigger {
+                    trigger_type: directional_break(is_up, wave_a_start),
+                    on_trigger: OnTriggerAction::InvalidateScenario,
+                    rule_reference: RuleId::Ch11_Zigzag_WaveByWave { wave: WaveAbc::B },
+                    neely_page: "neely_rules.md §Zigzag wave-b 規則(2328-2332 行)"
+                        .to_string(),
+                });
+            }
+            // v4.5.1 — Zigzag wave-c 不過 wave-b 端點(c-wave 退化前兆)
+            // (對齊 spec line 2337-2342:wave-c 反向破 wave-b 端點 → 警示)
+            if scenario.wave_tree.children.len() >= 3 {
+                let wave_b = &scenario.wave_tree.children[1];
+                let wave_b_end = find_wave_end_price(wave_b, monowaves);
+                triggers.push(Trigger {
+                    trigger_type: directional_break(is_up, wave_b_end),
+                    on_trigger: OnTriggerAction::WeakenScenario,
+                    rule_reference: RuleId::Ch11_Zigzag_WaveByWave { wave: WaveAbc::C },
+                    neely_page: "neely_rules.md §Zigzag wave-c 規則(2337-2342 行)"
+                        .to_string(),
+                });
+            }
+        }
+        // Flat / Triangle / Combination / RunningCorrection:留後續 sub-PR(G2.2 / G2.3 / G2.4)
         _ => {}
     }
 
@@ -254,17 +286,89 @@ mod tests {
         }
     }
 
+    // v4.5.1 Zigzag triggers tests ----------------------------------------
+
     #[test]
-    fn zigzag_gets_no_trigger_yet() {
+    fn zigzag_up_gets_wave_b_break_below_wave_a_start() {
         let s = make_scenario(
             NeelyPatternType::Zigzag {
                 sub_kind: ZigzagKind::Single,
             },
             MonowaveDirection::Up,
-            vec![("W1".into(), "2026-01-01", "2026-01-05")],
+            vec![
+                ("a".into(), "2026-01-01", "2026-01-05"),
+                ("b".into(), "2026-01-06", "2026-01-10"),
+                ("c".into(), "2026-01-11", "2026-01-15"),
+            ],
         );
-        let triggers = build_triggers(&s, &[]);
-        assert!(triggers.is_empty());
+        let monowaves = vec![
+            mw("2026-01-01", "2026-01-05", 100.0, 110.0, MonowaveDirection::Up),
+            mw("2026-01-06", "2026-01-10", 110.0, 104.0, MonowaveDirection::Down),
+            mw("2026-01-11", "2026-01-15", 104.0, 115.0, MonowaveDirection::Up),
+        ];
+        let triggers = build_triggers(&s, &monowaves);
+        assert_eq!(triggers.len(), 2);
+        // wave-b InvalidateScenario @ wave-a.start = 100.0
+        match triggers[0].trigger_type {
+            TriggerType::PriceBreakBelow(p) => assert!((p - 100.0).abs() < 1e-9),
+            _ => panic!("expected PriceBreakBelow(100.0) for Zigzag wave-b break"),
+        }
+        assert!(matches!(
+            triggers[0].on_trigger,
+            OnTriggerAction::InvalidateScenario
+        ));
+        // wave-c WeakenScenario @ wave-b.end = 104.0
+        match triggers[1].trigger_type {
+            TriggerType::PriceBreakBelow(p) => assert!((p - 104.0).abs() < 1e-9),
+            _ => panic!("expected PriceBreakBelow(104.0) for Zigzag wave-c weaken"),
+        }
+        assert!(matches!(
+            triggers[1].on_trigger,
+            OnTriggerAction::WeakenScenario
+        ));
+    }
+
+    #[test]
+    fn zigzag_down_gets_wave_b_break_above() {
+        let s = make_scenario(
+            NeelyPatternType::Zigzag {
+                sub_kind: ZigzagKind::Single,
+            },
+            MonowaveDirection::Down,
+            vec![
+                ("a".into(), "2026-01-01", "2026-01-05"),
+                ("b".into(), "2026-01-06", "2026-01-10"),
+                ("c".into(), "2026-01-11", "2026-01-15"),
+            ],
+        );
+        let monowaves = vec![
+            mw("2026-01-01", "2026-01-05", 200.0, 180.0, MonowaveDirection::Down),
+            mw("2026-01-06", "2026-01-10", 180.0, 195.0, MonowaveDirection::Up),
+            mw("2026-01-11", "2026-01-15", 195.0, 170.0, MonowaveDirection::Down),
+        ];
+        let triggers = build_triggers(&s, &monowaves);
+        assert_eq!(triggers.len(), 2);
+        match triggers[0].trigger_type {
+            TriggerType::PriceBreakAbove(p) => assert!((p - 200.0).abs() < 1e-9),
+            _ => panic!("expected PriceBreakAbove(200.0) for Down Zigzag wave-b"),
+        }
+    }
+
+    #[test]
+    fn zigzag_short_children_only_emits_wave_b_trigger() {
+        // 只有 wave-a 不足 3 children → 只生 wave-b trigger,不生 wave-c
+        let s = make_scenario(
+            NeelyPatternType::Zigzag {
+                sub_kind: ZigzagKind::Single,
+            },
+            MonowaveDirection::Up,
+            vec![("a".into(), "2026-01-01", "2026-01-05")],
+        );
+        let monowaves = vec![mw(
+            "2026-01-01", "2026-01-05", 100.0, 110.0, MonowaveDirection::Up,
+        )];
+        let triggers = build_triggers(&s, &monowaves);
+        assert_eq!(triggers.len(), 1);
     }
 
     #[test]
