@@ -508,10 +508,11 @@ P0 Gate 校準(user 本機 P1.4 後必跑):
 
 ```powershell
 # Windows / PowerShell
-.\scripts\test_pipeline.ps1                  # 跑全套 Phase 0-4
-.\scripts\test_pipeline.ps1 -OnlyPhase 0,1   # 只跑 sandbox(無 PG)
-.\scripts\test_pipeline.ps1 -SkipPhase 3     # 跳過 production verify(P0 Gate)
-.\scripts\test_pipeline.ps1 -DryRun          # 列計畫不執行
+.\scripts\test_pipeline.ps1                       # 跑全套 Phase 0-4
+.\scripts\test_pipeline.ps1 -OnlyPhase '0,1'      # 只跑 sandbox(無 PG;多 phase 用引號)
+.\scripts\test_pipeline.ps1 -SkipPhase '3'        # 跳過 production verify(P0 Gate)
+.\scripts\test_pipeline.ps1 -DryRun               # 列計畫不執行
+# 多 phase 用引號 '2,3,4' 避免 PS 5.1 array binding 不穩;支援逗號/空白/分號分隔
 ```
 
 ```bash

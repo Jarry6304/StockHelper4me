@@ -8,10 +8,14 @@
 #   Phase 4:MCP smoke test(Kalman + Neely + 8 toolkit tools)
 #
 # Usage:
-#   .\scripts\test_pipeline.ps1                # 跑全套(Phase 0-4)
-#   .\scripts\test_pipeline.ps1 -SkipPhase 3,4 # 跳過 production verify
-#   .\scripts\test_pipeline.ps1 -OnlyPhase 1   # 只跑 sandbox(無 PG)
-#   .\scripts\test_pipeline.ps1 -DryRun        # 列計畫不執行
+#   .\scripts\test_pipeline.ps1                       # 跑全套(Phase 0-4)
+#   .\scripts\test_pipeline.ps1 -SkipPhase '3,4'      # 跳過 production verify(用引號)
+#   .\scripts\test_pipeline.ps1 -OnlyPhase '2,3,4'    # 只跑 Phase 2-4(用引號)
+#   .\scripts\test_pipeline.ps1 -OnlyPhase 1          # 只跑 sandbox(單個值 OK)
+#   .\scripts\test_pipeline.ps1 -DryRun               # 列計畫不執行
+#
+# 注意:多 phase 用引號包(避免 PS 5.1 array binding 不穩);
+#       支援分隔符:逗號 , 空白 ' ' 分號 ;
 #
 # 環境變數:
 #   DATABASE_URL    — Phase 2-4 必要
@@ -24,8 +28,10 @@
 #   - Phase 3(P0 Gate forest_size + 觸發率)需 production data,user 本機跑
 
 param(
-    [int[]] $SkipPhase = @(),
-    [int[]] $OnlyPhase = @(),
+    # 改用 string 接受 "2,3,4" / "2 3 4" / "2;3;4" 多種格式
+    # 原 [int[]] 在 Windows PowerShell 5.1 有時 array binding 只取最後 element
+    [string] $SkipPhase = '',
+    [string] $OnlyPhase = '',
     [switch] $DryRun,
     [switch] $Verbose
 )
@@ -34,6 +40,22 @@ $ErrorActionPreference = "Stop"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptRoot
 Set-Location $RepoRoot
+
+# 解析 SkipPhase / OnlyPhase string 成 int array
+# 支援格式:"2,3,4" / "2 3 4" / "2;3;4" / "2,3 4"(空白 / 逗號 / 分號混用)
+function Parse-PhaseList([string] $raw) {
+    if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+    return ($raw -split '[,;\s]+') | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_.Trim() }
+}
+$ParsedSkipPhase = Parse-PhaseList $SkipPhase
+$ParsedOnlyPhase = Parse-PhaseList $OnlyPhase
+
+if ($ParsedOnlyPhase.Count -gt 0) {
+    Write-Host ("OnlyPhase parsed: {0}" -f ($ParsedOnlyPhase -join ',')) -ForegroundColor DarkGray
+}
+if ($ParsedSkipPhase.Count -gt 0) {
+    Write-Host ("SkipPhase parsed: {0}" -f ($ParsedSkipPhase -join ',')) -ForegroundColor DarkGray
+}
 
 # ── 共用 helpers ─────────────────────────────────────────────────────────
 
@@ -64,8 +86,8 @@ function Write-Warn($msg) {
 }
 
 function Should-Run($phase) {
-    if ($OnlyPhase.Count -gt 0) { return $OnlyPhase -contains $phase }
-    return ($SkipPhase -notcontains $phase)
+    if ($ParsedOnlyPhase.Count -gt 0) { return $ParsedOnlyPhase -contains $phase }
+    return ($ParsedSkipPhase -notcontains $phase)
 }
 
 function Invoke-Phase($num, $title, [ScriptBlock] $body) {
