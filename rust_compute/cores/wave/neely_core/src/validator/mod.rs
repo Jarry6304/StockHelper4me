@@ -35,6 +35,8 @@ pub mod flat_rules;
 pub mod triangle_rules;
 pub mod wave_rules;
 pub mod zigzag_rules;
+/// v4.3a P1.3a:Ch11 Trending Impulse Wave-by-Wave 變體規則(advisory mode,不 invalidate scenario)
+pub mod ch11_trending_impulse;
 
 /// 單條規則對 candidate 的判定結果。
 #[derive(Debug, Clone)]

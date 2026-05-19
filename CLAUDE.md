@@ -266,6 +266,58 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.3a — P1.3a Ch11 Trending Impulse wave-by-wave(2026-05-19)
+
+接 v4.2 P1.2 後動工 P1.3a(plan 文件 §「Milestone P1.3a」),補完 Ch11 Trending
+Impulse 的 wave-by-wave 變體規則。**Advisory mode**(對齊 NEoWave 原作 Ch11 =
+pattern characteristic 非 invariant);違反 → AdvisoryFinding 不 invalidate scenario。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_trending_impulse.rs` | **新檔** — `analyze()` 主入口 + `detect_extension()` + 3 variant analyzers(1st-Ext / 3rd-Ext / 5th-Ext)+ 共通 W4 規則 + 5th Wave Failure 偵測;**+11 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_trending_impulse;` 註冊 |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `crate::validator::ch11_trending_impulse::analyze()` 呼叫(advisory_findings 寫入) |
+| `CLAUDE.md` | v4.3a 章節 |
+
+### 規則覆蓋(每變體取核心規則,完整 spec 細化留 V4.x)
+
+| Variant | 核心規則(對齊 neely_rules.md line ref)|
+|---|---|
+| **1st Ext** | W2 ≤ 38.2% × W1(嚴 1st Ext)/ W3 < W1 + W3 ≥ 38.2% × W1 / W5 必為三段最短 (剛性,line 2081) |
+| **3rd Ext** | W3 > 161.8% × W1(line 2092)/ W2 寬鬆到 99%(line 2094)/ W4 ≤ 38.2-50% × W3(line 2095) / W5 ≈ W1 或 0.618/1.618 關係(line 2096) |
+| **5th Ext** | W3 ≈ 161.8% × W1(line 2110 典型,非剛性)/ W1 < W3 / W5 ≥ 1-3 全長 + W5 ≤ 261.8% × 1-3 全長(line 2112-2113)/ W4 > W2 + W4 ≥ 50% × W3(line 2114) |
+| **Wave-4 共通** | W4 ≤ 61.8% × W3 except 5th Ext(line 2133) |
+| **5th Wave Failure** | W5 < W4 偵測;在 3rd Ext = Strong,1st/5th Ext = Warning(spec 2126) |
+
+### Advisory severity 規則
+
+- `Warning`:剛性條件違反(e.g., W5 必最短被破)
+- `Info`:典型 Fibonacci 比例符合 / Wave-2 寬鬆但合理
+- `Strong`:5th Wave Failure 在 3rd Ext 環境(反轉強訊號,spec 2129)
+
+### 沙箱驗證
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release -p neely_core` ✅ **318 passed / 0 failed**(v4.2 307 → +11 new)
+
+### 風險
+
+🟢 中-低:
+- Advisory mode 安全網,production scenario forest 0 影響
+- LLM narrative 多 4-8 entries per 5-wave Impulse scenario
+- Scenario JSON 序列化加大(每 Impulse +~1-2KB advisory_findings list);PG TOAST 邊界 ~2KB 監控
+- params_hash 不變(Scenario 結構不改);user 重跑走 ON CONFLICT UPDATE 覆寫
+
+### 下個 sub-PR(P1.3b Terminal Impulse)
+
+接著 P1.3b — Terminal Impulse(原 Diagonal Triangle)wave-by-wave,
+spec line 2138-2189。詳見 plan §「Milestone P1.3b」。
+
+---
+
 ## v4.2 — P1.2 Ch9 advisory + Ch12 Waterfall/Localized(2026-05-19)
 
 接 v4.1 P1.1 後動工 P1.2(plan 文件 §「Milestone P1.2」)。補完 Ch9 / Ch12 advisory

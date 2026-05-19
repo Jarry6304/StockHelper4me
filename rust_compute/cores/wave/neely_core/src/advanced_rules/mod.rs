@@ -74,6 +74,11 @@ pub fn run(scenarios: &mut [Scenario], classified: &[ClassifiedMonowave]) {
             findings.push(f);
         }
 
+        // v4.3a P1.3a:Ch11 Trending Impulse Wave-by-Wave 變體規則(advisory only)
+        findings.extend(crate::validator::ch11_trending_impulse::analyze(
+            scenario, classified,
+        ));
+
         // 寫入 advisory_findings(此處 set,需在 Independent / Exception Aspect 2 之前)
         scenario.advisory_findings = findings;
 
