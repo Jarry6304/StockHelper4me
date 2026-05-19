@@ -41,6 +41,21 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptRoot
 Set-Location $RepoRoot
 
+# v4.7:修 PSQL 中文 output 在 PS 5.1 console 亂碼(CP950 vs UTF-8 mismatch)
+# 三步驟:
+#  1. chcp 65001 → Windows console codepage 改 UTF-8(子程序 stdout bytes 對應)
+#  2. [Console]::OutputEncoding = UTF-8 → PS 讀子程序 stdout 視為 UTF-8
+#  3. $env:PGCLIENTENCODING = UTF8 → psql 輸出 UTF-8 bytes
+# 對 PS 7 無害(PS 7 預設已 UTF-8;chcp 不變即 65001)
+try {
+    # chcp 寫 stderr,suppress output;若 chcp 不可用(非互動)就 silent skip
+    cmd /c chcp 65001 2>&1 | Out-Null
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $env:PGCLIENTENCODING = 'UTF8'
+} catch {
+    # 非互動環境(CI 等)console 可能不可設,忽略
+}
+
 # 解析 SkipPhase / OnlyPhase string 成 int array
 # 支援格式:"2,3,4" / "2 3 4" / "2;3;4" / "2,3 4"(空白 / 逗號 / 分號混用)
 function Parse-PhaseList([string] $raw) {
@@ -229,11 +244,13 @@ Invoke-Phase 2 "Schema health(alembic head / table row counts)" {
 
     Write-Step "alembic head"
     $expectedHead = "d9e0f1g2h3i4"  # v3.32 head;P1.x v4.x 沒新 migration
-    $alembicOut = alembic current 2>&1
-    if ($alembicOut -notmatch $expectedHead) {
-        Write-Warn "alembic head 非預期 ($expectedHead) — output: $alembicOut"
-    } else {
+    # alembic current 輸出含 2 行 INFO + 1 行 "<head> (head)";
+    # 用 Select-String 對整個輸出 grep,避免 -notmatch 對 string array 的奇怪行為
+    $alembicOut = alembic current 2>&1 | Out-String
+    if ($alembicOut -match [regex]::Escape($expectedHead)) {
         Write-Pass "alembic head = $expectedHead"
+    } else {
+        Write-Warn "alembic head 非預期 ($expectedHead) — output: $alembicOut"
     }
 
     Write-Step "M3 表 row counts + 11 個 cross_cores tables 存在"
