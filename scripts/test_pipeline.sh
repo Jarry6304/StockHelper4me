@@ -203,25 +203,11 @@ phase_2() {
         warn "alembic head 非預期 ($expected)"
     fi
 
-    step "M3 表 row counts"
-    psql "$DATABASE_URL" -c "
-SELECT
-  (SELECT COUNT(*) FROM facts) AS facts_count,
-  (SELECT COUNT(*) FROM indicator_values) AS indicator_values_count,
-  (SELECT COUNT(*) FROM structural_snapshots) AS structural_snapshots_count;
-"
-
-    step "11 個 cross_cores tables 存在"
-    local cc_count
-    cc_count=$(psql "$DATABASE_URL" -t -c "
-SELECT COUNT(*) FROM pg_tables
-WHERE schemaname='public'
-  AND (tablename LIKE '%_ranked_derived' OR tablename = 'monthly_trigger_signals_derived');
-" | tr -d ' ')
-    if [ "$cc_count" = "11" ]; then
-        pass "cross_cores tables: 11"
+    step "M3 表 row counts + 11 個 cross_cores tables 存在(改用外部 SQL file)"
+    if [ -f "$REPO_ROOT/scripts/_schema_health.sql" ]; then
+        psql "$DATABASE_URL" -f "$REPO_ROOT/scripts/_schema_health.sql"
     else
-        warn "cross_cores tables count = $cc_count (預期 11)"
+        warn "scripts/_schema_health.sql 不存在 — skip"
     fi
     return 0
 }
@@ -247,17 +233,11 @@ phase_3() {
     fi
 
     step "P0 Gate — Neely forest_size 分布(v4.4a acceptance:max ≤ 200,p95 < 180)"
-    psql "$DATABASE_URL" -c "
-SELECT
-  PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
-  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
-  PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p99,
-  MAX(jsonb_array_length(snapshot->'scenario_forest')) AS max_count,
-  COUNT(*) AS scenario_count
-FROM structural_snapshots
-WHERE core_name = 'neely_core'
-  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
-"
+    if [ -f "$REPO_ROOT/scripts/_forest_size_p0_gate.sql" ]; then
+        psql "$DATABASE_URL" -f "$REPO_ROOT/scripts/_forest_size_p0_gate.sql"
+    else
+        warn "scripts/_forest_size_p0_gate.sql 不存在 — skip"
+    fi
     return 0
 }
 
@@ -279,21 +259,16 @@ phase_4() {
         warn "scripts/verify_mcp_kalman_neely.py 不存在 — skip"
     fi
 
-    step "MCP 8 tools 公開介面 importable"
-    $pybin -c "
-import sys
-sys.path.insert(0, 'src')
-sys.path.insert(0, '.')
-from mcp_server.tools import data as d
-tools = ['neely_forecast', 'kalman_trend', 'magic_formula_screen', 'stock_snapshot',
-         'monthly_screen', 'quarterly_screen', 'annual_low_risk_screen', 'monthly_trigger_scan']
-for t in tools:
-    if not hasattr(d, t):
-        raise SystemExit(f'Missing tool: {t}')
-print(f'All {len(tools)} MCP tools importable')
-"
-    if [ $? -ne 0 ]; then fail_msg "MCP toolkit import FAILED"; return 1; fi
-    pass "MCP 8 tools 全 importable"
+    step "MCP 8 tools 公開介面 importable(改用外部 Python file)"
+    if [ -f "$REPO_ROOT/scripts/_mcp_import_check.py" ]; then
+        if $pybin "$REPO_ROOT/scripts/_mcp_import_check.py"; then
+            pass "MCP 8 tools 全 importable"
+        else
+            fail_msg "MCP toolkit import FAILED"; return 1
+        fi
+    else
+        warn "scripts/_mcp_import_check.py 不存在 — skip"
+    fi
     return 0
 }
 
