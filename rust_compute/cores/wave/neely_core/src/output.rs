@@ -569,21 +569,26 @@ pub enum ZigzagKind {
     Triple,
 }
 
-/// FlatKind 7-variant(spec r5 line 1161 + neely_rules.md line 2157-2239)。
+/// FlatKind 8-variant(spec r5 line 1161 + neely_rules.md line 2157-2239 + Appendix B 項 A)。
 ///
-/// Phase 16(2026-05-14)重構:由 r4 3-variant(Regular/Expanded/Running)→ r5 7-variant
-/// 具體形態變體 + Running 上提為 NeelyPatternType::RunningCorrection。
+/// Phase 16(2026-05-14)重構:r4 3-variant → r5 7-variant 具體形態變體;
+/// v4.1(2026-05-19)補完 Appendix B 項 A 123.6% Strong b-wave 中間檻 → 8-variant。
 ///
-/// 判定規則(spec line 2157-2239 + 2024-2034):
-/// | Variant          | b/a 範圍          | c 行為           | Power |
-/// |------------------|-------------------|------------------|-------|
-/// | Common           | 81%–100%          | c ≥ 100% × b     | 0     |
-/// | BFailure         | 61.8%–81%         | c ≥ 100% × b     | 0     |
-/// | CFailure         | 81%–100%          | c < 100% × b     | -1    |
-/// | DoubleFailure    | 61.8%–81%         | c < 100% × b     | -2    |
-/// | Irregular        | 100%–138.2%       | c ≥ 100% × b     | -1    |
-/// | IrregularFailure | > 138.2%          | c < 100% × b     | -2    |
+/// 判定規則(spec line 2157-2239 + 2024-2034 + Appendix B 項 A):
+/// | Variant          | b/a 範圍              | c 行為           | Power |
+/// |------------------|-----------------------|------------------|-------|
+/// | Common           | 81%–100%              | c ≥ 100% × b     | 0     |
+/// | BFailure         | 61.8%–81%             | c ≥ 100% × b     | 0     |
+/// | CFailure         | 81%–100%              | c < 100% × b     | -1    |
+/// | DoubleFailure    | 61.8%–81%             | c < 100% × b     | -2    |
+/// | Irregular        | 100%–**123.6%**       | c ≥ 100% × b     | -1    |
+/// | IrregularStrongB | **123.6%–138.2%**     | c ≥ 100% × b     | -1    |
+/// | IrregularFailure | > 138.2%              | c < 100% × b     | -2    |
 /// | Elongated        | ≥ 138.2%(Triangle/Terminal 內) | c > a | +1   |
+///
+/// **Appendix B 項 A 123.6% 中間檻語意**:b/a 超過 123.6% 屬 Strong b-wave 區段,
+/// 對 post-pattern Impulse 有更強約束(spec §Ch10 Power Rating Lookup),
+/// 仍走 Power -1 但 PostBehavior 細節較嚴(預留 V4.x table.rs 補微調)。
 ///
 /// 由 `classifier::flat_classifier::classify_flat` 從 monowave magnitudes 推導。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -592,7 +597,10 @@ pub enum FlatKind {
     BFailure,
     CFailure,
     DoubleFailure,
+    /// b/a 在 (100%, 123.6%] 區段 Irregular(weak B-wave)
     Irregular,
+    /// b/a 在 (123.6%, 138.2%] 區段 Irregular(**Strong B-wave**,v4.1 Appendix B 項 A)
+    IrregularStrongB,
     IrregularFailure,
     Elongated,
 }
@@ -688,6 +696,8 @@ pub struct StructuralFacts {
     pub volume_alignment: Option<VolumeAlignment>,
     pub gap_count: usize,
     pub overlap_pattern: Option<OverlapPattern>,
+    /// v4.1:Ch8 Extension vs Subdivision 獨立性判定(對齊 spec §Ch8 Independent Rule)
+    pub extension_subdivision_pair: Option<ExtensionSubdivisionPair>,
 }
 
 // 以下 placeholder type 在 Stage 5-7 實作時補欄位
@@ -696,19 +706,57 @@ pub struct FibonacciAlignment {
     pub matched_ratios: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct AlternationFact {
-    pub holds: bool,
+/// Alternation 單軸檢查結果(v4.1 — 對齊 NEoWave §Rule of Alternation 五軸)。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum AlternationCheck {
+    /// 該軸 alternation 存在(W2 與 W4 在此軸上不同)
+    Confirmed,
+    /// 該軸不適用(資料不足 / 規則對該模式不適用)
+    NotApplicable,
+    /// 該軸 alternation 缺失(W2 與 W4 在此軸上相同 — 違反 spec)
+    Failed,
 }
 
+/// Alternation 5 軸聚合結果(v4.1 從單軸 holds: bool 升 5-axis,對齊
+/// spec §Rule of Alternation 與 `output.rs::AlternationAxis` 既有 enum)。
+///
+/// 5 軸:Price / Time / Severity / Intricacy / Construction。
+/// Phase 1 PR 只有 Construction 軸被 validator dispatch;v4.1 補完其他 4 軸
+/// 由 `classifier::structural_facts::alternation` 直接由 monowave metrics 計算。
+#[derive(Debug, Clone, Serialize)]
+pub struct AlternationFact {
+    /// Price 軸:W2 / W4 retracement % 差異是否顯著(預設門檻 ≥ 25%)
+    pub price: AlternationCheck,
+    /// Time 軸:W2 / W4 持續時間是否顯著不同(預設 ≥ 1.5x 或 ≤ 0.67x)
+    pub time: AlternationCheck,
+    /// Severity 軸:W2 / W4 retracement 深淺嚴格度(deep vs shallow,預設深 ≥ 61.8%、淺 < 38.2%)
+    pub severity: AlternationCheck,
+    /// Intricacy 軸:W2 / W4 子結構複雜度(以 :3 構型內 sub-monowave 推估 — 簡化版,V4.x 細化)
+    pub intricacy: AlternationCheck,
+    /// Construction 軸:W2 / W4 :5/:3 構型是否不同(對齊 Phase 1 既有 validator 邏輯)
+    pub construction: AlternationCheck,
+    /// 全 5 軸聚合:任一軸 `Failed` → false;任一軸 `Confirmed` + 其他 NotApplicable → true
+    pub overall_holds: bool,
+}
+
+/// Channeling 證據細節(v4.1 — 補 evidence 欄位給 Aggregation 看)。
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelingFact {
     pub holds: bool,
+    /// 各 trendline touchpoints / channel 偵測證據(對齊 spec §Ch5/Ch9 Channeling
+    /// 5 條 trendlines:0-2 / 1-3 / 2-4 / 0-B / B-D)
+    pub evidence: Vec<String>,
 }
 
+/// Time Relationship 細節(v4.1 — 補 durations + Fibonacci ratio evidence)。
 #[derive(Debug, Clone, Serialize)]
 pub struct TimeRelationship {
     pub label: String,
+    /// 各 wave duration in bars(對齊 spec §StructuralFacts.time_relationship)
+    pub durations_bars: Vec<usize>,
+    /// W1/W3/W5 時間軸命中的 Fibonacci 比例(0.382 / 0.618 / 1.000 / 1.618 / 2.618;
+    /// ±10% 容差 / architecture §4.2)
+    pub fibonacci_ratios_matched: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -716,9 +764,47 @@ pub struct VolumeAlignment {
     pub holds: bool,
 }
 
+/// W4 與 W2 區 overlap 關係(v4.1 從 `{ label: String }` 升 enum,
+/// 給 Aggregation 結構化判斷。對齊 spec §Ch5 Overlap Rule 1326-1329 行)。
 #[derive(Debug, Clone, Serialize)]
-pub struct OverlapPattern {
-    pub label: String,
+pub enum OverlapPattern {
+    /// Trending Impulse:W4 不進入 W2 區(無 overlap)
+    Trending {
+        /// W2/W4 區間描述
+        evidence: String,
+    },
+    /// Terminal Impulse:W4 部分進入 W2 區(overlap)
+    Terminal {
+        /// W4 與 W2 重疊區間描述
+        evidence: String,
+    },
+    /// 無法判斷或非 5-wave 結構
+    None,
+}
+
+/// Ch8 Extension vs Subdivision 獨立性狀態(v4.1 — 對齊 spec §Ch8 Independent Rule)。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum SubdivisionStatus {
+    /// 該段細分結構獨立(典型 Impulse Extension,符合 Independent Rule)
+    Independent,
+    /// 該段為更大級的 subdivision(對應 spec § "Extensions vs Subdivisions" 的反面)
+    SubordinateToLarger,
+    /// 無法判定(資料不足 / 非 Extension 形態 / 非 5-wave)
+    Indeterminate,
+}
+
+/// Extension Subdivision Pair:延伸段位置 + 獨立性判定 + 倍率。
+///
+/// 對齊 spec §Ch8 Independent Rule(`neely_rules.md` §Ch8 Complex Polywaves)。
+/// v4.1 加入 StructuralFacts 給 Aggregation Layer 對 Ch8 Multiwave / X-wave 偵測伸縮判斷。
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtensionSubdivisionPair {
+    /// 延伸段在 5-wave Impulse 中的位置(W1 / W3 / W5)
+    pub extended_wave: WaveNumber,
+    /// 延伸段獨立性
+    pub status: SubdivisionStatus,
+    /// 延伸段倍率 = ext.magnitude / max(non-ext.magnitude)
+    pub extension_ratio: f64,
 }
 
 // ---------------------------------------------------------------------------

@@ -66,7 +66,11 @@ pub fn lookup(pattern: &NeelyPatternType, in_triangle_context: bool) -> PostBeha
                     PostBehavior::NextImpulseExceeds { ratio: 1.618 },
                 ],
             },
-            FlatKind::Irregular | FlatKind::Elongated => PostBehavior::MinRetracement { ratio: 0.90 },
+            // v4.1:IrregularStrongB(Appendix B 項 A 的 123.6-138.2% range)同 MinRetracement
+            // 90%;細部 strong b-wave 對下波 Impulse 額外約束可在 V4.x table 升級為 Composite
+            FlatKind::Irregular
+            | FlatKind::IrregularStrongB
+            | FlatKind::Elongated => PostBehavior::MinRetracement { ratio: 0.90 },
         },
 
         // Triangle:作為「整體形態」(不在內部段)時,後續 Thrust 必達 wave-D 區

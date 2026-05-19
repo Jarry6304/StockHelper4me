@@ -29,6 +29,9 @@ use crate::output::StructureLabelCandidate;
 
 pub mod context;
 pub mod predicates;
+/// v4.1 P1.1 #5:Appendix A.3 `is_fifth_of_fifth_extension` 共通函式 — 從
+/// rule_3.rs / rule_4.rs 兩處重複實作抽出。
+mod fifth_of_fifth_detector;
 mod rule_1;
 mod rule_2;
 mod rule_3;

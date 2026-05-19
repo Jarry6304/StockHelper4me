@@ -266,6 +266,91 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.1 — P1.1 Neely M3SPEC alignment Quick Wins(2026-05-19)
+
+接 v3.38 收尾後動工 v4.0 Plan(15 真闕漏 / 4 milestones / ~5,340 LoC),
+本 commit 落地 **P1.1 Quick Wins**(plan 文件 §「Milestone P1.1」)。0 dispatch
+行為改變,純結構性補完 — 給 Aggregation Layer 多餘資訊。
+
+### 動工項目(1 commit / 6 task / branch `claude/continue-previous-work-xdKrl`)
+
+| # | 工作 | 動作 |
+|---|---|---|
+| 1 | `StructuralFacts` 加 `extension_subdivision_pair` 欄位 | 新 `ExtensionSubdivisionPair` struct + `SubdivisionStatus` enum(Independent / SubordinateToLarger / Indeterminate);對齊 spec §Ch8 Independent Rule |
+| 2 | `AlternationFact` 升 5-axis | 從 `{ holds: bool }` 升 `{ price / time / severity / intricacy / construction: AlternationCheck, overall_holds: bool }`;新 `AlternationCheck` enum(Confirmed / NotApplicable / Failed);對齊 NEoWave §Rule of Alternation 五軸 |
+| 3 | `OverlapPattern` 升 enum + evidence | 從 `{ label: String }` 升 enum `Trending { evidence } / Terminal { evidence } / None`;對齊 spec §Ch5 Overlap Rule 1326-1329 行 |
+| 4 | `ChannelingFact` / `TimeRelationship` 加 evidence | ChannelingFact 加 `evidence: Vec<String>`;TimeRelationship 加 `durations_bars` + `fibonacci_ratios_matched` |
+| 5 | `fifth_of_fifth_detector.rs` 抽共通 fn | 新 module;`rule_3.rs:37` `check_fifth_of_fifth_and_add` + `rule_4.rs:210` `add_l5_if_fifth_of_fifth` 兩處 byte-for-byte 重複合併;對齊 Appendix A.3 |
+| 6 | `FlatKind::IrregularStrongB` 補 123.6% 中間檻 | `Irregular`(100-123.6%)+ 新 `IrregularStrongB`(123.6-138.2%);對齊 Appendix B 項 A;`flat_classifier::classify_flat` + power_rating table/post_behavior 對齊更新 |
+
+### 範圍
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/output.rs` | `StructuralFacts` 加 1 欄;`AlternationFact` / `OverlapPattern` 升結構;`ChannelingFact` / `TimeRelationship` 加 evidence 欄;新 `AlternationCheck` / `SubdivisionStatus` / `ExtensionSubdivisionPair`;`FlatKind` 加 `IrregularStrongB` |
+| `rust_compute/cores/wave/neely_core/src/classifier/structural_facts.rs` | `alternation` 改 `(candidate, classified, report)` 3-arg + 5-axis 計算 + 4 axis 分類 helper;`overlap_pattern` 升 enum 變體;`time_relationship` 加 evidence;`channeling` 加 evidence;**新** `extension_subdivision_pair()` fn;**+10 new tests** |
+| `rust_compute/cores/wave/neely_core/src/classifier/mod.rs` | StructuralFacts 構造加 `extension_subdivision_pair` 欄位 + alternation 改 3-arg call |
+| `rust_compute/cores/wave/neely_core/src/classifier/flat_classifier.rs` | `classify_flat` 加 123.6% 中間檻 sub-range 分支;**+3 new tests** |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/fifth_of_fifth_detector.rs` | **新檔** — 共通 fn + 2 unit tests |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/mod.rs` | 加 `mod fifth_of_fifth_detector;` |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/rule_3.rs` | 移除 local `check_fifth_of_fifth_and_add`,use shared `fifth_of_fifth_detector::add_l5_if_fifth_of_fifth as check_fifth_of_fifth_and_add` |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/rule_4.rs` | 移除 local `add_l5_if_fifth_of_fifth`,use shared |
+| `rust_compute/cores/wave/neely_core/src/power_rating/table.rs` | FlatKind match 加 `IrregularStrongB`(並列 Irregular,power -1) |
+| `rust_compute/cores/wave/neely_core/src/power_rating/post_behavior.rs` | 同上(並列 Irregular,MinRetracement 0.90) |
+| `CLAUDE.md` | v4.1 章節(本段) |
+
+**0 alembic / 0 collector.toml / 0 Python / 0 dispatch 行為改變**。
+
+### 沙箱驗證
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release -p neely_core` ✅ **288 passed / 0 failed**(從 v3.38 baseline → +13 new)
+- `cargo test --release --workspace --no-fail-fast` ✅ **461 passed / 0 failed**(v3.38 baseline 448 → +13)
+
+### 風險
+
+🟢 極低:
+- 純 struct 擴 + 共通 fn 抽提,**0 dispatch 行為改變**
+- production scenarios 0 影響(`Scenario` JSON 序列化新增欄位,既有 caller 0 break)
+- 既有 5 cores 的 tests + Aggregation Layer Python tests 不受影響(structural fields 是 optional)
+- params_hash 變動(`Scenario` struct schema 改)→ user 重跑 tw_cores 時走 ON CONFLICT UPDATE 覆寫;**不需 DELETE**
+- Rollback:單 commit `git revert` 即可
+
+### user 本機(下次 session 起點)
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+# (P1.1 純結構性,可不重跑 tw_cores;若要看新欄位 → 重跑)
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+
+# 確認新 fields 存在於 Scenario JSON
+psql $env:DATABASE_URL -c "
+SELECT
+  s->'structural_facts'->'extension_subdivision_pair' AS esp,
+  s->'structural_facts'->'alternation' AS alt_5axis,
+  s->'structural_facts'->'overlap_pattern' AS overlap_enum
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE stock_id='2330' AND core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE stock_id='2330' AND core_name='neely_core' AND timeframe='daily')
+  AND timeframe='daily'
+LIMIT 3;
+"
+# 預期:
+#   esp = {extended_wave:..., status:..., extension_ratio:...} JSON
+#   alt_5axis = {price:..., time:..., severity:..., intricacy:..., construction:..., overall_holds:...}
+#   overlap_enum = {"Trending":{"evidence":"..."}} 或 {"Terminal":{"evidence":"..."}}
+```
+
+### 下個 milestone(P1.2)
+
+接著 P1.2 Ch9 advisory + Ch12 Waterfall/Localized(2-3 天 / ~670 LoC / 1 commit)。
+詳見 `/root/.claude/plans/hashed-foraging-pixel.md` §「Milestone P1.2」。
+
+---
+
 ## v3.38 — Per-forecast-horizon Neely + degradation strategy(2026-05-18)
 
 接 v3.37.1 SQL hotfix + v3.37 multi-timeframe Neely production verify 後 user 對「daily

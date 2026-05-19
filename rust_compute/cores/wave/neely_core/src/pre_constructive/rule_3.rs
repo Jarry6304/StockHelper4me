@@ -8,6 +8,7 @@
 //   → add [:L5]
 
 use super::context::MonowaveContext;
+use super::fifth_of_fifth_detector::add_l5_if_fifth_of_fifth as check_fifth_of_fifth_and_add;
 use super::predicates::*;
 use crate::output::{Certainty, MonowaveDirection, StructureLabel, StructureLabelCandidate};
 
@@ -30,25 +31,8 @@ pub fn run(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
     }
 }
 
-/// 5th-of-5th Extension 共通檢測(spec 共通條件,Cond 3a 每子規則套用)。
-///
-/// IF m1 為 m(-1)/m1/m(-3) 中最長 AND m2 在 ≤ m1 時間內突破 m(-2)/m0 連線
-/// → 該子規則的 Structure list 額外加 [:L5]
-fn check_fifth_of_fifth_and_add(
-    ctx: &MonowaveContext,
-    cands: &mut Vec<StructureLabelCandidate>,
-) {
-    if let (Some(m_minus_3), Some(m_minus_2), Some(m_minus_1), Some(m0), Some(m2)) =
-        (ctx.m_minus_3, ctx.m_minus_2, ctx.m_minus_1, ctx.m0, ctx.m2)
-    {
-        let m1 = ctx.m1;
-        let m1_longest = is_longest_of_three(m1, Some(m_minus_1), Some(m_minus_3));
-        let breaches = m2_breaches_2_4_line_within_m1_time(m_minus_2, m0, m1, m2);
-        if m1_longest && breaches {
-            add_or_promote(cands, StructureLabel::L5, Certainty::Rare);
-        }
-    }
-}
+// v4.1 P1.1 #5:5th-of-5th 共通檢測抽到 fifth_of_fifth_detector module 共用
+// (與 rule_4.rs 的 add_l5_if_fifth_of_fifth 兩處重複實作合併)。
 
 // ---------------------------------------------------------------------------
 // Condition 3a — m0 < 38.2% m1(6 branches + 5th-of-5th 共通)
