@@ -1,21 +1,26 @@
 // emulation — Stage 9b:Emulation 偵測(Ch12 Emulation)
 //
 // 對齊 m3Spec/neely_rules.md §Ch8 Non-Standard Polywaves(1902-1906 行 Running 變體辨識要點)
-//       + §Ch12 Emulation
+//       + §Ch12 Emulation + Ch11 Zigzag wave-c 規則(2337-2342 行)
 //       + m3Spec/neely_core_architecture.md §7.1 Stage 9b + §9.3 Ch12_Emulation
 //
-// **Phase 9 PR**(完整 Ch12 Emulation 實作):
+// **Phase 9 PR**(原始 4 種 Ch12 Emulation 實作):
 //   對 forest 中每個 scenario 套用視覺/結構 emulation 偵測。Emulation 是「視覺上
 //   相似於 X 但結構規則屬 Y」的場景。Phase 9 偵測四種主要 emulation kind:
-//   1. RunningDoubleThreeAsImpulse(spec 1905-1906):
-//      Running Double Three Combination 偽裝 1st Wave Extension Impulse
-//      辨識:該 5-wave Impulse 的 W3 monowave structure_label_candidates 含 :3 系列
-//   2. DiagonalAsImpulse:Diagonal 偽裝 Trending Impulse
-//      Phase 9 簡化:已被 classifier 區分,scenario.pattern_type 是 Diagonal 即標
-//   3. TriangleAsFailure:Triangle 偽裝 5-wave Failure
-//      辨識:Triangle scenario + 末段相對短(可能被誤判 Truncated)
-//   4. FirstExtAsTerminal:1st Ext Impulse 偽裝 Terminal Impulse
-//      辨識:Impulse scenario + advisory_findings 中 Ch5_Overlap_* 接近邊界
+//   1. RunningDoubleThreeAsImpulse(spec 1905-1906)
+//   2. DiagonalAsImpulse
+//   3. TriangleAsFailure
+//   4. FirstExtAsTerminal
+//
+// **v4.5.1(2026-05-19)Group 2.1 補完 Zigzag emulation**:
+//   5. ZigzagAsFlatFailure(spec 2337-2342):Zigzag wave-c < 100% × wave-a → 似 Flat C-Failure
+//
+// **v4.5.2(2026-05-19)Group 2.2 補完 Flat emulation**:
+//   6. FlatAsZigzag(spec 2191-2321 Elongated):Flat wave-c > 138.2% × wave-a → 似 Zigzag
+//
+// **v4.5.4(2026-05-19)Group 2.4 補完 Combination emulation**:
+//   7. CombinationAsImpulse(spec 1905-1906 一般化):DoubleThree*/TripleThree* + 5/7 children → 似 Impulse
+//   Match arm 變 exhaustive(移除 `_ => {}` catch-all)
 
 use crate::monowave::ClassifiedMonowave;
 use crate::output::{
@@ -71,8 +76,26 @@ fn detect_for_scenario(
                 suspects.push(s);
             }
         }
-        // Zigzag / Flat / Combination:Phase 9 暫不偵測 emulation
-        _ => {}
+        // v4.5.1 — Zigzag 偽裝 Flat C-Failure
+        NeelyPatternType::Zigzag { .. } => {
+            if let Some(s) = check_zigzag_as_flat_failure(scenario, classified) {
+                suspects.push(s);
+            }
+        }
+        // v4.5.2 — Flat 偽裝 Zigzag(Elongated Flat 之 wave-c 過長)
+        NeelyPatternType::Flat { .. } => {
+            if let Some(s) = check_flat_as_zigzag(scenario, classified) {
+                suspects.push(s);
+            }
+        }
+        // v4.5.4 — Combination 偽裝 Trending Impulse
+        NeelyPatternType::Combination { .. } => {
+            if let Some(s) = check_combination_as_impulse(scenario, classified) {
+                suspects.push(s);
+            }
+        }
+        // RunningCorrection:暫不偵測 emulation(spec 對 RunningCorrection 視覺辨識度高)
+        NeelyPatternType::RunningCorrection => {}
     }
 
     suspects
@@ -190,6 +213,132 @@ fn check_first_ext_as_terminal(scenario: &Scenario) -> Option<EmulationSuspect> 
     }
 }
 
+/// v4.5.1 — 偵測 5:Zigzag 偽裝 Flat C-Failure(spec 2337-2342)。
+///
+/// 辨識(典型 Zigzag wave-c ∈ [61.8%, 161.8%] × wave-a):
+///   - scenario.pattern_type == Zigzag
+///   - wave-a 與 wave-c 都能找到對應 monowave
+///   - wave-c.magnitude / wave-a.magnitude < 1.0(truncated wave-c)
+///   - 視覺上似 Flat C-Failure(c 未過 wave-a 端點)
+fn check_zigzag_as_flat_failure(
+    scenario: &Scenario,
+    classified: &[ClassifiedMonowave],
+) -> Option<EmulationSuspect> {
+    if scenario.wave_tree.children.len() < 3 {
+        return None;
+    }
+    let wave_a_node = &scenario.wave_tree.children[0];
+    let wave_c_node = &scenario.wave_tree.children[2];
+
+    let wave_a_mw = classified
+        .iter()
+        .find(|c| c.monowave.start_date == wave_a_node.start)?;
+    let wave_c_mw = classified
+        .iter()
+        .find(|c| c.monowave.end_date == wave_c_node.end)?;
+
+    let mag_a = wave_a_mw.metrics.magnitude;
+    let mag_c = wave_c_mw.metrics.magnitude;
+
+    if mag_a > 1e-9 && mag_c / mag_a < 1.0 {
+        Some(EmulationSuspect {
+            scenario_id: Some(scenario.id.clone()),
+            kind: EmulationKind::ZigzagAsFlatFailure,
+            message: format!(
+                "Scenario[{}] Zigzag 但 wave-c/wave-a 比 = {:.3} < 1.0 — \
+                 視覺上可能被誤判為 Flat C-Failure(wave-c 未過 wave-a 端點;spec 2337-2342)",
+                scenario.id,
+                mag_c / mag_a
+            ),
+        })
+    } else {
+        None
+    }
+}
+
+/// v4.5.2 — 偵測 6:Flat 偽裝 Zigzag(spec 2191-2321 Elongated Flat)。
+///
+/// 辨識:
+///   - scenario.pattern_type == Flat
+///   - wave-c.magnitude / wave-a.magnitude ≥ 1.382(Elongated Flat 區段)
+///   - 視覺上 wave-c 顯著延伸超過 wave-a 端點,似 Zigzag
+fn check_flat_as_zigzag(
+    scenario: &Scenario,
+    classified: &[ClassifiedMonowave],
+) -> Option<EmulationSuspect> {
+    if scenario.wave_tree.children.len() < 3 {
+        return None;
+    }
+    let wave_a_node = &scenario.wave_tree.children[0];
+    let wave_c_node = &scenario.wave_tree.children[2];
+
+    let wave_a_mw = classified
+        .iter()
+        .find(|c| c.monowave.start_date == wave_a_node.start)?;
+    let wave_c_mw = classified
+        .iter()
+        .find(|c| c.monowave.end_date == wave_c_node.end)?;
+
+    let mag_a = wave_a_mw.metrics.magnitude;
+    let mag_c = wave_c_mw.metrics.magnitude;
+
+    if mag_a > 1e-9 && mag_c / mag_a >= 1.382 {
+        Some(EmulationSuspect {
+            scenario_id: Some(scenario.id.clone()),
+            kind: EmulationKind::FlatAsZigzag,
+            message: format!(
+                "Scenario[{}] Flat 但 wave-c/wave-a 比 = {:.3} ≥ 1.382(Elongated)— \
+                 視覺上可能被誤判為 Zigzag(spec 2191-2321 Elongated Flat 區段)",
+                scenario.id,
+                mag_c / mag_a
+            ),
+        })
+    } else {
+        None
+    }
+}
+
+/// v4.5.4 — 偵測 7:Combination 偽裝 Trending Impulse(spec 1905-1906 一般化)。
+///
+/// 辨識:
+///   - scenario.pattern_type == Combination(任 DoubleThree* / TripleThree* sub_kind)
+///   - wave_tree.children.len() 等於 5 或 7(對齊 5-wave 表象;wave-x 串接 5 或 7 段)
+///   - 與 RunningDoubleThreeAsImpulse 區別:本偵測不限 W3 含 :3 標記,
+///     而是純結構(Combination + 表象 5 段)的偽裝警示
+fn check_combination_as_impulse(
+    scenario: &Scenario,
+    _classified: &[ClassifiedMonowave],
+) -> Option<EmulationSuspect> {
+    let child_count = scenario.wave_tree.children.len();
+    let is_running_combo = match &scenario.pattern_type {
+        NeelyPatternType::Combination { sub_kinds } => sub_kinds.iter().any(|k| {
+            matches!(
+                k,
+                crate::output::CombinationKind::DoubleThree
+                    | crate::output::CombinationKind::DoubleThreeCombination
+                    | crate::output::CombinationKind::DoubleThreeRunning
+                    | crate::output::CombinationKind::TripleThree
+                    | crate::output::CombinationKind::TripleThreeCombination
+                    | crate::output::CombinationKind::TripleThreeRunning
+            )
+        }),
+        _ => false,
+    };
+    if is_running_combo && (child_count == 5 || child_count == 7) {
+        Some(EmulationSuspect {
+            scenario_id: Some(scenario.id.clone()),
+            kind: EmulationKind::CombinationAsImpulse,
+            message: format!(
+                "Scenario[{}] DoubleThree*/TripleThree* Combination 含 {} 段 — \
+                 視覺上可能被誤判為 5/7-wave Trending Impulse(spec 1905-1906 一般化)",
+                scenario.id, child_count
+            ),
+        })
+    } else {
+        None
+    }
+}
+
 /// Legacy API(Phase 1 skeleton)— Phase 9 改用 detect_all(forest, classified)。
 #[deprecated(note = "Phase 9 改用 detect_all(forest, classified)")]
 pub fn detect_emulation(_scenario: &Scenario) -> bool {
@@ -229,6 +378,7 @@ mod tests {
                 } else {
                     MonowaveDirection::Down
                 },
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -373,5 +523,132 @@ mod tests {
         assert!(suspects
             .iter()
             .any(|s| matches!(s.kind, EmulationKind::FirstExtAsTerminal)));
+    }
+
+    // v4.5.1 ZigzagAsFlatFailure tests ------------------------------------
+
+    #[test]
+    fn zigzag_with_short_wave_c_yields_flat_failure_suspect() {
+        // Zigzag wave-a mag 10, wave-b mag 5, wave-c mag 6 → c/a = 0.6 < 1.0
+        let classified = vec![
+            cmw_with(100.0, 110.0, 5, 0, vec![]),  // wave-a: mag 10
+            cmw_with(110.0, 105.0, 5, 5, vec![]),  // wave-b
+            cmw_with(105.0, 111.0, 5, 10, vec![]), // wave-c: mag 6
+        ];
+        let scenario = make_scenario(
+            NeelyPatternType::Zigzag {
+                sub_kind: ZigzagKind::Single,
+            },
+            vec![wave_node(0, 5), wave_node(5, 5), wave_node(10, 5)],
+        );
+        let suspects = detect_for_scenario(&scenario, &classified);
+        assert!(suspects
+            .iter()
+            .any(|s| matches!(s.kind, EmulationKind::ZigzagAsFlatFailure)));
+    }
+
+    #[test]
+    fn zigzag_with_normal_wave_c_does_not_yield_emulation() {
+        // wave-c mag 12 > wave-a mag 10 → not truncated
+        let classified = vec![
+            cmw_with(100.0, 110.0, 5, 0, vec![]),
+            cmw_with(110.0, 105.0, 5, 5, vec![]),
+            cmw_with(105.0, 117.0, 5, 10, vec![]),
+        ];
+        let scenario = make_scenario(
+            NeelyPatternType::Zigzag {
+                sub_kind: ZigzagKind::Single,
+            },
+            vec![wave_node(0, 5), wave_node(5, 5), wave_node(10, 5)],
+        );
+        let suspects = detect_for_scenario(&scenario, &classified);
+        assert!(!suspects
+            .iter()
+            .any(|s| matches!(s.kind, EmulationKind::ZigzagAsFlatFailure)));
+    }
+
+    // v4.5.2 FlatAsZigzag tests -------------------------------------------
+
+    #[test]
+    fn flat_with_elongated_wave_c_yields_zigzag_suspect() {
+        // wave-a mag 10, wave-c mag 15 → c/a = 1.5 ≥ 1.382
+        let classified = vec![
+            cmw_with(100.0, 110.0, 5, 0, vec![]),
+            cmw_with(110.0, 107.0, 5, 5, vec![]),
+            cmw_with(107.0, 122.0, 5, 10, vec![]),
+        ];
+        let scenario = make_scenario(
+            NeelyPatternType::Flat {
+                sub_kind: FlatKind::Elongated,
+            },
+            vec![wave_node(0, 5), wave_node(5, 5), wave_node(10, 5)],
+        );
+        let suspects = detect_for_scenario(&scenario, &classified);
+        assert!(suspects
+            .iter()
+            .any(|s| matches!(s.kind, EmulationKind::FlatAsZigzag)));
+    }
+
+    #[test]
+    fn flat_common_with_short_wave_c_does_not_yield_emulation() {
+        // wave-c mag 11 < wave-a × 1.382 = 13.82 → not Elongated
+        let classified = vec![
+            cmw_with(100.0, 110.0, 5, 0, vec![]),
+            cmw_with(110.0, 102.0, 5, 5, vec![]),
+            cmw_with(102.0, 113.0, 5, 10, vec![]),
+        ];
+        let scenario = make_scenario(
+            NeelyPatternType::Flat {
+                sub_kind: FlatKind::Common,
+            },
+            vec![wave_node(0, 5), wave_node(5, 5), wave_node(10, 5)],
+        );
+        let suspects = detect_for_scenario(&scenario, &classified);
+        assert!(!suspects
+            .iter()
+            .any(|s| matches!(s.kind, EmulationKind::FlatAsZigzag)));
+    }
+
+    // v4.5.4 CombinationAsImpulse tests -----------------------------------
+
+    #[test]
+    fn double_three_with_five_children_yields_combination_as_impulse_suspect() {
+        let scenario = make_scenario(
+            NeelyPatternType::Combination {
+                sub_kinds: vec![CombinationKind::DoubleThree],
+            },
+            vec![
+                wave_node(0, 5),
+                wave_node(5, 5),
+                wave_node(10, 5),
+                wave_node(15, 5),
+                wave_node(20, 5),
+            ],
+        );
+        let suspects = detect_for_scenario(&scenario, &[]);
+        assert!(suspects
+            .iter()
+            .any(|s| matches!(s.kind, EmulationKind::CombinationAsImpulse)));
+    }
+
+    #[test]
+    fn double_zigzag_combination_does_not_yield_emulation() {
+        // DoubleZigzag is a Table A small-x combination, not a DoubleThree* variant
+        let scenario = make_scenario(
+            NeelyPatternType::Combination {
+                sub_kinds: vec![CombinationKind::DoubleZigzag],
+            },
+            vec![
+                wave_node(0, 5),
+                wave_node(5, 5),
+                wave_node(10, 5),
+                wave_node(15, 5),
+                wave_node(20, 5),
+            ],
+        );
+        let suspects = detect_for_scenario(&scenario, &[]);
+        assert!(!suspects
+            .iter()
+            .any(|s| matches!(s.kind, EmulationKind::CombinationAsImpulse)));
     }
 }

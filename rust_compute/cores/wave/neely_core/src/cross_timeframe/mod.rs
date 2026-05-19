@@ -81,6 +81,7 @@ mod tests {
                 start_price: 100.0,
                 end_price: 110.0,
                 direction: MonowaveDirection::Up,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {

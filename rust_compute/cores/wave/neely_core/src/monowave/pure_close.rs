@@ -86,12 +86,14 @@ pub fn detect_monowaves(bars: &[OhlcvBar], atr_period: usize) -> Vec<Monowave> {
             // 反向 movement:檢查是否跨 reversal_threshold
             if movement.abs() >= reversal_threshold {
                 // 確認反轉 → push 完成的 monowave
+                // v4.6 G3.1:bar_indices = (start_idx, extreme_idx) 對應 monowave 起終 bar index
                 waves.push(Monowave {
                     start_date: bars[start_idx].date,
                     end_date: bars[extreme_idx].date,
                     start_price: mid_price(&bars[start_idx]),
                     end_price: mid_price(&bars[extreme_idx]),
                     direction: dir_enum(direction),
+                    bar_indices: (start_idx, extreme_idx),
                 });
                 start_idx = extreme_idx;
                 extreme_idx = i;
@@ -109,6 +111,7 @@ pub fn detect_monowaves(bars: &[OhlcvBar], atr_period: usize) -> Vec<Monowave> {
             start_price: mid_price(&bars[start_idx]),
             end_price: mid_price(&bars[extreme_idx]),
             direction: dir_enum(direction),
+            bar_indices: (start_idx, extreme_idx),
         });
     }
 

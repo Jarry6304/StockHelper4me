@@ -74,6 +74,7 @@ mod tests {
             start_price: start,
             end_price: end,
             direction: dir,
+            bar_indices: (0, 0),
         }
     }
 

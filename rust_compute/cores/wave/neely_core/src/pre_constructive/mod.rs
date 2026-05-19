@@ -19,13 +19,16 @@
 //
 // **缺資料項目**(本 PR best-guess,Phase 2 後校準):
 //   - m0/m1/m2 是否含 > 3 sub-monowaves(polywave 偵測)→ 預設 false(走 (B) 分支)
-//   - m1 端點被 m2 突破 → 需 OHLC intraday extreme reference,Phase 2 placeholder false
+//     [留 Group 1 polywave nested feedback loop 補完]
+//   - ~~m1 端點被 m2 突破 → 需 OHLC intraday extreme reference,Phase 2 placeholder false~~
+//     **v4.6 G3.1(2026-05-19)已實作**:用 m2.bar_indices 在 bars slice 走
+//     intraday high/low extremum,對齊 spec line 247-249
 //   - 部分子規則涉及「快/慢回測」+「market returns to wave start」幾何判斷,
 //     已以「duration 比較 + retracement_pct + 2-4 line breach」近似實作
 //   - 細項對齊 m3Spec/neely_rules.md 1042-1062 行「Pre-Constructive Logic 細部技術備註」
 
 use crate::monowave::ClassifiedMonowave;
-use crate::output::StructureLabelCandidate;
+use crate::output::{OhlcvBar, StructureLabelCandidate};
 
 pub mod context;
 pub mod predicates;
@@ -49,9 +52,12 @@ use predicates::{mag_ratio, FIB_1000, FIB_1618, FIB_2618, FIB_382, FIB_618, FIB_
 /// 後存回 `classified[i].structure_label_candidates`。
 ///
 /// 順序遍歷支援「m0 Structure 包含 X」query(早於 m1 處理時 m0 candidates 已填好)。
-pub fn run(classified: &mut [ClassifiedMonowave]) {
+///
+/// **v4.6 G3.1**:`bars` 參數對齊 `MonowaveContext::build`,供 intraday-aware
+/// predicates 用(e.g. m1_endpoint_broken_by_m2 在 m2 bar range 找 extrema)。
+pub fn run(classified: &mut [ClassifiedMonowave], bars: &[OhlcvBar]) {
     for i in 0..classified.len() {
-        let cands = compute_candidates_at(classified, i);
+        let cands = compute_candidates_at(classified, bars, i);
         classified[i].structure_label_candidates = cands;
     }
 }
@@ -59,9 +65,10 @@ pub fn run(classified: &mut [ClassifiedMonowave]) {
 /// 對 classified[i] 計算 structure label candidates(不修改 classified)。
 fn compute_candidates_at(
     classified: &[ClassifiedMonowave],
+    bars: &[OhlcvBar],
     i: usize,
 ) -> Vec<StructureLabelCandidate> {
-    let Some(ctx) = MonowaveContext::build(classified, i) else {
+    let Some(ctx) = MonowaveContext::build(classified, bars, i) else {
         return Vec::new();
     };
 
@@ -111,6 +118,7 @@ mod tests {
                 start_price: start_p,
                 end_price: end_p,
                 direction: dir,
+                bar_indices: (0, 0),
             },
             atr_at_start: 1.0,
             metrics: ProportionMetrics {
@@ -126,7 +134,7 @@ mod tests {
     #[test]
     fn run_empty_classified_no_panic() {
         let mut classified: Vec<ClassifiedMonowave> = Vec::new();
-        run(&mut classified);
+        run(&mut classified, &[]);
         assert!(classified.is_empty());
     }
 
@@ -141,7 +149,7 @@ mod tests {
             cmw(105.0, 117.0, MonowaveDirection::Up, 5),    // m2
             cmw(117.0, 112.0, MonowaveDirection::Down, 3),  // m3
         ];
-        run(&mut classified);
+        run(&mut classified, &[]);
         // m1(i=1)應至少有 1 個候選
         assert!(
             !classified[1].structure_label_candidates.is_empty(),
@@ -158,7 +166,7 @@ mod tests {
             cmw(80.0, 90.0, MonowaveDirection::Up, 5),     // m1 (mag 10, m0/m1=2.0)
             cmw(90.0, 88.0, MonowaveDirection::Down, 2),   // m2 (mag 2, m2/m1=0.2)
         ];
-        run(&mut classified);
+        run(&mut classified, &[]);
         // m1(i=2)走 Rule 1 Cond 1d → 僅 :5
         let cands = &classified[2].structure_label_candidates;
         assert_eq!(cands.len(), 1);
