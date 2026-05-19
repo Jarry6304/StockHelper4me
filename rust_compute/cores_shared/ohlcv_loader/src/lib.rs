@@ -158,19 +158,29 @@ pub async fn load_monthly(
     Ok(rows_to_series(stock_id, Timeframe::Monthly, rows))
 }
 
-/// 輔助函式:依 NeelyCore.warmup_periods(params) 自動載入足量 OHLCV。
+/// 輔助函式:依 timeframe 自動載入足量 OHLCV(NeelyCore 用)。
 ///
-/// **v3.36 hotfix(2026-05-18)**:原本 `warmup * 1.2`(Daily=600 bars ≈ 2.4 yr)
-/// 對長 history 股票(e.g. 3030 7+ yr)會把 5 年 history 全砍掉,monowave detection
-/// 只看到近 ~20 個月,Stage 3 Generator 永遠產不出 long-degree candidates。
-/// User 對 3030 看到的 primary 永遠是 SubMinuette(< 1 yr)就是這原因。
+/// **v3.38(2026-05-18)user 拍版 per-forecast-horizon spec**:
+///   支援 1m / 3m / 6m forecast 三 horizon(drop 1y),統一資料窗口拉取:
+///   - Daily   = 1,500 bars(~6 yr,覆蓋 6m forecast `daily_bars_required=1500`)
+///   - Weekly  = 300 bars(~6 yr,覆蓋 6m forecast `weekly_bars_required=300`)
+///   - Monthly = 60 bars(~5 yr,對齊 user 拍版「年級評估不期待精準,monthly 只給
+///     long-anchor reference」+ 6m forecast `monthly_bars_required=60`)
+///   - Quarterly = warmup_buffered.max(72)(spec 外保留 floor)
 ///
-/// 修法:對齊 `tw_cores::run_stock_cores::STOCK_LOOKBACK_DAYS = 365*6 = 2190` 既有
-/// 6 年慣例(loader 註解明文「6 年日線,覆蓋各 indicator warmup × 1.2 + 充足實際 series」),
-/// 但 load_for_neely 走自己 shortcut → 加 max() floor 對齊 6 年。Forest_max_size=200
-/// 仍 cap(BeamSearchFallback 取 top 100),compaction_timeout 防爆。
+/// **背景**:v3.36 hotfix 把 daily 推到 6 yr 是為了長 history 股(3030)長 degree
+/// scenarios,但 user audit + spec(neely_core_architecture §13.3)揭露 Daily 1-3 yr
+/// 對應 Minute degree(剛好是 1m-6m horizon);**長 degree anchor 走 weekly/monthly Neely
+/// 而非過度延伸 daily**(對齊 v3.37 multi-timeframe 設計 + NEoWave 原書「各 timeframe
+/// 負責自己 degree」哲學)。
 ///
-/// 對齊 cores_overview §3.4 / §7.3。
+/// v3.36 daily 6 yr 統計上 ok(對齊 user spec daily_bars_required=1500),保留;
+/// v3.36 monthly 144 bars 縮減為 60(對齊 user spec)。
+///
+/// MCP layer 用 `daily_bars` / `weekly_bars` / `monthly_bars` actual count 走 degradation
+/// logic(per-forecast-horizon `degree_uncertain` / `no_6m` / `insufficient_history`)。
+///
+/// 對齊 cores_overview §3.4 / §7.3 + m3Spec/neely_core_architecture.md §5.4 §8.6 §13.3。
 pub async fn load_for_neely(
     pool: &PgPool,
     stock_id: &str,
@@ -179,16 +189,15 @@ pub async fn load_for_neely(
     use fact_schema::WaveCore;
     let core = NeelyCore::new();
     let warmup = core.warmup_periods(params);
-    // 1.2x 緩衝(對齊 §7.3 原規格)
+    // 1.2x 緩衝(對齊 §7.3 原規格,Quarterly fallback 用)
     let warmup_buffered = (warmup as f64 * 1.2).ceil() as i32;
 
-    // v3.36 hotfix:對齊 tw_cores STOCK_LOOKBACK_DAYS = 365*6 6-year floor
-    // (Daily ~ 1500 trading bars / Weekly ~ 312 / Monthly ~ 84)
+    // v3.38 user 拍版 fixed table(對齊 per-forecast-horizon spec 完整 6m 需求)
     let lookback = match params.timeframe {
-        Timeframe::Daily   => warmup_buffered.max(365 * 6),
-        Timeframe::Weekly  => warmup_buffered.max(365 * 6 / 7),
-        Timeframe::Monthly => warmup_buffered.max(6 * 12 + 12),
-        Timeframe::Quarterly => warmup_buffered.max(6 * 4 + 4),
+        Timeframe::Daily     => 1500,                       // ~6 yr,6m forecast daily_bars_required
+        Timeframe::Weekly    => 300,                        // ~6 yr,6m forecast weekly_bars_required
+        Timeframe::Monthly   => 60,                         // ~5 yr,6m forecast monthly_bars_required
+        Timeframe::Quarterly => warmup_buffered.max(72),    // Quarterly 不在 user spec,保留 6 yr floor
     };
 
     match params.timeframe {

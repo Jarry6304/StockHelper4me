@@ -266,6 +266,133 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v3.38 — Per-forecast-horizon Neely + degradation strategy(2026-05-18)
+
+接 v3.37.1 SQL hotfix + v3.37 multi-timeframe Neely production verify 後 user 對「daily
+lookback 是否要 6 年」深度討論。Spec audit(Explore agent 報告)揭露 NEoWave 原書
+**不要求整段完整歷史**(Pattern Isolation Step 1 + Three Rounds 是 incremental forward-
+processing,starting pivot 由 `:L5/:L3` label 自然決定);warmup_periods=500 是 degree
+ceiling 設計(Daily 1-3 yr 對應 Minute degree = 1m-6m horizon);v3.37 multi-timeframe
+本來就對齊原書「各 timeframe 負責自己 degree」。
+
+User 拍版完整 v3.38 spec 取代 v3.36「daily 強推 6 yr」:支援 **1m / 3m / 6m** 三者並重
+(drop 1y),per-horizon `daily_bars_required` / `daily_bars_min` / `weekly_bars_required`
+/ `monthly_bars_required` / `missing_wave_threshold` 表 + 降級策略。
+
+### 完整 spec(user 拍版 2026-05-18)
+
+**Per-forecast bars 要求**:
+
+| 參數 | 1m | 3m | 6m |
+|---|---|---|---|
+| `daily_bars_required`(理想) | 250 | 750 | 1,500 |
+| `daily_bars_min`(硬下限) | 130 | 500 | 1,000 |
+| `weekly_bars_required` | 50 | 150 | 300 |
+| `monthly_bars_required` | — | — | 60 |
+
+**統一資料窗口**(`load_for_neely` fixed table):
+- Daily: 1,500 bars(~6 yr)
+- Weekly: 300 bars(~6 yr)
+- Monthly: **60**(~5 yr,**從 v3.36 144 縮減**)
+
+**降級策略**:
+
+| 條件 | 動作 |
+|---|---|
+| `daily_bars >= 1000` | full — 1m / 3m / 6m 全綠 confidence=1.0 |
+| `500 <= daily_bars < 1000` | `degree_uncertain` — 6m 走 reference mode(prob=0.5 / range=None / confidence=0 + 中文 note),1m/3m 維持 |
+| `130 <= daily_bars < 500` | `no_6m` — 拒 6m,僅 1m/3m |
+| `daily_bars < 130` | `insufficient_history` — 拒全部 |
+
+**missing_wave confidence tier**(spec line 2559-2582 對齊原書,**drop user 自訂 16/16/20**):
+
+| Pattern type | min monowaves |
+|---|---|
+| Zigzag / Flat | 5 |
+| Impulse / Triangle | 8 |
+| Double | 10 |
+| Doubles+Triangle | 13 |
+| Triple | 15 |
+| Triples+Triangle | 18 |
+
+判定:`<50% × min` → certain / `50% × min ≤ count < 2× min` → possible / `≥ 2× min` → absent
+
+Per-timeframe 獨立比對(spec §5.4「Core 内部不協同 Timeframe」):
+- 1m/3m 看 daily scenario + daily monowave_count
+- 6m 看 daily + weekly **各自** 套 spec table(對齊 user「重疊區」意圖)
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores_shared/ohlcv_loader/src/lib.rs` | `load_for_neely` lookback 改 fixed table:daily=1500 / weekly=300 / **monthly=60**(從 v3.36 144 縮減) |
+| `mcp_server/_forecast.py` | drop `1_year` / rename keys 為 `1m`/`3m`/`6m` / 加 `data_availability` + `missing_wave_by_horizon` fields / 加 `_compute_data_availability` / `_build_forecasts_v3_38` / `_classify_missing_wave_tier` / `_build_missing_wave_by_horizon` 5 個新 helper / spec-aligned `_MISSING_WAVE_MIN_BY_PATTERN` table |
+| `tests/mcp_server/test_toolkit_v2.py` | 既有 4 test 對齊 3 horizon keys + `full_history` flag for fixture + 加 `TestV3_38Degradation` 5 tests(full / 6m_degraded / 6m_rejected / all_rejected / missing_wave_tier)|
+| `CLAUDE.md` | v3.38 章節 |
+
+**0 alembic / 0 collector.toml / 0 Rust 邏輯改動**(僅 loader const + MCP layer)。
+
+### 沙箱驗證
+
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release --workspace --no-fail-fast` ✅ **448 passed / 0 failed**(monthly 144 → 60 不影響既有 tests)
+- `pytest tests/mcp_server/test_toolkit_v2.py::TestNeelyForecast* tests/mcp_server/test_toolkit_v2.py::TestV3_35Picker tests/mcp_server/test_toolkit_v2.py::TestV3_38Degradation` ✅ **24 passed**(19 既有 + 5 new v3.38)
+- `pytest tests/mcp_server/ tests/agg/ tests/cross_cores/` ✅ **190 passed / 1 skipped**(從 185 +5 new)
+
+### user 本機 production verify(下輪 session)
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+
+# 重跑(monthly lookback 144 → 60 → OhlcvSeries 變短;params_hash 不變;
+# 既有 monthly structural rows 走 ON CONFLICT UPDATE 覆寫)
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+# 預期 wall time 略降(monthly lookback 縮)
+
+# 驗 3030 多 horizon forecast(三 timeframe 都該有資料,3030 7+ yr history)
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast
+import json
+r = neely_forecast('3030','2026-05-15')
+print('forecast keys:', list(r['forecasts'].keys()))
+print('data_availability:', json.dumps(r['data_availability'], ensure_ascii=False, indent=2))
+print('missing_wave_by_horizon:', json.dumps(r['missing_wave_by_horizon'], ensure_ascii=False, indent=2))
+print('quality_caveat.is_usable:', r['quality_caveat']['is_usable'])
+"
+# 預期:
+#   forecast keys = ['1m', '3m', '6m']
+#   data_availability.daily_bars > 1500
+#   data_availability.degradation_status = 'full'
+#   missing_wave_by_horizon.6m 有 daily + weekly 兩 entry
+```
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 collector.toml / 0 Rust 邏輯改動
+- v3.37 multi-timeframe dispatch + v3.37.1 SQL fix 都已落地,本 PR 純 polish + degradation
+- backward compat:既有 forecast 4-key tests 改 3-key,fixture 加 `full_history` flag
+- Rollback:單 commit `git revert`
+- Rust workspace 448 passed,Python 190 passed,0 regression
+
+🟡 中:
+- **monthly_bars 縮到 60 對 long-history 股票(15+ yr)**:可能損失早期 monowaves;對 3030
+  7 yr 影響小(60 monthly = 5 yr 仍足),對 1101 40+ yr 老股可能影響
+- **degradation_status 對 newly-listed 股大量 fire**:預期 ~5-10% 股票走 `degree_uncertain`
+  / `no_6m`,LLM 體驗反映在 confidence=0 或缺 6m key
+
+🔴 高:**無**
+
+### Out of Scope(留 future)
+
+- Rust 端 NeelyCoreParams 加 `missing_wave_threshold` field — MCP gating 足夠
+- 1y horizon 重新加入 — drop 拍版,長期 anchor 走 Kalman ultra_long horizon
+- per-stock dynamic lookback — 統一拉 1500/300/60 + degradation 由 MCP 處理
+
+---
+
 ## v3.37 — Multi-timeframe Neely(C3,跨 daily/weekly/monthly picker,2026-05-18)
 
 接 v3.36 hotfix(commit `a0a8a68`)production verify 揭露 root cause:即使 Neely

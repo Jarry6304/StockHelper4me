@@ -35,21 +35,48 @@ from typing import Any
 # 4 時間框架 Fibonacci ratio scaling(plan §Tool 1 第 2 點)
 # ────────────────────────────────────────────────────────────
 
-# 每個 timeframe 用 fib zones 的 ratio 範圍取 range_high / range_low
+# v3.38(2026-05-18)user 拍版 3 horizon(drop 1y,理由:年級評估 daily 顆粒度太細
+# 雜訊太多,長 anchor 走 weekly/monthly Neely + Kalman ultra_long)
+#
+# 每個 horizon 用 fib zones 的 ratio 範圍取 range_high / range_low
 # ratio_lo = 預期下界 fib;ratio_hi = 預期上界 fib
 _TIMEFRAME_FIB_RANGE: dict[str, tuple[float, float]] = {
-    "1_month":   (0.382, 0.618),
-    "1_quarter": (0.618, 1.000),
-    "6_month":   (1.000, 1.382),
-    "1_year":    (1.382, 1.618),
+    "1m": (0.382, 0.618),
+    "3m": (0.618, 1.000),
+    "6m": (1.000, 1.382),
 }
 
-# Prob_up 時間衰減(plan §Tool 1 第 3 點)
+# Prob_up 時間衰減(plan §Tool 1 第 3 點;v3.38 對齊 3 horizon)
 _TIMEFRAME_DECAY: dict[str, float] = {
-    "1_month":   1.00,
-    "1_quarter": 0.85,
-    "6_month":   0.70,
-    "1_year":    0.55,
+    "1m": 1.00,
+    "3m": 0.85,
+    "6m": 0.70,
+}
+
+# v3.38 per-horizon data 需求(user 拍版 2026-05-18)
+_HORIZON_BARS_REQUIRED: dict[str, dict[str, int]] = {
+    "1m": {"daily": 250,   "weekly": 50,  "monthly": 0},
+    "3m": {"daily": 750,   "weekly": 150, "monthly": 0},
+    "6m": {"daily": 1500,  "weekly": 300, "monthly": 60},
+}
+_HORIZON_DAILY_MIN: dict[str, int] = {
+    # daily hard 下限 — 低於則該 horizon 拒出
+    "1m": 130,
+    "3m": 500,
+    "6m": 1000,
+}
+
+# v3.38 missing wave min monowave per pattern type(spec line 2559-2582,對齊原書)
+# Judgment:< 50% min → certain / 50%-2× min → possible / ≥ 2× min → absent
+_MISSING_WAVE_MIN_BY_PATTERN: dict[str, int] = {
+    "Zigzag":                   5,
+    "Flat":                     5,
+    "Impulse":                  8,
+    "Triangle":                 8,
+    "Double":                   10,
+    "DoubleCombo_WithTriangle": 13,    # spec 「Doubles+Triangle」
+    "Triple":                   15,
+    "TripleCombo_WithTriangle": 18,    # spec 「Triples+Triangle」
 }
 
 # Power Rating → base prob_up(plan §Tool 1 第 3 點)
@@ -107,7 +134,11 @@ def compute_neely_forecast(
     price_info = fetch_latest_close_for_tool(stock_id, as_of, database_url=database_url)
     current_price = price_info["close"] if price_info else _extract_current_price(snapshot)
 
-    # 2. Primary scenario:v3.35 picker 走 invalidation filter + degree-aware ordering
+    # 2. v3.38 data_availability:從 snapshot 抽各 timeframe 真實 bars 數(走 monowave_series len)
+    #    → degradation status decision
+    data_availability = _compute_data_availability(snapshot)
+
+    # 3. Primary scenario:v3.35 picker 走 invalidation filter + degree-aware ordering
     primary, all_scenarios = _extract_primary_and_top_scenarios(
         snapshot, current_price=current_price, limit=5,
     )
@@ -116,38 +147,42 @@ def compute_neely_forecast(
     # 時 invalidation_price 等欄會是過期 anchor;surface 給 LLM 知道
     scenario_staleness = _compute_scenario_staleness(snapshot, as_of)
 
-    # 3. 4 時間框架價位區間
-    forecasts = _build_forecasts(primary, current_price, snapshot, as_of)
+    # 4. v3.38:per-horizon forecasts(1m/3m/6m 各自走 degradation logic)
+    forecasts = _build_forecasts_v3_38(
+        primary, current_price, snapshot, as_of, data_availability,
+    )
 
-    # 4. Key levels:supports / resistances 從 fib zones 推
+    # 5. Key levels:supports / resistances 從 fib zones 推
     key_levels = _extract_key_levels(primary, current_price)
 
-    # 5. Invalidation price 從 primary 的 triggers 抽
+    # 6. Invalidation price 從 primary 的 triggers 抽
     invalidation_price = _extract_invalidation_price(primary, current_price)
 
-    # 6. v3.35.1 quality caveat:
-    #    (a) 若所有 scenarios 都是 short-degree → warn LLM 沒長期 anchor
-    #    (b) 若 primary fib zones 與 current_price 完全脫節 → forecasts 不可用
-    #    對應 v3.35 production verify 揭露:Rust Stage 3 Generator 對長 history 股票
-    #    只產短 span candidates,picker 即使選最長也仍是 SubMinuette。
+    # 7. v3.35.1 quality caveat
     quality_caveat = _compute_quality_caveat(all_scenarios, primary, current_price)
 
-    # 7. v3.37 multi-timeframe Neely 摘要(LLM 看 daily / weekly / monthly 各自 primary
-    #    + 跨 timeframe 一致性)。primary 帶 __timeframe__ tag 告知它來自哪 timeframe。
+    # 8. v3.37 multi-timeframe Neely 摘要
     neely_by_timeframe = _build_neely_by_timeframe(snapshot, current_price)
 
+    # 9. v3.38 missing wave per-horizon classify(spec-aligned)
+    missing_wave_by_horizon = _build_missing_wave_by_horizon(
+        snapshot, data_availability,
+    )
+
     return {
-        "stock_id":           stock_id,
-        "as_of":              as_of.isoformat(),
-        "current_price":      current_price,
-        "primary_scenario":   _format_primary_scenario(primary),
-        "scenario_count":     len(all_scenarios),
-        "scenario_staleness": scenario_staleness,
-        "forecasts":          forecasts,
-        "key_levels":         key_levels,
-        "invalidation_price": invalidation_price,
-        "quality_caveat":     quality_caveat,
-        "neely_by_timeframe": neely_by_timeframe,    # v3.37 加
+        "stock_id":              stock_id,
+        "as_of":                 as_of.isoformat(),
+        "current_price":         current_price,
+        "primary_scenario":      _format_primary_scenario(primary),
+        "scenario_count":        len(all_scenarios),
+        "scenario_staleness":    scenario_staleness,
+        "data_availability":     data_availability,        # v3.38 加
+        "forecasts":             forecasts,
+        "key_levels":            key_levels,
+        "invalidation_price":    invalidation_price,
+        "quality_caveat":        quality_caveat,
+        "neely_by_timeframe":    neely_by_timeframe,
+        "missing_wave_by_horizon": missing_wave_by_horizon,  # v3.38 加
     }
 
 
@@ -677,11 +712,16 @@ def _build_forecasts(
     snapshot,
     as_of: date,
 ) -> dict[str, dict[str, Any]]:
-    """4 個 timeframe 各算 prob_up + range_high + range_low。"""
+    """legacy 3 horizon forecasts(供 v3.38 internal 沒帶 degradation 用)。
+
+    v3.38 起新主入口 `_build_forecasts_v3_38` 加 degradation logic;此函式留作
+    no-degradation backstop(若 data_availability 全綠 → 等同 v3.38)。
+    """
     if primary is None or current_price <= 0:
         # 無 primary scenario / 無價格 → 全 neutral
         return {
-            tf: {"prob_up": 0.50, "range_high": None, "range_low": None}
+            tf: {"prob_up": 0.50, "range_high": None, "range_low": None,
+                 "confidence": 0.0}
             for tf in _TIMEFRAME_FIB_RANGE
         }
 
@@ -708,9 +748,278 @@ def _build_forecasts(
             "prob_up":    round(prob_up, 2),
             "range_high": _round_range(range_high),
             "range_low":  _round_range(range_low),
+            "confidence": 1.0,
         }
 
     return forecasts
+
+
+# ────────────────────────────────────────────────────────────
+# v3.38 per-forecast-horizon helpers(user 拍版 2026-05-18)
+# ────────────────────────────────────────────────────────────
+
+
+def _compute_data_availability(snapshot) -> dict[str, Any]:
+    """v3.38:從 snapshot 抽 daily / weekly / monthly bars 真實 count → degradation status。
+
+    Bars count 從 `structural["neely_core@<tf>"].snapshot["monowave_series"]` 推估
+    (用 monowave_count × ~7-8 days/monowave 對 daily 反推;weekly/monthly 直接乘 7/30)。
+    若該 timeframe entry 不存在 → bars=0。
+
+    對齊 user 拍版降級表:
+      daily_bars >= 1000:  full(1m/3m/6m 全綠)
+      500 <= daily_bars <1000: degree_uncertain(6m 走 reference mode)
+      130 <= daily_bars < 500: no_6m(只 1m/3m)
+      daily_bars < 130:        insufficient_history(全拒)
+    """
+    structural = snapshot.structural or {}
+
+    def _bars_from_mw_series(tf: str, days_per_mw: float) -> int:
+        """從 monowave_series length 反推 bars。"""
+        key = f"neely_core@{tf}"
+        row = structural.get(key)
+        if row is None:
+            return 0
+        snap = row.snapshot or {}
+        # 優先 data_range(若 Rust 已暴露)
+        data_range = snap.get("data_range") or {}
+        start_str = data_range.get("start") or data_range.get(0)
+        end_str   = data_range.get("end")   or data_range.get(1)
+        if start_str and end_str:
+            try:
+                start = _parse_iso_date(start_str)
+                end   = _parse_iso_date(end_str)
+                span_days = (end - start).days
+                if tf == "daily":
+                    return int(span_days * 252 / 365)   # trading days
+                elif tf == "weekly":
+                    return int(span_days / 7)
+                elif tf == "monthly":
+                    return int(span_days / 30.4)
+            except (ValueError, TypeError):
+                pass
+        # fallback: monowave_count × days_per_mw
+        mw_series = snap.get("monowave_series") or []
+        return int(len(mw_series) * days_per_mw)
+
+    daily_bars   = _bars_from_mw_series("daily",   7.5)    # ~7-8 trading days / daily mw
+    weekly_bars  = _bars_from_mw_series("weekly",  1.0)    # weekly mw 大致 = 1 week
+    monthly_bars = _bars_from_mw_series("monthly", 1.0)    # monthly mw ≈ 1 month bar
+
+    # 降級狀態
+    if daily_bars < 130:
+        status            = "insufficient_history"
+        available         = []
+        degraded          = []
+    elif daily_bars < 500:
+        status            = "no_6m"
+        available         = ["1m", "3m"]
+        degraded          = []
+    elif daily_bars < 1000:
+        status            = "degree_uncertain"
+        available         = ["1m", "3m", "6m"]
+        degraded          = ["6m"]
+    else:
+        status            = "full"
+        available         = ["1m", "3m", "6m"]
+        degraded          = []
+
+    return {
+        "daily_bars":            daily_bars,
+        "weekly_bars":           weekly_bars,
+        "monthly_bars":          monthly_bars,
+        "available_horizons":    available,
+        "degraded_horizons":     degraded,
+        "degradation_status":    status,
+    }
+
+
+def _build_forecasts_v3_38(
+    primary: dict | None,
+    current_price: float,
+    snapshot,
+    as_of: date,
+    data_availability: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """v3.38 per-horizon forecasts + degradation。
+
+    對齊 user 拍版降級表:
+      - daily_bars >= 1000: 1m/3m/6m 全綠 confidence=1.0
+      - 500-999: 6m 走 reference mode(prob_up=0.5, range=None, confidence=0.0, note 中文)
+      - 130-499: 6m 不出
+      - < 130: 全 omit
+    """
+    status            = data_availability["degradation_status"]
+    available         = data_availability["available_horizons"]
+    degraded          = data_availability["degraded_horizons"]
+    daily_bars        = data_availability["daily_bars"]
+
+    forecasts: dict[str, dict[str, Any]] = {}
+
+    if status == "insufficient_history":
+        # 全部拒絕 — return empty dict
+        return forecasts
+
+    if primary is None or current_price <= 0:
+        for horizon in available:
+            forecasts[horizon] = {
+                "prob_up": 0.50, "range_high": None, "range_low": None,
+                "confidence": 0.0,
+            }
+        return forecasts
+
+    fib_zones = primary.get("expected_fib_zones") or []
+    pr_label  = _power_rating_label(primary.get("power_rating"))
+    base_prob = _POWER_TO_PROB.get(pr_label, 0.50)
+    pr_sign   = _power_rating_sign(primary.get("power_rating"))
+
+    momentum_adj = _compute_momentum_adj(snapshot)
+    chip_adj     = _compute_chip_adj(snapshot)
+
+    for horizon in available:
+        ratio_lo, ratio_hi = _TIMEFRAME_FIB_RANGE[horizon]
+        decay              = _TIMEFRAME_DECAY[horizon]
+
+        if horizon in degraded:
+            # 6m reference mode(user 拍版 C):prob_up=0.5 / range=None / note 中文
+            forecasts[horizon] = {
+                "prob_up":    0.50,
+                "range_high": None,
+                "range_low":  None,
+                "confidence": 0.0,
+                "note":       f"資料不足(daily_bars={daily_bars} 在 500-999 區間),"
+                              f"6m forecast 僅供參考,不適合決策依據。建議改看 monthly Neely "
+                              f"long-anchor。",
+            }
+            continue
+
+        # 正常路徑
+        raw_prob = base_prob + decay * pr_sign * (momentum_adj + chip_adj)
+        prob_up  = max(0.10, min(0.90, raw_prob))
+        range_low, range_high = _project_range(fib_zones, ratio_lo, ratio_hi, current_price, pr_sign)
+
+        forecasts[horizon] = {
+            "prob_up":    round(prob_up, 2),
+            "range_high": _round_range(range_high),
+            "range_low":  _round_range(range_low),
+            "confidence": 1.0,
+        }
+
+    return forecasts
+
+
+def _classify_missing_wave_tier(scenario: dict, monowave_count: int) -> str:
+    """v3.38 spec-aligned(neely_rules.md line 2559-2582):per scenario pattern_type
+    對 spec min monowave 表推 confidence tier。
+
+    Returns:
+        "certain"   — count < 50% × min(missing wave 幾乎肯定)
+        "possible"  — 50% × min ≤ count < 2× min(可能 missing)
+        "absent"    — count ≥ 2× min(無 missing)
+    """
+    pattern = scenario.get("pattern_type")
+    if isinstance(pattern, dict):
+        pattern = next(iter(pattern.keys()), None)
+    min_n = _MISSING_WAVE_MIN_BY_PATTERN.get(pattern, 8)    # fallback Impulse default
+    if monowave_count < int(0.5 * min_n):
+        return "certain"
+    if monowave_count < 2 * min_n:
+        return "possible"
+    return "absent"
+
+
+def _get_monowave_count(snapshot, timeframe: str) -> int:
+    """從 structural[neely_core@<tf>].snapshot.monowave_series 取 length。"""
+    structural = snapshot.structural or {}
+    key = f"neely_core@{timeframe}"
+    row = structural.get(key)
+    if row is None:
+        return 0
+    snap = row.snapshot or {}
+    mw_series = snap.get("monowave_series") or []
+    return len(mw_series) if isinstance(mw_series, list) else 0
+
+
+def _get_missing_wave_suspects(snapshot, timeframe: str) -> list[dict]:
+    """從 structural[neely_core@<tf>].snapshot.missing_wave_suspects 取 list。"""
+    structural = snapshot.structural or {}
+    key = f"neely_core@{timeframe}"
+    row = structural.get(key)
+    if row is None:
+        return []
+    snap = row.snapshot or {}
+    suspects = snap.get("missing_wave_suspects") or []
+    return suspects if isinstance(suspects, list) else []
+
+
+def _get_primary_scenario_at_timeframe(snapshot, timeframe: str) -> dict | None:
+    """取得指定 timeframe 的 primary scenario(取 forest 第一個 by power_rating)。"""
+    structural = snapshot.structural or {}
+    key = f"neely_core@{timeframe}"
+    row = structural.get(key)
+    if row is None:
+        return None
+    snap = row.snapshot or {}
+    scenarios = snap.get("scenario_forest") or snap.get("scenarios") or []
+    if not isinstance(scenarios, list) or not scenarios:
+        return None
+    # 取 power_rating strength 最高的(對齊 v3.35 picker 但不需 invalidation filter)
+    sorted_s = sorted(
+        scenarios,
+        key=lambda s: _power_rating_strength(s.get("power_rating")),
+        reverse=True,
+    )
+    return sorted_s[0] if sorted_s else None
+
+
+def _build_missing_wave_by_horizon(
+    snapshot, data_availability: dict[str, Any],
+) -> dict[str, Any]:
+    """v3.38 spec-aligned missing wave classification per horizon。
+
+    對齊 spec §5.4「Core 內部不協同 Timeframe」分離比對 +
+    user「6m daily/weekly 對照」意圖:
+      - 1m/3m: 只看 daily Neely(scenario + monowave_count)→ classify tier
+      - 6m:    daily 與 weekly **各自** 套 spec table → output {daily: ..., weekly: ...}
+
+    Returns:
+        {
+          "1m":   {"daily": {"tier": "possible", "suspect_count": 3}},
+          "3m":   {"daily": {"tier": "absent",   "suspect_count": 0}},
+          "6m":   {"daily":  {"tier": "possible", "suspect_count": 2},
+                   "weekly": {"tier": "absent",   "suspect_count": 0}},
+        }
+    """
+    available = data_availability.get("available_horizons", [])
+    result: dict[str, Any] = {}
+
+    for horizon in available:
+        if horizon in ("1m", "3m"):
+            primary = _get_primary_scenario_at_timeframe(snapshot, "daily")
+            if primary is None:
+                result[horizon] = {"daily": {"tier": "absent", "suspect_count": 0}}
+                continue
+            daily_mw_count = _get_monowave_count(snapshot, "daily")
+            tier           = _classify_missing_wave_tier(primary, daily_mw_count)
+            suspects       = _get_missing_wave_suspects(snapshot, "daily")
+            result[horizon] = {
+                "daily": {"tier": tier, "suspect_count": len(suspects)}
+            }
+        elif horizon == "6m":
+            # daily + weekly 各自獨立 gate
+            entry: dict[str, Any] = {}
+            for tf in ("daily", "weekly"):
+                primary  = _get_primary_scenario_at_timeframe(snapshot, tf)
+                mw_count = _get_monowave_count(snapshot, tf)
+                suspects = _get_missing_wave_suspects(snapshot, tf)
+                if primary is None:
+                    entry[tf] = {"tier": "absent", "suspect_count": 0}
+                else:
+                    tier = _classify_missing_wave_tier(primary, mw_count)
+                    entry[tf] = {"tier": tier, "suspect_count": len(suspects)}
+            result["6m"] = entry
+
+    return result
 
 
 def _compute_momentum_adj(snapshot) -> float:
