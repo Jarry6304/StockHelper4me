@@ -1,4 +1,4 @@
-# test_pipeline.ps1 — StockHelper4me 完整測試流水線
+﻿# test_pipeline.ps1 — StockHelper4me 完整測試流水線
 #
 # 跑 5 個 phase:
 #   Phase 0:Environment check(Python venv / Rust toolchain / .env / PG 連線)
@@ -240,14 +240,14 @@ Invoke-Phase 3 "Production verify(per-EventKind rate / forest_size / facts stats
         Write-Warn "scripts/maintain_facts_stats.sql 不存在 — skip"
     }
 
-    Write-Step "Per-EventKind 觸發率(target ≤ 12/yr/stock)"
+    Write-Step "Per-EventKind 觸發率(target <= 12/yr/stock)"
     if (Test-Path "$RepoRoot\scripts\verify_event_kind_rate.sql") {
         psql $env:DATABASE_URL -f "$RepoRoot\scripts\verify_event_kind_rate.sql" 2>&1 | Out-String | Write-Host
     } else {
         Write-Warn "scripts/verify_event_kind_rate.sql 不存在 — skip"
     }
 
-    Write-Step "P0 Gate — Neely forest_size 分布(v4.4a 後 acceptance:max ≤ 200,p95 < 180)"
+    Write-Step "P0 Gate - Neely forest_size 分布(v4.4a 後 acceptance: max <= 200, p95 below 180)"
     # 改用外部 SQL file 避開 PowerShell here-string parser 問題
     $forestSqlFile = "$RepoRoot\scripts\_forest_size_p0_gate.sql"
     if (Test-Path $forestSqlFile) {

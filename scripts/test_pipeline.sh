@@ -225,14 +225,14 @@ phase_3() {
         warn "scripts/maintain_facts_stats.sql 不存在 — skip"
     fi
 
-    step "Per-EventKind 觸發率(target ≤ 12/yr/stock)"
+    step "Per-EventKind 觸發率(target <= 12/yr/stock)"
     if [ -f "$REPO_ROOT/scripts/verify_event_kind_rate.sql" ]; then
         psql "$DATABASE_URL" -f "$REPO_ROOT/scripts/verify_event_kind_rate.sql"
     else
         warn "scripts/verify_event_kind_rate.sql 不存在 — skip"
     fi
 
-    step "P0 Gate — Neely forest_size 分布(v4.4a acceptance:max ≤ 200,p95 < 180)"
+    step "P0 Gate - Neely forest_size 分布(v4.4a acceptance: max <= 200, p95 below 180)"
     if [ -f "$REPO_ROOT/scripts/_forest_size_p0_gate.sql" ]; then
         psql "$DATABASE_URL" -f "$REPO_ROOT/scripts/_forest_size_p0_gate.sql"
     else
