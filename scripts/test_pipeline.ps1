@@ -86,8 +86,11 @@ function Write-Warn($msg) {
 }
 
 function Should-Run($phase) {
-    if ($ParsedOnlyPhase.Count -gt 0) { return $ParsedOnlyPhase -contains $phase }
-    return ($ParsedSkipPhase -notcontains $phase)
+    # PS 5.1 ScriptBlock scope:用 $script: 顯式 qualifier 確保抓到 top-level 變數
+    if ($script:ParsedOnlyPhase.Count -gt 0) {
+        return $script:ParsedOnlyPhase -contains $phase
+    }
+    return ($script:ParsedSkipPhase -notcontains $phase)
 }
 
 function Invoke-Phase($num, $title, [ScriptBlock] $body) {
@@ -135,7 +138,7 @@ Invoke-Phase 0 "Environment check" {
     if ($env:VIRTUAL_ENV) {
         Write-Pass "VIRTUAL_ENV=$env:VIRTUAL_ENV"
     } else {
-        Write-Warn "VIRTUAL_ENV not set — recommend `.\.venv\Scripts\Activate.ps1`"
+        Write-Warn 'VIRTUAL_ENV not set - recommend .\.venv\Scripts\Activate.ps1'
     }
 
     Write-Step "pytest available"
