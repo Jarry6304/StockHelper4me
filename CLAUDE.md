@@ -266,6 +266,46 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.3b — P1.3b Ch11 Terminal Impulse wave-by-wave(2026-05-19)
+
+接 v4.3a P1.3a 後動工 P1.3b — Ch11 Terminal Impulse(原 Elliott Diagonal Triangle)
+wave-by-wave 變體規則。**Advisory mode**;對應 `NeelyPatternType::Diagonal`。
+
+### 範圍(1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_terminal_impulse.rs` | **新檔** — `analyze()` + 4 variant analyzers(1st-Ext / 3rd-Ext / 5th-Ext / 5th Non-Ext);**+7 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_terminal_impulse;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `ch11_terminal_impulse::analyze()` 呼叫 |
+| `CLAUDE.md` | v4.3b 章節 |
+
+### 與 Trending Impulse 主要差異
+
+- **W2 寬鬆**:Terminal 1st Ext W2 上限 61.8%(Trending 是 38.2%,spec line 2145)
+- **各 wave 是 :3 結構**(Trending 是 :5,spec line 2144)
+- **典型為 c-wave of correction**(spec line 2154)
+
+### 規則覆蓋(per variant)
+
+| Variant | 核心規則 |
+|---|---|
+| **1st Ext** | W2 ≤ 61.8% × W1(line 2145)/ W3 ≥ 38.2% × W1 + ≤ 100% × W1(line 2146)/ W5 ≤ 99% × W3 + 典型 38.2-61.8%(line 2147)/ W4 ≈ 61.8% × W2(line 2148) |
+| **3rd Ext** | W3 ≤ 161.8% × W1(line 2158)/ W2 必 > 61.8% × W1(line 2159)/ W4 ≤ 38.2% × W3(line 2160)/ W5 ≤ 61.8% × W3(line 2163) |
+| **5th Ext** | W3 ≤ 161.8% × W1(line 2178)/ W5 ≥ 100% × (W1 + W3)(line 2177)/ W4 ≥ 50% × W3(line 2179) |
+| **5th Non-Ext** | W5 ≤ 61.8% × W3(line 2183)/ W4 < W2 (時/價)(line 2187)|
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **325 passed / 0 failed**(v4.3a 318 → +7)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### 下個 sub-PR(P1.3c Flat 七變體)
+
+接著 P1.3c — Flat 七變體 wave-a/b/c 規則,spec line 2191-2322。
+
+---
+
 ## v4.3a — P1.3a Ch11 Trending Impulse wave-by-wave(2026-05-19)
 
 接 v4.2 P1.2 後動工 P1.3a(plan 文件 §「Milestone P1.3a」),補完 Ch11 Trending

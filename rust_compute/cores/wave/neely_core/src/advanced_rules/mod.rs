@@ -79,6 +79,11 @@ pub fn run(scenarios: &mut [Scenario], classified: &[ClassifiedMonowave]) {
             scenario, classified,
         ));
 
+        // v4.3b P1.3b:Ch11 Terminal Impulse Wave-by-Wave 變體規則(Diagonal pattern)
+        findings.extend(crate::validator::ch11_terminal_impulse::analyze(
+            scenario, classified,
+        ));
+
         // 寫入 advisory_findings(此處 set,需在 Independent / Exception Aspect 2 之前)
         scenario.advisory_findings = findings;
 
