@@ -16,8 +16,12 @@
 // **依賴**:必須先跑完 Stage 0 Pre-Constructive Logic
 //          (classified[i].structure_label_candidates 已填好)。
 //
-// **Compaction validation**(Step 5):Phase 3 暫不接 Compaction(留 P6/P8),
-// 所有 PatternBound 的 `validated` 預設 false(= "pending Compaction validation")。
+// **Compaction validation**(Step 5):
+//   - Phase 3:Compaction 未跑,所有 PatternBound `validated` 預設 false
+//   - **v4.7.1 G1.1(2026-05-19)**:加 `validate_after_compaction(bounds, scenarios,
+//     classified)` fn,在 lib.rs 主 pipeline 接 Compaction(Stage 8)後呼叫;
+//     對 bounds 內的每筆,匹配 classified[start/end_idx].monowave.start_date/
+//     end_date 與 Scenario.wave_tree.start/end 對應 → 找到 match → `validated = true`
 //
 // **Special Circumstances**(spec 1121-1123 行):
 //   若 Compacted 形態 price action 超出自身起點 → 強制 base = `:3`
@@ -28,7 +32,7 @@
 use crate::candidates::WaveCandidate;
 use crate::monowave::ClassifiedMonowave;
 use crate::output::{
-    MonowaveDirection, PatternBound, DetourAnnotation, StructureLabel,
+    MonowaveDirection, PatternBound, DetourAnnotation, Scenario, StructureLabel,
     StructureLabelCandidate,
 };
 
@@ -211,6 +215,39 @@ fn check_special_circumstances(
     false
 }
 
+/// **v4.7.1 G1.1**:Compaction-after validation hook(spec Step 5)。
+///
+/// 對齊 plan §G1.1:接 Stage 8 Compaction 跑完後,對 `bounds` 內每筆 PatternBound:
+///   - 取 `classified[bound.start_idx].monowave.start_date` 與
+///     `classified[bound.end_idx].monowave.end_date` 作為 pattern 邊界日期
+///   - 找 `scenarios` 內是否有 Scenario 之 `wave_tree.start == start_date` 且
+///     `wave_tree.end == end_date`(date exact match;Compaction 產出的 scenario
+///     對應到該 isolated pattern)
+///   - 若 match → `bound.validated = true`;否則保 false
+///
+/// 設計原則(對齊 architecture §三 pattern_isolation Step 5):
+///   - Compaction Three Rounds 跑完後產生的 scenarios 是「合法 Elliott 形態」
+///   - PatternBound 是 Stage 3.5 從 sole `:L5/:L3` anchor 推出的「可能形態邊界」
+///   - 兩者邊界重合 → 該 PatternBound 通過 Compaction 驗證(`validated = true`)
+///   - 沒重合 → 該 anchor 推出的 bound 沒被 Compaction 接受,留 `validated = false`
+///     供 LLM diagnostics 看(NEoWave 仍承認其為「可能的形態邊界」資訊)
+pub fn validate_after_compaction(
+    bounds: &mut [PatternBound],
+    scenarios: &[Scenario],
+    classified: &[ClassifiedMonowave],
+) {
+    for bound in bounds.iter_mut() {
+        if bound.start_idx >= classified.len() || bound.end_idx >= classified.len() {
+            continue;
+        }
+        let start_date = classified[bound.start_idx].monowave.start_date;
+        let end_date = classified[bound.end_idx].monowave.end_date;
+        bound.validated = scenarios
+            .iter()
+            .any(|s| s.wave_tree.start == start_date && s.wave_tree.end == end_date);
+    }
+}
+
 /// Zigzag DETOUR Test 對外入口 — 對 Stage 3 wave_candidates 跑 DETOUR
 ///
 /// 對齊 spec 1283-1285 行:Zigzag(`:L5` 結尾)→ 檢查前兩個 Structure Label 能否組成更大 Impulse。
@@ -385,5 +422,171 @@ mod tests {
         let bounds = run(&classified);
         assert_eq!(bounds.len(), 1);
         assert!(bounds[0].forced_corrective, "起點 100,idx=1 跌至 95 → 強制 :3");
+    }
+
+    // v4.7.1 G1.1 validate_after_compaction tests ------------------------
+
+    fn cmw_at_dates(
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+        labels: Vec<(StructureLabel, Certainty)>,
+    ) -> ClassifiedMonowave {
+        let candidates = labels
+            .into_iter()
+            .map(|(label, certainty)| StructureLabelCandidate { label, certainty })
+            .collect();
+        ClassifiedMonowave {
+            monowave: Monowave {
+                start_date,
+                end_date,
+                start_price: 100.0,
+                end_price: 110.0,
+                direction: MonowaveDirection::Up,
+                bar_indices: (0, 0),
+            },
+            atr_at_start: 1.0,
+            metrics: ProportionMetrics {
+                magnitude: 10.0,
+                duration_bars: 5,
+                atr_relative: 1.0,
+                slope_vs_45deg: 1.0,
+            },
+            structure_label_candidates: candidates,
+        }
+    }
+
+    fn make_scenario_at(start_date: NaiveDate, end_date: NaiveDate) -> Scenario {
+        use crate::output::{
+            ComplexityLevel, NeelyPatternType, PostBehavior, PowerRating, RoundState,
+            StructuralFacts, WaveNode,
+        };
+        Scenario {
+            id: "test_scenario".to_string(),
+            wave_tree: WaveNode {
+                label: "test".to_string(),
+                start: start_date,
+                end: end_date,
+                children: Vec::new(),
+            },
+            pattern_type: NeelyPatternType::Impulse,
+            initial_direction: MonowaveDirection::Up,
+            compacted_base_label: StructureLabel::Five,
+            structure_label: "test".to_string(),
+            complexity_level: ComplexityLevel::Simple,
+            power_rating: PowerRating::Neutral,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
+            passed_rules: Vec::new(),
+            deferred_rules: Vec::new(),
+            rules_passed_count: 0,
+            deferred_rules_count: 0,
+            invalidation_triggers: Vec::new(),
+            expected_fib_zones: Vec::new(),
+            structural_facts: StructuralFacts::default(),
+            advisory_findings: Vec::new(),
+            in_triangle_context: false,
+            awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
+        }
+    }
+
+    #[test]
+    fn validate_after_compaction_marks_validated_when_scenario_boundary_matches() {
+        // 3 classified monowaves;bound (idx 0..=2) start_date=Jan 1 / end_date=Jan 15
+        let classified = vec![
+            cmw_at_dates(
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                vec![],
+            ),
+            cmw_at_dates(
+                NaiveDate::from_ymd_opt(2026, 1, 6).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+                vec![],
+            ),
+            cmw_at_dates(
+                NaiveDate::from_ymd_opt(2026, 1, 11).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+                vec![],
+            ),
+        ];
+        let mut bounds = vec![PatternBound {
+            start_idx: 0,
+            end_idx: 2,
+            start_label: StructureLabel::F3,
+            end_label: StructureLabel::L5,
+            validated: false,
+            forced_corrective: false,
+        }];
+        // Scenario 邊界對齊:start = classified[0].start_date,end = classified[2].end_date
+        let scenarios = vec![make_scenario_at(
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        )];
+        validate_after_compaction(&mut bounds, &scenarios, &classified);
+        assert!(bounds[0].validated, "scenario 邊界匹配 → validated=true");
+    }
+
+    #[test]
+    fn validate_after_compaction_keeps_false_when_no_scenario_matches() {
+        let classified = vec![
+            cmw_at_dates(
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                vec![],
+            ),
+            cmw_at_dates(
+                NaiveDate::from_ymd_opt(2026, 1, 6).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+                vec![],
+            ),
+            cmw_at_dates(
+                NaiveDate::from_ymd_opt(2026, 1, 11).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+                vec![],
+            ),
+        ];
+        let mut bounds = vec![PatternBound {
+            start_idx: 0,
+            end_idx: 2,
+            start_label: StructureLabel::F3,
+            end_label: StructureLabel::L5,
+            validated: false,
+            forced_corrective: false,
+        }];
+        // Scenario 邊界不對齊(end 差 1 天)
+        let scenarios = vec![make_scenario_at(
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 14).unwrap(),
+        )];
+        validate_after_compaction(&mut bounds, &scenarios, &classified);
+        assert!(!bounds[0].validated, "scenario 邊界不匹配 → validated 保 false");
+    }
+
+    #[test]
+    fn validate_after_compaction_skips_out_of_range_bounds() {
+        // bound.end_idx 超出 classified.len() → 跳過(保持原本 validated=false)
+        let classified = vec![cmw_at_dates(
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            vec![],
+        )];
+        let mut bounds = vec![PatternBound {
+            start_idx: 0,
+            end_idx: 99, // 越界
+            start_label: StructureLabel::F3,
+            end_label: StructureLabel::L5,
+            validated: false,
+            forced_corrective: false,
+        }];
+        let scenarios = vec![make_scenario_at(
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        )];
+        validate_after_compaction(&mut bounds, &scenarios, &classified);
+        assert!(!bounds[0].validated, "out-of-range bound 不應 mutate");
     }
 }

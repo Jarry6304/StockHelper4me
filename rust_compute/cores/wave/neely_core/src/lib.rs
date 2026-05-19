@@ -311,7 +311,8 @@ impl WaveCore for NeelyCore {
         //    本 stage 為「資訊性」— 結果寫入 NeelyCoreOutput.pattern_bounds /
         //    detour_annotations,Stage 4 Validator 暫不依賴(留 P5+ 串接)
         let stage_3_5_start = Instant::now();
-        let pattern_bounds = pattern_isolation::run(&classified);
+        // v4.7.1 G1.1:pattern_bounds 改 mut,Stage 8 Compaction 跑完後接 validate_after_compaction
+        let mut pattern_bounds = pattern_isolation::run(&classified);
         let detour_annotations = pattern_isolation::run_detour(&wave_candidates, &classified);
         stage_elapsed.insert(
             "stage_3_5_pattern_isolation".to_string(),
@@ -400,6 +401,10 @@ impl WaveCore for NeelyCore {
             stage_8_start.elapsed().as_micros() as u64,
         );
         let mut forest = compaction_result.forest;
+
+        // v4.7.1 G1.1:Compaction-after pattern_isolation validation(spec Step 5)
+        // 對 Stage 3.5 isolated bounds 重對 forest scenarios 邊界匹配 → 設 validated=true
+        pattern_isolation::validate_after_compaction(&mut pattern_bounds, &forest, &classified);
 
         // ── Stage 8.5:Three Rounds nested context + Round 3 暫停偵測(Phase 8 PR)
         //    對齊 m3Spec/neely_rules.md §Three Rounds + §Ch10 三角內 Power = 0 例外

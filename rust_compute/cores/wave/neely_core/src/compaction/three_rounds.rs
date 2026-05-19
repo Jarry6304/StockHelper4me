@@ -200,38 +200,39 @@ fn all_pairs_pass_sb(window: &[Scenario], monowaves: &[Monowave]) -> bool {
 
 /// Similarity & Balance:相鄰波在 price magnitude 或 time duration 維度其一相似即可
 /// (對齊 spec §Rule of Similarity & Balance 1189-1197)。
+///
+/// **v4.7.1 G1.1**:`scenario_price_magnitude` 改 `Option<f64>` —
+/// 無 monowave 資料時 price 維度 short-circuit false(原 children.len() fallback
+/// 導致 Level-0 placeholder 永遠 similar,違反「price 不可用時純依賴 time」spec)。
 fn similarity_and_balance(a: &Scenario, b: &Scenario, monowaves: &[Monowave]) -> bool {
     let price_a = scenario_price_magnitude(a, monowaves);
     let price_b = scenario_price_magnitude(b, monowaves);
     let time_a = scenario_time_days(a);
     let time_b = scenario_time_days(b);
 
-    let price_similar = ratio_in_range(price_a, price_b, SB_MIN_RATIO, SB_MAX_RATIO);
+    let price_similar = match (price_a, price_b) {
+        (Some(pa), Some(pb)) => ratio_in_range(pa, pb, SB_MIN_RATIO, SB_MAX_RATIO),
+        _ => false, // 無 monowave 反查 → price 維度不可用,等 time 判定
+    };
     let time_similar = ratio_in_range(time_a, time_b, SB_MIN_RATIO, SB_MAX_RATIO);
 
     price_similar || time_similar
 }
 
-/// **v4.4a 修法**(原 placeholder 用 wave_tree.children.len() — spec line 204-213 留 P1.4 改):
-/// 從 scenario.wave_tree.start / end 日期反查 monowaves,取真實 |end_price - start_price|。
-/// 若 monowaves 找不到對應 → fallback 用 children.len()(維持 v3.7 行為,避免 Level-0 為 0 卡死)
-fn scenario_price_magnitude(s: &Scenario, monowaves: &[Monowave]) -> f64 {
-    // Level-0 / Level-N 都先試 monowave 反查(對 Level-0:從 wave_tree.start/end 取 raw price)
-    let start_price = find_price_at_date(s.wave_tree.start, monowaves, /*use_end=*/ false);
-    let end_price = find_price_at_date(s.wave_tree.end, monowaves, /*use_end=*/ true);
-
-    if let (Some(start_p), Some(end_p)) = (start_price, end_price) {
-        let mag = (end_p - start_p).abs();
-        if mag > 1e-9 {
-            return mag;
-        }
-    }
-
-    // Fallback:對 Level-N 用 children.len() 維持 v3.7 行為;Level-0 用 1.0
-    if s.wave_tree.children.is_empty() {
-        1.0
+/// 從 scenario.wave_tree.start / end 日期反查 monowaves,取真實 `|end_price - start_price|`。
+///
+/// **v4.7.1 G1.1(2026-05-19)**:改 `Option<f64>` 返回 — 移除 children.len() fallback
+/// (原 v4.4a 引入,Level-0 為 1.0 / Level-N 為 children 數,違反 spec line 204-213
+/// 「Compaction 必須依賴實際 monowave price 比對」)。Caller 走 None case 退到純 time
+/// 維度判定,對齊 NEoWave 設計精神。
+fn scenario_price_magnitude(s: &Scenario, monowaves: &[Monowave]) -> Option<f64> {
+    let start_price = find_price_at_date(s.wave_tree.start, monowaves, /*use_end=*/ false)?;
+    let end_price = find_price_at_date(s.wave_tree.end, monowaves, /*use_end=*/ true)?;
+    let mag = (end_price - start_price).abs();
+    if mag > 1e-9 {
+        Some(mag)
     } else {
-        s.wave_tree.children.len() as f64
+        None
     }
 }
 
@@ -315,20 +316,24 @@ fn build_round_advisories(
         ];
 
         for (label, a, b) in &boundary_pairs {
-            let mag_a = scenario_price_magnitude(a, monowaves);
-            let mag_b = scenario_price_magnitude(b, monowaves);
-            if mag_a > 1e-9 && mag_b > 1e-9 {
-                let ratio = mag_b / mag_a;
-                let typical_range = (0.382, 2.618);
-                if ratio < typical_range.0 || ratio > typical_range.1 {
-                    findings.push(AdvisoryFinding {
-                        rule_id: RuleId::Ch4_Round2_Compaction,
-                        severity: AdvisorySeverity::Info,
-                        message: format!(
-                            "Ch4 Round 2 動作 B:邊界波 {} retracement ratio = {:.3}(超出典型 [0.382, 2.618])— 邊界 retracement Rules 重評啟動(spec line 1249-1251)",
-                            label, ratio
-                        ),
-                    });
+            // v4.7.1 G1.1:scenario_price_magnitude 改 Option<f64> → 只有 Some/Some 才比對
+            if let (Some(mag_a), Some(mag_b)) = (
+                scenario_price_magnitude(a, monowaves),
+                scenario_price_magnitude(b, monowaves),
+            ) {
+                if mag_a > 1e-9 && mag_b > 1e-9 {
+                    let ratio = mag_b / mag_a;
+                    let typical_range = (0.382, 2.618);
+                    if ratio < typical_range.0 || ratio > typical_range.1 {
+                        findings.push(AdvisoryFinding {
+                            rule_id: RuleId::Ch4_Round2_Compaction,
+                            severity: AdvisorySeverity::Info,
+                            message: format!(
+                                "Ch4 Round 2 動作 B:邊界波 {} retracement ratio = {:.3}(超出典型 [0.382, 2.618])— 邊界 retracement Rules 重評啟動(spec line 1249-1251)",
+                                label, ratio
+                            ),
+                        });
+                    }
                 }
             }
         }
@@ -560,23 +565,79 @@ mod tests {
 
     #[test]
     fn time_similarity_extreme_blocks_aggregation() {
-        // time durations 10 / 1 / 10 → 第二段太短不 similar
+        // time durations 10 / 1 / 10 → 第二段太短不 similar(10/1 = 10 > 2.618;1/10 = 0.1 < 0.382)
         let scenarios = vec![
             mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-11"),
             mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-11", "2026-01-12"),
             mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-12", "2026-01-22"),
         ];
         let result = aggregate_one_level(&scenarios, &[]);
-        // 10/1 = 10 ratio > 2.618;1/10 = 0.1 < 0.382 → time 不 similar
-        // price 全部 1.0(empty children)→ price 永遠 similar
-        // 所以結果視 price OR time:price similar → 仍 aggregate
-        // 這 case 文件用,實際行為:price similar → aggregate
+        // **v4.7.1 G1.1**:scenario_price_magnitude 改 Option,monowaves=[] → None
+        //   → price_similar=false → only time_similar 主導
+        //   → time 不 similar(10/1 = 10x ratio)→ aggregation blocked
+        //   (對齊 spec §Rule of Similarity & Balance:price OR time 至少一個 similar)
+        assert!(
+            result.is_empty(),
+            "time extreme + 無 monowave 反查 → S&B fail → 不應 aggregate"
+        );
+    }
+
+    #[test]
+    fn aggregate_with_real_monowaves_price_similar_passes() {
+        // v4.7.1 G1.1:提供真實 monowaves,price magnitude similar → aggregate
+        // 即使 time 不 similar 也能透過 price 維度通過 S&B
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-11"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-11", "2026-01-12"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-12", "2026-01-22"),
+        ];
+        // monowaves 對 a/b/c 的 wave_tree.start/end 提供 price reference
+        // a:100→110(mag 10);b:110→100(mag 10);c:100→110(mag 10)
+        let monowaves = vec![
+            Monowave {
+                start_date: chrono::NaiveDate::parse_from_str("2026-01-01", "%Y-%m-%d").unwrap(),
+                end_date: chrono::NaiveDate::parse_from_str("2026-01-11", "%Y-%m-%d").unwrap(),
+                start_price: 100.0,
+                end_price: 110.0,
+                direction: MonowaveDirection::Up,
+                bar_indices: (0, 0),
+            },
+            Monowave {
+                start_date: chrono::NaiveDate::parse_from_str("2026-01-11", "%Y-%m-%d").unwrap(),
+                end_date: chrono::NaiveDate::parse_from_str("2026-01-12", "%Y-%m-%d").unwrap(),
+                start_price: 110.0,
+                end_price: 100.0,
+                direction: MonowaveDirection::Down,
+                bar_indices: (0, 0),
+            },
+            Monowave {
+                start_date: chrono::NaiveDate::parse_from_str("2026-01-12", "%Y-%m-%d").unwrap(),
+                end_date: chrono::NaiveDate::parse_from_str("2026-01-22", "%Y-%m-%d").unwrap(),
+                start_price: 100.0,
+                end_price: 110.0,
+                direction: MonowaveDirection::Up,
+                bar_indices: (0, 0),
+            },
+        ];
+        let result = aggregate_one_level(&scenarios, &monowaves);
         let zigzag = result
             .iter()
             .find(|s| matches!(s.pattern_type, NeelyPatternType::Zigzag { .. }));
         assert!(
             zigzag.is_some(),
-            "Level-0 placeholder price 永遠 similar → 仍 aggregate(留 V3 接真 monowave price 改善)"
+            "price magnitude similar(全部 = 10)→ S&B pass → aggregate"
         );
+    }
+
+    #[test]
+    fn no_monowave_no_price_similarity_blocks_aggregation_when_time_also_extreme() {
+        // v4.7.1 G1.1 regression:確認 monowave=[] + time extreme → 雙不通 → 不 aggregate
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-30"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-30", "2026-01-31"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-31", "2026-03-01"),
+        ];
+        let result = aggregate_one_level(&scenarios, &[]);
+        assert!(result.is_empty(), "無 monowave + time 不 similar → 不 aggregate");
     }
 }
