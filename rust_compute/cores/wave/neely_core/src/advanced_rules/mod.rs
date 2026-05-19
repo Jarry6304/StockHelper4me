@@ -97,6 +97,29 @@ pub fn run(scenarios: &mut [Scenario], classified: &[ClassifiedMonowave]) {
             scenario, classified,
         ));
 
+        // v4.4b P1.4b:Ch8 X-wave Internal Structure 偵測(對 Combination 觸發)
+        findings.extend(crate::ch8_xwave::detect(scenario));
+
+        // v4.4c P1.4c:Ch8 Multiwave 建構偵測(對 Combination 觸發)
+        findings.extend(crate::ch8_multiwave::detect(scenario));
+
+        // v4.4d P1.4d:Ch6 Stage 2 接 Ch8(Combination 含 X-wave / Multiwave 時的後續判定 hint)
+        if matches!(scenario.pattern_type, NeelyPatternType::Combination { .. }) {
+            findings.push(AdvisoryFinding {
+                rule_id: RuleId::Ch6_Correction_BSmall_Stage2,
+                severity: AdvisorySeverity::Info,
+                message: "Ch6 Combination Stage 2:Combination 含 X-wave / Multiwave — 後續走勢確認須結合 Ch8 module 結果(spec line 2034)".to_string(),
+            });
+        }
+        // RunningCorrection 後續 Impulse > 161.8% 提示(spec line 2306-2312)
+        if matches!(scenario.pattern_type, NeelyPatternType::RunningCorrection) {
+            findings.push(AdvisoryFinding {
+                rule_id: RuleId::Ch6_Correction_BLarge_Stage2,
+                severity: AdvisorySeverity::Info,
+                message: "Ch6 RunningCorrection Stage 2:後續同級 Impulse 預期 > 161.8% 前一同向 Impulse(spec line 2306-2312)— 跨 timeframe verify 接 Ch8 Multiwave context".to_string(),
+            });
+        }
+
         // 寫入 advisory_findings(此處 set,需在 Independent / Exception Aspect 2 之前)
         scenario.advisory_findings = findings;
 

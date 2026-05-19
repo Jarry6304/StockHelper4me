@@ -266,6 +266,99 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.4 — P1.4b+c+d Ch8 X-wave / Multiwave + Ch6 Stage 2(2026-05-19)
+
+P1.4 收尾 commit。合併 P1.4b(Ch8 X-wave)+ P1.4c(Ch8 Multiwave)+ P1.4d(Ch6
+Stage 2 接 Ch8 + RunningCorrection Stage 2)。**Advisory mode**;對應 Combination /
+RunningCorrection scenarios。
+
+### 範圍(1 commit / P1.4 final)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/ch8_xwave/mod.rs` | **新檔** — `detect()` 對 Combination scenario 偵測 X-wave 結構;Large X-wave(DoubleThree*/TripleThree*)→ Info「只允許 Flat/Triangle」/ Small X-wave(DoubleZigzag/Combination)→ Info「允許 Zigzag」 |
+| `rust_compute/cores/wave/neely_core/src/ch8_multiwave/mod.rs` | **新檔** — `detect()` 對 Combination scenario 偵測 Multiwave 建構;Triple* → 末段 / Double* → 中段 |
+| `rust_compute/cores/wave/neely_core/src/lib.rs` | 加 `pub mod ch8_xwave;` + `pub mod ch8_multiwave;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 Ch8 X-wave / Multiwave detect 呼叫 + Ch6 Combination Stage 2 + RunningCorrection Stage 2 advisory |
+| `CLAUDE.md` | v4.4 章節 |
+
+### Advisory 內容(對應 Combination / RunningCorrection 兩 pattern type)
+
+| Pattern | Advisory 加 |
+|---|---|
+| `Combination` | Ch8 X-wave internal structure + Ch8 Multiwave 建構 + Ch6 Stage 2 (Combination Stage 2 須結合 Ch8 module 結果) |
+| `RunningCorrection` | Ch6 Stage 2 (後續 Impulse > 161.8% 預期) |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **355 passed / 0 failed**(P1.4a 349 → +6)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release --workspace` ✅ **528 passed / 0 failed**
+  (v3.38 baseline 448 → **+80 new tests across 4 milestones**)
+
+### v4.0 → v4.4 完整收尾(P1.1 → P1.4 全部完成)
+
+| Milestone | Commit | 新 modules / 主要動作 | Tests |
+|---|---|---|---|
+| P1.1 | v4.1 `34f73e2` | StructuralFacts 5 欄補完 + 5-axis Alternation + IrregularStrongB + fifth_of_fifth_detector | +13 |
+| P1.2 | v4.2 `aa64e5a` | Ch9 advisory(Independent/Simultaneous/Aspect 2)+ Ch12 Waterfall + Ch12 Localized | +19 |
+| P1.3a | v4.3a `77ab3d7` | ch11_trending_impulse.rs | +11 |
+| P1.3b | v4.3b `21fb732` | ch11_terminal_impulse.rs | +7 |
+| P1.3c | v4.3c `8a91392` | ch11_flat_variants.rs(+ FlatVariant::DoubleFailure)| +8 |
+| P1.3d | v4.3d `3a592f9` | ch11_zigzag.rs + Appendix B 項 F | +7 |
+| P1.3e | v4.3e `2c663b4` | ch11_triangle_variants.rs(9 變體)| +9 |
+| P1.4a | v4.4a `1af97a0` | Ch4 Level-0 真 magnitude + Round 2 動作 B advisory | 0(test fixture 更新) |
+| P1.4 final | v4.4 (this) | Ch8 X-wave / Multiwave + Ch6 Combination Stage 2 + RunningCorrection Stage 2 | +6 |
+| **Total** | **9 commits** | **9 new modules + 1 enum variant + ~5,500 LoC** | **+80** |
+
+### ⚠️ P0 Gate 校準(user 本機 P1.4 收尾後必跑)
+
+對齊 plan v4.0 §「Calibration division of labor」— Claude 寫 code + 沙箱 test;user 跑 P0 Gate。
+
+```powershell
+git pull
+cd rust_compute
+cargo clean -p neely_core -p tw_cores
+cargo build --release -p tw_cores
+.\target\release\tw_cores.exe run-all --write
+cd ..
+
+# forest_size 分布(對齊 architecture §10 forest_max_size=200 cap)
+psql $env:DATABASE_URL -c "
+SELECT
+  PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
+  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
+  MAX(jsonb_array_length(snapshot->'scenario_forest'))                                        AS max_count
+FROM structural_snapshots
+WHERE core_name = 'neely_core'
+  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
+"
+# acceptance:max ≤ 200(cap 不破),p95 < 180
+
+# 3030 / 2330 / 1101 manual review
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast
+for sid in ['3030','2330','1101']:
+    r = neely_forecast(sid,'2026-05-15')
+    print(f'{sid}: degree={r[\"primary_scenario\"][\"effective_degree\"]} '
+          f'tf={r[\"primary_scenario\"][\"timeframe\"]} '
+          f'wave_count={r[\"primary_scenario\"][\"wave_count\"]} '
+          f'horizons={list(r[\"forecasts\"].keys())}')
+"
+```
+
+### 風險(P1.4 整體)
+
+🔴 高(對齊 plan §P1.4 風險):
+- Ch4 Level-0 真 magnitude 改變 Similarity & Balance pass 率 → forest_size 分布可能改變
+- forest_size 爆超 200 cap 機率非零;user 本機 verify 後判斷
+- 若 p95 > 180 需重新校準 `BeamSearchFallback.k`
+- 沙箱無法完全 cover production data 變異,**user 必跑 P0 Gate**
+- Rollback:任一 P1.4 commit `git revert` 即可
+
+---
+
 ## v4.4a — P1.4a Ch4 Level-0 真 magnitude + Round 2 動作 B(2026-05-19)
 
 P1.4 系列第一個 commit。修 `scenario_price_magnitude` 從 `wave_tree.children.len()`

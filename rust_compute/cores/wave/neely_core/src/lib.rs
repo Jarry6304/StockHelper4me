@@ -92,6 +92,10 @@ use crate::output::TimeRange;
 
 pub mod advanced_rules;
 pub mod candidates;
+/// v4.4b P1.4b:Ch8 X-wave Internal Structure 偵測(對齊 m3Spec Ch8 §X-wave)
+pub mod ch8_xwave;
+/// v4.4c P1.4c:Ch8 Multiwave 建構偵測(對齊 m3Spec Ch8 §Multiwave 建構)
+pub mod ch8_multiwave;
 pub mod classifier;
 pub mod compaction;
 pub mod complexity;
