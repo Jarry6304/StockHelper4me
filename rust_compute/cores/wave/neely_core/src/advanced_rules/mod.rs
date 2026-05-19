@@ -21,9 +21,16 @@ use crate::output::{
 
 pub mod channeling;
 pub mod ch9;
+/// v4.2 P1.2 #12:Ch12 Localized Progress Label Changes 偵測(原 spec-only,本 PR 落地)
+pub mod ch12_localized;
 
-/// Stage 7.5 主入口:對每個 Scenario 跑 Channeling + Ch9 Advanced Rules,
+/// Stage 7.5 主入口:對每個 Scenario 跑 Channeling + Ch9 Advanced Rules + Ch12 Waterfall/Localized,
 /// 將 AdvisoryFinding 寫進 scenario.advisory_findings。
+///
+/// v4.2 P1.2 變動(2026-05-19):
+///   - 加 Ch9 Independent / Simultaneous / Exception Aspect 2 三 advisory checks
+///   - 加 Ch12 Waterfall Effect 偵測(`fibonacci::waterfall`)
+///   - 加 Ch12 Localized Changes 偵測(`advanced_rules::ch12_localized`)
 pub fn run(scenarios: &mut [Scenario], classified: &[ClassifiedMonowave]) {
     for scenario in scenarios.iter_mut() {
         let mut findings = Vec::new();
@@ -52,7 +59,57 @@ pub fn run(scenarios: &mut [Scenario], classified: &[ClassifiedMonowave]) {
             ),
         });
 
+        // v4.2 P1.2 #8:Ch9 Simultaneous Occurrence(Impulse 預期 Ch5_Essential R1-R7 全 passed)
+        if let Some(f) = ch9::check_simultaneous_occurrence(scenario) {
+            findings.push(f);
+        }
+
+        // v4.2 P1.2 #11:Ch12 Waterfall Effect(W3 / W5 超 2.618 + 5% 容差)
+        if let Some(f) = crate::fibonacci::waterfall::check_waterfall_effect(scenario, classified) {
+            findings.push(f);
+        }
+
+        // v4.2 P1.2 #12:Ch12 Localized Progress Label Changes
+        if let Some(f) = ch12_localized::detect_localized_changes(scenario) {
+            findings.push(f);
+        }
+
+        // v4.3a P1.3a:Ch11 Trending Impulse Wave-by-Wave 變體規則(advisory only)
+        findings.extend(crate::validator::ch11_trending_impulse::analyze(
+            scenario, classified,
+        ));
+
+        // v4.3b P1.3b:Ch11 Terminal Impulse Wave-by-Wave 變體規則(Diagonal pattern)
+        findings.extend(crate::validator::ch11_terminal_impulse::analyze(
+            scenario, classified,
+        ));
+
+        // v4.3c P1.3c:Ch11 Flat 七變體 wave-a/b/c 規則
+        findings.extend(crate::validator::ch11_flat_variants::analyze(
+            scenario, classified,
+        ));
+
+        // v4.3d P1.3d:Ch11 Zigzag wave-a/b/c 進階規則 + Appendix B 項 F
+        findings.extend(crate::validator::ch11_zigzag::analyze(scenario, classified));
+
+        // v4.3e P1.3e:Ch11 Triangle 9 變體 wave-a-e 規則(P1.3 最後 sub-PR)
+        findings.extend(crate::validator::ch11_triangle_variants::analyze(
+            scenario, classified,
+        ));
+
+        // 寫入 advisory_findings(此處 set,需在 Independent / Exception Aspect 2 之前)
         scenario.advisory_findings = findings;
+
+        // v4.2 P1.2 #7:Ch9 Independent Rule advisory — 依「scenario 啟動章節數」判定,
+        // 須在前面 findings 寫入後才執行(count_active_chapters 讀 scenario.advisory_findings)
+        if let Some(f) = ch9::check_independent_rule(scenario) {
+            scenario.advisory_findings.push(f);
+        }
+
+        // v4.2 P1.2 #9:Ch9 Exception Aspect 2 — Trendline Strong + Diagonal → 觸發 Terminal Impulse
+        if let Some(f) = ch9::detect_exception_aspect_2(scenario) {
+            scenario.advisory_findings.push(f);
+        }
     }
 }
 

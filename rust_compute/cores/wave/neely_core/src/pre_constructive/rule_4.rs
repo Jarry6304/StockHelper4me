@@ -7,6 +7,7 @@
 // (P2 PR best-guess:m1_endpoint_broken_by_m2 placeholder 返 false,留 P5/P10)
 
 use super::context::MonowaveContext;
+use super::fifth_of_fifth_detector::add_l5_if_fifth_of_fifth;
 use super::predicates::*;
 use crate::output::{Certainty, MonowaveDirection, StructureLabel, StructureLabelCandidate};
 
@@ -207,18 +208,9 @@ fn cond_4b(
     }
 }
 
-fn add_l5_if_fifth_of_fifth(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
-    if let (Some(m_minus_3), Some(m_minus_2), Some(m_minus_1), Some(m0), Some(m2)) =
-        (ctx.m_minus_3, ctx.m_minus_2, ctx.m_minus_1, ctx.m0, ctx.m2)
-    {
-        let m1 = ctx.m1;
-        let m1_longest = is_longest_of_three(m1, Some(m_minus_1), Some(m_minus_3));
-        let breaches = m2_breaches_2_4_line_within_m1_time(m_minus_2, m0, m1, m2);
-        if m1_longest && breaches {
-            add_or_promote(cands, StructureLabel::L5, Certainty::Rare);
-        }
-    }
-}
+// v4.1 P1.1 #5:add_l5_if_fifth_of_fifth 抽到 fifth_of_fifth_detector module
+// (與 rule_3.rs 的 check_fifth_of_fifth_and_add 兩處重複實作合併)。
+// 本檔 7 處 caller 改 call shared `super::fifth_of_fifth_detector::add_l5_if_fifth_of_fifth`。
 
 fn cat_4b_i(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>, m1_broken: bool) {
     let m1 = ctx.m1;

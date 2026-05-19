@@ -16,7 +16,7 @@
 //
 //   ±4% 容差(FIB_TOLERANCE_PCT)— architecture §4.5 / §6.6 寫死,不可外部化。
 //   Waterfall Effect ±5%(WATERFALL_TOLERANCE_PCT)— Ch12 特例,
-//   留 P11+ Reverse Logic 偵測時啟用。
+//   **v4.2 P1.2 已啟用**(fibonacci/waterfall.rs;Stage 7.5 advisory 寫入)。
 
 use super::ratios::{FIB_TOLERANCE_PCT, NEELY_FIB_RATIOS};
 use crate::output::{FibZone, Monowave, Scenario};

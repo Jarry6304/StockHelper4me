@@ -72,7 +72,8 @@ fn signed_power_lookup(pattern: &NeelyPatternType, in_triangle: bool) -> SignedP
             FlatKind::Common | FlatKind::BFailure => 0,
             FlatKind::CFailure => -1,
             FlatKind::DoubleFailure => -2,
-            FlatKind::Irregular => -1,
+            // v4.1:IrregularStrongB(123.6-138.2%)同 Power -1,後續 Impulse 約束較嚴(post_behavior 處理)
+            FlatKind::Irregular | FlatKind::IrregularStrongB => -1,
             FlatKind::IrregularFailure => -2,
             FlatKind::Elongated => 1,
         },

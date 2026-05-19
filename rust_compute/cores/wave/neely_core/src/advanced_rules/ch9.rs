@@ -1,19 +1,25 @@
-// ch9.rs — Ch9 Advanced Rules(Trendline Touchpoints / Time Rule / Exception)
+// ch9.rs — Ch9 Advanced Rules(Trendline Touchpoints / Time Rule / Independent /
+// Simultaneous / Exception Aspect 1+2 / Structure Integrity)
 //
 // 對齊 m3Spec/neely_rules.md §Ch9 Basic Neely Extensions(1930-1994 行)。
 //
-// **Phase 7 PR**:
+// **Phase 7 PR**(2026-05-13):
 //   - Trendline Touchpoints Rule(spec 1957-1961):5+ 點觸線 → Impulse 不可能
 //   - Time Rule(spec 1963-1971):3 相鄰同級波不可時間皆等
-//   - Exception Rule Aspect 1/2(spec 1979-1990):本 PR 提供 predicate helpers,
-//     由 caller(validator dispatcher / classifier)決定何時觸發
-//   - Structure Integrity(spec 1992-1994):純宣示,advisory_findings 寫一條 Info
-//   - Independent / Simultaneous(spec 1973-1977):meta rules,本 PR 不單獨檢測
+//   - Exception Rule Aspect 1 predicate(spec 1979-1986)
+//   - Structure Integrity(spec 1992-1994):advisory_findings 寫一條 Info
+//
+// **v4.2 P1.2 補完**(2026-05-19):
+//   - Ch9 Independent Rule advisory(spec 1973-1974)— 多 chapter 規則互不干涉
+//   - Ch9 Simultaneous Occurrence advisory(spec 1976-1977)— 同情境須所有規則齊備
+//   - Ch9 Exception Aspect 1 Multiwave 結尾分支補完(原 ch9.rs:149 留空 P8/P9)
+//   - Ch9 Exception Aspect 2 dispatch(spec 1988-1990)— 規則失效啟動另一規則
 
 use super::scenario_monowaves;
 use crate::monowave::ClassifiedMonowave;
 use crate::output::{
-    AdvisoryFinding, AdvisorySeverity, ExceptionSituation, NeelyPatternType, RuleId, Scenario,
+    AdvisoryFinding, AdvisorySeverity, CombinationKind, ExceptionSituation, NeelyPatternType,
+    RuleId, Scenario,
 };
 
 /// Ch9 Trendline Touchpoints Rule:
@@ -134,19 +140,195 @@ pub fn check_time_rule(
 ///   檢測 scenario 是否符合允許「單規則失靈」的三情境之一。
 ///
 /// 適用場景(spec 1980-1986):
-///   - A:Multiwave 或更大形態的結尾
+///   - A:Multiwave 或更大形態的結尾(v4.2:Combination Triple* 變體 / RunningCorrection)
 ///   - B:Terminal (diagonal triangle) 的 wave-5 或 c-wave
 ///   - C:進入或離開 Contracting/Expanding Triangle 位置
 ///
-/// **本 PR best-guess**:用 pattern_type 直接對應:
+/// **v4.2 落地完整 3 情境**(原 P7 留空 Multiwave 分支):
 ///   - Diagonal { .. } → TerminalW5OrC
 ///   - Triangle { .. } → TriangleEntryExit
+///   - Combination { Triple* } / RunningCorrection → MultiwaveEnd
 ///   - 其他 → None(不符合三情境)
 pub fn exception_aspect_1_situation(scenario: &Scenario) -> Option<ExceptionSituation> {
     match &scenario.pattern_type {
         NeelyPatternType::Diagonal { .. } => Some(ExceptionSituation::TerminalW5OrC),
         NeelyPatternType::Triangle { .. } => Some(ExceptionSituation::TriangleEntryExit),
-        // Multiwave 結尾需 polywave 嵌套偵測(留 P8/P9)
+        // v4.2 P1.2 #10:Multiwave 結尾 = Combination Triple* 變體 + RunningCorrection
+        // (對齊 spec 1980「Multiwave 或更大形態的結尾」+ reverse_logic 對 Triple* 視為「near completion」)
+        NeelyPatternType::Combination { sub_kinds } => {
+            let is_triple = sub_kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    CombinationKind::TripleZigzag
+                        | CombinationKind::TripleCombination
+                        | CombinationKind::TripleThree
+                        | CombinationKind::TripleThreeCombination
+                        | CombinationKind::TripleThreeRunning
+                )
+            });
+            if is_triple {
+                Some(ExceptionSituation::MultiwaveEnd)
+            } else {
+                None
+            }
+        }
+        NeelyPatternType::RunningCorrection => Some(ExceptionSituation::MultiwaveEnd),
+        _ => None,
+    }
+}
+
+// ── v4.2 P1.2 新 4 個 Ch9 advisory checks ────────────────────────────────
+
+/// Ch9 Independent Rule advisory(spec 1973-1974)— 各規則彼此獨立。
+///
+/// **語意**:規則間互不干涉,單條規則的結果不應觸發其他規則的判定。
+/// **advisory 用途**:當 scenario 啟動多 chapter 規則(passed/deferred/advisory_findings 跨 ≥ 2 chapters)
+/// → Info advisory 標示「多 chapter 規則互不干涉」,供 LLM 看 multi-rule independence。
+pub fn check_independent_rule(scenario: &Scenario) -> Option<AdvisoryFinding> {
+    let chapters_active = count_active_chapters(scenario);
+    if chapters_active >= 2 {
+        Some(AdvisoryFinding {
+            rule_id: RuleId::Ch9_Independent,
+            severity: AdvisorySeverity::Info,
+            message: format!(
+                "Ch9 Independent Rule:scenario 有 {} 個 NEoWave 章節規則同時啟動 — 各規則彼此獨立評估,不互相觸發(spec 1973-1974)",
+                chapters_active
+            ),
+        })
+    } else {
+        None
+    }
+}
+
+/// Ch9 Simultaneous Occurrence advisory(spec 1976-1977)— 同情境須所有規則齊備。
+///
+/// **語意**:同一情境(例如 5-wave Impulse)的所有規則應同時成立;若部分 Pass 部分 Fail
+/// → 該情境本身不成立(non-impulsive)。
+/// **advisory 用途**:Impulse pattern 預期 Ch5_Essential R1-R7 全部 passed(7 個都在);
+/// 若 < 7 個 → Warning advisory「未同時滿足全部 Essential R1-R7」。
+pub fn check_simultaneous_occurrence(scenario: &Scenario) -> Option<AdvisoryFinding> {
+    if !matches!(scenario.pattern_type, NeelyPatternType::Impulse) {
+        return None;
+    }
+    let passed_essentials: usize = (1..=7)
+        .filter(|n| {
+            scenario
+                .passed_rules
+                .iter()
+                .any(|r| matches!(r, RuleId::Ch5_Essential(num) if *num == *n))
+        })
+        .count();
+    if passed_essentials < 7 {
+        Some(AdvisoryFinding {
+            rule_id: RuleId::Ch9_Simultaneous,
+            severity: AdvisorySeverity::Warning,
+            message: format!(
+                "Ch9 Simultaneous Occurrence:5-wave Impulse 預期 Ch5_Essential R1-R7 全部 passed,實際 {}/7 — 該情境未同時齊備(spec 1976-1977)",
+                passed_essentials
+            ),
+        })
+    } else {
+        Some(AdvisoryFinding {
+            rule_id: RuleId::Ch9_Simultaneous,
+            severity: AdvisorySeverity::Info,
+            message: "Ch9 Simultaneous Occurrence:Ch5_Essential R1-R7 全部 passed(7/7) — 情境齊備".to_string(),
+        })
+    }
+}
+
+/// Ch9 Exception Rule Aspect 2(spec 1988-1990)— 規則失效啟動另一規則。
+///
+/// **語意**:當一條規則失靈,該失靈本身啟動另一規則。例如:
+///   - 2-4 線突破 → Terminal Impulse 啟動(從 Impulse 升 Diagonal)
+///   - Thrust 超時 → Non-Limiting / Terminal Triangle 啟動
+///
+/// **v4.2 best-guess 實作**:檢測 scenario.advisory_findings 中是否含
+/// `Ch9_TrendlineTouchpoints` Strong(2-4 線突破暗示)+ pattern_type 是 Diagonal → 觸發
+/// Exception Aspect 2,triggered_new_rule = "Terminal Impulse"。
+/// 其他組合留 V4.x 細化。
+pub fn detect_exception_aspect_2(scenario: &Scenario) -> Option<AdvisoryFinding> {
+    let trendline_strong = scenario.advisory_findings.iter().any(|f| {
+        matches!(f.rule_id, RuleId::Ch9_TrendlineTouchpoints)
+            && matches!(f.severity, AdvisorySeverity::Strong)
+    });
+    if trendline_strong && matches!(scenario.pattern_type, NeelyPatternType::Diagonal { .. }) {
+        return Some(AdvisoryFinding {
+            rule_id: RuleId::Ch9_Exception_Aspect2 {
+                triggered_new_rule: "Terminal Impulse (Diagonal)".to_string(),
+            },
+            severity: AdvisorySeverity::Strong,
+            message: "Ch9 Exception Aspect 2:Trendline 5+ 觸點(2-4 線突破)觸發 Terminal Impulse 規則 — Impulse 升為 Diagonal(spec 1988-1990)".to_string(),
+        });
+    }
+    None
+}
+
+/// 計算 scenario 啟動的 NEoWave 章節數(passed_rules + deferred_rules + advisory_findings
+/// 跨章節去重)。
+///
+/// 章節編碼:Ch3 / Ch4 / Ch5 / Ch6 / Ch7 / Ch8 / Ch9 / Ch10 / Ch11 / Ch12 / Engineering
+/// (從 RuleId enum variant prefix 推導)。
+fn count_active_chapters(scenario: &Scenario) -> usize {
+    let mut chapters: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+    for r in &scenario.passed_rules {
+        if let Some(ch) = rule_chapter(r) {
+            chapters.insert(ch);
+        }
+    }
+    for r in &scenario.deferred_rules {
+        if let Some(ch) = rule_chapter(r) {
+            chapters.insert(ch);
+        }
+    }
+    for f in &scenario.advisory_findings {
+        if let Some(ch) = rule_chapter(&f.rule_id) {
+            chapters.insert(ch);
+        }
+    }
+    chapters.len()
+}
+
+fn rule_chapter(rule: &RuleId) -> Option<&'static str> {
+    match rule {
+        RuleId::Ch3_PreConstructive { .. }
+        | RuleId::Ch3_Proportion_Directional
+        | RuleId::Ch3_Proportion_NonDirectional
+        | RuleId::Ch3_Neutrality_Aspect1
+        | RuleId::Ch3_Neutrality_Aspect2
+        | RuleId::Ch3_PatternIsolation_Step(_)
+        | RuleId::Ch3_SpecialCircumstances => Some("Ch3"),
+        RuleId::Ch4_SimilarityBalance_Price
+        | RuleId::Ch4_SimilarityBalance_Time
+        | RuleId::Ch4_Round1_Series
+        | RuleId::Ch4_Round2_Compaction
+        | RuleId::Ch4_Round3_Pause
+        | RuleId::Ch4_ZigzagDetour => Some("Ch4"),
+        RuleId::Ch5_Essential(_)
+        | RuleId::Ch5_Overlap_Trending
+        | RuleId::Ch5_Overlap_Terminal
+        | RuleId::Ch5_Equality
+        | RuleId::Ch5_Alternation { .. }
+        | RuleId::Ch5_Flat_Min_BRatio
+        | RuleId::Ch5_Flat_Min_CRatio
+        | RuleId::Ch5_Zigzag_Max_BRetracement
+        | RuleId::Ch5_Zigzag_C_TriangleException
+        | RuleId::Ch5_Triangle_BRange
+        | RuleId::Ch5_Triangle_LegContraction
+        | RuleId::Ch5_Triangle_LegEquality_5Pct
+        | RuleId::Ch5_Extension
+        | RuleId::Ch5_Extension_Exception1
+        | RuleId::Ch5_Extension_Exception2 => Some("Ch5"),
+        RuleId::Ch9_TrendlineTouchpoints
+        | RuleId::Ch9_TimeRule
+        | RuleId::Ch9_Independent
+        | RuleId::Ch9_Simultaneous
+        | RuleId::Ch9_Exception_Aspect1 { .. }
+        | RuleId::Ch9_Exception_Aspect2 { .. }
+        | RuleId::Ch9_StructureIntegrity => Some("Ch9"),
+        RuleId::Engineering_InsufficientData
+        | RuleId::Engineering_ForestOverflow
+        | RuleId::Engineering_CompactionTimeout => Some("Engineering"),
+        // Ch6 / Ch7 / Ch8 / Ch10 / Ch11 / Ch12 章節(v3.6 spec-only,目前未 dispatch)
         _ => None,
     }
 }
@@ -288,5 +470,154 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
         );
         assert!(exception_aspect_1_situation(&scenario).is_none());
+    }
+
+    #[test]
+    fn exception_aspect_1_v4_2_combination_triple_returns_multiwave_end() {
+        let scenario = make_scenario(
+            NeelyPatternType::Combination {
+                sub_kinds: vec![CombinationKind::TripleZigzag],
+            },
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        let sit = exception_aspect_1_situation(&scenario);
+        assert!(matches!(sit, Some(ExceptionSituation::MultiwaveEnd)));
+    }
+
+    #[test]
+    fn exception_aspect_1_v4_2_running_correction_returns_multiwave_end() {
+        let scenario = make_scenario(
+            NeelyPatternType::RunningCorrection,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        let sit = exception_aspect_1_situation(&scenario);
+        assert!(matches!(sit, Some(ExceptionSituation::MultiwaveEnd)));
+    }
+
+    #[test]
+    fn exception_aspect_1_combination_double_returns_none() {
+        // Double Combination 不在 spec 1980「Multiwave 或更大形態的結尾」內 → None
+        let scenario = make_scenario(
+            NeelyPatternType::Combination {
+                sub_kinds: vec![CombinationKind::DoubleZigzag],
+            },
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        assert!(exception_aspect_1_situation(&scenario).is_none());
+    }
+
+    #[test]
+    fn independent_rule_returns_info_when_multi_chapter_active() {
+        let mut scenario = make_scenario(
+            NeelyPatternType::Impulse,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        // Ch3 + Ch5 + Ch9 三 chapter 都有規則 → multi-chapter
+        scenario
+            .passed_rules
+            .push(RuleId::Ch3_Proportion_Directional);
+        scenario.passed_rules.push(RuleId::Ch5_Essential(1));
+        scenario.advisory_findings.push(AdvisoryFinding {
+            rule_id: RuleId::Ch9_TimeRule,
+            severity: AdvisorySeverity::Info,
+            message: "test".to_string(),
+        });
+        let f = check_independent_rule(&scenario).expect("should fire");
+        assert!(matches!(f.severity, AdvisorySeverity::Info));
+        assert!(matches!(f.rule_id, RuleId::Ch9_Independent));
+    }
+
+    #[test]
+    fn independent_rule_returns_none_when_single_chapter() {
+        let mut scenario = make_scenario(
+            NeelyPatternType::Impulse,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        scenario.passed_rules.push(RuleId::Ch5_Essential(1));
+        scenario.passed_rules.push(RuleId::Ch5_Essential(2));
+        // 只 Ch5 一個 chapter → < 2 → None
+        assert!(check_independent_rule(&scenario).is_none());
+    }
+
+    #[test]
+    fn simultaneous_occurrence_warns_when_not_all_essentials_passed() {
+        let mut scenario = make_scenario(
+            NeelyPatternType::Impulse,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        // 只 R1-R3 passed,R4-R7 缺 → Warning
+        for n in 1..=3 {
+            scenario.passed_rules.push(RuleId::Ch5_Essential(n));
+        }
+        let f = check_simultaneous_occurrence(&scenario).expect("should fire");
+        assert!(matches!(f.severity, AdvisorySeverity::Warning));
+        assert!(f.message.contains("3/7"));
+    }
+
+    #[test]
+    fn simultaneous_occurrence_info_when_all_essentials_passed() {
+        let mut scenario = make_scenario(
+            NeelyPatternType::Impulse,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        for n in 1..=7 {
+            scenario.passed_rules.push(RuleId::Ch5_Essential(n));
+        }
+        let f = check_simultaneous_occurrence(&scenario).expect("should fire");
+        assert!(matches!(f.severity, AdvisorySeverity::Info));
+        assert!(f.message.contains("7/7"));
+    }
+
+    #[test]
+    fn simultaneous_occurrence_none_for_non_impulse() {
+        let scenario = make_scenario(
+            NeelyPatternType::Zigzag {
+                sub_kind: ZigzagKind::Single,
+            },
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        assert!(check_simultaneous_occurrence(&scenario).is_none());
+    }
+
+    #[test]
+    fn exception_aspect_2_fires_for_diagonal_with_trendline_strong() {
+        let mut scenario = make_scenario(
+            NeelyPatternType::Diagonal {
+                sub_kind: DiagonalKind::Leading,
+            },
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        scenario.advisory_findings.push(AdvisoryFinding {
+            rule_id: RuleId::Ch9_TrendlineTouchpoints,
+            severity: AdvisorySeverity::Strong,
+            message: "5+ touchpoints".to_string(),
+        });
+        let f = detect_exception_aspect_2(&scenario).expect("should fire");
+        assert!(matches!(f.severity, AdvisorySeverity::Strong));
+        match f.rule_id {
+            RuleId::Ch9_Exception_Aspect2 { triggered_new_rule } => {
+                assert!(triggered_new_rule.contains("Terminal Impulse"));
+            }
+            _ => panic!("expected Ch9_Exception_Aspect2"),
+        }
+    }
+
+    #[test]
+    fn exception_aspect_2_none_when_impulse_no_trendline_strong() {
+        let scenario = make_scenario(
+            NeelyPatternType::Impulse,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        );
+        assert!(detect_exception_aspect_2(&scenario).is_none());
     }
 }

@@ -35,6 +35,16 @@ pub mod flat_rules;
 pub mod triangle_rules;
 pub mod wave_rules;
 pub mod zigzag_rules;
+/// v4.3a P1.3a:Ch11 Trending Impulse Wave-by-Wave 變體規則(advisory mode,不 invalidate scenario)
+pub mod ch11_trending_impulse;
+/// v4.3b P1.3b:Ch11 Terminal Impulse Wave-by-Wave 變體規則(對應 Diagonal pattern)
+pub mod ch11_terminal_impulse;
+/// v4.3c P1.3c:Ch11 Flat 七變體 wave-a/b/c 規則
+pub mod ch11_flat_variants;
+/// v4.3d P1.3d:Ch11 Zigzag wave-a/b/c 進階規則 + Appendix B 項 F(Triangle 內例外)
+pub mod ch11_zigzag;
+/// v4.3e P1.3e:Ch11 Triangle 9 變體 wave-a-e 進階規則(P1.3 最後 sub-PR)
+pub mod ch11_triangle_variants;
 
 /// 單條規則對 candidate 的判定結果。
 #[derive(Debug, Clone)]

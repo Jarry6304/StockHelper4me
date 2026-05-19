@@ -16,21 +16,26 @@
 
 use crate::output::FlatKind;
 
-/// Phase 16:依 a / b / c monowave magnitudes 判 FlatKind 變體。
+/// Phase 16 / v4.1:依 a / b / c monowave magnitudes 判 FlatKind 變體。
 ///
-/// 對齊 spec line 2157-2239 詳細規則:
-///   - Common:           b/a ∈ [81%, 100%]  AND  c/b ≥ 100%
-///   - BFailure:         b/a ∈ [61.8%, 81%) AND  c/b ≥ 100%
-///   - CFailure:         b/a ∈ [81%, 100%]  AND  c/b < 100%
-///   - DoubleFailure:    b/a ∈ [61.8%, 81%) AND  c/b < 100%
-///   - Irregular:        b/a ∈ (100%, 138.2%]
-///     (含 101-123.6% 與 123.6-138.2% 兩 sub-range,spec 24/05 v1.4 補完)
-///   - IrregularFailure: b/a > 138.2%       AND  c/b < 100%(spec line 2238)
-///   - Elongated:        b/a > 138.2%       AND  c > a(Triangle/Terminal 內罕見)
+/// 對齊 spec line 2157-2239 詳細規則 + Appendix B 項 A 123.6% Strong b-wave 中間檻:
+///   - Common:           b/a ∈ [81%, 100%]    AND  c/b ≥ 100%
+///   - BFailure:         b/a ∈ [61.8%, 81%)   AND  c/b ≥ 100%
+///   - CFailure:         b/a ∈ [81%, 100%]    AND  c/b < 100%
+///   - DoubleFailure:    b/a ∈ [61.8%, 81%)   AND  c/b < 100%
+///   - **Irregular**:    b/a ∈ (100%, **123.6%**]  AND  c/b ≥ 100%(weak b-wave)
+///   - **IrregularStrongB**: b/a ∈ (**123.6%**, 138.2%] AND  c/b ≥ 100%(strong b-wave,
+///     v4.1 Appendix B 項 A)
+///   - IrregularFailure: b/a > 138.2%         AND  c/b < 100%(spec line 2238)
+///   - Elongated:        b/a > 138.2%         AND  c > a(Triangle/Terminal 內罕見)
 ///
-/// 容差規範:此處的 81% / 100% / 138.2% 等臨界值對齊 Fibonacci 常數,容差由 caller
+/// 容差規範:此處的 81% / 100% / 123.6% / 138.2% 等臨界值對齊 Fibonacci 常數,容差由 caller
 /// (validator/flat_rules.rs)做最終 ±4% 比對;本 fn 採嚴格邊界(僅供 classifier
 /// 給 candidate 分類,validator 才驗 Pass/Fail)。
+///
+/// **123.6% 中間檻語意**(Appendix B 項 A,v4.1 補完):
+/// b/a 超過 123.6% 屬 Strong b-wave 區段,對 post-pattern Impulse 有更強約束
+/// (對齊 spec §Ch10 Power Rating Lookup;細部 power table 微調留 V4.x)。
 ///
 /// **返回 None**:b/a < 61.8%(不符任何 Flat 變體最低要求)
 /// → caller(`classifier::classify_3wave`)應改試 Zigzag 或 Triangle 解讀。
@@ -66,15 +71,17 @@ pub fn classify_flat(a_mag: f64, b_mag: f64, c_mag: f64) -> Option<FlatKind> {
                 Some(FlatKind::CFailure)
             }
         }
-        // 100% < b/a ≤ 138.2% → Irregular(含 101-123.6% / 123.6-138.2% 兩 sub-range)
-        x if x <= 1.382 => Some(FlatKind::Irregular),
+        // 100% < b/a ≤ 123.6% → Irregular(weak b-wave,Appendix B 項 A 第一段)
+        x if x <= 1.236 => Some(FlatKind::Irregular),
+        // 123.6% < b/a ≤ 138.2% → IrregularStrongB(strong b-wave,v4.1 Appendix B 項 A 第二段)
+        x if x <= 1.382 => Some(FlatKind::IrregularStrongB),
         // > 138.2% → IrregularFailure(spec line 2238 明文 b > 138.2% × a)
         _ => {
             if c_over_b < 1.0 {
                 Some(FlatKind::IrregularFailure)
             } else {
-                // b > 138.2% AND c ≥ 100% × b → 仍偏 Irregular(罕見場景)
-                Some(FlatKind::Irregular)
+                // b > 138.2% AND c ≥ 100% × b → 仍偏 IrregularStrongB(罕見場景)
+                Some(FlatKind::IrregularStrongB)
             }
         }
     }
@@ -128,8 +135,35 @@ mod tests {
 
     #[test]
     fn irregular_at_120_pct_b() {
-        // b/a = 1.20(100-138.2% Irregular range)→ Irregular
+        // b/a = 1.20(100-123.6% Irregular weak range)→ Irregular(v4.1 sub-range 1)
         assert_eq!(classify_flat(100.0, 120.0, 80.0), Some(FlatKind::Irregular));
+    }
+
+    #[test]
+    fn irregular_strong_b_at_130_pct_b() {
+        // b/a = 1.30(123.6-138.2% Strong B range)→ IrregularStrongB(v4.1 Appendix B 項 A)
+        assert_eq!(
+            classify_flat(100.0, 130.0, 80.0),
+            Some(FlatKind::IrregularStrongB)
+        );
+    }
+
+    #[test]
+    fn irregular_boundary_at_123_6_pct_b() {
+        // b/a = 1.236(剛好邊界,屬 weak side)→ Irregular
+        assert_eq!(
+            classify_flat(100.0, 123.6, 80.0),
+            Some(FlatKind::Irregular)
+        );
+    }
+
+    #[test]
+    fn irregular_strong_b_just_over_123_6() {
+        // b/a = 1.24(剛超 123.6%)→ IrregularStrongB
+        assert_eq!(
+            classify_flat(100.0, 124.0, 80.0),
+            Some(FlatKind::IrregularStrongB)
+        );
     }
 
     #[test]

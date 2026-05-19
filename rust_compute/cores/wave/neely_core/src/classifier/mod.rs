@@ -81,12 +81,16 @@ pub fn classify(
     let monowave_structure_labels = build_monowave_structure_labels(candidate, classified);
     let triplexity_detected = detect_triplexity(&pattern_type);
 
-    // Phase 17:StructuralFacts 4 sub-fields(classify-time,有 candidate + classified + report)
+    // Phase 17 / v4.1:StructuralFacts 5 sub-fields 在 classify-time 填
+    //(candidate + classified + report;v4.1 加 extension_subdivision_pair)
     let structural_facts = StructuralFacts {
         fibonacci_alignment: structural_facts::fibonacci_alignment(candidate, classified),
-        alternation: structural_facts::alternation(report),
+        alternation: structural_facts::alternation(candidate, classified, report),
         time_relationship: structural_facts::time_relationship(candidate, classified),
         overlap_pattern: structural_facts::overlap_pattern(candidate, classified),
+        extension_subdivision_pair: structural_facts::extension_subdivision_pair(
+            candidate, classified,
+        ),
         // 3 個 sub-fields 留 lib.rs::compute Stage 7.5 後填(需 bars / advisory_findings)
         channeling: None,
         volume_alignment: None,

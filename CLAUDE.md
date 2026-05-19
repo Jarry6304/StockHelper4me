@@ -266,6 +266,391 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.3e — P1.3e Ch11 Triangle 9 變體 wave-a-e 規則(2026-05-19)
+
+P1.3 系列最後 sub-PR。動工 Ch11 Triangle 9 變體 × wave-a/b/c/d/e 進階規則。
+**Advisory mode**;對應 `NeelyPatternType::Triangle { sub_kind: TriangleKind }`。
+
+### 範圍(1 commit / P1.3 收尾)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_triangle_variants.rs` | **新檔** — `analyze()` + `classify_variant()`(TriangleKind 3 → TriangleVariant 9 mapping)+ Common Contracting / Expanding 規則 + 3 變體特定 b-wave 規則;**+9 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_triangle_variants;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `ch11_triangle_variants::analyze()`(P1.3 5 sub-PR 全部 wire 完)|
+| `CLAUDE.md` | v4.3e 章節 |
+
+### 規則覆蓋(spec line 2346-2485)
+
+**TriangleKind 3 → TriangleVariant 9 mapping**(從 b/a ratio):
+- b/a ≤ 1.01 → Horizontal
+- 1.01 < b/a ≤ 1.382 → Irregular
+- b/a > 1.382 → Running
+- × TriangleKind:Limiting / NonLimiting(Contracting)/ Expanding
+
+**共同規則**:
+- Contracting:d < c / e < d / c ≤ 161.8% × b
+- Expanding:a 或 b 為最小 / d > c / e > d / e 為最大
+
+**變體特定 b-wave 規則**:
+- Horizontal:a ≥ 50% × b / b ≤ 261.8% × a
+- Irregular:b > 1.01 × a / b ≤ 261.8% × a / 更常 ≤ 161.8% × a
+- Running:b 為最長段(b > 1.382 × a)
+
+### P1.3 5 sub-PR 整體總結
+
+| Sub-PR | 模組 | Tests |
+|---|---|---|
+| P1.3a Trending Impulse | ch11_trending_impulse.rs | +11 |
+| P1.3b Terminal Impulse | ch11_terminal_impulse.rs | +7 |
+| P1.3c Flat 7 變體 | ch11_flat_variants.rs | +8 |
+| P1.3d Zigzag + Appendix B 項 F | ch11_zigzag.rs | +7 |
+| P1.3e Triangle 9 變體 | ch11_triangle_variants.rs | +9 |
+| **Total P1.3** | **5 new modules** | **+42** |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **349 passed / 0 failed**(v4.3d 340 → +9)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### 下個 milestone(P1.4)
+
+P1.3 完成!接著 P1.4 — Ch4 Round 2 動作 B + Ch8 X-wave / Multiwave / Ch6 接 Ch8
+(~1,500 LoC,3-4 commits)。**P1.4 收尾後 user 必跑 P0 Gate**(forest_size 重校)。
+詳見 plan §「Milestone P1.4」。
+
+---
+
+## v4.3d — P1.3d Ch11 Zigzag wave-a/b/c + Appendix B 項 F(2026-05-19)
+
+接 v4.3c P1.3c 後動工 P1.3d — Ch11 Zigzag wave-a/b/c 進階規則 + Appendix B 項 F
+(Zigzag c 在 Triangle 內例外)。**Advisory mode**;對應 `NeelyPatternType::Zigzag`。
+
+### 範圍(1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_zigzag.rs` | **新檔** — `analyze()` + wave-a/b/c 規則 + Triangle 內例外處理;**+7 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_zigzag;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `ch11_zigzag::analyze()` 呼叫 |
+| `CLAUDE.md` | v4.3d 章節 |
+
+### 規則覆蓋(spec line 2323-2345 + Appendix B 項 F)
+
+| Wave | 規則 |
+|---|---|
+| **a** | b 回測 ≥ 81% × a → Missing Wave Rule 警告(spec line 2329) |
+| **b** | 61.8-81% 區間 → 內部 wave-a 警告;≤ 61.8% → Info(spec line 2328-2332)|
+| **c**(non-Triangle) | c ∈ [61.8%, 161.8%] × a;超出 → Warning;> 161.8% → Elongated Zigzag(spec line 2337-2342) |
+| **c**(in_triangle_context = true)| 範圍放寬;超出 → Strong「Triangle 形成訊號」(Appendix B 項 F + spec 2338-2342) |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **340 passed / 0 failed**(v4.3c 333 → +7)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### 下個 sub-PR(P1.3e Triangle 9 變體)
+
+P1.3e — Triangle 9 變體 × wave-a-e 完整規則 ~900 LoC(P1.3 最後一個 sub-PR),
+spec line 2346-2485。
+
+---
+
+## v4.3c — P1.3c Ch11 Flat 七變體 wave-a/b/c 規則(2026-05-19)
+
+接 v4.3b P1.3b 後動工 P1.3c — Ch11 Flat 全部 7 變體 wave-a/b/c 規則。
+**Advisory mode**;對應 `NeelyPatternType::Flat { sub_kind: FlatKind }`。
+
+### 範圍(1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_flat_variants.rs` | **新檔** — `analyze()` 主入口 + `flat_kind_to_variant()` mapping + 7 analyzers(B-Failure / C-Failure / Common / Double Failure / Elongated / Irregular(+StrongB)/ Irregular Failure);**+8 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/output.rs` | `FlatVariant` enum 加 `DoubleFailure` variant(原僅 8 variant,補完 9 個) |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_flat_variants;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `ch11_flat_variants::analyze()` 呼叫 |
+| `CLAUDE.md` | v4.3c 章節 |
+
+### 7 變體規則核心覆蓋(對齊 spec 2195-2321)
+
+| Variant | 核心規則 |
+|---|---|
+| **B-Failure** | b 在 61.8-81% × a / c ≥ 61.8% × b / c 必完全回測 b |
+| **C-Failure** | c < b(本變體定義)/ c < 61.8% × b 視為極罕 / c ≈ 61.8% × a |
+| **Common** | b ∈ [81%, 100%] × a / c 必完全回測 b / c 稍微超越 a 不超 10-20% |
+| **Double Failure** | b ≤ 81% × a / c 必未完全回測 b(定義) |
+| **Elongated** | b ≥ 61.8% × a(a/b 相似)/ c 必遠大於 a(c > 100%, 通常 > 150%) |
+| **Irregular**(+StrongB) | b > a 但 ≤ 138.2% × a / c 必完全回測 b |
+| **Irregular Failure** | b > 138.2% × a(定義)/ c 不可完全回測 b |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **333 passed / 0 failed**(v4.3b 325 → +8)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### 下個 sub-PR(P1.3d Zigzag + Appendix B 項 F)
+
+接著 P1.3d — Zigzag wave-a/b/c 進階規則 + Appendix B 項 F(Zigzag c 在 Triangle 內例外),spec line 2323-2345。
+
+---
+
+## v4.3b — P1.3b Ch11 Terminal Impulse wave-by-wave(2026-05-19)
+
+接 v4.3a P1.3a 後動工 P1.3b — Ch11 Terminal Impulse(原 Elliott Diagonal Triangle)
+wave-by-wave 變體規則。**Advisory mode**;對應 `NeelyPatternType::Diagonal`。
+
+### 範圍(1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_terminal_impulse.rs` | **新檔** — `analyze()` + 4 variant analyzers(1st-Ext / 3rd-Ext / 5th-Ext / 5th Non-Ext);**+7 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_terminal_impulse;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `ch11_terminal_impulse::analyze()` 呼叫 |
+| `CLAUDE.md` | v4.3b 章節 |
+
+### 與 Trending Impulse 主要差異
+
+- **W2 寬鬆**:Terminal 1st Ext W2 上限 61.8%(Trending 是 38.2%,spec line 2145)
+- **各 wave 是 :3 結構**(Trending 是 :5,spec line 2144)
+- **典型為 c-wave of correction**(spec line 2154)
+
+### 規則覆蓋(per variant)
+
+| Variant | 核心規則 |
+|---|---|
+| **1st Ext** | W2 ≤ 61.8% × W1(line 2145)/ W3 ≥ 38.2% × W1 + ≤ 100% × W1(line 2146)/ W5 ≤ 99% × W3 + 典型 38.2-61.8%(line 2147)/ W4 ≈ 61.8% × W2(line 2148) |
+| **3rd Ext** | W3 ≤ 161.8% × W1(line 2158)/ W2 必 > 61.8% × W1(line 2159)/ W4 ≤ 38.2% × W3(line 2160)/ W5 ≤ 61.8% × W3(line 2163) |
+| **5th Ext** | W3 ≤ 161.8% × W1(line 2178)/ W5 ≥ 100% × (W1 + W3)(line 2177)/ W4 ≥ 50% × W3(line 2179) |
+| **5th Non-Ext** | W5 ≤ 61.8% × W3(line 2183)/ W4 < W2 (時/價)(line 2187)|
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **325 passed / 0 failed**(v4.3a 318 → +7)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### 下個 sub-PR(P1.3c Flat 七變體)
+
+接著 P1.3c — Flat 七變體 wave-a/b/c 規則,spec line 2191-2322。
+
+---
+
+## v4.3a — P1.3a Ch11 Trending Impulse wave-by-wave(2026-05-19)
+
+接 v4.2 P1.2 後動工 P1.3a(plan 文件 §「Milestone P1.3a」),補完 Ch11 Trending
+Impulse 的 wave-by-wave 變體規則。**Advisory mode**(對齊 NEoWave 原作 Ch11 =
+pattern characteristic 非 invariant);違反 → AdvisoryFinding 不 invalidate scenario。
+
+### 範圍(1 commit / branch `claude/continue-previous-work-xdKrl`)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_trending_impulse.rs` | **新檔** — `analyze()` 主入口 + `detect_extension()` + 3 variant analyzers(1st-Ext / 3rd-Ext / 5th-Ext)+ 共通 W4 規則 + 5th Wave Failure 偵測;**+11 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_trending_impulse;` 註冊 |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `crate::validator::ch11_trending_impulse::analyze()` 呼叫(advisory_findings 寫入) |
+| `CLAUDE.md` | v4.3a 章節 |
+
+### 規則覆蓋(每變體取核心規則,完整 spec 細化留 V4.x)
+
+| Variant | 核心規則(對齊 neely_rules.md line ref)|
+|---|---|
+| **1st Ext** | W2 ≤ 38.2% × W1(嚴 1st Ext)/ W3 < W1 + W3 ≥ 38.2% × W1 / W5 必為三段最短 (剛性,line 2081) |
+| **3rd Ext** | W3 > 161.8% × W1(line 2092)/ W2 寬鬆到 99%(line 2094)/ W4 ≤ 38.2-50% × W3(line 2095) / W5 ≈ W1 或 0.618/1.618 關係(line 2096) |
+| **5th Ext** | W3 ≈ 161.8% × W1(line 2110 典型,非剛性)/ W1 < W3 / W5 ≥ 1-3 全長 + W5 ≤ 261.8% × 1-3 全長(line 2112-2113)/ W4 > W2 + W4 ≥ 50% × W3(line 2114) |
+| **Wave-4 共通** | W4 ≤ 61.8% × W3 except 5th Ext(line 2133) |
+| **5th Wave Failure** | W5 < W4 偵測;在 3rd Ext = Strong,1st/5th Ext = Warning(spec 2126) |
+
+### Advisory severity 規則
+
+- `Warning`:剛性條件違反(e.g., W5 必最短被破)
+- `Info`:典型 Fibonacci 比例符合 / Wave-2 寬鬆但合理
+- `Strong`:5th Wave Failure 在 3rd Ext 環境(反轉強訊號,spec 2129)
+
+### 沙箱驗證
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release -p neely_core` ✅ **318 passed / 0 failed**(v4.2 307 → +11 new)
+
+### 風險
+
+🟢 中-低:
+- Advisory mode 安全網,production scenario forest 0 影響
+- LLM narrative 多 4-8 entries per 5-wave Impulse scenario
+- Scenario JSON 序列化加大(每 Impulse +~1-2KB advisory_findings list);PG TOAST 邊界 ~2KB 監控
+- params_hash 不變(Scenario 結構不改);user 重跑走 ON CONFLICT UPDATE 覆寫
+
+### 下個 sub-PR(P1.3b Terminal Impulse)
+
+接著 P1.3b — Terminal Impulse(原 Diagonal Triangle)wave-by-wave,
+spec line 2138-2189。詳見 plan §「Milestone P1.3b」。
+
+---
+
+## v4.2 — P1.2 Ch9 advisory + Ch12 Waterfall/Localized(2026-05-19)
+
+接 v4.1 P1.1 後動工 P1.2(plan 文件 §「Milestone P1.2」)。補完 Ch9 / Ch12 advisory
+規則,讓 spec-only enum variants 全部有 dispatch。**advisory mode**:不參與 scenario filter,
+僅 寫 `Scenario.advisory_findings` 給 LLM 看。
+
+### 動工項目(1 commit / 6 task / branch `claude/continue-previous-work-xdKrl`)
+
+| # | 工作 | 動作 |
+|---|---|---|
+| 7 | Ch9 Independent Rule advisory(spec 1973-1974) | 新 `check_independent_rule(scenario)`:scenario 啟動 ≥ 2 NEoWave 章節 → Info advisory「規則互不干涉」;`rule_chapter()` helper 對 RuleId enum 推導章節 |
+| 8 | Ch9 Simultaneous Occurrence advisory(spec 1976-1977) | 新 `check_simultaneous_occurrence(scenario)`:Impulse pattern 預期 Ch5_Essential R1-R7 全 passed;< 7 個 → Warning advisory「未同時齊備」;= 7 個 → Info「情境齊備」 |
+| 9 | Ch9 Exception Aspect 2 dispatch(spec 1988-1990) | 新 `detect_exception_aspect_2(scenario)`:Trendline Touchpoints Strong + Diagonal pattern → 觸發 `Ch9_Exception_Aspect2 { triggered_new_rule: "Terminal Impulse (Diagonal)" }` |
+| 10 | Ch9 Exception Aspect 1 Multiwave 補完 | `exception_aspect_1_situation` 加 Multiwave 結尾分支:Combination Triple* / RunningCorrection → `ExceptionSituation::MultiwaveEnd` |
+| 11 | Ch12 Waterfall Effect ±5% | **新 module** `fibonacci/waterfall.rs`:Trending Impulse + W3/W1 > 2.618 + 5% 或 W5/max(W1,W3) > 2.618 + 5% → Strong advisory「加速 cascade」;否則 Info |
+| 12 | Ch12 Localized Progress Label Changes | **新 module** `advanced_rules/ch12_localized.rs`:3 種觸發 case(Impulse in_triangle_context / compacted_base=Five 含複雜 labels / awaiting_l_label)→ Info advisory「label 局部變動」 |
+
+### 範圍
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/ch9.rs` | 加 4 個新 fn(`check_independent_rule` / `check_simultaneous_occurrence` / `detect_exception_aspect_2` / `count_active_chapters` + `rule_chapter` helpers);`exception_aspect_1_situation` 加 Multiwave 結尾分支(Combination Triple* / RunningCorrection → MultiwaveEnd);**+8 new tests** |
+| `rust_compute/cores/wave/neely_core/src/fibonacci/waterfall.rs` | **新檔** — `check_waterfall_effect()` + `waterfall_threshold()`(2.618 × 1.05 = 2.7489) + 5 unit tests |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/ch12_localized.rs` | **新檔** — `detect_localized_changes()` 3 case 偵測 + 4 unit tests |
+| `rust_compute/cores/wave/neely_core/src/fibonacci/mod.rs` | 加 `pub mod waterfall;` 註冊 |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | 加 `pub mod ch12_localized;` 註冊 + `run()` 內接入 6 個新 advisory check |
+| `rust_compute/cores/wave/neely_core/src/fibonacci/projection.rs` | line 19 註解 update:Waterfall「**v4.2 P1.2 已啟用**」(原「留 P11+」)|
+| `CLAUDE.md` | v4.2 章節(本段) |
+
+**0 alembic / 0 collector.toml / 0 Python / advisory mode → 0 scenario forest filter 行為改變**。
+
+### 沙箱驗證
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release -p neely_core` ✅ **307 passed / 0 failed**(從 v4.1 288 → +19 new)
+- `cargo test --release --workspace --no-fail-fast` ✅ **480 passed / 0 failed**(v4.1 baseline 461 → +19)
+
+### 風險
+
+🟢 低:
+- advisory 不參與 scenario filter,production behavior 變化僅 `advisory_findings` 多 entries
+- LLM 看 narrative 多訊號(章節獨立性 / Simultaneous 齊備度 / Exception Aspect 2 觸發 / Waterfall cascade / Localized adjustments)
+- 既有 P1.1 / v3.38 tests 0 regression
+- params_hash 不變(Scenario 結構不改);user 重跑 tw_cores 走 ON CONFLICT UPDATE 覆寫
+- Rollback:單 commit `git revert` 即可
+
+### user 本機(下次 session 起點)
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+
+# 重跑 tw_cores 讓新 advisory 寫入 scenario.advisory_findings
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+
+# 確認新 advisory 在 production 出現
+psql $env:DATABASE_URL -c "
+SELECT
+  jsonb_array_length(s->'advisory_findings') AS finding_count,
+  s->'advisory_findings' AS findings
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE stock_id='2330' AND core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE stock_id='2330' AND core_name='neely_core' AND timeframe='daily')
+  AND timeframe='daily'
+LIMIT 3;
+"
+# 預期 finding_count 略升(v4.1 ~5 → v4.2 +4~6 個 new advisory:
+# Ch9_Simultaneous / Ch12_WaterfallEffect / Ch12_LocalizedChanges / Ch9_Independent
+# / Ch9_Exception_Aspect2 (Diagonal 時))
+```
+
+### 下個 milestone(P1.3 Ch11 wave-by-wave)
+
+接著 P1.3 Ch11 Wave-by-Wave 5 個 sub-PR(Trending Impulse / Terminal Impulse / Flat 七變體
+/ Zigzag / Triangle 九變體 ~2,650 LoC)。詳見 plan 文件 §「Milestone P1.3」。
+
+---
+
+## v4.1 — P1.1 Neely M3SPEC alignment Quick Wins(2026-05-19)
+
+接 v3.38 收尾後動工 v4.0 Plan(15 真闕漏 / 4 milestones / ~5,340 LoC),
+本 commit 落地 **P1.1 Quick Wins**(plan 文件 §「Milestone P1.1」)。0 dispatch
+行為改變,純結構性補完 — 給 Aggregation Layer 多餘資訊。
+
+### 動工項目(1 commit / 6 task / branch `claude/continue-previous-work-xdKrl`)
+
+| # | 工作 | 動作 |
+|---|---|---|
+| 1 | `StructuralFacts` 加 `extension_subdivision_pair` 欄位 | 新 `ExtensionSubdivisionPair` struct + `SubdivisionStatus` enum(Independent / SubordinateToLarger / Indeterminate);對齊 spec §Ch8 Independent Rule |
+| 2 | `AlternationFact` 升 5-axis | 從 `{ holds: bool }` 升 `{ price / time / severity / intricacy / construction: AlternationCheck, overall_holds: bool }`;新 `AlternationCheck` enum(Confirmed / NotApplicable / Failed);對齊 NEoWave §Rule of Alternation 五軸 |
+| 3 | `OverlapPattern` 升 enum + evidence | 從 `{ label: String }` 升 enum `Trending { evidence } / Terminal { evidence } / None`;對齊 spec §Ch5 Overlap Rule 1326-1329 行 |
+| 4 | `ChannelingFact` / `TimeRelationship` 加 evidence | ChannelingFact 加 `evidence: Vec<String>`;TimeRelationship 加 `durations_bars` + `fibonacci_ratios_matched` |
+| 5 | `fifth_of_fifth_detector.rs` 抽共通 fn | 新 module;`rule_3.rs:37` `check_fifth_of_fifth_and_add` + `rule_4.rs:210` `add_l5_if_fifth_of_fifth` 兩處 byte-for-byte 重複合併;對齊 Appendix A.3 |
+| 6 | `FlatKind::IrregularStrongB` 補 123.6% 中間檻 | `Irregular`(100-123.6%)+ 新 `IrregularStrongB`(123.6-138.2%);對齊 Appendix B 項 A;`flat_classifier::classify_flat` + power_rating table/post_behavior 對齊更新 |
+
+### 範圍
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/output.rs` | `StructuralFacts` 加 1 欄;`AlternationFact` / `OverlapPattern` 升結構;`ChannelingFact` / `TimeRelationship` 加 evidence 欄;新 `AlternationCheck` / `SubdivisionStatus` / `ExtensionSubdivisionPair`;`FlatKind` 加 `IrregularStrongB` |
+| `rust_compute/cores/wave/neely_core/src/classifier/structural_facts.rs` | `alternation` 改 `(candidate, classified, report)` 3-arg + 5-axis 計算 + 4 axis 分類 helper;`overlap_pattern` 升 enum 變體;`time_relationship` 加 evidence;`channeling` 加 evidence;**新** `extension_subdivision_pair()` fn;**+10 new tests** |
+| `rust_compute/cores/wave/neely_core/src/classifier/mod.rs` | StructuralFacts 構造加 `extension_subdivision_pair` 欄位 + alternation 改 3-arg call |
+| `rust_compute/cores/wave/neely_core/src/classifier/flat_classifier.rs` | `classify_flat` 加 123.6% 中間檻 sub-range 分支;**+3 new tests** |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/fifth_of_fifth_detector.rs` | **新檔** — 共通 fn + 2 unit tests |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/mod.rs` | 加 `mod fifth_of_fifth_detector;` |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/rule_3.rs` | 移除 local `check_fifth_of_fifth_and_add`,use shared `fifth_of_fifth_detector::add_l5_if_fifth_of_fifth as check_fifth_of_fifth_and_add` |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/rule_4.rs` | 移除 local `add_l5_if_fifth_of_fifth`,use shared |
+| `rust_compute/cores/wave/neely_core/src/power_rating/table.rs` | FlatKind match 加 `IrregularStrongB`(並列 Irregular,power -1) |
+| `rust_compute/cores/wave/neely_core/src/power_rating/post_behavior.rs` | 同上(並列 Irregular,MinRetracement 0.90) |
+| `CLAUDE.md` | v4.1 章節(本段) |
+
+**0 alembic / 0 collector.toml / 0 Python / 0 dispatch 行為改變**。
+
+### 沙箱驗證
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release -p neely_core` ✅ **288 passed / 0 failed**(從 v3.38 baseline → +13 new)
+- `cargo test --release --workspace --no-fail-fast` ✅ **461 passed / 0 failed**(v3.38 baseline 448 → +13)
+
+### 風險
+
+🟢 極低:
+- 純 struct 擴 + 共通 fn 抽提,**0 dispatch 行為改變**
+- production scenarios 0 影響(`Scenario` JSON 序列化新增欄位,既有 caller 0 break)
+- 既有 5 cores 的 tests + Aggregation Layer Python tests 不受影響(structural fields 是 optional)
+- params_hash 變動(`Scenario` struct schema 改)→ user 重跑 tw_cores 時走 ON CONFLICT UPDATE 覆寫;**不需 DELETE**
+- Rollback:單 commit `git revert` 即可
+
+### user 本機(下次 session 起點)
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+# (P1.1 純結構性,可不重跑 tw_cores;若要看新欄位 → 重跑)
+cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
+
+# 確認新 fields 存在於 Scenario JSON
+psql $env:DATABASE_URL -c "
+SELECT
+  s->'structural_facts'->'extension_subdivision_pair' AS esp,
+  s->'structural_facts'->'alternation' AS alt_5axis,
+  s->'structural_facts'->'overlap_pattern' AS overlap_enum
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE stock_id='2330' AND core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE stock_id='2330' AND core_name='neely_core' AND timeframe='daily')
+  AND timeframe='daily'
+LIMIT 3;
+"
+# 預期:
+#   esp = {extended_wave:..., status:..., extension_ratio:...} JSON
+#   alt_5axis = {price:..., time:..., severity:..., intricacy:..., construction:..., overall_holds:...}
+#   overlap_enum = {"Trending":{"evidence":"..."}} 或 {"Terminal":{"evidence":"..."}}
+```
+
+### 下個 milestone(P1.2)
+
+接著 P1.2 Ch9 advisory + Ch12 Waterfall/Localized(2-3 天 / ~670 LoC / 1 commit)。
+詳見 `/root/.claude/plans/hashed-foraging-pixel.md` §「Milestone P1.2」。
+
+---
+
 ## v3.38 — Per-forecast-horizon Neely + degradation strategy(2026-05-18)
 
 接 v3.37.1 SQL hotfix + v3.37 multi-timeframe Neely production verify 後 user 對「daily

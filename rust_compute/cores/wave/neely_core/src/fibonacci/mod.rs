@@ -19,6 +19,8 @@
 
 pub mod projection;
 pub mod ratios;
+/// v4.2 P1.2 #11:Waterfall Effect ±5% 偵測(原 projection.rs:19 註解 deferred P11+,本 PR 落地)
+pub mod waterfall;
 
 pub use projection::{
     compute_expected_fib_zones, project_external_from_w1, project_from_w1, project_internal_from_w1,
