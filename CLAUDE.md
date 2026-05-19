@@ -266,6 +266,61 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.3e — P1.3e Ch11 Triangle 9 變體 wave-a-e 規則(2026-05-19)
+
+P1.3 系列最後 sub-PR。動工 Ch11 Triangle 9 變體 × wave-a/b/c/d/e 進階規則。
+**Advisory mode**;對應 `NeelyPatternType::Triangle { sub_kind: TriangleKind }`。
+
+### 範圍(1 commit / P1.3 收尾)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/validator/ch11_triangle_variants.rs` | **新檔** — `analyze()` + `classify_variant()`(TriangleKind 3 → TriangleVariant 9 mapping)+ Common Contracting / Expanding 規則 + 3 變體特定 b-wave 規則;**+9 unit tests** |
+| `rust_compute/cores/wave/neely_core/src/validator/mod.rs` | 加 `pub mod ch11_triangle_variants;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 `ch11_triangle_variants::analyze()`(P1.3 5 sub-PR 全部 wire 完)|
+| `CLAUDE.md` | v4.3e 章節 |
+
+### 規則覆蓋(spec line 2346-2485)
+
+**TriangleKind 3 → TriangleVariant 9 mapping**(從 b/a ratio):
+- b/a ≤ 1.01 → Horizontal
+- 1.01 < b/a ≤ 1.382 → Irregular
+- b/a > 1.382 → Running
+- × TriangleKind:Limiting / NonLimiting(Contracting)/ Expanding
+
+**共同規則**:
+- Contracting:d < c / e < d / c ≤ 161.8% × b
+- Expanding:a 或 b 為最小 / d > c / e > d / e 為最大
+
+**變體特定 b-wave 規則**:
+- Horizontal:a ≥ 50% × b / b ≤ 261.8% × a
+- Irregular:b > 1.01 × a / b ≤ 261.8% × a / 更常 ≤ 161.8% × a
+- Running:b 為最長段(b > 1.382 × a)
+
+### P1.3 5 sub-PR 整體總結
+
+| Sub-PR | 模組 | Tests |
+|---|---|---|
+| P1.3a Trending Impulse | ch11_trending_impulse.rs | +11 |
+| P1.3b Terminal Impulse | ch11_terminal_impulse.rs | +7 |
+| P1.3c Flat 7 變體 | ch11_flat_variants.rs | +8 |
+| P1.3d Zigzag + Appendix B 項 F | ch11_zigzag.rs | +7 |
+| P1.3e Triangle 9 變體 | ch11_triangle_variants.rs | +9 |
+| **Total P1.3** | **5 new modules** | **+42** |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **349 passed / 0 failed**(v4.3d 340 → +9)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### 下個 milestone(P1.4)
+
+P1.3 完成!接著 P1.4 — Ch4 Round 2 動作 B + Ch8 X-wave / Multiwave / Ch6 接 Ch8
+(~1,500 LoC,3-4 commits)。**P1.4 收尾後 user 必跑 P0 Gate**(forest_size 重校)。
+詳見 plan §「Milestone P1.4」。
+
+---
+
 ## v4.3d — P1.3d Ch11 Zigzag wave-a/b/c + Appendix B 項 F(2026-05-19)
 
 接 v4.3c P1.3c 後動工 P1.3d — Ch11 Zigzag wave-a/b/c 進階規則 + Appendix B 項 F

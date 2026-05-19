@@ -92,6 +92,11 @@ pub fn run(scenarios: &mut [Scenario], classified: &[ClassifiedMonowave]) {
         // v4.3d P1.3d:Ch11 Zigzag wave-a/b/c 進階規則 + Appendix B 項 F
         findings.extend(crate::validator::ch11_zigzag::analyze(scenario, classified));
 
+        // v4.3e P1.3e:Ch11 Triangle 9 變體 wave-a-e 規則(P1.3 最後 sub-PR)
+        findings.extend(crate::validator::ch11_triangle_variants::analyze(
+            scenario, classified,
+        ));
+
         // 寫入 advisory_findings(此處 set,需在 Independent / Exception Aspect 2 之前)
         scenario.advisory_findings = findings;
 
