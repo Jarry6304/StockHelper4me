@@ -32,7 +32,14 @@ type SignedPower = i8;
 /// 由 spec power table 查找 signed power(±3..0..∓3 範圍)。
 ///
 /// `in_triangle` = scenario 是否為較大 Triangle 內部 leg(spec 2021 行例外:Triangle 內任一規則例外 = 0)。
-/// Phase 5 暫無 parent context → 傳 false;留 P6/P8 Compaction 補完整 nested 偵測。
+///
+/// **v4.7.2 G1.2 更新註解**(2026-05-19):in_triangle parent context 偵測
+/// 已在 Phase 8 PR `three_rounds::apply_nested_triangle_context` 落地
+/// (見 `three_rounds/mod.rs:39-57`)— 對每個 scenario A,若存在另一
+/// Triangle scenario B 完全涵蓋 A → A.in_triangle_context = true。
+/// 本 fn 由 `power_rating::rate_scenario` 呼叫時,傳入 `scenario.in_triangle_context`
+/// 真實值(`power_rating/mod.rs:24-30`),非 hardcoded false placeholder。
+/// 細節 nested(e.g. Limiting Triangle 例外、Combination Double* 中段)留 V4.x 細化。
 fn signed_power_lookup(pattern: &NeelyPatternType, in_triangle: bool) -> SignedPower {
     if in_triangle {
         // Spec 2021:三角內所有規則例外 → power = 0

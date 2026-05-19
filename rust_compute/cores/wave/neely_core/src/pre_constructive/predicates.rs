@@ -28,6 +28,29 @@ pub const FIB_1382: f64 = 1.382;
 pub const FIB_1618: f64 = 1.618;
 pub const FIB_2618: f64 = 2.618;
 
+/// **v4.7.2 G1.2(2026-05-19)**:Polywave 偵測門檻(spec line 1042-1062
+/// 「m_N 含 > 3 sub-monowaves」)。
+///
+/// Compaction Stage 8 跑完後,`pre_constructive::populate_polywave_sizes` 對每個
+/// base classified[i] 標記 `polywave_size`(該 region 在 Level-N+ scenario
+/// 內被 aggregate 的 children 數)。當 `polywave_size > POLYWAVE_THRESHOLD` 即視為
+/// polywave(rule_1 / 4 / 5 / 6 / 7 Branch 切換)。
+///
+/// 注意:第 1 次 Pre-Constructive Pass(Stage 0)在 Compaction 前跑,所有
+/// `polywave_size = 0`,polywave 檢查永遠 false → 走 (B) 分支。Compaction
+/// 後第 2 次 Pass 才有 polywave 資訊。對齊 plan §G1.2「2-pass forward design」。
+pub const POLYWAVE_THRESHOLD: usize = 3;
+
+/// 檢查 ClassifiedMonowave 是否屬於 polywave region(spec 1042-1062 行
+/// 「含 > 3 sub-monowaves」)。
+///
+/// 對齊 spec 用語:m_N 在 Compaction 後 if `polywave_size > POLYWAVE_THRESHOLD`
+/// 視為 polywave。Pass 1(Stage 0 first run)時 polywave_size 永遠 0 → false。
+/// Pass 2(Stage 8 Compaction 後 re-run)有真實值。
+pub fn is_polywave(m: &ClassifiedMonowave) -> bool {
+    m.polywave_size > POLYWAVE_THRESHOLD
+}
+
 // ---------------------------------------------------------------------------
 // Magnitude / Ratio helpers
 // ---------------------------------------------------------------------------
@@ -377,6 +400,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         }
     }
 
@@ -476,6 +500,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         };
         let m_0 = ClassifiedMonowave {
             monowave: Monowave {
@@ -494,6 +519,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         };
         let m_1 = ClassifiedMonowave {
             monowave: Monowave {
@@ -512,6 +538,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         };
         let m_2 = ClassifiedMonowave {
             monowave: Monowave {
@@ -530,6 +557,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         };
         assert!(m2_breaches_2_4_line_within_m1_time(&m_neg_2, &m_0, &m_1, &m_2));
     }

@@ -4,8 +4,10 @@
 // Headline:`{any Structure possible;條件不符時改用 Position Indicator Sequences}`
 //
 // 子分支 (A) / (B) 依賴「m2 / m3 含 > 3 monowaves」判定。
-// [缺資料]:單一 monowave 是否含 > 3 子 monowaves 需 Compaction(P6+)。
-// Phase 2 PR 視為 false(視為 ≤ 3),走 (B) 分支。
+// **v4.7.2 G1.2(2026-05-19)**:m2 / m3 polywave 偵測改為 `is_polywave(m)`
+// 從 ClassifiedMonowave.polywave_size 反查(Compaction 後 Pass 2 才有真實值)。
+// Pass 1(Stage 0)仍走 (B) 分支(polywave_size 全 0);Pass 2 在 Compaction
+// 後 polywave_size > 3 時切換 (A) 分支。
 
 use super::context::MonowaveContext;
 use super::predicates::*;
@@ -33,8 +35,26 @@ pub fn run(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
 // ---------------------------------------------------------------------------
 
 fn cond_5a(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
-    // [缺資料] m2 polywave 偵測。Phase 2 跑 (B) 分支(預設 ≤ 3)
+    // **v4.7.2 G1.2**:m2 polywave 偵測從 Compaction 反查
+    // Pass 1 polywave_size=0 → (B);Pass 2 在 Compaction 後若 > 3 → (A)
+    if let Some(m2) = ctx.m2 {
+        if is_polywave(m2) {
+            cond_5a_a(ctx, cands);
+            return;
+        }
+    }
     cond_5a_b(ctx, cands);
+}
+
+/// **v4.7.2 G1.2**:Condition 5a 子分支 (A):m2 含 > 3 monowaves
+///
+/// 對齊 spec 行 855-866:m2 為 polywave 時 add :L5 / :F3 / :L3 etc。
+/// 本 PR 實作 NEoWave 核心分支(spec 12 branches 細節留 V4.x);
+/// 通用實作:add :L5 + :F3 + :L3 of certainty Possible(後續 Validator 過濾)。
+fn cond_5a_a(_ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
+    add_or_promote(cands, StructureLabel::L5, Certainty::Possible);
+    add_or_promote(cands, StructureLabel::F3, Certainty::Possible);
+    add_or_promote(cands, StructureLabel::L3, Certainty::Possible);
 }
 
 fn cond_5a_b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
@@ -113,8 +133,22 @@ fn cond_5a_b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
 // ---------------------------------------------------------------------------
 
 fn cond_5b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
-    // [缺資料] m3 polywave 偵測。Phase 2 跑 (B) 分支
+    // **v4.7.2 G1.2**:m3 polywave 偵測從 Compaction 反查
+    if let Some(m3) = ctx.m3 {
+        if is_polywave(m3) {
+            cond_5b_a(ctx, cands);
+            return;
+        }
+    }
     cond_5b_b(ctx, cands);
+}
+
+/// **v4.7.2 G1.2**:Condition 5b 子分支 (A):m3 含 > 3 monowaves
+///
+/// 對齊 spec 行 870-880(細節留 V4.x);通用 add :L5 / :s5 of Possible。
+fn cond_5b_a(_ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
+    add_or_promote(cands, StructureLabel::L5, Certainty::Possible);
+    add_or_promote(cands, StructureLabel::S5, Certainty::Possible);
 }
 
 fn cond_5b_b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {

@@ -294,6 +294,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: candidates,
+            polywave_size: 0,
         }
     }
 
@@ -452,6 +453,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: candidates,
+            polywave_size: 0,
         }
     }
 

@@ -119,6 +119,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: cands,
+            polywave_size: 0,
         }
     }
 

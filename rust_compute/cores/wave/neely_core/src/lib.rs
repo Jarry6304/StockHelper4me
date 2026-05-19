@@ -406,6 +406,12 @@ impl WaveCore for NeelyCore {
         // 對 Stage 3.5 isolated bounds 重對 forest scenarios 邊界匹配 → 設 validated=true
         pattern_isolation::validate_after_compaction(&mut pattern_bounds, &forest, &classified);
 
+        // v4.7.2 G1.2:Pre-Constructive 2-pass — Compaction 後 polywave 反查 + 重跑 rules
+        //   - Pass 1(Stage 0 first run,classifid[i].polywave_size = 0)已跑完
+        //   - 此處反查 forest 標記 polywave_size,再跑 Pass 2 取得 polywave-aware 候選
+        pre_constructive::populate_polywave_sizes(&mut classified, &forest);
+        pre_constructive::run(&mut classified, &input.bars);
+
         // ── Stage 8.5:Three Rounds nested context + Round 3 暫停偵測(Phase 8 PR)
         //    對齊 m3Spec/neely_rules.md §Three Rounds + §Ch10 三角內 Power = 0 例外
         let stage_8_5_start = Instant::now();

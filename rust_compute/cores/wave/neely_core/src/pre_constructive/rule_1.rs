@@ -62,9 +62,17 @@ fn cond_1a(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
 
     // Branch 3:m0 含 > 3 monowaves AND m1 在 m0 同時間或更短完全回測 m0
     //   → 記:m0 可能是重要 Elliott 形態結束
-    //   [缺資料] m0 是否為 polywave(含 > 3 monowaves)需 Stage 7 Compaction 後才知道。
-    //   Phase 2 PR 將其視為 false(單一 monowave 不算「含 > 3 monowaves」)
-    //   → 此 branch 無 candidate 變動,只可能加 diagnostic flag(P6 Compaction 串接後完整)
+    //   **v4.7.2 G1.2**:m0 polywave 偵測從 Compaction 反查
+    //   (Pass 1 永遠 false,Pass 2 在 Stage 8 後 polywave_size 已填)
+    if is_polywave(m0) {
+        let m1_completely_retraces = completely_retraced(&m0.monowave, &m1.monowave);
+        let m1_same_or_shorter_time =
+            m1.metrics.duration_bars <= m0.metrics.duration_bars;
+        if m1_completely_retraces && m1_same_or_shorter_time {
+            // m0 為 polywave 結束 → add [:L5] 候選
+            add_or_promote(cands, StructureLabel::L5, Certainty::Possible);
+        }
+    }
 
     // Branch 4:m0 ≈ m2(價/時 相等或 61.8%)AND m(-1) ≥ 161.8% m1
     //          AND m3(或 m3~m5)在 ≤ m(-1) 時間內 ≥ m(-1) 價長
@@ -184,8 +192,16 @@ fn cond_1b(ctx: &MonowaveContext, cands: &mut Vec<StructureLabelCandidate>) {
     }
 
     // Branch 3:m0 polywave + m1 完全回測 m0(plus 1 time unit 嚴格時計)
-    //   → 記:m0 可能 Elliott 形態結束(本 PR 視為 false placeholder)
-    //   [缺資料]:m0 polywave 偵測需 Compaction(P6+)
+    //   → 記:m0 可能 Elliott 形態結束
+    // **v4.7.2 G1.2**:m0 polywave 偵測從 Compaction 反查
+    if is_polywave(m0) {
+        let m1_completely_retraces = completely_retraced(&m0.monowave, &m1.monowave);
+        // plus 1 time unit:m1 duration ≤ m0 duration + 1 bar(本 PR 簡化為嚴格 ≤)
+        let m1_stricter_time = m1.metrics.duration_bars <= m0.metrics.duration_bars;
+        if m1_completely_retraces && m1_stricter_time {
+            add_or_promote(cands, StructureLabel::L5, Certainty::Possible);
+        }
+    }
 
     // Branch 4:m2 部分價區與 m0 共享 AND m3 比 m1 更長更垂直(時間 ≤ m1)AND m(-1) > m1
     //   → add :sL3(Triangle 倒二)
@@ -365,6 +381,7 @@ mod tests {
                 slope_vs_45deg: 1.0,
             },
             structure_label_candidates: Vec::new(),
+            polywave_size: 0,
         }
     }
 
