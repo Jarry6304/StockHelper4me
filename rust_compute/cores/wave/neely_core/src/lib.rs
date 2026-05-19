@@ -92,6 +92,10 @@ use crate::output::TimeRange;
 
 pub mod advanced_rules;
 pub mod candidates;
+/// v4.4b P1.4b:Ch8 X-wave Internal Structure 偵測(對齊 m3Spec Ch8 §X-wave)
+pub mod ch8_xwave;
+/// v4.4c P1.4c:Ch8 Multiwave 建構偵測(對齊 m3Spec Ch8 §Multiwave 建構)
+pub mod ch8_multiwave;
 pub mod classifier;
 pub mod compaction;
 pub mod complexity;
@@ -386,8 +390,10 @@ impl WaveCore for NeelyCore {
         );
 
         // ── Stage 8:Compaction(M3 PR-5,簡化 pass-through + Forest 上限保護)
+        // v4.4a:提前構建 monowave_series 給 compaction(Level-0 magnitude 真實 lookup)
+        let monowave_series_for_compaction: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
         let stage_8_start = Instant::now();
-        let compaction_result = compaction::compact(scenarios, cfg);
+        let compaction_result = compaction::compact(scenarios, &monowave_series_for_compaction, cfg);
         stage_elapsed.insert(
             "stage_8_compaction".to_string(),
             stage_8_start.elapsed().as_micros() as u64,

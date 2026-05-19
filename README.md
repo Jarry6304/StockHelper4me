@@ -2,9 +2,9 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + Cross-Stock Cores 11 builders + MCP toolkit 8 tools)。
 
-**版本**:v3.32(alembic head `d9e0f1g2h3i4` / 2026-05-18)
-**驗證流水線**:今日 4 commits(v3.29 / v3.30 / v3.31 / v3.32)完整 verify chain 見 [CLAUDE.md §下班後 verify 流水線](CLAUDE.md#下班後-verify-流水線2026-05-18-整日-4-commits)(6 phase:env / SQL diagnostic / alembic+phase 8 / 資料 spot-check / Kalman-Neely verify / MCP 8 tools 對話內測 / pytest)
-**狀態**:**Round 7-9 calibration 完整結算** ☕ + **v3.31 MCP toolkit 9 → 4 consolidation(stock_snapshot 6-in-1)** + **v3.32 10 new cross_cores factor builders + 4 MCP screen wrappers**(對齊量化因子提案 v1.1:Toolkit A momentum + B value-quality + C low-risk + Layer 5 trigger overlay)。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**(magic_formula + v3.32 10 個);Aggregation Layer 4 Phase 全套;Rust workspace **443 tests passed / 0 failed**;Python tests **165 passed / 1 skipped**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
+**版本**:**v4.4**(alembic head `d9e0f1g2h3i4` / 2026-05-19,v4.0 → v4.4 Neely M3SPEC alignment 9 commits 全收尾)
+**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)5 phase 流水線:Environment check / Sandbox unit tests / Schema health / Production verify / MCP smoke test。完整 verify chain 見 [CLAUDE.md §下班後 verify 流水線](CLAUDE.md)
+**狀態**:**v4.0 Neely M3SPEC alignment 完整收尾** ☕ — 15 真闕漏 + 2 簡化降級全部 dispatch(P1.1 ~ P1.4 / 9 modules / ~5,500 LoC / +80 tests)+ **v3.31 MCP toolkit 9 → 4 consolidation(stock_snapshot 6-in-1)** + **v3.32 10 new cross_cores factor builders + 4 MCP screen wrappers**。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**;Aggregation Layer 4 Phase 全套;**Rust workspace 528 tests passed / 0 failed**;**Python tests 165+ passed**;1266 stocks × 36 cores / wall time ~12 min / facts ~5.1M(VACUUM 後)
 
 ---
 
@@ -14,7 +14,7 @@
 
 | 文件 | 用途 |
 |---|---|
-| **`CLAUDE.md`** | v1.35 → v3.24 跨 session 歷程紀錄(改 schema / 加 entry 前必看「關鍵架構決策」+ 最新 v3.X 段;v1.5 ~ v1.34 已歸檔 `docs/claude_history.md`)|
+| **`CLAUDE.md`** | v1.35 → **v4.4** 跨 session 歷程紀錄(改 schema / 加 entry 前必看「關鍵架構決策」+ 最新 v4.X 段;v1.5 ~ v1.34 已歸檔 `docs/claude_history.md`)|
 | **`m2Spec/layered_schema_post_refactor.md`** | Bronze + Silver schema 規範(主要 spec)|
 | **`m3Spec/`** | M3 Cores 層 spec(13 份,涵蓋 indicator / pattern / chip / fundamental / environment / neely / agg layer)|
 |   `m3Spec/neely_core_architecture.md` | Neely Wave Core(P0)架構,r6(v3.6 RuleId enum 76 variants)|
@@ -421,22 +421,131 @@ v3.32 10 new cross_cores factor builders + 4 MCP toolkit screens(2026-05-18):
       - tests 125 → 165 passed(+23 cross_cores + 17 screens)
 ```
 
+### v3.33 → v3.38(2026-05-18 Kalman multi-horizon + Neely multi-timeframe)
+
+```
+v3.33 Kalman multi-horizon output:
+      - Rust kalman_filter_core 重構 KalmanFilterParams 為 4 horizons
+        (short Q=1e-1 / medium Q=1e-2 / long Q=1e-3 / ultra_long Q=1e-5)
+      - facts(EventKind transition)只從 primary horizon("medium")產
+      - MCP kalman_trend 加 kalman_by_horizon + cross_horizon_consistency
+v3.34 Kalman polish:short threshold 0.005 → 0.003;deviation_sigma 1% smoothed floor
+v3.35 Neely-C-MCP picker:invalidation filter + degree-aware ordering
+      (Advisory Layer 處理,不動 Rust Three Rounds — 對齊 NEoWave 原作精神)
+v3.35.1 quality_caveat:short-degree only + fib decoupled warnings
+v3.36 load_for_neely 6 yr floor hotfix(原 600 bars / 2.4 yr → 6 yr 對齊其他 cores)
+v3.37 Multi-timeframe Neely:Daily/Weekly/Monthly 三 timeframe 並行
+      cross-timeframe picker(Aggregation Layer 跨 tf primary 選擇)
+v3.37.1 hotfix:load_weekly/load_monthly SQL — use (year, week/month), not date
+v3.38 Per-forecast-horizon Neely:1m/3m/6m(drop 1y)
+      + degradation strategy(full / degree_uncertain / no_6m / insufficient_history)
+      + spec-aligned missing_wave tier(pattern-specific min monowave table)
+      + monthly lookback 144 → 60
+```
+
+### v4.0 → v4.4(2026-05-19 Neely Core M3SPEC alignment 完整收尾,9 commits)
+
+```
+v4.0 Plan:對 m3Spec/neely_core_architecture.md r6 + neely_rules.md 全篇對照 54 個
+     .rs files,揭露 15 真闕漏 + 2 簡化降級。User 拍版全做 P1.1 → P1.4
+     (~5,500 LoC / +80 tests / Ch11 Advisory mode 對齊 NEoWave 原作精神)。
+
+v4.1 P1.1 Quick Wins(34f73e2):
+     - StructuralFacts 加 extension_subdivision_pair 欄位(Ch8 Independent Rule)
+     - AlternationFact 升 5-axis(Price/Time/Severity/Intricacy/Construction)
+     - OverlapPattern 升 enum(Trending/Terminal/None with evidence)
+     - ChannelingFact / TimeRelationship 加 evidence
+     - 新 fifth_of_fifth_detector.rs(Appendix A.3 共通 fn 抽提)
+     - FlatKind::IrregularStrongB(Appendix B 項 A 123.6% 中間檻)
+
+v4.2 P1.2 Ch9 advisory + Ch12 Waterfall/Localized(aa64e5a):
+     - Ch9 Independent Rule advisory(多 chapter 規則互不干涉)
+     - Ch9 Simultaneous Occurrence(Impulse 預期 R1-R7 全 passed)
+     - Ch9 Exception Aspect 2 dispatch(2-4 線突破觸發 Terminal Impulse)
+     - Ch9 Exception Aspect 1 Multiwave 結尾分支補完
+     - Ch12 Waterfall Effect ±5%(W3/W1 或 W5/max > 2.668)
+     - Ch12 Localized Progress Label Changes
+
+v4.3 P1.3 Ch11 wave-by-wave 全變體(5 sub-PRs):
+     - P1.3a Trending Impulse(77ab3d7):1st/3rd/5th Ext + Failure + Wave-4 共通
+     - P1.3b Terminal Impulse(21fb732):4 變體 + 與 Trending 差異(W2 寬鬆 / :3 結構)
+     - P1.3c Flat 7 變體(8a91392):B-Failure/C-Failure/Common/Double Failure/
+       Elongated/Irregular(+StrongB)/Irregular Failure;FlatVariant 加 DoubleFailure
+     - P1.3d Zigzag(3a592f9):wave-a/b/c + Appendix B 項 F(Triangle 內 c 例外)
+     - P1.3e Triangle 9 變體(2c663b4):Horizontal/Irregular/Running ×
+       Limiting/NonLimiting/Expanding 9 variants
+
+v4.4a P1.4a Ch4 真 magnitude + Round 2 動作 B(1af97a0):
+     - scenario_price_magnitude 從 wave_tree.children.len() placeholder 升為
+       真實 monowave price lookup(find_price_at_date helper)
+     - compact() chain signature 加 monowaves: &[Monowave] 參數
+     - Round 2 動作 B 邊界波 retracement Rules 重評 advisory(spec line 1249-1251)
+
+v4.4 P1.4b+c+d Ch8 X-wave + Multiwave + Ch6 Stage 2(40d1996):
+     - ch8_xwave/mod.rs:Combination 偵測 Large/Small X-wave(Table A vs B)
+     - ch8_multiwave/mod.rs:Triple* 末段 / Double* 中段
+     - Ch6 Combination Stage 2 advisory(後續走勢確認須結合 Ch8 module)
+     - Ch6 RunningCorrection Stage 2 advisory(後續 Impulse > 161.8%)
+
+Advisory mode 設計(對齊 NEoWave 原作 Ch11 = pattern characteristic 非 invariant):
+- 違反規則 → 寫 AdvisoryFinding(Warning/Info/Strong)+ RuleId metadata
+- 不 invalidate scenario / 不縮 forest size / production scenario forest 0 影響
+- LLM 看 narrative 取信號;V4.x 可開 feature flag 升 hard reject
+
+P0 Gate 校準(user 本機 P1.4 後必跑):
+- forest_size 分布:max ≤ 200(cap),p95 < 180
+- 3030 / 2330 / 1101 manual review:primary degree 不退化
+- 若 p95 > 180 → 重校 BeamSearchFallback.k
+```
+
 ---
 
-## 8. 測試
+## 8. 測試流水線
+
+### 8.1 一鍵測試流水線(推薦,v4.4 新)
+
+`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)— 5 phase 完整測試:
+
+```powershell
+# Windows / PowerShell
+.\scripts\test_pipeline.ps1                  # 跑全套 Phase 0-4
+.\scripts\test_pipeline.ps1 -OnlyPhase 0,1   # 只跑 sandbox(無 PG)
+.\scripts\test_pipeline.ps1 -SkipPhase 3     # 跳過 production verify(P0 Gate)
+.\scripts\test_pipeline.ps1 -DryRun          # 列計畫不執行
+```
+
+```bash
+# Unix / Bash
+./scripts/test_pipeline.sh                            # 全套
+ONLY_PHASES="1"   ./scripts/test_pipeline.sh          # 只 sandbox
+SKIP_PHASES="3 4" ./scripts/test_pipeline.sh          # 跳 PG-heavy phase
+DRY_RUN=1         ./scripts/test_pipeline.sh          # 計畫模式
+```
+
+| Phase | 用途 | 需 PG | 預估時間 |
+|---|---|---|---|
+| **0** Environment check | Python venv / Rust toolchain / .env / psql / tw_cores binary | ❌ | 數秒 |
+| **1** Sandbox unit tests | Rust workspace(528 tests)+ Python pytest agg/mcp/cross_cores(165+) | ❌ | ~5-8 分鐘 |
+| **2** Schema health | alembic head + M3 表 row counts + 11 cross_cores tables | ✅ | < 5 秒 |
+| **3** Production verify | facts stats(VACUUM)+ per-EventKind rate + **Neely forest_size P0 Gate**(v4.4a acceptance:max ≤ 200,p95 < 180) | ✅ | ~1 分鐘 |
+| **4** MCP smoke test | `verify_mcp_kalman_neely.py` 對 2330 / 3030 + 8 toolkit 公開介面 importable | ✅ | ~30 秒 |
+
+退碼:0 = 全綠 / 1 = 任一 phase fail。
+
+### 8.2 個別 test 指令(進階,需精確控制時用)
 
 ```bash
 # Python tests(agg + silver + cross_cores + mcp_server)
 pytest tests/agg/                       # 39 passed / 1 skipped(pandas 未裝)
-pytest tests/mcp_server/                # 100+ passed(v3.32 +17 screens cases)
-pytest tests/cross_cores/               # 30+ passed(v3.32 +23 builder cases)
+pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py   # 100+ passed
+pytest tests/cross_cores/               # 30+ passed
 pytest tests/                           # 全套 unit test
 
-# Rust workspace tests(39 crates / 443 passed / 0 failed)
-cd rust_compute && cargo test --release --workspace
+# Rust workspace tests(39 crates / 528 passed / 0 failed,v4.4 後)
+cd rust_compute && cargo test --release --workspace --no-fail-fast
 ```
 
-push 前必跑 verifier:
+push 前必跑 verifier(已整合進 Phase 1):
 ```bash
 python scripts/verify_pr18_bronze.py        # 5 張 Bronze 反推 round-trip
 python scripts/verify_pr19b_silver.py       # 5 個簡單 builder 對 v2.0 legacy 等值
@@ -444,13 +553,29 @@ python scripts/verify_pr19c_silver.py       # 5 個 market-level builder
 python scripts/verify_pr20_triggers.py      # 15 個 trigger 整合測試
 ```
 
-production calibration verify(v3.14 加,4 sections 分流):
+production calibration verify(已整合進 Phase 3):
 ```bash
-psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql
+psql $env:DATABASE_URL -f scripts/maintain_facts_stats.sql       # ANALYZE + VACUUM stats
+psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql     # per-EventKind ≤ 12/yr
 # Section 1: per-stock cores ≤ 12 events/stock/year
 # Section 2: market-level cores events/year(distinct_stocks ≤ 5)
 # Section 3: Round 7 verify(adx/atr/day_trading/margin/trendline)— 0 row = 達標
-# Section 4: foreign_holding milestone 4 variants 顯式 + target band 對照(Round 8.3 verify 用)
+# Section 4: foreign_holding milestone 4 variants(Round 8.3 verify)
+```
+
+P0 Gate forest_size verify(v4.4a 後必跑,已整合進 Phase 3):
+```bash
+psql $env:DATABASE_URL -c "
+SELECT
+  PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
+  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
+  MAX(jsonb_array_length(snapshot->'scenario_forest')) AS max_count
+FROM structural_snapshots
+WHERE core_name = 'neely_core'
+  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
+"
+# Acceptance:max ≤ 200(cap 不破),p95 < 180
+# 若 max > 200 → 重校 rust_compute/cores/wave/neely_core/src/compaction/beam_search.rs::BeamSearchFallback.k
 ```
 
 ---

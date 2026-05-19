@@ -11,14 +11,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
-Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores)。
+Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment)。
 
-- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;前 head `c8d9e0f1g2h3` v3.21 Silver derived)
-- **開發分支**:`claude/continue-previous-work-xdKrl` → 合 main
+- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.4 無 schema migration)
+- **開發分支**:`claude/continue-previous-work-xdKrl` → PR 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
-- **Rust tests**:39 crates / **448 passed / 0 failed**(v3.33 +5 multi-horizon Kalman tests;v3.34 short threshold 微調無新 test)
-- **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens:`monthly_screen` / `quarterly_screen` / `annual_low_risk_screen` / `monthly_trigger_scan`)
-- **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**(7/7 over-fired EventKind = 6 校準 + 1 accepted baseline,v3.24 production verify:LoanCategoryConcentration 125.69 → 1.16/yr ✅,commodity_macro 0 → 105 events ✅)
+- **Rust tests**:39 crates / **528 passed / 0 failed**(v4.4 後;v3.38 baseline 448 → +80 v4.x tests across 9 commits)
+- **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens)
+- **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
+- **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
+- **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神(Ch11 = pattern characteristic 非 invariant);**P0 Gate 校準** user 本機跑 `tw_cores run-all --write` 後驗 forest_size(max ≤ 200,p95 < 180)
 
 ---
 
@@ -263,6 +265,167 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.4 — P1.4b+c+d Ch8 X-wave / Multiwave + Ch6 Stage 2(2026-05-19)
+
+P1.4 收尾 commit。合併 P1.4b(Ch8 X-wave)+ P1.4c(Ch8 Multiwave)+ P1.4d(Ch6
+Stage 2 接 Ch8 + RunningCorrection Stage 2)。**Advisory mode**;對應 Combination /
+RunningCorrection scenarios。
+
+### 範圍(1 commit / P1.4 final)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/ch8_xwave/mod.rs` | **新檔** — `detect()` 對 Combination scenario 偵測 X-wave 結構;Large X-wave(DoubleThree*/TripleThree*)→ Info「只允許 Flat/Triangle」/ Small X-wave(DoubleZigzag/Combination)→ Info「允許 Zigzag」 |
+| `rust_compute/cores/wave/neely_core/src/ch8_multiwave/mod.rs` | **新檔** — `detect()` 對 Combination scenario 偵測 Multiwave 建構;Triple* → 末段 / Double* → 中段 |
+| `rust_compute/cores/wave/neely_core/src/lib.rs` | 加 `pub mod ch8_xwave;` + `pub mod ch8_multiwave;` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/mod.rs` | `run()` 加 Ch8 X-wave / Multiwave detect 呼叫 + Ch6 Combination Stage 2 + RunningCorrection Stage 2 advisory |
+| `CLAUDE.md` | v4.4 章節 |
+
+### Advisory 內容(對應 Combination / RunningCorrection 兩 pattern type)
+
+| Pattern | Advisory 加 |
+|---|---|
+| `Combination` | Ch8 X-wave internal structure + Ch8 Multiwave 建構 + Ch6 Stage 2 (Combination Stage 2 須結合 Ch8 module 結果) |
+| `RunningCorrection` | Ch6 Stage 2 (後續 Impulse > 161.8% 預期) |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **355 passed / 0 failed**(P1.4a 349 → +6)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release --workspace` ✅ **528 passed / 0 failed**
+  (v3.38 baseline 448 → **+80 new tests across 4 milestones**)
+
+### v4.0 → v4.4 完整收尾(P1.1 → P1.4 全部完成)
+
+| Milestone | Commit | 新 modules / 主要動作 | Tests |
+|---|---|---|---|
+| P1.1 | v4.1 `34f73e2` | StructuralFacts 5 欄補完 + 5-axis Alternation + IrregularStrongB + fifth_of_fifth_detector | +13 |
+| P1.2 | v4.2 `aa64e5a` | Ch9 advisory(Independent/Simultaneous/Aspect 2)+ Ch12 Waterfall + Ch12 Localized | +19 |
+| P1.3a | v4.3a `77ab3d7` | ch11_trending_impulse.rs | +11 |
+| P1.3b | v4.3b `21fb732` | ch11_terminal_impulse.rs | +7 |
+| P1.3c | v4.3c `8a91392` | ch11_flat_variants.rs(+ FlatVariant::DoubleFailure)| +8 |
+| P1.3d | v4.3d `3a592f9` | ch11_zigzag.rs + Appendix B 項 F | +7 |
+| P1.3e | v4.3e `2c663b4` | ch11_triangle_variants.rs(9 變體)| +9 |
+| P1.4a | v4.4a `1af97a0` | Ch4 Level-0 真 magnitude + Round 2 動作 B advisory | 0(test fixture 更新) |
+| P1.4 final | v4.4 (this) | Ch8 X-wave / Multiwave + Ch6 Combination Stage 2 + RunningCorrection Stage 2 | +6 |
+| **Total** | **9 commits** | **9 new modules + 1 enum variant + ~5,500 LoC** | **+80** |
+
+### ⚠️ P0 Gate 校準(user 本機 P1.4 收尾後必跑)
+
+對齊 plan v4.0 §「Calibration division of labor」— Claude 寫 code + 沙箱 test;user 跑 P0 Gate。
+
+```powershell
+git pull
+cd rust_compute
+cargo clean -p neely_core -p tw_cores
+cargo build --release -p tw_cores
+.\target\release\tw_cores.exe run-all --write
+cd ..
+
+# forest_size 分布(對齊 architecture §10 forest_max_size=200 cap)
+psql $env:DATABASE_URL -c "
+SELECT
+  PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
+  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
+  MAX(jsonb_array_length(snapshot->'scenario_forest'))                                        AS max_count
+FROM structural_snapshots
+WHERE core_name = 'neely_core'
+  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
+"
+# acceptance:max ≤ 200(cap 不破),p95 < 180
+
+# 3030 / 2330 / 1101 manual review
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import neely_forecast
+for sid in ['3030','2330','1101']:
+    r = neely_forecast(sid,'2026-05-15')
+    print(f'{sid}: degree={r[\"primary_scenario\"][\"effective_degree\"]} '
+          f'tf={r[\"primary_scenario\"][\"timeframe\"]} '
+          f'wave_count={r[\"primary_scenario\"][\"wave_count\"]} '
+          f'horizons={list(r[\"forecasts\"].keys())}')
+"
+```
+
+### 風險(P1.4 整體)
+
+🔴 高(對齊 plan §P1.4 風險):
+- Ch4 Level-0 真 magnitude 改變 Similarity & Balance pass 率 → forest_size 分布可能改變
+- forest_size 爆超 200 cap 機率非零;user 本機 verify 後判斷
+- 若 p95 > 180 需重新校準 `BeamSearchFallback.k`
+- 沙箱無法完全 cover production data 變異,**user 必跑 P0 Gate**
+- Rollback:任一 P1.4 commit `git revert` 即可
+
+---
+
+## v4.4a — P1.4a Ch4 Level-0 真 magnitude + Round 2 動作 B(2026-05-19)
+
+P1.4 系列第一個 commit。修 `scenario_price_magnitude` 從 `wave_tree.children.len()`
+placeholder 改用真實 monowave price lookup + 加 Ch4 Round 2 動作 B 邊界波 retracement
+重評 advisory。
+
+### 範圍(1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/lib.rs` | 提前構建 `monowave_series` 給 compaction 用(原 line 469,移到 line 388 前) |
+| `rust_compute/cores/wave/neely_core/src/compaction/mod.rs` | `compact()` signature 加 `monowaves: &[Monowave]` 參數 |
+| `rust_compute/cores/wave/neely_core/src/compaction/exhaustive.rs` | `compact()` signature 同步加 |
+| `rust_compute/cores/wave/neely_core/src/compaction/three_rounds.rs` | `aggregate_one_level` / `try_aggregate_*` / `all_pairs_pass_sb` / `similarity_and_balance` / `scenario_price_magnitude` / `build_aggregated` 全部 signature 加 `monowaves: &[Monowave]`;**新** `find_price_at_date` helper + **新** `build_round_advisories` helper(含 Round 2 動作 B advisory) |
+| `CLAUDE.md` | v4.4a 章節 |
+
+### 主要 fix
+
+1. **真 magnitude lookup**(`scenario_price_magnitude`):
+   - 從 `wave_tree.children.len()` placeholder 改為 `find_price_at_date()` 反查 monowaves
+   - 對 Level-0 / Level-N scenario 都先試 monowave 反查,fallback 用 children.len() 維持 v3.7 行為
+   - 對應 spec line 204-213 的 placeholder note
+
+2. **Round 2 動作 B advisory**(`build_round_advisories`):
+   - 對齊 spec line 1249-1251「Round 2 動作 B 邊界波 m(-1)/m(+1) Retracement Rules 重評」
+   - 邊界 retracement ratio < 0.382 或 > 2.618 → Info advisory `Ch4_Round2_Compaction`
+   - 留 V4.x 細化:部分 Stage 3-4 candidate rerun(spec 1249-1251 完整實作)
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core` ✅ **349 passed / 0 failed**(P1.3e baseline 不變;
+  既有 17 個 compaction tests 全部更新呼叫 `&[]` empty monowaves slice 維持行為一致)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+
+### ⚠️ P0 Gate 校準(user 本機,P1.4 收尾後跑)
+
+> **真實 monowave magnitude 改變 Similarity & Balance pass 率** → `forest_size` 分布可能改變。
+> 對齊 plan v4.0 §P1.4 風險:**P1.4 收尾後必跑** user 本機 P0 Gate。
+
+P0 Gate 驗證指令(P1.4 整個 milestone 完工後跑):
+
+```powershell
+git pull
+cd rust_compute
+cargo clean -p neely_core -p tw_cores
+cargo build --release -p tw_cores
+.\target\release\tw_cores.exe run-all --write
+cd ..
+
+# forest_size 分布觀察(對齊 architecture §10 forest_max_size=200 cap)
+psql $env:DATABASE_URL -c "
+SELECT
+  PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
+  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
+  MAX(jsonb_array_length(snapshot->'scenario_forest'))                                        AS max_count
+FROM structural_snapshots
+WHERE core_name = 'neely_core'
+  AND snapshot_date = (SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
+"
+# acceptance:max ≤ 200(cap 不破),p95 < 180
+```
+
+### 下個 commit(P1.4b+c+d 合併)
+
+接下來 P1.4b + P1.4c + P1.4d 合併一個 commit(Ch8 X-wave / Multiwave + Ch6 Stage 2 接 Ch8)。
 
 ---
 
@@ -4474,6 +4637,8 @@ cd ..
 | `scripts/diagnose_slow_tw_cores.sql` 🆕 v3.19 | tw_cores 跑期間另開 psql 取樣:pg_stat_activity / lock waits / dedup query plan / pool saturation 4 phase + 解讀指南 | `psql $env:DATABASE_URL -f scripts/diagnose_slow_tw_cores.sql`(tw_cores 開跑後 30s) |
 | `scripts/verify_mcp_kalman_neely.py` 🆕 v3.31 | MCP Kalman + Neely 對 production 出值健康度 verify。per-stock check `smoothed_price > 0` / `velocity ≠ 0` / `wave_count > 0` / staleness。退碼 0=全綠 / 1=任一 FAIL,提示 root cause(v3.30 path fix / v3.28 regex parse / tw_cores 重算)| `python scripts/verify_mcp_kalman_neely.py --stocks 2330,3030` |
 | `scripts/verify_mcp_kalman_neely.sql` 🆕 v3.31 | 對 indicator_values / structural_snapshots 直接 SQL spot-check 揭露 Rust 寫進 DB 的真實內容(排除 MCP layer 干擾)2 phase + 解讀 comment | `psql $env:DATABASE_URL -v stock=2330 -f scripts/verify_mcp_kalman_neely.sql` |
+| `scripts/test_pipeline.ps1` 🆕 v4.4 | **完整測試流水線**(Windows)— 5 phase:Environment check / Sandbox unit tests(Rust 528 + Python 165+)/ Schema health(alembic+row counts)/ Production verify(facts stats + per-EventKind + **Neely forest_size P0 Gate**)/ MCP smoke test;支援 `-OnlyPhase` / `-SkipPhase` / `-DryRun` | `.\scripts\test_pipeline.ps1` |
+| `scripts/test_pipeline.sh` 🆕 v4.4 | 完整測試流水線(Unix Bash 版,對齊 .ps1);環境變數 `SKIP_PHASES` / `ONLY_PHASES` / `DRY_RUN=1` 控制 | `./scripts/test_pipeline.sh` |
 
 ---
 

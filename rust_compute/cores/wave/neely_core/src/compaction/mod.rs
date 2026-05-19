@@ -21,7 +21,7 @@
 //   - beam_search.rs 進階:k 值 P0 Gate 校準
 
 use crate::config::{NeelyEngineConfig, OverflowStrategy};
-use crate::output::{PowerRating, Scenario};
+use crate::output::{Monowave, PowerRating, Scenario};
 use std::time::Instant;
 
 pub mod beam_search;
@@ -48,12 +48,16 @@ pub struct CompactionResult {
 ///   2. 檢查 forest size 是否超過 cfg.forest_max_size
 ///   3. 超過 → 套 cfg.overflow_strategy(BeamSearchFallback / Unbounded)
 ///   4. 同時檢查 compaction_timeout_secs
-pub fn compact(scenarios: Vec<Scenario>, cfg: &NeelyEngineConfig) -> CompactionResult {
+pub fn compact(
+    scenarios: Vec<Scenario>,
+    monowaves: &[Monowave],
+    cfg: &NeelyEngineConfig,
+) -> CompactionResult {
     let start = Instant::now();
     let timeout_duration = std::time::Duration::from_secs(cfg.compaction_timeout_secs);
 
     // ── Step 1:exhaustive 窮舉(目前簡化 pass-through)
-    let initial_forest = exhaustive::compact(scenarios);
+    let initial_forest = exhaustive::compact(scenarios, monowaves);
     let initial_count = initial_forest.len();
 
     // ── Step 2-3:Forest 上限保護
@@ -148,7 +152,7 @@ mod tests {
             make_scenario("a", PowerRating::Bullish),
             make_scenario("b", PowerRating::Neutral),
         ];
-        let result = compact(scenarios, &cfg);
+        let result = compact(scenarios, &[], &cfg);
         assert_eq!(result.forest.len(), 2);
         assert!(!result.overflow_triggered);
         assert_eq!(result.compaction_paths, 2);
@@ -168,7 +172,7 @@ mod tests {
             make_scenario("d", PowerRating::Bearish),
             make_scenario("e", PowerRating::Neutral),
         ];
-        let result = compact(scenarios, &cfg);
+        let result = compact(scenarios, &[], &cfg);
         assert!(result.overflow_triggered);
         assert_eq!(result.forest.len(), 2);
         assert_eq!(result.compaction_paths, 5);
@@ -185,7 +189,7 @@ mod tests {
             make_scenario("a", PowerRating::Bullish),
             make_scenario("b", PowerRating::Bearish),
         ];
-        let result = compact(scenarios, &cfg);
+        let result = compact(scenarios, &[], &cfg);
         assert!(!result.overflow_triggered, "Unbounded 不應 trigger overflow");
         assert_eq!(result.forest.len(), 2);
     }
