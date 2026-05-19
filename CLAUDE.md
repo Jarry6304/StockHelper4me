@@ -11,14 +11,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
-Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores)。
+Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment)。
 
-- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;前 head `c8d9e0f1g2h3` v3.21 Silver derived)
-- **開發分支**:`claude/continue-previous-work-xdKrl` → 合 main
+- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.4 無 schema migration)
+- **開發分支**:`claude/continue-previous-work-xdKrl` → PR 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
-- **Rust tests**:39 crates / **448 passed / 0 failed**(v3.33 +5 multi-horizon Kalman tests;v3.34 short threshold 微調無新 test)
-- **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens:`monthly_screen` / `quarterly_screen` / `annual_low_risk_screen` / `monthly_trigger_scan`)
-- **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**(7/7 over-fired EventKind = 6 校準 + 1 accepted baseline,v3.24 production verify:LoanCategoryConcentration 125.69 → 1.16/yr ✅,commodity_macro 0 → 105 events ✅)
+- **Rust tests**:39 crates / **528 passed / 0 failed**(v4.4 後;v3.38 baseline 448 → +80 v4.x tests across 9 commits)
+- **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens)
+- **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
+- **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
+- **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神(Ch11 = pattern characteristic 非 invariant);**P0 Gate 校準** user 本機跑 `tw_cores run-all --write` 後驗 forest_size(max ≤ 200,p95 < 180)
 
 ---
 
@@ -4635,6 +4637,8 @@ cd ..
 | `scripts/diagnose_slow_tw_cores.sql` 🆕 v3.19 | tw_cores 跑期間另開 psql 取樣:pg_stat_activity / lock waits / dedup query plan / pool saturation 4 phase + 解讀指南 | `psql $env:DATABASE_URL -f scripts/diagnose_slow_tw_cores.sql`(tw_cores 開跑後 30s) |
 | `scripts/verify_mcp_kalman_neely.py` 🆕 v3.31 | MCP Kalman + Neely 對 production 出值健康度 verify。per-stock check `smoothed_price > 0` / `velocity ≠ 0` / `wave_count > 0` / staleness。退碼 0=全綠 / 1=任一 FAIL,提示 root cause(v3.30 path fix / v3.28 regex parse / tw_cores 重算)| `python scripts/verify_mcp_kalman_neely.py --stocks 2330,3030` |
 | `scripts/verify_mcp_kalman_neely.sql` 🆕 v3.31 | 對 indicator_values / structural_snapshots 直接 SQL spot-check 揭露 Rust 寫進 DB 的真實內容(排除 MCP layer 干擾)2 phase + 解讀 comment | `psql $env:DATABASE_URL -v stock=2330 -f scripts/verify_mcp_kalman_neely.sql` |
+| `scripts/test_pipeline.ps1` 🆕 v4.4 | **完整測試流水線**(Windows)— 5 phase:Environment check / Sandbox unit tests(Rust 528 + Python 165+)/ Schema health(alembic+row counts)/ Production verify(facts stats + per-EventKind + **Neely forest_size P0 Gate**)/ MCP smoke test;支援 `-OnlyPhase` / `-SkipPhase` / `-DryRun` | `.\scripts\test_pipeline.ps1` |
+| `scripts/test_pipeline.sh` 🆕 v4.4 | 完整測試流水線(Unix Bash 版,對齊 .ps1);環境變數 `SKIP_PHASES` / `ONLY_PHASES` / `DRY_RUN=1` 控制 | `./scripts/test_pipeline.sh` |
 
 ---
 
