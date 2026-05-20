@@ -198,7 +198,7 @@ def _patch_agg_as_of(monkeypatch, *, indicator_value: dict | None,
     def fake_as_of(*args, **kwargs):
         return snapshot
     # 走 agg 模組
-    import agg as agg_mod
+    import fusion.raw as agg_mod
     monkeypatch.setattr(agg_mod, "as_of", fake_as_of)
     return snapshot
 

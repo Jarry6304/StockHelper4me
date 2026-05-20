@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from agg._db import get_connection
+from fusion.raw._db import get_connection
 
 
 SPIKE_THRESHOLD_Z = 2.0    # 對齊 spec §10.3 z_score_threshold

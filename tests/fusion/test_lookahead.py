@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from agg._lookahead import (
+from fusion.raw._lookahead import (
     FINANCIAL_STATEMENT_LAG_DAYS,
     filter_visible,
     is_visible_at,

@@ -5,7 +5,7 @@
 
 from datetime import date
 
-from agg.query import _indicator_key, _to_fact_row, _to_indicator_row, _to_structural_row
+from fusion.raw.query import _indicator_key, _to_fact_row, _to_indicator_row, _to_structural_row
 
 
 class TestRowConverters:

@@ -65,7 +65,7 @@ class TestListCores:
 class TestAsOfSnapshot:
     def test_wraps_agg_as_of(self, monkeypatch):
         """確認 tool 把 ISO 字串轉 date + 傳遞參數。"""
-        from agg import _types
+        from fusion.raw import _types
 
         captured: dict[str, object] = {}
 
@@ -86,9 +86,9 @@ class TestAsOfSnapshot:
                 ),
             )
 
-        # data_tools.as_of_snapshot imports `from agg import as_of` locally,
-        # so we monkey-patch the agg module's binding.
-        import agg
+        # data_tools.as_of_snapshot imports `from fusion.raw import as_of` locally,
+        # so we monkey-patch the fusion.raw module's binding.
+        import fusion.raw as agg
         monkeypatch.setattr(agg, "as_of", fake_as_of)
 
         result = data_tools.as_of_snapshot(
@@ -113,7 +113,7 @@ class TestAsOfSnapshot:
 
 class TestFindFacts:
     def test_wraps_find_facts_today(self, monkeypatch):
-        from agg import _types
+        from fusion.raw import _types
 
         captured: dict[str, object] = {}
 
@@ -133,7 +133,7 @@ class TestFindFacts:
                 ),
             ]
 
-        import agg
+        import fusion.raw as agg
         monkeypatch.setattr(agg, "find_facts_today", fake_find)
 
         out = data_tools.find_facts("2026-05-13", source_core="macd_core", kind="GoldenCross")
@@ -154,7 +154,7 @@ class TestFetchOhlc:
         mock_conn = MagicMock()
 
         # Patch get_connection 直接回 mock conn
-        from agg import _db
+        from fusion.raw import _db
         monkeypatch.setattr(_db, "get_connection", lambda *a, **kw: mock_conn)
 
         # Patch fetch_ohlc 回固定 rows(模擬 PG response)

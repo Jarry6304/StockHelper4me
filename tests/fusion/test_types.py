@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from agg._types import (
+from fusion.raw._types import (
     AsOfSnapshot,
     FactRow,
     IndicatorRow,

@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-from agg._db import get_connection
+from fusion.raw._db import get_connection
 
 
 # 三級嚴重度中文對照

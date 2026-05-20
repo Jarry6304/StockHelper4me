@@ -21,7 +21,7 @@ Transport: stdio(本機 process)。Phase 2 再 lift 同套 tools 到 HTTP transp
 (function 留在 `mcp_server.tools.data`,LLM 不可見)。
 """
 
-# v3.5 R5 C12:連線 single entry 全走 agg._db.get_connection,DELETE mcp_server/_conn.py
+# v3.5 R5 C12:連線 single entry 全走 fusion.raw._db.get_connection,DELETE mcp_server/_conn.py
 # 對齊 dashboards/aggregation.py 同一 sys.path 模式 — 確保從 repo root 跑
 # `python -m mcp_server` 時 src/(放 agg/ silver/ bronze/ cross_cores/)+ repo root
 # (放 dashboards/)都在 sys.path。

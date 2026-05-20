@@ -62,7 +62,7 @@ def as_of_snapshot(
     Returns:
         AsOfSnapshot dict — date 欄全部 ISO 字串(JSON-serializable)
     """
-    from agg import as_of
+    from fusion.raw import as_of
 
     snapshot = as_of(
         stock_id,
@@ -94,7 +94,7 @@ def find_facts(
         當日該 fact 的 list[dict] — 每筆 fact 含 stock_id / fact_date /
         source_core / statement / metadata 等
     """
-    from agg import find_facts_today
+    from fusion.raw import find_facts_today
 
     rows = find_facts_today(
         _parse_date(date),
@@ -208,7 +208,7 @@ def stock_health(
 ) -> dict[str, Any]:
     """個股 4 維健康度評分(plan §Tool 2)。
 
-    內部:撈 agg.as_of() 全 cores → 4 維 score(technical / chip /
+    內部:撈 fusion.raw.as_of() 全 cores → 4 維 score(technical / chip /
     valuation / fundamental)加權 → top 5 訊號排序 → 1 句 narrative。
 
     輸出只回結論(~2 KB / ~500 tokens),不回 raw indicator series。
@@ -286,7 +286,7 @@ def kalman_trend(
 ) -> dict[str, Any]:
     """個股 1-D Kalman trend + 5-class regime(v3.4 plan §Phase C)。
 
-    內部:走 agg.as_of(cores=["kalman_filter_core"]) → indicator_latest 拉
+    內部:走 fusion.raw.as_of(cores=["kalman_filter_core"]) → indicator_latest 拉
     smoothed_price / velocity / uncertainty / regime → facts 拉 recent
     regime transitions → 1 句 narrative。
     輸出 ~1.5 KB / ~400 tokens。
@@ -748,7 +748,7 @@ def fetch_ohlc(
         list[dict] {date, open, high, low, close, volume},ORDER BY date ASC。
         date 欄全 ISO 字串。
     """
-    from agg._db import fetch_ohlc as _fetch, get_connection
+    from fusion.raw._db import fetch_ohlc as _fetch, get_connection
 
     conn = get_connection()
     try:

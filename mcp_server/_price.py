@@ -6,7 +6,7 @@
 
 設計:
 - 取 <= as_of 最新一筆 close;順便算 prev_close → change_pct
-- 共用 `agg._db.get_connection()`(對齊 v3.5 R5 C12 single entry)
+- 共用 `fusion.raw._db.get_connection()`(對齊 v3.5 R5 C12 single entry)
 - 失敗 graceful 回 None,caller fallback 0.0(對齊既有行為)
 
 呼叫端:`mcp_server/{_health,_kalman,_forecast}.py`。
@@ -35,7 +35,7 @@ def fetch_latest_close_for_tool(
         dict {date, close, prev_close, change_pct} 或 None(無資料)。
         日期為 ISO 字串;close / prev_close 為 float;change_pct % 含 sign。
     """
-    from agg._db import fetch_latest_close, get_connection
+    from fusion.raw._db import fetch_latest_close, get_connection
 
     conn = get_connection(database_url)
     try:

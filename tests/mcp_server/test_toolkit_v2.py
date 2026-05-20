@@ -57,7 +57,7 @@ def _make_fact(
 
 def _patch_fetch_market_facts(monkeypatch, grouped: dict[str, list[dict]]):
     """Mock _market.fetch_market_facts 回固定 grouped facts。"""
-    from agg import _market
+    from fusion.raw import _market
 
     def fake(_conn, *, as_of, lookback_days, cores=None, apply_lookahead_filter=True):
         return grouped
@@ -72,7 +72,7 @@ def _patch_get_connection(monkeypatch):
     避免 MagicMock conn 的 int() 行為返回 1 把 risk_alert score 帶進去。
     對 v3.25 自己的 test 個別覆寫即可。
     """
-    from agg import _db
+    from fusion.raw import _db
     from mcp_server import _climate as climate_mod
 
     monkeypatch.setattr(_db, "get_connection", lambda *a, **kw: MagicMock())
@@ -417,8 +417,8 @@ def _patch_agg_as_of(monkeypatch, facts: list[dict], indicator_latest: dict | No
     v3.26:預設 latest_close=None → 回退到 indicator_latest path(對齊既有 test 期望)。
     若指定 dict {"close":..,"prev_close":..,"change_pct":..}則 fetch_latest_close 回該值。
     """
-    from agg import _types
-    import agg
+    from fusion.raw import _types
+    import fusion.raw as agg
     from mcp_server import _price as _price_mod
 
     monkeypatch.setattr(_price_mod, "fetch_latest_close_for_tool",
@@ -624,8 +624,8 @@ def _patch_agg_as_of_with_neely(
     v3.38:加 `full_history` 旗標 — True 時 fake monowave_series 多筆讓
     `data_availability.daily_bars >= 1000`(對齊 user 拍版 full 級別)。
     """
-    from agg import _types
-    import agg
+    from fusion.raw import _types
+    import fusion.raw as agg
     from mcp_server import _price as _price_mod
 
     monkeypatch.setattr(_price_mod, "fetch_latest_close_for_tool",
@@ -864,8 +864,8 @@ def _patch_neely_with_bars(
       - 67 mw   ≈ 502 bars(degree_uncertain 區間)
       - 200 mw  ≈ 1500 bars(full 區間 >=1000)
     """
-    from agg import _types
-    import agg
+    from fusion.raw import _types
+    import fusion.raw as agg
     from mcp_server import _price as _price_mod
 
     monkeypatch.setattr(_price_mod, "fetch_latest_close_for_tool",
@@ -1233,8 +1233,8 @@ class TestV3_35Picker:
           monthly 有 Minor degree(5 年 span)
         → primary 應走 monthly Minor,而非 daily SubMinuette。
         """
-        from agg import _types
-        import agg
+        from fusion.raw import _types
+        import fusion.raw as agg
         from mcp_server import _price as _price_mod
 
         daily_short = _scenario_with_dates(

@@ -1,7 +1,7 @@
 """Tool 2 內部演算法:`stock_health` — 個股 4 維健康度評分。
 
 對齊 plan §Tool 2:
-1. 撈 `agg.as_of()` 全 cores 90-day
+1. 撈 `fusion.raw.as_of()` 全 cores 90-day
 2. 4 維 score 加權(technical / chip / valuation / fundamental)
 3. top_signals 跨 cores 排序取 top 5
 4. narrative 規則組裝
@@ -211,7 +211,7 @@ def compute_stock_health(
     Returns:
         dict 結構對齊 plan §Tool 2(~2 KB / ~500 tokens)
     """
-    from agg import as_of as agg_as_of
+    from fusion.raw import as_of as agg_as_of
 
     snapshot = agg_as_of(
         stock_id,
