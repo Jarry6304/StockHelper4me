@@ -728,6 +728,43 @@ def monthly_trigger_scan(
 
 
 # ────────────────────────────────────────────────────────────
+# Fusion Layer · Integration 端口 tools(P1.4)
+# ────────────────────────────────────────────────────────────
+
+
+def market_events(
+    start_date: str,
+    end_date: str,
+    severity_min: str = "info",
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion D 視角:大盤環境事件時間軸。
+
+    撈 7 個 environment cores(taiex / us_market / exchange_rate / fear_greed /
+    market_margin / business_indicator / commodity_macro)寫進 facts 的事件,
+    依日期區間 [start_date, end_date] + 最低嚴重度 filter,以統一 Event schema
+    回傳時間軸。
+
+    severity_min:info / notable / warning / critical(預設 info = 全收)。
+    嚴重度由各 core 寫入 fact 時決定,本層只 filter 不二次判斷。
+
+    Returns:
+        {start_date, end_date, severity_min, event_count, by_severity,
+         events: [{date, source, kind, severity, statement, value, metadata}, ...]}
+        events 依 (date DESC, severity DESC) 排序。
+    """
+    from fusion.market_events import market_events as _market_events
+
+    return _market_events(
+        _parse_date(start_date),
+        _parse_date(end_date),
+        severity_min=severity_min,
+        database_url=database_url,
+    )
+
+
+# ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
 
