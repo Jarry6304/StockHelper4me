@@ -337,7 +337,7 @@ fn event_to_fact(output: &ShareholderOutput, e: &ShareholderEvent) -> Fact {
         ShareholderEventKind::ConcentrationDecreasing => format!(
             "Concentration index down {:.4} on {}(week)", e.value.abs(), e.date),
     };
-    Fact {
+    Fact { severity: fact_schema::Severity::Info,
         stock_id: output.stock_id.clone(),
         fact_date: e.date,
         timeframe: output.timeframe,

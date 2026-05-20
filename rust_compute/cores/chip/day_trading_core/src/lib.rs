@@ -366,7 +366,7 @@ fn event_to_fact(output: &DayTradingOutput, event: &DayTradingEvent) -> Fact {
         ),
     };
 
-    Fact {
+    Fact { severity: fact_schema::Severity::Info,
         stock_id: output.stock_id.clone(),
         fact_date: event.date,
         timeframe: output.timeframe,

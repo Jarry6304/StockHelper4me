@@ -284,7 +284,7 @@ impl IndicatorCore for MaCore {
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
-        output.events.iter().map(|e| Fact {
+        output.events.iter().map(|e| Fact { severity: fact_schema::Severity::Info,
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
             source_core: "ma_core".to_string(), source_version: "0.1.0".to_string(),
             params_hash: None, statement: format!("MA {:?} on {}", e.kind, e.date),

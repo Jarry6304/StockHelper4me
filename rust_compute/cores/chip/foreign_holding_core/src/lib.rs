@@ -314,7 +314,7 @@ fn event_to_fact(output: &ForeignHoldingOutput, e: &ForeignHoldingEvent) -> Fact
             e.date
         ),
     };
-    Fact {
+    Fact { severity: fact_schema::Severity::Info,
         stock_id: output.stock_id.clone(),
         fact_date: e.date,
         timeframe: output.timeframe,

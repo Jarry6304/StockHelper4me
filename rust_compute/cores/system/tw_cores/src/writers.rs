@@ -112,15 +112,16 @@ pub async fn write_facts(pool: &PgPool, facts: &[Fact]) -> Result<u64> {
         let params_hashes:  Vec<&str>             = chunk.iter().map(|f| f.params_hash.as_deref().unwrap_or("")).collect();
         let statements:     Vec<&str>             = chunk.iter().map(|f| f.statement.as_str()).collect();
         let metadatas:      Vec<&serde_json::Value> = chunk.iter().map(|f| &f.metadata).collect();
+        let severities:     Vec<i16>               = chunk.iter().map(|f| f.severity.as_i16()).collect();
 
         let res = sqlx::query(
             r#"
             INSERT INTO facts
                 (stock_id, fact_date, timeframe, source_core,
-                 source_version, params_hash, statement, metadata)
+                 source_version, params_hash, statement, metadata, severity)
             SELECT * FROM UNNEST(
                 $1::text[], $2::date[], $3::text[], $4::text[],
-                $5::text[], $6::text[], $7::text[], $8::jsonb[]
+                $5::text[], $6::text[], $7::text[], $8::jsonb[], $9::smallint[]
             )
             ON CONFLICT DO NOTHING
             "#,
@@ -133,6 +134,7 @@ pub async fn write_facts(pool: &PgPool, facts: &[Fact]) -> Result<u64> {
         .bind(&params_hashes)
         .bind(&statements)
         .bind(&metadatas)
+        .bind(&severities)
         .execute(pool)
         .await
         .context("batch insert facts failed")?;

@@ -261,7 +261,7 @@ impl IndicatorCore for TaiexCore {
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
-        output.events.iter().map(|e| Fact {
+        output.events.iter().map(|e| Fact { severity: fact_schema::Severity::Info,
             stock_id: e.index_code.reserved_stock_id().to_string(),
             fact_date: e.date, timeframe: output.timeframe,
             source_core: "taiex_core".to_string(), source_version: "0.2.0".to_string(),

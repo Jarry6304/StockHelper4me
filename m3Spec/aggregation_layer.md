@@ -1,4 +1,11 @@
-# Aggregation Layer 規格 r3
+# Aggregation Layer 規格 r4(已併入 Fusion Layer)
+
+> **r4 修訂摘要**(2026-05-20):本層升級為 Fusion Layer 的 **Raw 端口**。
+>
+> 程式碼從 `src/agg/` 搬到 `src/fusion/raw/`(import path `agg` → `fusion.raw`),
+> 行為與 `as_of()` API 完全不變(並排呈現,不整合)。Fusion Layer 在 Raw 端口
+> 之外新增 Integration 端口(跨 core 整合,不引入新規則)。
+> **本文件以下章節保留為歷史參考;最新規格見 `m3Spec/fusion_layer.md`。**
 
 > **r3 修訂摘要**(v3.7,2026-05-16):per-timeframe lookback fold-forward 落地
 >
