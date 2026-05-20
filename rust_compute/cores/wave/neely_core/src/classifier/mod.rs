@@ -58,6 +58,10 @@ pub fn classify(
     let pattern_type = match candidate.wave_count {
         5 => classify_5wave(candidate, report, classified)?,
         3 => classify_3wave(candidate, classified),
+        // P2a(Combination 上游補完):7-monowave candidate → Double-* Combination
+        7 => classify_7wave_combination(candidate, classified)?,
+        // P2b(Combination 上游補完):11-monowave candidate → Triple-* Combination
+        11 => classify_11wave_combination(candidate, classified)?,
         _ => return None,
     };
 
@@ -283,16 +287,26 @@ fn classify_diagonal_subkind(
 /// 對齊 m3Spec/neely_rules.md §第 5 章 Flat 詳細規則(line 2157-2239)+
 /// §第 10 章 Pattern Implications line 2024-2037。
 ///
-/// 流程:
-///   1. 抽 a / b / c monowave magnitudes
-///   2. 先試 `flat_classifier::is_running_correction`(b > a + c < a)→ RunningCorrection
-///   3. 再試 `flat_classifier::classify_flat` → FlatKind 7-variant 之一
-///   4. 都失敗(b/a < 61.8%)→ Zigzag { Single }(spec 預設;Triangle / Combination 需 5-wave 規模)
+/// P2a(Combination 上游補完):核心邏輯抽至 `classify_3wave_segment`,本函式為對
+/// `candidate.monowave_indices` 的薄包裝;`classify_7wave_combination` 對 sub-segment 複用核心。
 fn classify_3wave(
     candidate: &WaveCandidate,
     classified: &[ClassifiedMonowave],
 ) -> NeelyPatternType {
-    let mi = &candidate.monowave_indices;
+    classify_3wave_segment(&candidate.monowave_indices, classified)
+}
+
+/// 對任意 3-monowave index 序列分類 corrective pattern(Zigzag / Flat / RunningCorrection)。
+///
+/// 流程:
+///   1. 抽 a / b / c monowave magnitudes
+///   2. 先試 `flat_classifier::is_running_correction`(b > a + c < a)→ RunningCorrection
+///   3. 再試 `flat_classifier::classify_flat` → FlatKind 之一
+///   4. 都失敗(b/a < 61.8%)→ Zigzag { Single }
+fn classify_3wave_segment(
+    mi: &[usize],
+    classified: &[ClassifiedMonowave],
+) -> NeelyPatternType {
     if mi.len() < 3 {
         // 不夠 3 段 — 回 Zigzag Single 作 safe fallback
         return NeelyPatternType::Zigzag {
@@ -308,7 +322,7 @@ fn classify_3wave(
         return NeelyPatternType::RunningCorrection;
     }
 
-    // 2. Flat 7-variant 判定
+    // 2. Flat 變體判定
     if let Some(flat_kind) = flat_classifier::classify_flat(a_mag, b_mag, c_mag) {
         return NeelyPatternType::Flat {
             sub_kind: flat_kind,
@@ -316,9 +330,151 @@ fn classify_3wave(
     }
 
     // 3. b/a < 61.8% → 不符 Flat 任一變體,回 Zigzag Single
-    //    (Triangle 需 5 段;Combination 需更多;Phase 16 範圍只處理 Flat + Running)
     NeelyPatternType::Zigzag {
         sub_kind: ZigzagKind::Single,
+    }
+}
+
+/// P2a(Combination 上游補完):7-monowave candidate → Double-* Combination。
+///
+/// 7 monowaves = sub_a(mi[0..3])+ x-wave(mi[3])+ sub_b(mi[4..7])。對兩個
+/// corrective sub-segment 各跑 `classify_3wave_segment`,依 (kind_a, kind_b, x-wave
+/// 大小)對映 `CombinationKind`(對齊 m3Spec/neely_rules.md Ch8 Table A 小 x-wave /
+/// Table B 大 x-wave)。非可辨識 Double-* 組合 → None(candidate 丟棄,不產 garbage)。
+fn classify_7wave_combination(
+    candidate: &WaveCandidate,
+    classified: &[ClassifiedMonowave],
+) -> Option<NeelyPatternType> {
+    let mi = &candidate.monowave_indices;
+    if mi.len() != 7 {
+        return None;
+    }
+    let kind_a = classify_3wave_segment(&mi[0..3], classified);
+    let kind_b = classify_3wave_segment(&mi[4..7], classified);
+    let large_x = x_wave_is_large(mi[3], &mi[0..3], &mi[4..7], classified);
+    let combination_kind = map_double_combination(&kind_a, &kind_b, large_x)?;
+    Some(NeelyPatternType::Combination {
+        sub_kinds: vec![combination_kind],
+    })
+}
+
+/// 判定 x-wave 相對兩側 corrective sub-segment 是否為「大 x-wave」(Table B)。
+///
+/// 啟發式:x magnitude ≥ 61.8% × min(兩側 sub-segment 淨幅)→ 大 x-wave。
+/// 61.8% 為 Neely 通用 Fibonacci 門檻;production 觸發率由 P0 Gate 校準。
+fn x_wave_is_large(
+    x_idx: usize,
+    sub_a: &[usize],
+    sub_b: &[usize],
+    classified: &[ClassifiedMonowave],
+) -> bool {
+    let x_mag = classified[x_idx].metrics.magnitude;
+    let net_span = |seg: &[usize]| -> f64 {
+        let start = classified[seg[0]].monowave.start_price;
+        let end = classified[seg[seg.len() - 1]].monowave.end_price;
+        (end - start).abs()
+    };
+    let min_span = net_span(sub_a).min(net_span(sub_b));
+    x_mag >= 0.618 * min_span
+}
+
+/// (kind_a, kind_b, large_x) → CombinationKind(Double-* 5 variant)。
+///
+/// Table A(小 x-wave):允許 Zigzag 構成段。
+/// Table B(大 x-wave):構成段只能 Flat —— 任一為 Zigzag → None
+/// (對齊 m3Spec/neely_rules.md Ch8 Table B 修正:大 x-wave 場景不可出現 Zigzag)。
+fn map_double_combination(
+    kind_a: &NeelyPatternType,
+    kind_b: &NeelyPatternType,
+    large_x: bool,
+) -> Option<CombinationKind> {
+    let is_zigzag = |k: &NeelyPatternType| matches!(k, NeelyPatternType::Zigzag { .. });
+    let a_zz = is_zigzag(kind_a);
+    let b_zz = is_zigzag(kind_b);
+    let has_running = matches!(kind_a, NeelyPatternType::RunningCorrection)
+        || matches!(kind_b, NeelyPatternType::RunningCorrection);
+
+    if large_x {
+        // Table B 大 x-wave:不可有 Zigzag 構成段(spec Ch8 Table B 修正)
+        if a_zz || b_zz {
+            return None;
+        }
+        if has_running {
+            Some(CombinationKind::DoubleThreeCombination)
+        } else {
+            Some(CombinationKind::DoubleThree)
+        }
+    } else {
+        // Table A 小 x-wave:允許 Zigzag。classify_3wave_segment 僅回
+        // Zigzag / Flat / RunningCorrection,故「非 Zigzag」即 Flat-family。
+        match (a_zz, b_zz) {
+            (true, true) => Some(CombinationKind::DoubleZigzag),
+            (true, false) | (false, true) => Some(CombinationKind::DoubleCombination),
+            (false, false) => Some(CombinationKind::DoubleFlat),
+        }
+    }
+}
+
+/// P2b(Combination 上游補完):11-monowave candidate → Triple-* Combination。
+///
+/// 11 monowaves = sub_a(mi[0..3])+ x1(mi[3])+ sub_b(mi[4..7])+ x2(mi[7])
+/// + sub_c(mi[8..11])。對三個 corrective sub-segment 各跑 `classify_3wave_segment`,
+/// 依 (kind_a, kind_b, kind_c, x-wave 大小)對映 Triple-* `CombinationKind`。
+fn classify_11wave_combination(
+    candidate: &WaveCandidate,
+    classified: &[ClassifiedMonowave],
+) -> Option<NeelyPatternType> {
+    let mi = &candidate.monowave_indices;
+    if mi.len() != 11 {
+        return None;
+    }
+    let kind_a = classify_3wave_segment(&mi[0..3], classified);
+    let kind_b = classify_3wave_segment(&mi[4..7], classified);
+    let kind_c = classify_3wave_segment(&mi[8..11], classified);
+    // 兩個 x-wave(mi[3]、mi[7]);任一為大 x-wave → 整體視為 Table B 大 x-wave 場景
+    let large_x = x_wave_is_large(mi[3], &mi[0..3], &mi[4..7], classified)
+        || x_wave_is_large(mi[7], &mi[4..7], &mi[8..11], classified);
+    let combination_kind = map_triple_combination(&kind_a, &kind_b, &kind_c, large_x)?;
+    Some(NeelyPatternType::Combination {
+        sub_kinds: vec![combination_kind],
+    })
+}
+
+/// (kind_a, kind_b, kind_c, large_x) → CombinationKind(Triple-* variant)。
+///
+/// Table A(小 x-wave):允許 Zigzag 構成段。
+/// Table B(大 x-wave):構成段只能 Flat —— 任一為 Zigzag → None
+/// (對齊 m3Spec/neely_rules.md Ch8 Table B 修正)。
+fn map_triple_combination(
+    kind_a: &NeelyPatternType,
+    kind_b: &NeelyPatternType,
+    kind_c: &NeelyPatternType,
+    large_x: bool,
+) -> Option<CombinationKind> {
+    let is_zigzag = |k: &NeelyPatternType| matches!(k, NeelyPatternType::Zigzag { .. });
+    let any_zigzag = is_zigzag(kind_a) || is_zigzag(kind_b) || is_zigzag(kind_c);
+    let all_zigzag = is_zigzag(kind_a) && is_zigzag(kind_b) && is_zigzag(kind_c);
+    let has_running = matches!(kind_a, NeelyPatternType::RunningCorrection)
+        || matches!(kind_b, NeelyPatternType::RunningCorrection)
+        || matches!(kind_c, NeelyPatternType::RunningCorrection);
+
+    if large_x {
+        // Table B 大 x-wave:不可有 Zigzag 構成段
+        if any_zigzag {
+            return None;
+        }
+        if has_running {
+            Some(CombinationKind::TripleThreeRunning)
+        } else {
+            Some(CombinationKind::TripleThree)
+        }
+    } else {
+        // Table A 小 x-wave
+        if all_zigzag {
+            Some(CombinationKind::TripleZigzag)
+        } else {
+            Some(CombinationKind::TripleCombination)
+        }
     }
 }
 
@@ -521,6 +677,149 @@ mod tests {
             not_applicable: vec![],
             overall_pass: true,
         }
+    }
+
+    // ── P2a(Combination 上游補完)test fixtures + tests ────────────────────
+
+    /// 7 個 alternating monowaves(U-D-U-D-U-D-U)構成 Double Zigzag:
+    /// sub_a[0..3] = Zigzag(a=10/b=5/c=12,b/a<61.8%)、x-wave[3] 小(mag 3)、
+    /// sub_b[4..7] = Zigzag。
+    fn make_7wave_double_zigzag_classified() -> Vec<ClassifiedMonowave> {
+        vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),   // m0  sub_a a=10
+            cmw(110.0, 105.0, MonowaveDirection::Down), // m1  sub_a b=5
+            cmw(105.0, 117.0, MonowaveDirection::Up),   // m2  sub_a c=12
+            cmw(117.0, 114.0, MonowaveDirection::Down), // m3  x-wave mag=3(小)
+            cmw(114.0, 124.0, MonowaveDirection::Up),   // m4  sub_b a=10
+            cmw(124.0, 119.0, MonowaveDirection::Down), // m5  sub_b b=5
+            cmw(119.0, 131.0, MonowaveDirection::Up),   // m6  sub_b c=12
+        ]
+    }
+
+    fn make_candidate_wc7() -> WaveCandidate {
+        WaveCandidate {
+            id: "c7-mw0-mw6".to_string(),
+            monowave_indices: vec![0, 1, 2, 3, 4, 5, 6],
+            wave_count: 7,
+            initial_direction: MonowaveDirection::Up,
+        }
+    }
+
+    #[test]
+    fn seven_wave_double_zigzag_classifies_as_combination() {
+        let classified = make_7wave_double_zigzag_classified();
+        let candidate = make_candidate_wc7();
+        let pattern =
+            classify_7wave_combination(&candidate, &classified).expect("應產生 Combination");
+        match pattern {
+            NeelyPatternType::Combination { sub_kinds } => {
+                assert_eq!(sub_kinds.len(), 1);
+                assert!(matches!(sub_kinds[0], CombinationKind::DoubleZigzag));
+            }
+            other => panic!("預期 Combination,得到 {:?}", other),
+        }
+    }
+
+    #[test]
+    fn seven_wave_combination_full_classify_produces_scenario() {
+        // P2a:wc=7 走完整 classify() 不可 panic,且產出 Combination Scenario。
+        let classified = make_7wave_double_zigzag_classified();
+        let candidate = make_candidate_wc7();
+        let report = ValidationReport {
+            overall_pass: true,
+            ..Default::default()
+        };
+        let scenario =
+            classify(&candidate, &report, &classified).expect("wc=7 應產生 Scenario");
+        assert!(matches!(
+            scenario.pattern_type,
+            NeelyPatternType::Combination { .. }
+        ));
+        assert!(matches!(scenario.complexity_level, ComplexityLevel::Complex));
+        assert_eq!(scenario.wave_tree.children.len(), 7);
+    }
+
+    #[test]
+    fn large_x_wave_with_zigzag_component_rejected() {
+        // map_double_combination:大 x-wave(Table B)不可有 Zigzag 構成段 → None
+        let zz = NeelyPatternType::Zigzag {
+            sub_kind: ZigzagKind::Single,
+        };
+        let flat = NeelyPatternType::Flat {
+            sub_kind: FlatKind::Common,
+        };
+        assert!(map_double_combination(&zz, &flat, true).is_none());
+        // 大 x-wave + 兩 Flat → DoubleThree
+        assert!(matches!(
+            map_double_combination(&flat, &flat, true),
+            Some(CombinationKind::DoubleThree)
+        ));
+    }
+
+    #[test]
+    fn eleven_wave_triple_zigzag_classifies_as_combination() {
+        // P2b:11 monowaves,3 個 sub-segment 全 Zigzag + 兩個小 x-wave → TripleZigzag
+        let classified = vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),   // m0  sub_a a=10
+            cmw(110.0, 105.0, MonowaveDirection::Down), // m1  sub_a b=5
+            cmw(105.0, 117.0, MonowaveDirection::Up),   // m2  sub_a c=12
+            cmw(117.0, 114.0, MonowaveDirection::Down), // m3  x1 小
+            cmw(114.0, 124.0, MonowaveDirection::Up),   // m4  sub_b a=10
+            cmw(124.0, 119.0, MonowaveDirection::Down), // m5  sub_b b=5
+            cmw(119.0, 131.0, MonowaveDirection::Up),   // m6  sub_b c=12
+            cmw(131.0, 128.0, MonowaveDirection::Down), // m7  x2 小
+            cmw(128.0, 138.0, MonowaveDirection::Up),   // m8  sub_c a=10
+            cmw(138.0, 133.0, MonowaveDirection::Down), // m9  sub_c b=5
+            cmw(133.0, 145.0, MonowaveDirection::Up),   // m10 sub_c c=12
+        ];
+        let candidate = WaveCandidate {
+            id: "c11-mw0-mw10".to_string(),
+            monowave_indices: (0..11).collect(),
+            wave_count: 11,
+            initial_direction: MonowaveDirection::Up,
+        };
+        let pattern =
+            classify_11wave_combination(&candidate, &classified).expect("應產生 Combination");
+        match pattern {
+            NeelyPatternType::Combination { sub_kinds } => {
+                assert!(matches!(sub_kinds[0], CombinationKind::TripleZigzag));
+            }
+            other => panic!("預期 Combination,得到 {:?}", other),
+        }
+        // 走完整 classify() 不可 panic
+        let report = ValidationReport {
+            overall_pass: true,
+            ..Default::default()
+        };
+        let scenario =
+            classify(&candidate, &report, &classified).expect("wc=11 應產生 Scenario");
+        assert!(matches!(
+            scenario.pattern_type,
+            NeelyPatternType::Combination { .. }
+        ));
+        assert_eq!(scenario.wave_tree.children.len(), 11);
+    }
+
+    #[test]
+    fn map_triple_combination_table_b_rejects_zigzag() {
+        let zz = NeelyPatternType::Zigzag {
+            sub_kind: ZigzagKind::Single,
+        };
+        let flat = NeelyPatternType::Flat {
+            sub_kind: FlatKind::Common,
+        };
+        // 大 x-wave + 有 Zigzag → None
+        assert!(map_triple_combination(&flat, &zz, &flat, true).is_none());
+        // 大 x-wave + 全 Flat → TripleThree
+        assert!(matches!(
+            map_triple_combination(&flat, &flat, &flat, true),
+            Some(CombinationKind::TripleThree)
+        ));
+        // 小 x-wave + 全 Zigzag → TripleZigzag
+        assert!(matches!(
+            map_triple_combination(&zz, &zz, &zz, false),
+            Some(CombinationKind::TripleZigzag)
+        ));
     }
 
     #[test]

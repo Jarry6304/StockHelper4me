@@ -4,7 +4,7 @@
 //
 // 演算法(Bottom-up):
 //   1. 過濾掉 Neutral monowaves(Stage 2 Rule of Neutrality 已標)
-//   2. 對 directional monowave 序列,滑動取 wave_count ∈ {3, 5} 的連續視窗
+//   2. 對 directional monowave 序列,滑動取 wave_count ∈ {3, 5, 7, 11} 的連續視窗
 //   3. 視窗內 monowave direction 必須交替(zigzag 性質),否則跳過
 //   4. 通過交替檢查的視窗即為一個 candidate
 //
@@ -28,7 +28,7 @@ use crate::output::MonowaveDirection;
 /// Stage 3 候選結果。每個 WaveCandidate 對應一個「可能是 wave structure 的視窗」。
 ///
 /// `monowave_indices` 是 candidate 內 monowaves 在 `classified[]` 的 index list,
-/// length 為 wave_count(目前 3 或 5)。Validator(Stage 4)會用 indices 取回對應
+/// length 為 wave_count(目前 3 / 5 / 7 / 11)。Validator(Stage 4)會用 indices 取回對應
 /// monowave 做規則檢查。
 #[derive(Debug, Clone)]
 pub struct WaveCandidate {
@@ -36,7 +36,7 @@ pub struct WaveCandidate {
     pub id: String,
     /// monowave indices(構成此 candidate 的 directional monowaves,按時間排序)
     pub monowave_indices: Vec<usize>,
-    /// 視窗內 monowave 個數,目前 ∈ {3, 5}
+    /// 視窗內 monowave 個數,目前 ∈ {3, 5, 7, 11}
     pub wave_count: usize,
     /// 第 1 個 monowave 的 direction(Up 表示上升 wave 序列,Down 表示下降)
     pub initial_direction: MonowaveDirection,
@@ -50,7 +50,7 @@ const BEAM_CAP_MULTIPLIER: usize = 10;
 ///
 /// 流程:
 ///   1. 過濾 Neutral
-///   2. 對 wave_count ∈ {3, 5} 滑動取窗
+///   2. 對 wave_count ∈ {3, 5, 7, 11} 滑動取窗
 ///   3. 視窗內 direction 必須交替(Up-Down-Up... 或 Down-Up-Down...)
 ///   4. 達 beam_width × 10 上限即停止繼續產生
 pub fn generate_candidates(
@@ -72,15 +72,20 @@ pub fn generate_candidates(
     let cap = cfg.beam_width.saturating_mul(BEAM_CAP_MULTIPLIER).max(1);
     let mut candidates: Vec<WaveCandidate> = Vec::new();
 
-    // 對每個 wave_count(3 / 5)滑窗
-    for &wc in &[3usize, 5] {
+    // 對每個 wave_count(3 / 5 / 7 / 11)滑窗
+    // P1a/P1b(Combination 上游補完):加 wave_count=7 / 11 — Double-* Combination 在
+    // monowave 層級為 sub_a(3)+ x(1)+ sub_b(3)= 7;Triple-* 為再 +x(1)+sub_c(3)= 11。
+    for &wc in &[3usize, 5, 7, 11] {
         if directional.len() < wc {
             continue;
         }
+        // P1a:per-wave-count cap —— 各 wave_count 各有 `cap` 額度,確保 wc=7 不被
+        // wc=3/5 佔滿共用 cap 而 starve(原本單一共用 cap,wc=7 可能完全產不出)。
+        let wc_cap_base = candidates.len();
 
         for window_start in 0..=(directional.len() - wc) {
-            if candidates.len() >= cap {
-                return candidates;
+            if candidates.len() - wc_cap_base >= cap {
+                break;
             }
 
             let window: Vec<usize> = directional[window_start..window_start + wc].to_vec();
@@ -238,13 +243,64 @@ mod tests {
     }
 
     #[test]
+    fn seven_alternating_monowaves_yield_wc7_candidate() {
+        // P1a:7 個 alternating monowaves(U-D-U-D-U-D-U)→
+        //   wave_count=3:window 起點 0..4 → 5 個
+        //   wave_count=5:window 起點 0..2 → 3 個
+        //   wave_count=7:window 起點 0     → 1 個   共 9 個
+        let cfg = NeelyEngineConfig::default();
+        let cms = vec![
+            cmw("2026-01-01", "2026-01-03", MonowaveDirection::Up),
+            cmw("2026-01-03", "2026-01-05", MonowaveDirection::Down),
+            cmw("2026-01-05", "2026-01-07", MonowaveDirection::Up),
+            cmw("2026-01-07", "2026-01-09", MonowaveDirection::Down),
+            cmw("2026-01-09", "2026-01-11", MonowaveDirection::Up),
+            cmw("2026-01-11", "2026-01-13", MonowaveDirection::Down),
+            cmw("2026-01-13", "2026-01-15", MonowaveDirection::Up),
+        ];
+        let cands = generate_candidates(&cms, &cfg);
+        assert_eq!(cands.len(), 9);
+        assert_eq!(cands.iter().filter(|c| c.wave_count == 7).count(), 1);
+        let seven = cands.iter().find(|c| c.wave_count == 7).unwrap();
+        assert_eq!(seven.monowave_indices, vec![0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(seven.initial_direction, MonowaveDirection::Up);
+        assert_eq!(seven.id, "c7-mw0-mw6");
+    }
+
+    #[test]
+    fn eleven_alternating_monowaves_yield_wc11_candidate() {
+        // P1b:11 個 alternating monowaves → wc=3:9 / wc=5:7 / wc=7:5 / wc=11:1  共 22
+        let cfg = NeelyEngineConfig::default();
+        let mut cms = Vec::new();
+        for i in 0..11 {
+            let dir = if i % 2 == 0 {
+                MonowaveDirection::Up
+            } else {
+                MonowaveDirection::Down
+            };
+            cms.push(cmw(
+                &format!("2026-01-{:02}", i + 1),
+                &format!("2026-01-{:02}", i + 2),
+                dir,
+            ));
+        }
+        let cands = generate_candidates(&cms, &cfg);
+        assert_eq!(cands.len(), 22);
+        assert_eq!(cands.iter().filter(|c| c.wave_count == 11).count(), 1);
+        let eleven = cands.iter().find(|c| c.wave_count == 11).unwrap();
+        assert_eq!(eleven.monowave_indices, (0..11).collect::<Vec<usize>>());
+        assert_eq!(eleven.id, "c11-mw0-mw10");
+    }
+
+    #[test]
     fn beam_width_cap_limits_candidates() {
-        // 製造大量 alternating monowaves,驗 cap 生效
+        // 製造大量 alternating monowaves,驗 P1a per-wave-count cap 生效
         let cfg = NeelyEngineConfig {
-            beam_width: 2,  // cap = 2 × 10 = 20
+            beam_width: 2, // cap = 2 × 10 = 20(每個 wave_count 各 20 額度)
             ..NeelyEngineConfig::default()
         };
-        // 30 個 alternating monowaves → 理論 wave_count=3 視窗 28 個 + wave_count=5 視窗 26 個 = 54 個
+        // 30 個 alternating monowaves → 理論 wc=3 視窗 28 + wc=5 26 + wc=7 24 + wc=11 20 = 98;
+        // P1a/P1b per-wave-count cap 後各 wave_count ≤ 20 → 總計 ≤ 20 × 4 = 80
         let mut cms = Vec::new();
         for i in 0..30 {
             let dir = if i % 2 == 0 { MonowaveDirection::Up } else { MonowaveDirection::Down };
@@ -255,7 +311,16 @@ mod tests {
             ));
         }
         let cands = generate_candidates(&cms, &cfg);
-        assert!(cands.len() <= 20, "candidate count 應 ≤ beam_width × 10 = 20,實際 {}", cands.len());
+        assert!(
+            cands.len() <= 80,
+            "per-wave-count cap:每 wave_count ≤ beam_width × 10 = 20,4 個 wave_count 總計 ≤ 80,實際 {}",
+            cands.len()
+        );
+        // 各 wave_count 各自不超過 cap
+        for wc in [3usize, 5, 7, 11] {
+            let n = cands.iter().filter(|c| c.wave_count == wc).count();
+            assert!(n <= 20, "wave_count={} candidate 數 {} 應 ≤ cap 20", wc, n);
+        }
     }
 
     #[test]

@@ -231,6 +231,68 @@ mod tests {
         }
     }
 
+    // ── P1.5(Combination 上游補完):7-monowave candidate validator guard ──────
+
+    fn make_7wave_alternating() -> Vec<ClassifiedMonowave> {
+        vec![
+            cmw(100.0, 110.0, MonowaveDirection::Up),
+            cmw(110.0, 105.0, MonowaveDirection::Down),
+            cmw(105.0, 117.0, MonowaveDirection::Up),
+            cmw(117.0, 114.0, MonowaveDirection::Down),
+            cmw(114.0, 124.0, MonowaveDirection::Up),
+            cmw(124.0, 119.0, MonowaveDirection::Down),
+            cmw(119.0, 131.0, MonowaveDirection::Up),
+        ]
+    }
+
+    fn make_candidate_7wave() -> WaveCandidate {
+        WaveCandidate {
+            id: "c7-mw0-mw6".to_string(),
+            monowave_indices: vec![0, 1, 2, 3, 4, 5, 6],
+            wave_count: 7,
+            initial_direction: MonowaveDirection::Up,
+        }
+    }
+
+    #[test]
+    fn seven_wave_candidate_not_rejected_by_essential_rules() {
+        // P1.5:wc=7 Combination candidate — R1-R7 + 2 Overlap 全須 NotApplicable,
+        // overall_pass 必 true(否則 classifier 永遠拒收 Combination)。
+        let classified = make_7wave_alternating();
+        let candidate = make_candidate_7wave();
+        let report = validate_candidate(&candidate, &classified);
+        assert!(
+            report.overall_pass,
+            "wc=7 candidate 應 overall_pass=true,failed={:?}",
+            report.failed
+        );
+        for rid in [
+            RuleId::Ch5_Essential(1),
+            RuleId::Ch5_Essential(2),
+            RuleId::Ch5_Essential(3),
+            RuleId::Ch5_Essential(4),
+            RuleId::Ch5_Essential(5),
+            RuleId::Ch5_Essential(6),
+            RuleId::Ch5_Essential(7),
+            RuleId::Ch5_Overlap_Trending,
+            RuleId::Ch5_Overlap_Terminal,
+        ] {
+            assert!(
+                report.not_applicable.contains(&rid),
+                "{:?} 對 wc=7 應為 NotApplicable",
+                rid
+            );
+        }
+        assert!(
+            !report
+                .failed
+                .iter()
+                .any(|r| matches!(r.rule_id, RuleId::Ch5_Essential(_))),
+            "wc=7 不該有 Essential fail,failed={:?}",
+            report.failed
+        );
+    }
+
     #[test]
     fn valid_5wave_up_impulse_passes_overall() {
         let classified = make_5wave_impulse_up();

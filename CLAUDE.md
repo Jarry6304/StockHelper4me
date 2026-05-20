@@ -14,9 +14,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
 - **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.10 無 schema migration)
-- **開發分支**:`claude/start-v4.9-j7WZX`(v4.10) → PR 合 main
+- **開發分支**:`claude/start-v4.9-j7WZX`(v4.11) → PR 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
-- **Rust tests**:39 crates / **587 passed / 0 failed**(v4.10 後;v4.9 baseline 582 → +5 Item 4 run_pass2 tests)
+- **Rust tests**:39 crates / **596 passed / 0 failed**(v4.11 後;v4.10 baseline 587 → +9 Combination 上游補完 A+B+C tests)
 - **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
 - **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
@@ -344,6 +344,87 @@ cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
 - 0 alembic / 0 collector.toml / 0 Python
 - 既有 6 個 obv_core test margin 充足(divergence 邏輯不動)
 - Rollback:單 commit `git revert`
+
+---
+
+## v4.11 — Combination 上游補完 里程碑 A+B+C(2026-05-20)
+
+接 v4.10 後動工 `m3Spec/neely_combination_upstream_plan.md`「完整方案」。本輪 Neely
+原作落實盤點揭露 `NeelyPatternType::Combination` 在 production **從不產生**(classifier
+只產 Impulse/Diagonal/Zigzag/Flat/RunningCorrection,compaction 多產 Triangle)→
+v4.5 G2 已建的 `ch8_xwave` / `ch8_multiwave` / `triggers` / `emulation` /
+`post_validator` / `power_rating` Combination 鏈路全為 **dead code**。里程碑 A+B+C
+補上游 4 個動工點,點亮全鏈路。
+
+### 動工(1 commit / branch `claude/start-v4.9-j7WZX`)
+
+| 點 | 檔 | 動作 |
+|---|---|---|
+| P1a/P1b | `candidates/generator.rs` | wave_count `{3,5}` → `{3,5,7,11}`(A 加 7 / B 加 11)+ per-wave-count cap(防 wc=7/11 被 wc=3/5 佔滿共用 cap starve)|
+| P1.5 | `validator/core_rules.rs` | R3/R4 guard `wave_count < 3` → `!matches!(3 \| 5)` — wc=7/11 Combination candidate 不再被 5-wave Essential 規則誤拒(R5/R6/R7/Overlap 早已 `!= 5`)|
+| P2a | `classifier/mod.rs` | `classify_7wave_combination`(7 mw = sub_a 3 + x 1 + sub_b 3)→ Double-* 5 variant;`x_wave_is_large`(Table A/B 判定)+ `map_double_combination`;`classify_3wave` 抽 `classify_3wave_segment` 供 sub-segment 複用 |
+| P2b | `classifier/mod.rs` | `classify_11wave_combination`(11 mw = 3+1+3+1+3)→ Triple-* variant;`map_triple_combination` |
+| P3 | `compaction/three_rounds.rs` | `try_aggregate_7` / `try_aggregate_11` — 從 Level-N scenarios 拼 higher-degree Combination(全 :_3 corrective 交替)+ wire 進 `aggregate_one_level` |
+
+### 沙箱驗證
+
+- `cargo test --release -p neely_core --lib` ✅ **419 passed**(v4.10 baseline 410 → +9)
+- `cargo build --release -p tw_cores` ✅ 0 warnings
+- `cargo test --release --workspace --no-fail-fast` ✅ **596 passed / 0 failed**(587 → +9)
+
+### ⚠️ 待 user 跑 P0 Gate(本機,完整方案跨 3 Gate)
+
+對齊 `m3Spec/neely_combination_upstream_plan.md` §6 驗收條件:
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+.\rust_compute\target\release\tw_cores.exe run-all --write
+
+# P0 Gate#1 — Combination 是否產生 + forest 健康
+psql $env:DATABASE_URL -c "
+SELECT COUNT(*) AS combination_scenarios
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE core_name='neely_core'
+  AND s->>'pattern_type' LIKE 'Combination%'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
+"
+# 預期 > 0(production 不再是 0 個 Combination)
+
+psql $env:DATABASE_URL -c "
+SELECT PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p50,
+       PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(snapshot->'scenario_forest')) AS p95,
+       MAX(jsonb_array_length(snapshot->'scenario_forest')) AS max_count
+FROM structural_snapshots
+WHERE core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
+"
+# acceptance:p95 ≤ 50 / max ≤ 250。若 max > 300 → abort,加 magnitude 預篩
+```
+
+驗收綠燈:Combination scenario > 0 / forest p95 ≤ 50 / max ≤ 250 / ch8 advisory
+出現 ≥ 10 檔 / Triple-* scenarios ≥ 3 檔。
+
+### 已知限制(對齊 plan §8)
+
+- **P3 產的是 Level-1+ Combination** → 出現在 Stage 7.5 之後 → 拿不到
+  `ch8_xwave` / `ch8_multiwave` advisory(§9.3);只點亮 `power_rating`。
+- wave_count {7,11} 固定假設每元件最小 3-monowave;非最小元件組合會漏。
+- CombinationKind 細分(P3 取通用 DoubleThree/TripleThree)留 P0 Gate#3 校準。
+
+### 風險
+
+🟡 中:
+- 0 alembic / 0 Python / 0 collector.toml
+- **forest_size 行為改變**(新增 Combination scenarios)— 須 user 本機 P0 Gate 校準;
+  若 forest max > 300 → abort 並加 magnitude 預篩(plan §6 risk table)
+- Rollback:單 commit `git revert`
+
+### ⚠️「M3SPEC Out-of-Scope backlog 全清空」已不成立
+
+Combination 上游補完完整方案 code 已落地(里程碑 A+B+C),**P0 Gate 待 user 本機跑**。
+完整計畫見 `m3Spec/neely_combination_upstream_plan.md`(含實作待辦清單)。
 
 ---
 
