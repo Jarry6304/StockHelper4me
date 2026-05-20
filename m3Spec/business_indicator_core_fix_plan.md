@@ -1,8 +1,9 @@
 # business_indicator_core empty-series 修復 plan
 
-> **狀態**:✅ 診斷確認 + 修復完成(2026-05-20)— 真因 = 候選根因 3
+> **狀態**:✅ 已解決 + production verified(2026-05-20)— 真因 = 候選根因 3
 >            (`monitoring_color` 存縮寫 `G/YB/YR/R/B`,`from_label` 原只收英文全名)。
->            待 user 從 `claude/fix-execution-errors-8E8z4` 重編 tw_cores 重跑確認 events > 0。
+>            修復後 `tw_cores run-all --skip-stock` 確認 `business_indicator_core`
+>            events 0 → 34、facts_new 34。
 > **發現於**:2026-05-20 Fusion Layer P0-P2 production verify
 > **嚴重度**:🟡 中 — `market_dashboard` 7 個 component 缺 1;非 crash,graceful 降級
 
@@ -42,9 +43,9 @@ user 跑 §三 診斷,結果確認真因 = 候選 3,其餘候選排除:
 → loader 撈到 58 個有效 row,但舊 `from_label` 把每個 `G/YB/YR/R/B` 都判 `None`,
 `compute` 的 `filter_map` 丟光整批 → 空 series。本 §〇 上方修法正確且充分。
 
-**最後一步**:user 從 `claude/fix-execution-errors-8E8z4` 重編 `tw_cores`(舊 binary
-不含修復)重跑,確認 `business_indicator_core` events > 0 + `market_dashboard`
-component_count: 7。
+**✅ Production verified(2026-05-20)**:user 從 `claude/fix-execution-errors-8E8z4`
+重編 `tw_cores` 重跑 `run-all --skip-stock --write` — `business_indicator_core`
+events **0 → 34**、facts_new **34**、iv_rows 1(series 非空)。bug 結案。
 
 ## 一、問題
 

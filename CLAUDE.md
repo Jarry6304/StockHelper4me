@@ -316,15 +316,17 @@ user 跑 fix plan §三 診斷,確認真因 = 候選 3,其餘排除:
 先前 user 看到 `business_indicator_core events=0` 是 `claude/plan-stockhelper-api-kWh9F`
 分支編的 binary(不含本修復),非修復失敗。
 
-### 最後一步(user 從本分支重編重跑)
+### Production verified(2026-05-20)✅
 
-```powershell
-cd rust_compute
-cargo build --release -p tw_cores
-.\target\release\tw_cores.exe run-all --skip-stock --write   # --skip-stock 只跑 7 個 env cores,數秒
-cd ..
-# 確認 business_indicator_core events > 0;market_dashboard → component_count: 7
+user 從 `claude/fix-execution-errors-8E8z4` 重編 `tw_cores` 重跑
+`run-all --skip-stock --write`(7 env cores / 0.3s):
+
 ```
+business_indicator_core           1      0        34          1         34        0.0
+```
+
+`events` 0 → **34**、`facts_new` **34**、`iv_rows` 1(series 非空)。bug 結案 —
+`market_dashboard` 應回 component_count: 7。
 
 ### 風險
 
