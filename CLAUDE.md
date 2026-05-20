@@ -13,11 +13,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
-- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.10 無 schema migration)
-- **開發分支**:`claude/start-v4.9-j7WZX`(v4.11) → PR 合 main
+- **alembic head**:`e0f1g2h3i4j5`(Fusion Layer P0.2 加 `facts.severity`;v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.11 無 schema migration)
+- **開發分支**:`claude/plan-stockhelper-api-kWh9F`(Fusion Layer P0+P1+P2)→ PR #91 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
-- **Rust tests**:39 crates / **596 passed / 0 failed**(v4.11 後;v4.10 baseline 587 → +9 Combination 上游補完 A+B+C tests)
-- **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens)
+- **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
+- **MCP toolkit**:**18 public tools**(8 既有 + Fusion Layer 10 新:market_events / market_dashboard / key_levels / stop_loss_calc / pattern_scan / indicator_×5)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
 - **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
 - **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏 P1.1-P1.4 全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神
@@ -344,6 +344,70 @@ cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
 - 0 alembic / 0 collector.toml / 0 Python
 - 既有 6 個 obv_core test margin 充足(divergence 邏輯不動)
 - Rollback:單 commit `git revert`
+
+---
+
+## Fusion Layer — API 規劃落地(P0+P1+P2,2026-05-20)
+
+接 v4.11 後動工 `m3Spec/fusion_layer.md`(🔒 LOCK)+ `m3Spec/api_roadmap_v1.md`。把
+aggregation_layer 升級為 **Fusion Layer** 雙端口:`fusion.raw`(= 既有 `as_of()`,
+並排不整合)+ Integration 端口(跨 core 整合,不引入新規則)。MCP toolkit 8 → 18。
+
+分支 `claude/plan-stockhelper-api-kWh9F` → PR #91。14 commits + Ma20SlopeFlip
+calibration + business_indicator fix plan + 本 doc。
+
+### P0 — 基礎
+
+| Phase | 動作 |
+|---|---|
+| P0.1 | `src/agg/` → `src/fusion/raw/`;44 處 import 改寫(mcp_server / dashboards / tests);`tests/agg` → `tests/fusion` |
+| P0.2 | alembic `e0f1g2h3i4j5`:`facts.severity` SMALLINT NOT NULL DEFAULT 1 + idx_facts_severity_date |
+| P0.3 | Rust `Severity` enum(info/notable/warning/critical)+ `Fact.severity` 欄;44 cores produce_facts 全帶 severity;writers.rs UNNEST 加 `$9::smallint[]` |
+| P0.4 | cores_overview §8 對齊(chip 5→8 / env 6→7 / 新 §8.7 Cross-Stock);aggregation_layer.md r4 |
+
+severity 採 struct field(對齊「不耦合不抽象」— 各 core 自己決定,非中央表)。
+
+### P1 — Rust core 變更 + Fusion 模組 + 10 工具
+
+| 項目 | 內容 |
+|---|---|
+| P1.1 | neely `NeelyCoreOutput.flat_fib_zones`(全 forest scenario `expected_fib_zones` 去重聯集)|
+| P1.2 | 7 環境核心:8 新 EventKind(Drawdown5pct / NewHigh52w / NewHighAll / Ma20SlopeFlip / EnterPanic / Drop30In5d / TwdStrengthenStreak / Balance5dDrop3pct)+ 各 core 自己的 `severity()` 映射 + Point struct 加 `percentile_252` |
+| P1.3 | 7 Fusion 整合模組:`snapshot`(10-in-1)/ `key_levels` / `pattern_scan` / `stop_loss` / `market_dashboard` / `market_events` / `indicator_assembly` + `_shared` |
+| P1.4 | 10 新 MCP 工具(thin wrapper);`stock_snapshot` 擴 6→10 sections |
+
+### P2 — 收尾
+
+- P2.1:`magic_formula_core` Rust crate 查證為 **live**(`tw_cores` dispatch,讀 cross_cores 寫的 ranked 表產 facts)— 不移除;cores_overview §8.4 更正。
+- P2.2:`traditional_core` 確認 vaporware,從 §8.1 / §9 移除。
+- P2.3:30 個 mock-based 測試隨各模組落地。
+
+### Production verify(user 本機 2026-05-20)
+
+- alembic upgrade → `e0f1g2h3i4j5`;`tw_cores run-all` ~730s,40 cores 0 err。
+- `facts.severity` 寫入:info 537 萬 / notable 681 / warning 69 / critical 6。
+- neely `flat_fib_zones` 進 structural_snapshots JSONB(各股 58-217 區)。
+- 8 個新環境 EventKind 全觸發,severity 正確。
+- Neely forest P0 Gate:max=160 / p95=28 ✅(flat_fib_zones 未撐爆 forest)。
+- 測試流水線 5 phase 全綠;`cargo test --workspace` 607 passed。
+
+### Ma20SlopeFlip production calibration
+
+無門檻時 35.7/yr(平盤 MA20 抖動噪音)→ 加 `MA20_SLOPE_FLIP_MIN_PCT=0.0005`
+(翻轉後新斜率須 ≥ MA20 值的 0.05%)→ verify 13.2/yr(-63%)。production-data-driven,
+非回測。
+
+### 已知 follow-up
+
+`business_indicator_core` series 空 → `market_dashboard` 6/7 component。Silver
+`business_indicator_derived` 有 87 rows 但 core 產不出 series。**屬 environment core
+bug,非 Fusion Layer 問題**(market_dashboard graceful 降級正確)。下個 session 修,
+完整診斷 + 修法見 `m3Spec/business_indicator_core_fix_plan.md`。
+
+### 風險
+
+🟢 低:純架構升級 + 加欄,行為向下相容。`severity` / `flat_fib_zones` 不進
+params_hash。各 commit 可單獨 `git revert`。
 
 ---
 
