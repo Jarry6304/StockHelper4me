@@ -67,6 +67,8 @@ pub struct CommodityMacroPoint {
     pub return_z_score: f64,
     pub momentum_state: String,           // 'up' | 'down' | 'neutral'
     pub streak_days: i32,
+    /// Fusion Layer P1.2b:price 在尾段 252 個資料點內的百分位(0.0-1.0)。
+    pub percentile_252: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,6 +90,17 @@ pub enum CommodityMacroEventKind {
 pub struct CommodityMacroCore;
 impl CommodityMacroCore { pub fn new() -> Self { CommodityMacroCore } }
 impl Default for CommodityMacroCore { fn default() -> Self { CommodityMacroCore::new() } }
+
+/// Fusion Layer P1.2b:回 `values[i]` 在尾段 `window` 個資料點(含自己)內的百分位(0.0-1.0)。
+fn percentile_trailing(values: &[f64], i: usize, window: usize) -> f64 {
+    if values.is_empty() || i >= values.len() || window == 0 {
+        return 0.0;
+    }
+    let lo = i.saturating_sub(window - 1);
+    let win = &values[lo..=i];
+    let le = win.iter().filter(|&&v| v <= values[i]).count();
+    le as f64 / win.len() as f64
+}
 
 impl IndicatorCore for CommodityMacroCore {
     type Input = CommodityMacroSeries;
@@ -117,7 +130,13 @@ impl IndicatorCore for CommodityMacroCore {
                 return_z_score: p.return_z_score.unwrap_or(0.0),
                 momentum_state: p.momentum_state.clone().unwrap_or_else(|| "neutral".to_string()),
                 streak_days: p.streak_days.unwrap_or(0),
+                percentile_252: 0.0,
             });
+        }
+        // Fusion Layer P1.2b:price 尾段 252 百分位
+        let prices: Vec<f64> = series.iter().map(|p| p.price).collect();
+        for (i, p) in series.iter_mut().enumerate() {
+            p.percentile_252 = percentile_trailing(&prices, i, 252);
         }
 
         let mut events = Vec::new();

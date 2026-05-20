@@ -88,6 +88,8 @@ pub struct BusinessIndicatorPoint {
     pub lagging_indicator: f64,
     pub monitoring: i32,          // 9-45 分
     pub monitoring_color: MonitoringColor,
+    /// Fusion Layer P1.2b:monitoring 在尾段 252 個月內的百分位(0.0-1.0;月頻 → 252 > 序列長度時取全歷史)。
+    pub percentile_252: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -112,6 +114,17 @@ pub struct BusinessIndicatorCore;
 impl BusinessIndicatorCore { pub fn new() -> Self { BusinessIndicatorCore } }
 impl Default for BusinessIndicatorCore { fn default() -> Self { BusinessIndicatorCore::new() } }
 
+/// Fusion Layer P1.2b:回 `values[i]` 在尾段 `window` 個資料點(含自己)內的百分位(0.0-1.0)。
+fn percentile_trailing(values: &[f64], i: usize, window: usize) -> f64 {
+    if values.is_empty() || i >= values.len() || window == 0 {
+        return 0.0;
+    }
+    let lo = i.saturating_sub(window - 1);
+    let win = &values[lo..=i];
+    let le = win.iter().filter(|&&v| v <= values[i]).count();
+    le as f64 / win.len() as f64
+}
+
 impl IndicatorCore for BusinessIndicatorCore {
     type Input = BusinessIndicatorSeries;
     type Params = BusinessIndicatorParams;
@@ -125,7 +138,7 @@ impl IndicatorCore for BusinessIndicatorCore {
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
-        let series: Vec<BusinessIndicatorPoint> = input.points.iter().filter_map(|p| {
+        let mut series: Vec<BusinessIndicatorPoint> = input.points.iter().filter_map(|p| {
             let leading = p.leading_indicator?;
             let coincident = p.coincident_indicator?;
             let lagging = p.lagging_indicator?;
@@ -143,8 +156,15 @@ impl IndicatorCore for BusinessIndicatorCore {
                 lagging_indicator: lagging,
                 monitoring,
                 monitoring_color: color,
+                percentile_252: 0.0,
             })
         }).collect();
+
+        // Fusion Layer P1.2b:monitoring 尾段 252 百分位(月頻;252 > 序列長度 → 取全歷史)
+        let monitoring_vals: Vec<f64> = series.iter().map(|p| p.monitoring as f64).collect();
+        for (i, p) in series.iter_mut().enumerate() {
+            p.percentile_252 = percentile_trailing(&monitoring_vals, i, 252);
+        }
 
         let mut events = Vec::new();
         let n = series.len();
