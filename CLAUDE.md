@@ -302,19 +302,29 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 - `cargo test --workspace` ✅ **609 passed / 0 failed**(607 → +2)
 - `pytest tests/`(`--ignore=test_render_tools.py`)✅ 240 passed / 1 skipped(0 regression)
 
-### 待 user 本機 production verify
+### 診斷確認(2026-05-20,`scripts/diag_business_indicator.sql`)
 
-本 session 環境無 DB,無法跑 fix plan §三 SQL 診斷確認 Bronze 實際字串值。user 端:
+user 跑 fix plan §三 診斷,確認真因 = 候選 3,其餘排除:
+
+- Silver / Bronze 各 87 rows(2019-01 ~ 2026-03),leading/coincident/lagging/
+  monitoring/monitoring_color **全 87/87 non-null** → 「某中間欄全 null」排除。
+- distinct stock_id 只有 `_market_` → 候選 1 排除;通過 loader filter **58 rows** →
+  候選 2(date 太舊)排除。
+- `monitoring_color` 值分佈:`G`×21 / `YB`×20 / `YR`×18 / `R`×17 / `B`×11 —
+  **正是 schema 契約縮寫**,非英文全名 → 候選 3 確認,本修法正確且充分。
+
+先前 user 看到 `business_indicator_core events=0` 是 `claude/plan-stockhelper-api-kWh9F`
+分支編的 binary(不含本修復),非修復失敗。
+
+### 最後一步(user 從本分支重編重跑)
 
 ```powershell
-cd rust_compute && cargo build --release -p tw_cores && cd ..
-.\rust_compute\target\release\tw_cores.exe run-all --write
-# 確認 business_indicator_core events > 0 且 indicator_values.value->'series' 非空
-# market_dashboard('YYYY-MM-DD') → component_count: 7,missing 不含 business_indicator_core
+cd rust_compute
+cargo build --release -p tw_cores
+.\target\release\tw_cores.exe run-all --skip-stock --write   # --skip-stock 只跑 7 個 env cores,數秒
+cd ..
+# 確認 business_indicator_core events > 0;market_dashboard → component_count: 7
 ```
-
-若 verify 後 series 仍空 → 依 fix plan §三 SQL 結果走候選 1(stock_id)/ 候選 2
-(date 太舊)/ 某中間欄全 null。
 
 ### 風險
 

@@ -1,7 +1,8 @@
 # business_indicator_core empty-series 修復 plan
 
-> **狀態**:✅ code 層修復(2026-05-20)— 候選根因 3(monitoring_color 字串不匹配)
->            已修;production verify 待 user 本機跑(無 DB 的 session 無法跑 §三 SQL)。
+> **狀態**:✅ 診斷確認 + 修復完成(2026-05-20)— 真因 = 候選根因 3
+>            (`monitoring_color` 存縮寫 `G/YB/YR/R/B`,`from_label` 原只收英文全名)。
+>            待 user 從 `claude/fix-execution-errors-8E8z4` 重編 tw_cores 重跑確認 events > 0。
 > **發現於**:2026-05-20 Fusion Layer P0-P2 production verify
 > **嚴重度**:🟡 中 — `market_dashboard` 7 個 component 缺 1;非 crash,graceful 降級
 
@@ -26,9 +27,24 @@
 - 附帶修 `environment_loader/src/lib.rs` `BusinessIndicatorRaw.monitoring_color`
   誤導性註解(原寫只收英文全名)。
 
-**仍待 user 本機 production verify**(下方 §三 SQL + §五):本 session 環境無 DB,
-無法跑診斷確認 Bronze 實際字串值,也無法排除候選 1 / 2。若 verify 後 series 仍空,
-依 §三 SQL 結果走 §四(候選 1 stock_id / 候選 2 date 太舊 / 某中間欄全 null)。
+### 診斷確認(2026-05-20,`scripts/diag_business_indicator.sql`)
+
+user 跑 §三 診斷,結果確認真因 = 候選 3,其餘候選排除:
+
+| 檢查 | 結果 | 候選判定 |
+|---|---|---|
+| Silver / Bronze row 數 | 各 87 rows,2019-01 ~ 2026-03 | — |
+| 各欄 non-null count | leading / coincident / lagging / monitoring / monitoring_color **全 87/87** | 「某中間欄全 null」**排除** |
+| distinct stock_id | 只有 `_market_` | 候選 1(stock_id 不符)**排除** |
+| 通過 loader filter 的 row 數 | **58**(stock_id=`_market_` + 近 1825 天) | 候選 2(date 太舊)**排除** |
+| `monitoring_color` 值分佈 | `G`×21 / `YB`×20 / `YR`×18 / `R`×17 / `B`×11 | **候選 3 確認** — 存的是 schema 契約縮寫,非英文全名 |
+
+→ loader 撈到 58 個有效 row,但舊 `from_label` 把每個 `G/YB/YR/R/B` 都判 `None`,
+`compute` 的 `filter_map` 丟光整批 → 空 series。本 §〇 上方修法正確且充分。
+
+**最後一步**:user 從 `claude/fix-execution-errors-8E8z4` 重編 `tw_cores`(舊 binary
+不含修復)重跑,確認 `business_indicator_core` events > 0 + `market_dashboard`
+component_count: 7。
 
 ## 一、問題
 
