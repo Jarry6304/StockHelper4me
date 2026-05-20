@@ -5263,16 +5263,17 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v3.18 收尾(2026-05-17)**:Round 8 calibration session **完整結算** ☕ —
-> 6 個原始 over-fired EventKind = 5 校準到 target band + 1(LargeTransaction)
-> accepted baseline(fat-tail Lo 2001 reality)。production verify 4/4 milestone
-> variants in band(Low 10.06 / High 7.90 / LowAnn 5.10 / HighAnn 3.74)。
+> **🎯 v4.9 收尾(2026-05-19)**:M3SPEC 闕漏補完 + Out-of-Scope Items 1+2+3 **完整收尾** ☕☕☕ —
+> Group 2(4 sub-PR)+ Group 3(1 sub-PR)+ Group 1(3 sub-PR;**P0 Gate verified**:max=196 / p95=28 / overflow=0)
+> + v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)
+> + v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞)。
 >
-> alembic head 不變:`a6b7c8d9e0f1`(v3.15 → v3.18 純 Rust const tweak)。
-> Rust workspace 35 crates / **426 tests passed / 0 failed**。
-> Production state:1266 stocks × 35 cores / ~10 min wall / facts ~10M+。
+> alembic head 不變:`d9e0f1g2h3i4`(v4.0 → v4.9 全部 0 schema migration)。
+> Rust workspace 39 crates / **582 tests passed / 0 failed**(v4.4 baseline 528 → +54)。
+> Production state:1266 stocks × 36 cores / wall time ~11 min / facts ~5.2M(VACUUM 後)。
 >
-> **m2 大重構 + Round 7/8 calibration + Aggregation Layer 4 Phase + Neely Core v1.0.1 P0 Gate** 全部已收尾,進入「沒有 calibration backlog」的乾淨起點。
+> **v4.0 → v4.9 共 10 commits / 6 milestones / +130 tests / ~8,100 LoC** 全部 production-ready。
+> 僅 **Item 4 Pre-Constructive Pass 1/2 diagnostics union** 真正 V4.x(屬 struct schema change)。
 
 ### 1. 立即可動工(無 blocker)
 
@@ -5294,20 +5295,27 @@ python scripts/probe_finmind_sponsor_unused.py --max 0
 - `agg_api/main.py` + Pydantic schemas + `/as_of/{stock_id}` + `/health_check`
 - 不含 auth / rate limit / deploy(屬 Phase B-5 網站工程,獨立規格)
 
-**1d. wall time 微優化**(v3.18 run-all 695s vs v3.17 561s,+24%):
-- 非 calibration 引起(params_hash 0 變動 → facts dedup 行為一致)
+**1d. wall time 微優化**(目前 ~11 min / 1266 stocks):
+- 非 calibration 引起(v4.x params_hash 0 變動 → facts dedup 行為一致)
 - 可能 PG contention / sqlx pool 大小 / WAL flush 時機
 - 若想動:從 `cargo flamegraph` 看哪個 core hot path 變慢起
 - 排序低,wall time 仍 < 12 分鐘可接受
 
 ### 2. 中期 backlog(non-blocking)
 
-**2a. exhaustive compaction Round 3 邊界波 reevaluation**(留 V3):
-- spec `m3Spec/neely_rules.md §Three Rounds` line 1198-1256
-- 目前 Round 1-2 已落地(`compaction/three_rounds.rs`),Round 3 邊界波 m(+1)/m(-1)
-  reevaluation 需要部分 Stage 3-4 rerun
+**2a. Neely M3SPEC Item 4 Pre-Constructive Pass 1/2 diagnostics union**(留真正 V4.x):
+- 目前 Pass 2 直接覆蓋 Pass 1 的 `structure_label_candidates`(對齊 spec
+  「Compaction-aware candidates 較 accurate」設計)
+- Union 需新增 `Scenario.diagnostics.pre_constructive_rejections` 欄位
+- struct schema change + 影響 ~30+ Scenario 構造點 → 屬大幅 struct 重構
+- 不阻塞 production;留真正 V4.x range
 
-**2b. Silver schema 假設待 user 驗**(目前不阻塞 production):
+**2b. exhaustive compaction Round 3 真實 partial Stage 3-4 rerun**(留 V3):
+- v4.8 已加 boundary_retracement_extreme reject 機制(< 0.236 or > 4.236 → reject)
+- 完整 Stage 3-4 partial rerun(對 boundary scenarios 重跑 validator)留 V3 議題
+- 目前 advisory + reject 已對齊 spec 大部分意圖
+
+**2c. Silver schema 假設待 user 驗**(目前不阻塞 production):
 
 | 假設 | 影響 core | 處置 |
 |---|---|---|
@@ -5315,12 +5323,6 @@ python scripts/probe_finmind_sponsor_unused.py --max 0
 | `holding_shares_per_derived.detail` JSONB schema | shareholder_core | best-guess key(small_holders_count 等)|
 | `fear_greed_index` 是否需 `_derived` 表 | fear_greed_core | 目前直讀 Bronze,§6.2 已登記架構例外 |
 | `financial_statement_derived.detail` JSONB key | financial_statement_core | v3.14 改中文 origin_name + 17 levels iterate 已部分解 |
-
-**2c. Neely P0 Gate 五檔實測校準**(估 ~1 天 + 校準):
-- 0050 / 2330 / 3363 / 6547 / 1312
-- 校準常數寫入 `docs/benchmarks/`:`forest_max_size` / `compaction_timeout_secs`
-  / `BeamSearchFallback.k` / `REVERSAL_ATR_MULTIPLIER` / `BEAM_CAP_MULTIPLIER`
-- 對齊 cores_overview §9.1「P0 完成後的 Gate」
 
 **2d. Phase 4 真正的 incremental 優化** — 偵測「該股票無新除權息事件 → 跳過」每天 incremental 可省 ~6 分鐘
 
