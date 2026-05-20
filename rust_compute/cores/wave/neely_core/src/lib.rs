@@ -573,6 +573,9 @@ impl WaveCore for NeelyCore {
             }
         };
 
+        // Fusion Layer P1.1:全 forest fib zones 去重聯集,供 Fusion key_levels 直接讀。
+        let flat_fib_zones = fibonacci::flatten_fib_zones(&forest);
+
         Ok(NeelyCoreOutput {
             stock_id: input.stock_id.clone(),
             timeframe: input.timeframe,
@@ -604,6 +607,7 @@ impl WaveCore for NeelyCore {
             reverse_logic_observation,
             degree_ceiling,
             cross_timeframe_hints,
+            flat_fib_zones,
         })
     }
 

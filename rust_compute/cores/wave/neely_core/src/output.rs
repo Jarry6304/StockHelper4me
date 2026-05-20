@@ -104,6 +104,11 @@ pub struct NeelyCoreOutput {
     /// Phase 12 新增:Stage 12 cross_timeframe_hints(architecture §8.6 / §3.4)。
     /// 各 monowave 的 Structure Label + 價格區間摘要,供 Aggregation Layer 跨 Timeframe 比對。
     pub cross_timeframe_hints: CrossTimeframeHints,
+
+    /// Fusion Layer P1.1:全 forest scenario 的 `expected_fib_zones` 去重聯集
+    /// (對齊 m3Spec/fusion_layer.md §6 #1)。供 Fusion `key_levels` 模組直接讀,
+    /// 不必每次重跑 Neely。
+    pub flat_fib_zones: Vec<FibZone>,
 }
 
 /// Three Rounds Round 3 暫停資訊(neely_core_architecture.md §8.4)。

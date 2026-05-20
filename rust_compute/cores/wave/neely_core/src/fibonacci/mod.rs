@@ -28,7 +28,7 @@ pub use projection::{
 };
 pub use ratios::{FIB_TOLERANCE_PCT, NEELY_FIB_RATIOS, WATERFALL_TOLERANCE_PCT};
 
-use crate::output::{Monowave, Scenario};
+use crate::output::{FibZone, Monowave, Scenario};
 
 /// 對 Forest 中所有 Scenario 套 Fibonacci 投影,寫入 Scenario.expected_fib_zones。
 ///
@@ -37,5 +37,86 @@ use crate::output::{Monowave, Scenario};
 pub fn apply_to_forest(forest: &mut [Scenario], monowaves: &[Monowave]) {
     for scenario in forest.iter_mut() {
         scenario.expected_fib_zones = compute_expected_fib_zones(scenario, monowaves);
+    }
+}
+
+/// 中點距離 < 此比例的兩個 FibZone 視為同一價位(去重門檻)。
+const FIB_ZONE_DEDUP_PCT: f64 = 0.003;
+
+/// 去重一組 FibZone:依中點升序排序,丟掉與前一個保留項中點距離 < 0.3% 的近重複。
+fn dedup_fib_zones(mut zones: Vec<FibZone>) -> Vec<FibZone> {
+    zones.retain(|z| z.low.is_finite() && z.high.is_finite() && z.low > 0.0);
+    zones.sort_by(|a, b| {
+        let ma = (a.low + a.high) / 2.0;
+        let mb = (b.low + b.high) / 2.0;
+        ma.partial_cmp(&mb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut out: Vec<FibZone> = Vec::new();
+    for z in zones {
+        let mid = (z.low + z.high) / 2.0;
+        let dup = out.last().map_or(false, |prev| {
+            let pmid = (prev.low + prev.high) / 2.0;
+            pmid > 0.0 && ((mid - pmid).abs() / pmid) < FIB_ZONE_DEDUP_PCT
+        });
+        if !dup {
+            out.push(z);
+        }
+    }
+    out
+}
+
+/// Fusion Layer P1.1:全 forest scenario 的 `expected_fib_zones` 去重聯集。
+///
+/// 對齊 m3Spec/fusion_layer.md §6 #1。寫進 `NeelyCoreOutput.flat_fib_zones`,
+/// 供 Fusion `key_levels` 模組直接讀(不必重跑 Neely)。
+pub fn flatten_fib_zones(forest: &[Scenario]) -> Vec<FibZone> {
+    let all: Vec<FibZone> = forest
+        .iter()
+        .flat_map(|s| s.expected_fib_zones.iter().cloned())
+        .collect();
+    dedup_fib_zones(all)
+}
+
+#[cfg(test)]
+mod flat_fib_tests {
+    use super::dedup_fib_zones;
+    use crate::output::FibZone;
+
+    fn z(low: f64, high: f64, ratio: f64) -> FibZone {
+        FibZone {
+            label: format!("fib_{ratio}"),
+            low,
+            high,
+            source_ratio: ratio,
+        }
+    }
+
+    #[test]
+    fn dedup_collapses_near_duplicate_zones() {
+        // 三個中點都落 ~100 → 收斂成 1
+        let out = dedup_fib_zones(vec![
+            z(99.0, 101.0, 0.618),
+            z(99.1, 101.1, 0.618),
+            z(99.05, 101.05, 0.5),
+        ]);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn dedup_keeps_distinct_levels() {
+        // 中點 100 vs 120 差 20% → 兩個都留
+        let out = dedup_fib_zones(vec![z(99.0, 101.0, 0.618), z(119.0, 121.0, 1.0)]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn dedup_drops_non_finite_and_sorts_by_midpoint() {
+        let out = dedup_fib_zones(vec![
+            z(119.0, 121.0, 1.0),
+            z(f64::NAN, 101.0, 0.5),
+            z(49.0, 51.0, 0.382),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].low < out[1].low);
     }
 }

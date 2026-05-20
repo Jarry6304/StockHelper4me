@@ -220,6 +220,7 @@ mod tests {
                 timeframe: Timeframe::Daily,
                 monowave_summaries: Vec::new(),
             },
+            flat_fib_zones: Vec::new(),
         }
     }
 
