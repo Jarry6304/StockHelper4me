@@ -42,3 +42,59 @@ def severity_to_label(value: int | None) -> str:
         return SEVERITY_LABEL.get(int(value), "info")  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return "info"
+
+
+def cluster_price_levels(
+    points: list[dict],
+    *,
+    bucket_pct: float = 0.01,
+) -> list[dict]:
+    """把帶 `price` 的點 cluster 成價位區。對齊 m3Spec/fusion_layer.md §8.1。
+
+    依 price 升序排序,greedy 收同一 bucket(與該 cluster 首個成員相對距離
+    < `bucket_pct`)。`strength` = cluster 內 distinct `source` 數(被越多來源
+    確認的價位越強)。
+
+    Args:
+        points: [{price: float, source: str, ...}]
+        bucket_pct: 同一價位的相對容差(預設 1%)。
+
+    Returns:
+        [{price, low, high, sources, strength, member_count}],依 price 升序。
+    """
+    valid = [
+        p for p in points
+        if isinstance(p.get("price"), (int, float))
+        and not isinstance(p.get("price"), bool)
+        and p["price"] > 0
+    ]
+    valid.sort(key=lambda p: p["price"])
+
+    clusters: list[list[dict]] = []
+    cur: list[dict] = []
+    for p in valid:
+        if not cur:
+            cur = [p]
+            continue
+        anchor = cur[0]["price"]
+        if abs(p["price"] - anchor) / anchor < bucket_pct:
+            cur.append(p)
+        else:
+            clusters.append(cur)
+            cur = [p]
+    if cur:
+        clusters.append(cur)
+
+    out: list[dict] = []
+    for c in clusters:
+        prices = [m["price"] for m in c]
+        sources = sorted({str(m.get("source")) for m in c})
+        out.append({
+            "price": round(sum(prices) / len(prices), 4),
+            "low": round(min(prices), 4),
+            "high": round(max(prices), 4),
+            "sources": sources,
+            "strength": len(sources),
+            "member_count": len(c),
+        })
+    return out

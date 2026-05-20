@@ -786,6 +786,28 @@ def market_dashboard(
     return _market_dashboard(_parse_date(date), database_url=database_url)
 
 
+def key_levels(
+    stock_id: str,
+    date: str,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion B 視角:個股關鍵支撐 / 壓力價位。
+
+    整合三來源並以 1% bucket cluster:support_resistance_core(SR 價位)、
+    trendline_core(有效趨勢線)、neely_core flat_fib_zones(Fibonacci 區)。
+    strength = 該價位被幾個來源確認(越多越強)。
+
+    Returns:
+        {stock_id, as_of, source_point_count, level_count,
+         levels: [{price, low, high, sources, strength, member_count}, ...]}
+        levels 依 price 升序。
+    """
+    from fusion.key_levels import key_levels as _key_levels
+
+    return _key_levels(stock_id, _parse_date(date), database_url=database_url)
+
+
 # ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
