@@ -174,16 +174,18 @@ phase_1() {
     rust_pass=$(grep -oE '[0-9]+ passed' /tmp/rust_test_out.log | awk '{sum += $1} END {print sum}')
     pass "Rust workspace: $rust_pass tests passed"
 
-    step "Python pytest — tests/agg/"
-    if ! pytest tests/agg/ -q 2>&1; then fail_msg "agg tests FAILED"; return 1; fi
+    # 用 `python -m pytest`(非裸 pytest):把 repo root 放 sys.path[0],
+    # 否則 tests/mcp_server/ 這個測試 package 會 shadow 真正的 mcp_server 套件。
+    step "Python pytest — tests/fusion/"
+    if ! $pybin -m pytest tests/fusion/ -q 2>&1; then fail_msg "fusion tests FAILED"; return 1; fi
 
     step "Python pytest — tests/mcp_server/ (skip render_tools)"
-    if ! pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py -q 2>&1; then
+    if ! $pybin -m pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py -q 2>&1; then
         fail_msg "mcp_server tests FAILED"; return 1
     fi
 
     step "Python pytest — tests/cross_cores/"
-    if ! pytest tests/cross_cores/ -q 2>&1; then fail_msg "cross_cores tests FAILED"; return 1; fi
+    if ! $pybin -m pytest tests/cross_cores/ -q 2>&1; then fail_msg "cross_cores tests FAILED"; return 1; fi
 
     pass "All sandbox tests passed"
     return 0
@@ -196,7 +198,7 @@ phase_2() {
     if ! cmd_exists psql; then warn "psql not in PATH — skip"; return 0; fi
 
     step "alembic head"
-    local expected="d9e0f1g2h3i4"
+    local expected="e0f1g2h3i4j5"
     if alembic current 2>&1 | grep -q "$expected"; then
         pass "alembic head = $expected"
     else
