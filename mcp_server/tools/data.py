@@ -841,6 +841,28 @@ def stop_loss_calc(
     )
 
 
+def pattern_scan(
+    stock_id: str,
+    date: str,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion B 視角:近期 K 線型態 + 支撐 / 壓力 context。
+
+    撈 candlestick_pattern_core 近期偵測到的 K 線型態,為每個型態補上
+    key_levels context(型態發生價是否貼近支撐 / 壓力 — 同型態在支撐附近
+    與在中段意義不同)。型態本身由 core 偵測,本層只整合 key_levels。
+
+    Returns:
+        {stock_id, as_of, pattern_count,
+         patterns: [{date, pattern, trend_context, strength, price,
+                     level_context}, ...]}  依 date 降序。
+    """
+    from fusion.pattern_scan import pattern_scan as _pattern_scan
+
+    return _pattern_scan(stock_id, _parse_date(date), database_url=database_url)
+
+
 # ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
