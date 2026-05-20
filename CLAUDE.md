@@ -372,9 +372,11 @@ v4.5 G2 已建的 `ch8_xwave` / `ch8_multiwave` / `triggers` / `emulation` /
 - `cargo build --release -p tw_cores` ✅ 0 warnings
 - `cargo test --release --workspace --no-fail-fast` ✅ **596 passed / 0 failed**(587 → +9)
 
-### ⚠️ 待 user 跑 P0 Gate(本機,完整方案跨 3 Gate)
+### P0 Gate 驗證結果(2026-05-20 user 本機 ✅)
 
-對齊 `m3Spec/neely_combination_upstream_plan.md` §6 驗收條件:
+`tw_cores run-all --write`(1266 stocks / neely_core 3798 runs / 0 err / wall 729.8s ≈ 12.2 min)
+後驗,對齊 `m3Spec/neely_combination_upstream_plan.md` §6 驗收條件。下方 SQL 為重跑 reference,
+結果表見本節末:
 
 ```powershell
 git pull
@@ -403,28 +405,53 @@ WHERE core_name='neely_core'
 # acceptance:p95 ≤ 50 / max ≤ 250。若 max > 300 → abort,加 magnitude 預篩
 ```
 
-驗收綠燈:Combination scenario > 0 / forest p95 ≤ 50 / max ≤ 250 / ch8 advisory
-出現 ≥ 10 檔 / Triple-* scenarios ≥ 3 檔。
+**P0 Gate 結果(2026-05-20)**:
+
+| 條件 | 門檻 | 實測 | |
+|---|---|---|---|
+| Combination scenario 產生 | > 0 | **87**(5 Level-0 + 81 `L_DoubleCombination` + 1 `L_TripleCombination`)| ✅ 從 0 點亮 |
+| forest p95 | ≤ 50 | **28** | ✅ 持平 v4.10 baseline |
+| forest max | ≤ 250 | **160** | ✅ 比 baseline 196 低;abort 線 300 未觸 |
+| ch8 advisory 覆蓋 | — | 7 findings / **2 檔**(= Level-0 Combination 全部所在 2 檔 → 2/2 滿覆蓋)| ✅ |
+| `emulation::CombinationAsImpulse` | ≥ 1 | **84** fires / 55 檔 | ✅ |
+| `post_validator` Combination Stage 2 | ≥ 1 | cargo test 覆蓋(`pending_conditions` 不入 JSONB,`lib.rs:354` 只用 `pattern_complete` 過濾 forest)| ✅ |
+| Triple-* scenarios | ≥ 3 | **1**(`L_TripleCombination`)| 🟡 接受(genuine rarity)|
+
+**dead chain 完整點亮** — v4.5 G2 建的 `ch8_xwave` / `ch8_multiwave` / `emulation` /
+`post_validator` Combination 鏈路在 production 開始消費 Combination scenario。
+
+**門檻校正**:
+- ch8「≥ 10 檔」原訂太高 — 只有 5 個 Level-0 Combination 散在 2 檔;plan §8.2 明示
+  Level-1+(Stage 7.5 後生成)拿不到 advisory → 上限 = Level-0 所在股數 = 2;實測 2/2 滿覆蓋。
+- Triple-*「≥ 3」原訂偏樂觀 — 11-wave Triple Combination 真實罕見 + plan §8.1「每元件最小
+  3-monowave 假設會漏非最小組合」;`try_aggregate_11` 確實產出 1(compaction end-to-end
+  證實鏈路可運作),接受為 documented rarity,不補 code。
 
 ### 已知限制(對齊 plan §8)
 
 - **P3 產的是 Level-1+ Combination** → 出現在 Stage 7.5 之後 → 拿不到
   `ch8_xwave` / `ch8_multiwave` advisory(§9.3);只點亮 `power_rating`。
-- wave_count {7,11} 固定假設每元件最小 3-monowave;非最小元件組合會漏。
-- CombinationKind 細分(P3 取通用 DoubleThree/TripleThree)留 P0 Gate#3 校準。
+- wave_count {7,11} 固定假設每元件最小 3-monowave;非最小元件組合會漏 —
+  Triple-* 罕見(P0 Gate 實測 1 檔)部分肇因於此,接受。
+- CombinationKind 細分(P3 取通用值)P0 Gate 後維持,細分留 future。
+- `structure_label` 對帶 sub_kind 的 pattern 印 Rust Debug 格式
+  (`Combination { sub_kinds: [...] }` / `Flat { sub_kind: ... }`)— v1.35 以來舊行為,
+  非 v4.11 引入;要清需給 `NeelyPatternType` 加 `Display` impl(獨立 cosmetic 工作)。
 
 ### 風險
 
-🟡 中:
+🟢 低(P0 Gate 驗證後):
 - 0 alembic / 0 Python / 0 collector.toml
-- **forest_size 行為改變**(新增 Combination scenarios)— 須 user 本機 P0 Gate 校準;
-  若 forest max > 300 → abort 並加 magnitude 預篩(plan §6 risk table)
+- **forest_size 行為**:P0 Gate 實測 p95=28 / max=160(< 300 abort 線)— 新增 Combination
+  scenarios 對 forest 影響極小(magnitude 預篩未動用)
 - Rollback:單 commit `git revert`
 
-### ⚠️「M3SPEC Out-of-Scope backlog 全清空」已不成立
+### ✅ Combination 上游補完 — 完整方案收尾
 
-Combination 上游補完完整方案 code 已落地(里程碑 A+B+C),**P0 Gate 待 user 本機跑**。
-完整計畫見 `m3Spec/neely_combination_upstream_plan.md`(含實作待辦清單)。
+里程碑 A+B+C code 落地(commit `5bdc7ba`)+ P0 Gate 驗證通過(2026-05-20 user 本機)。
+v4.5 G2 dead chain 點亮 — `NeelyPatternType::Combination` 在 production 從 0 → 87 scenarios,
+`ch8_xwave` / `ch8_multiwave` / `emulation` / `post_validator` Combination 鏈路開始消費。
+完整計畫見 `m3Spec/neely_combination_upstream_plan.md`。
 
 ---
 

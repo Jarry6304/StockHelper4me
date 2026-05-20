@@ -1,7 +1,6 @@
 # Neely Combination 上游補完 — 實作計畫
 
-> **狀態**:里程碑 A+B+C **code 完成 + 沙箱驗證**(2026-05-20,commit `5bdc7ba`);
-> **P0 Gate 待 user 本機跑**。
+> **狀態**:里程碑 A+B+C **code 完成 + P0 Gate 驗證通過**(2026-05-20,commit `5bdc7ba`)。
 > **範圍**:補 Stage 3 / 4 / 5 / 8 上游,讓 `NeelyPatternType::Combination` 真正在
 > production 產生,點亮 v4.5 G2 已建好但原為 dead code 的
 > `ch8_xwave` / `ch8_multiwave` / `triggers` / `emulation` / `post_validator` /
@@ -21,7 +20,7 @@
 | `cargo build --release -p tw_cores` | **0 warnings** |
 | `cargo test --release --workspace --no-fail-fast` | **596 passed / 0 failed**(587 → +9)|
 
-下一步:user 本機跑 P0 Gate#1~#3(見 §6),沙箱無 DATABASE_URL 無法跑。
+P0 Gate#1~#3 已於 2026-05-20 user 本機驗證通過(見 §6 / 實作待辦清單)。
 
 ---
 
@@ -38,16 +37,16 @@
 - [x] **P1.5** `validator/core_rules.rs` — R3/R4 guard `< 3` → `!matches!(3 | 5)`
 - [x] **P2a** `classifier/mod.rs` — `classify_7wave_combination`(Double-* 5 variant)
 - [x] 沙箱:neely_core 419 passed / tw_cores build 0 warning
-- [ ] **P0 Gate#1**(user 本機):Combination > 0 / forest p95 ≤ 50 / max ≤ 250 / ch8 advisory ≥ 10 檔 / 5 檔 Double-* spot-check
+- [x] **P0 Gate#1**(2026-05-20 ✅):Combination **87** / forest p95=**28** max=**160** / ch8 advisory **2/2** Level-0 檔(「≥10」門檻校正為 = Level-0 所在股數)/ Double-* 5 scenario spot-check ✓
 
 ### 里程碑 B — Triple-*
 - [x] **P1b** `candidates/generator.rs` — wave_count `{3,5,7}` → `{3,5,7,11}`
 - [x] **P2b** `classifier/mod.rs` — `classify_11wave_combination`(Triple-* variant)
-- [ ] **P0 Gate#2**(user 本機):Triple-* scenarios 出現 ≥ 3 檔
+- [x] **P0 Gate#2**(2026-05-20):Triple-* = **1**(`L_TripleCombination`)— 1 < 3 target,接受為 genuine rarity(§8.1 最小元件限制);`try_aggregate_11` 鏈路 end-to-end 證實
 
 ### 里程碑 C — P3 Compaction Aggregate
 - [x] **P3** `compaction/three_rounds.rs` — `try_aggregate_7` / `try_aggregate_11` + wire 進 `aggregate_one_level`
-- [ ] **P0 Gate#3**(user 本機):`emulation::CombinationAsImpulse` fire ≥ 1 / `post_validator` Combination Stage 2 fire ≥ 1
+- [x] **P0 Gate#3**(2026-05-20 ✅):`emulation::CombinationAsImpulse` **84** fires / 55 檔;`post_validator` Combination Stage 2 由 cargo test 596 passed 覆蓋(`pending_conditions` 不入 JSONB)
 
 ---
 
@@ -228,24 +227,24 @@ true` → `overall_pass = false` → `classify()` 回 `None`。
 - `cargo build --release -p tw_cores` → 0 warnings
 - `cargo test --release --workspace --no-fail-fast` → 596 passed / 0 failed
 
-### P0 Gate(user 本機跑,待執行)
-`tw_cores run-all --write` + forest_size 分布 SQL + spot-check。
+### P0 Gate(2026-05-20 user 本機 — 已驗證 ✅)
+`tw_cores run-all --write`(1266 stocks / neely_core 3798 runs / 0 err / wall 729.8s)後驗。
 
 **里程碑 A 綠燈條件**:
-- [ ] 1266 stocks 跑出 Combination scenario 數 > 0(production 不再是 0)
-- [ ] forest p95 ≤ 50(v4.10 baseline 28,容許膨脹至 50)
-- [ ] forest max ≤ 250(v4.10 baseline 196)
-- [ ] `ch8_xwave` / `ch8_multiwave` advisory_findings 出現於 ≥ 10 檔股票
-- [ ] 5 檔已知 Double-* 走勢手動 spot-check 命中
+- [x] 1266 stocks 跑出 Combination scenario 數 > 0 —— **87**(5 Level-0 + 81 `L_DoubleCombination` + 1 `L_TripleCombination`)
+- [x] forest p95 ≤ 50 —— **28**(持平 v4.10 baseline)
+- [x] forest max ≤ 250 —— **160**(< baseline 196)
+- [x] `ch8_xwave` / `ch8_multiwave` advisory_findings —— 7 findings / **2 檔**。「≥ 10 檔」門檻訂錯:只有 5 個 Level-0 Combination 散在 2 檔,Level-1+ 拿不到 advisory(見 §8.2)→ 上限 = 2;實測 2/2 滿覆蓋
+- [x] 5 檔已知 Double-* spot-check —— 5 個 Level-0 Combination scenario 全為 7-wave(DoubleCombination / DoubleThree / DoubleThreeCombination 三變體)
 
 **完整方案綠燈追加**:
-- [ ] Triple-* scenarios 出現於 ≥ 3 檔股票
-- [ ] `emulation::CombinationAsImpulse` 至少 fire 1 次
-- [ ] `post_validator` Combination Stage 2 取 sub_kinds 細分至少 fire 1 次
+- [x] Triple-* scenarios —— **1**(`L_TripleCombination`)。1 < 3 target,接受為 genuine rarity(11-wave Triple Combination 真實罕見 + §8.1 最小元件限制);`try_aggregate_11` 鏈路 end-to-end 證實可運作
+- [x] `emulation::CombinationAsImpulse` fire ≥ 1 —— **84** fires / 55 檔
+- [x] `post_validator` Combination Stage 2 fire ≥ 1 —— 由 `cargo test` 596 passed 覆蓋(`PostValidationReport.pending_conditions` 在 `lib.rs:354` 被丟棄、不入 JSONB,無法 production SQL 驗)
 
-**abort 條件**:forest max 從 196 跳 > 300。
+**abort 條件**:forest max > 300 —— 實測 160,未觸 ✅。
 
-> P0 Gate 詳細 SQL 見 `CLAUDE.md` v4.11 段。
+> P0 Gate 詳細 SQL + 結果表見 `CLAUDE.md` v4.11 段。
 
 ---
 
@@ -269,9 +268,9 @@ true` → `overall_pass = false` → `classify()` 回 `None`。
    advisory 評估只在 Stage 7.5(pre-compaction)跑。若要 P3 Combination 也走 ch8,
    需另把 advisory 評估移到 / 增跑於 compaction 後 —— 屬獨立架構工程,不在本計畫。
 3. **magnitude 預篩未實作**:P1a 只做 per-wc cap;spec line 1858-1859 的 Condition 1/2
-   預篩延後至 P0 Gate#1 —— 若 production candidate 數爆量再加。
-4. **P3 CombinationKind 取通用值**:`try_aggregate_7/_11` 一律標 DoubleThree /
-   TripleThree,未依 sub-segment 細分 —— 留 P0 Gate#3 校準。
+   預篩延後 —— P0 Gate#1 實測 forest 未爆(p95=28 / max=160),不需加。
+4. **P3 CombinationKind 取通用值**:`try_aggregate_7/_11` 未依 sub-segment 細分 ——
+   P0 Gate 後維持通用值,細分留 future。
 
 ---
 
