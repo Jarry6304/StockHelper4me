@@ -808,6 +808,39 @@ def key_levels(
     return _key_levels(stock_id, _parse_date(date), database_url=database_url)
 
 
+def stop_loss_calc(
+    stock_id: str,
+    entry_price: float,
+    date: str,
+    direction: str = "long",
+    atr_mult: float = 2.0,
+    reward_risk_ratio: float = 2.0,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion B 視角:止損 / 止盈計算。
+
+    給定進場價,整合 ATR(atr_core)+ key_levels(SR / 趨勢線 / Neely Fib)算出
+    止損、止盈候選。純計算 — 同時呈現 ATR-based 與 level-based 候選 + 距離百分比,
+    不替你抉擇(由 LLM 判讀)。
+
+    direction:long(預設)或 short。atr_mult 為止損 ATR 倍數;reward_risk_ratio
+    為 ATR 止盈相對止損的報酬風險比。
+
+    Returns:
+        {stock_id, as_of, direction, entry_price, atr, stops, targets}
+        stops/targets 各含 atr_based + nearest_level,每筆 {price, distance,
+        distance_pct}。
+    """
+    from fusion.stop_loss import stop_loss as _stop_loss
+
+    return _stop_loss(
+        stock_id, entry_price, _parse_date(date),
+        direction=direction, atr_mult=atr_mult,
+        reward_risk_ratio=reward_risk_ratio, database_url=database_url,
+    )
+
+
 # ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
