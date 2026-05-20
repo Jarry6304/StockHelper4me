@@ -24,6 +24,14 @@ inventory::submit! {
 const RESERVED_TAIEX: &str = "_index_taiex_";
 const RESERVED_TPEX: &str = "_index_tpex_";
 
+/// Ma20SlopeFlip 最小斜率幅度門檻(|新斜率| / MA20 值)。翻轉後的新斜率須夠陡
+/// 才算「真趨勢翻轉」,過濾平盤時 MA20 在 0 附近抖動造成的假翻轉。
+///
+/// production calibration Round 1(2026-05-20):全市場 run 觀測 Ma20SlopeFlip
+/// = 35.7/yr(taiex + tpex 合計);0.0005 為起始估值,目標收斂 ~8-12/yr。重跑
+/// verify 後若未落入區間 → Round 2 調整本常數(對齊專案 Round-N calibration 慣例)。
+const MA20_SLOPE_FLIP_MIN_PCT: f64 = 0.0005;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TaiexParams {
     pub timeframe: Timeframe,
@@ -282,17 +290,20 @@ fn compute_one(
                 value: series[i].close, metadata: json!({"index": label, "close": series[i].close}) });
         }
     }
-    // Ma20SlopeFlip:MA20 斜率變號(edge — flip 本身即離散事件)
+    // Ma20SlopeFlip:MA20 斜率變號(edge — flip 本身即離散事件)。
+    // production calibration:翻轉後新斜率須超過 MA20_SLOPE_FLIP_MIN_PCT,過濾平盤抖動。
     let ma20 = sma(&closes, 20);
     for i in 22..series.len() {
         let prev_slope = ma20[i - 1] - ma20[i - 2];
         let cur_slope = ma20[i] - ma20[i - 1];
-        if ma20[i - 2] > 0.0 && prev_slope != 0.0 && cur_slope != 0.0
-            && prev_slope.signum() != cur_slope.signum()
-        {
+        let flipped = ma20[i - 2] > 0.0 && prev_slope != 0.0 && cur_slope != 0.0
+            && prev_slope.signum() != cur_slope.signum();
+        let slope_pct = if ma20[i] > 0.0 { cur_slope.abs() / ma20[i] } else { 0.0 };
+        if flipped && slope_pct >= MA20_SLOPE_FLIP_MIN_PCT {
             events.push(TaiexEvent { date: series[i].date, index_code, kind: TaiexEventKind::Ma20SlopeFlip,
                 value: cur_slope,
-                metadata: json!({"index": label, "prev_slope": prev_slope, "cur_slope": cur_slope}) });
+                metadata: json!({"index": label, "prev_slope": prev_slope, "cur_slope": cur_slope,
+                                 "slope_pct": slope_pct}) });
         }
     }
     // Drawdown5pct:自尾段 252 根高點回落 ≥ 5%(edge — 跌破當日 fire 一次)
