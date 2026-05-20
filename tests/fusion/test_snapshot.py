@@ -31,12 +31,19 @@ def test_narrative_fallback_when_empty():
 
 
 def test_fundamentals_reads_two_silver_tables():
-    conn = _conn_with_fetchone({"date": date(2026, 5, 18), "per": 18.5, "pbr": 4.2,
-                                "dividend_yield": 2.1, "market_value_weight": 0.03})
+    # Silver NUMERIC 欄 psycopg 回 Decimal — _latest_row 須轉 float(否則 json.dumps 炸)
+    from decimal import Decimal
+    conn = _conn_with_fetchone({"date": date(2026, 5, 18), "per": Decimal("18.5000"),
+                                "pbr": Decimal("4.2"), "dividend_yield": Decimal("2.1"),
+                                "market_value_weight": Decimal("0.03")})
     out = _fundamentals(conn, "2330", date(2026, 5, 18))
     assert out["valuation"]["per"] == 18.5
+    assert isinstance(out["valuation"]["per"], float)  # Decimal 已轉 float
     assert out["valuation"]["date"] == "2026-05-18"
     assert "monthly_revenue" in out  # 同 conn 第二次查(mock 回同 row,但 key 存在)
+    # 整個 fundamentals 須可被標準 json.dumps 序列化(不靠 default=str)
+    import json
+    json.dumps(out)
 
 
 def test_fact_section_maps_events(monkeypatch):

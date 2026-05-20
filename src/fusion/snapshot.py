@@ -11,6 +11,7 @@ helper(對齊 fusion_layer §5「reuses existing mcp_server.compute_* helpers」
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from fusion._shared import fact_to_event
@@ -124,7 +125,11 @@ def _latest_row(
     out: dict[str, Any] = {"date": d.isoformat() if hasattr(d, "isoformat") else d}
     for c in cols:
         v = row.get(c)
-        out[c] = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+        # Silver NUMERIC 欄 psycopg 回 Decimal — 轉 float 確保 json.dumps 可序列化。
+        if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool):
+            out[c] = float(v)
+        else:
+            out[c] = v
     return out
 
 
