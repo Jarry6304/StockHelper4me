@@ -68,6 +68,26 @@ pub fn aggregate_one_level(scenarios: &[Scenario], monowaves: &[Monowave]) -> Ve
         }
     }
 
+    // 7-pattern 比對(Double-* Combination,P3 Combination 上游補完)
+    if scenarios.len() >= 7 {
+        for start in 0..=scenarios.len() - 7 {
+            let window = &scenarios[start..start + 7];
+            if let Some(new_scenario) = try_aggregate_7(window, start, monowaves) {
+                aggregated.push(new_scenario);
+            }
+        }
+    }
+
+    // 11-pattern 比對(Triple-* Combination,P3)
+    if scenarios.len() >= 11 {
+        for start in 0..=scenarios.len() - 11 {
+            let window = &scenarios[start..start + 11];
+            if let Some(new_scenario) = try_aggregate_11(window, start, monowaves) {
+                aggregated.push(new_scenario);
+            }
+        }
+    }
+
     aggregated
 }
 
@@ -180,6 +200,70 @@ fn try_aggregate_3(
         ));
     }
 
+    None
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7 / 11-pattern 比對(Double-* / Triple-* Combination,P3 Combination 上游補完)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 7-scenario window = sub_a(3)+ x(1)+ sub_b(3);全 corrective(:_3)交替 → Double Combination。
+/// 對齊 classifier `classify_7wave_combination` 的 3+1+3 結構,差別在此 aggregate 的是
+/// 已分類的 Level-N scenarios(非 monowaves)。CombinationKind 取通用 DoubleThree,
+/// 細分留 P0 Gate#3 校準。
+fn try_aggregate_7(
+    window: &[Scenario],
+    window_start: usize,
+    monowaves: &[Monowave],
+) -> Option<Scenario> {
+    if boundary_retracement_extreme(window, monowaves) {
+        return None;
+    }
+    let labels: Vec<StructureLabel> = window.iter().map(|s| s.compacted_base_label).collect();
+    let dirs: Vec<MonowaveDirection> = window.iter().map(|s| s.initial_direction).collect();
+
+    let all_three = labels.iter().all(|l| *l == StructureLabel::Three);
+    if all_three && alternating(&dirs) && all_pairs_pass_sb(window, monowaves) {
+        return Some(build_aggregated(
+            window,
+            window_start,
+            StructureLabel::Three,
+            NeelyPatternType::Combination {
+                sub_kinds: vec![crate::output::CombinationKind::DoubleThree],
+            },
+            "L_DoubleCombination",
+            monowaves,
+        ));
+    }
+    None
+}
+
+/// 11-scenario window = sub_a(3)+ x1(1)+ sub_b(3)+ x2(1)+ sub_c(3);全 corrective
+/// 交替 → Triple Combination。CombinationKind 取通用 TripleThree,細分留 P0 Gate#3。
+fn try_aggregate_11(
+    window: &[Scenario],
+    window_start: usize,
+    monowaves: &[Monowave],
+) -> Option<Scenario> {
+    if boundary_retracement_extreme(window, monowaves) {
+        return None;
+    }
+    let labels: Vec<StructureLabel> = window.iter().map(|s| s.compacted_base_label).collect();
+    let dirs: Vec<MonowaveDirection> = window.iter().map(|s| s.initial_direction).collect();
+
+    let all_three = labels.iter().all(|l| *l == StructureLabel::Three);
+    if all_three && alternating(&dirs) && all_pairs_pass_sb(window, monowaves) {
+        return Some(build_aggregated(
+            window,
+            window_start,
+            StructureLabel::Three,
+            NeelyPatternType::Combination {
+                sub_kinds: vec![crate::output::CombinationKind::TripleThree],
+            },
+            "L_TripleCombination",
+            monowaves,
+        ));
+    }
     None
 }
 
@@ -519,6 +603,26 @@ mod tests {
             pattern_isolation_anchors: Vec::new(),
             triplexity_detected: false,
         }
+    }
+
+    #[test]
+    fn aggregate_7_double_combination() {
+        // P3:7 段全 :_3 corrective + 交替方向 → Double Combination
+        let scenarios = vec![
+            mk_scenario("s0", StructureLabel::Three, MonowaveDirection::Up, "2026-01-01", "2026-01-08"),
+            mk_scenario("s1", StructureLabel::Three, MonowaveDirection::Down, "2026-01-08", "2026-01-15"),
+            mk_scenario("s2", StructureLabel::Three, MonowaveDirection::Up, "2026-01-15", "2026-01-22"),
+            mk_scenario("s3", StructureLabel::Three, MonowaveDirection::Down, "2026-01-22", "2026-01-29"),
+            mk_scenario("s4", StructureLabel::Three, MonowaveDirection::Up, "2026-01-29", "2026-02-05"),
+            mk_scenario("s5", StructureLabel::Three, MonowaveDirection::Down, "2026-02-05", "2026-02-12"),
+            mk_scenario("s6", StructureLabel::Three, MonowaveDirection::Up, "2026-02-12", "2026-02-19"),
+        ];
+        let result = aggregate_one_level(&scenarios, &[]);
+        let combo = result
+            .iter()
+            .find(|s| matches!(s.pattern_type, NeelyPatternType::Combination { .. }));
+        assert!(combo.is_some(), "7 段全 corrective 應 aggregate 出 Double Combination");
+        assert_eq!(combo.unwrap().wave_tree.children.len(), 7);
     }
 
     #[test]

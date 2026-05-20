@@ -128,10 +128,12 @@ mod tests {
         let mut scenario = make_scenario(NeelyPatternType::Impulse, false);
         scenario.monowave_structure_labels.push(MonowaveStructureLabels {
             monowave_index: 0,
+            classified_index: 0,
             labels: vec![StructureLabelCandidate {
                 label: StructureLabel::L5,
                 certainty: Certainty::Rare,
             }],
+            pass1_only_labels: Vec::new(),
         });
         let f = detect_localized_changes(&scenario).expect("should fire");
         assert!(matches!(f.rule_id, RuleId::Ch12_LocalizedChanges));

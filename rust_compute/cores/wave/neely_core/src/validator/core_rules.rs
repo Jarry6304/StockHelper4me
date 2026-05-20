@@ -155,7 +155,10 @@ fn rule_r3(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
     let Some(waves) = wave_refs(candidate, classified) else {
         return RuleResult::NotApplicable(rid);
     };
-    if candidate.wave_count < 3 {
+    // P1.5(Combination 上游補完):R3/R4 為 5-wave Impulse Essential 規則,對 wc∈{3,5}
+    // 維持既有適用;對 wc∉{3,5}(Combination 7/11-wave)必須 NotApplicable —— 否則
+    // Combination candidate 被 Impulse 規則誤判 Fail → overall_pass=false → classifier 拒收。
+    if !matches!(candidate.wave_count, 3 | 5) {
         return RuleResult::NotApplicable(rid);
     }
     let w1 = waves[0];
@@ -219,7 +222,10 @@ fn rule_r4(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> Rule
     let Some(_) = wave_refs(candidate, classified) else {
         return RuleResult::NotApplicable(rid);
     };
-    if candidate.wave_count < 3 {
+    // P1.5(Combination 上游補完):R3/R4 為 5-wave Impulse Essential 規則,對 wc∈{3,5}
+    // 維持既有適用;對 wc∉{3,5}(Combination 7/11-wave)必須 NotApplicable —— 否則
+    // Combination candidate 被 Impulse 規則誤判 Fail → overall_pass=false → classifier 拒收。
+    if !matches!(candidate.wave_count, 3 | 5) {
         return RuleResult::NotApplicable(rid);
     }
     let mi = &candidate.monowave_indices;
