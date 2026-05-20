@@ -92,6 +92,7 @@ mcp.tool(_data_tools.monthly_trigger_scan)        # Layer 5:Positive/Negative tr
 
 # Fusion Layer · Integration 端口 tools(P1.4)
 mcp.tool(_data_tools.market_events)               # D 視角:大盤環境事件時間軸(severity filter)
+mcp.tool(_data_tools.market_dashboard)            # D 視角:大盤環境快照(7 cores headline metric)
 
 # v3.31:以下 6 個仍在 mcp_server.tools.data 內(dashboard / direct python 用),
 # 但**不再透過 MCP server.py 註冊**,LLM 看不到。stock_snapshot 內部會呼叫

@@ -764,6 +764,28 @@ def market_events(
     )
 
 
+def market_dashboard(
+    date: str,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion D 視角:大盤環境快照。
+
+    讀 7 個 environment cores(taiex / us_market / exchange_rate / fear_greed /
+    market_margin / business_indicator / commodity_macro)的最新一筆,抽出各核心
+    headline metric + 歷史百分位(percentile_252)+ 短期變化。
+
+    純資料快照 — 不打主觀標籤,由 LLM 自行判讀大盤環境。
+
+    Returns:
+        {as_of, component_count, components, missing}
+        每個 component:{latest_date, value, change_pct, percentile_252, state, ...}
+    """
+    from fusion.market_dashboard import market_dashboard as _market_dashboard
+
+    return _market_dashboard(_parse_date(date), database_url=database_url)
+
+
 # ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
