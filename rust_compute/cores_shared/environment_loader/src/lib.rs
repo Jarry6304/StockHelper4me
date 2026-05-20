@@ -220,7 +220,7 @@ pub struct BusinessIndicatorRaw {
     pub coincident_indicator: Option<f64>,
     pub lagging_indicator: Option<f64>,
     pub monitoring: Option<i32>,
-    pub monitoring_color: Option<String>,  // 'blue'/'yellow_blue'/'green'/'yellow_red'/'red'
+    pub monitoring_color: Option<String>,  // schema 契約 R/YR/G/YB/B;from_label 另容英文全名 + 中文燈號
 }
 
 pub async fn load_business_indicator(pool: &PgPool, lookback_days: i32) -> Result<BusinessIndicatorSeries> {

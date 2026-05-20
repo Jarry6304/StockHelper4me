@@ -1,8 +1,34 @@
-# business_indicator_core empty-series 修復 plan(下個 session)
+# business_indicator_core empty-series 修復 plan
 
-> **狀態**:📋 待動工(下個 session)
+> **狀態**:✅ code 層修復(2026-05-20)— 候選根因 3(monitoring_color 字串不匹配)
+>            已修;production verify 待 user 本機跑(無 DB 的 session 無法跑 §三 SQL)。
 > **發現於**:2026-05-20 Fusion Layer P0-P2 production verify
 > **嚴重度**:🟡 中 — `market_dashboard` 7 個 component 缺 1;非 crash,graceful 降級
+
+## 〇、已修(2026-05-20)
+
+候選根因 **3(monitoring_color 字串不匹配)** 為從 code + schema 文件即可確認的真實
+缺陷,已修:
+
+- **Schema 契約**:`src/schema_pg.sql:213` + `m2Spec/layered_schema_post_refactor.md
+  §3.3` 兩處獨立文件都記 `business_indicator_tw.monitoring_color` 存
+  `R / YR / G / YB / B`。
+- **Bug**:`business_indicator_core::MonitoringColor::from_label` 原本只收
+  `blue / yellow_blue / green / yellow_red / red` 英文全名。`field_mapper` 對此
+  dataset 不做值轉換(只 rename leading/coincident/lagging),Bronze→Silver 原值
+  直通。故若 Bronze 存的是文件契約的 `R/YR/G/YB/B`,`from_label` 每點回 `None`,
+  `compute` 的 `filter_map` 把整批 series 丟光 → 空 series。
+- **修法**(`rust_compute/cores/environment/business_indicator_core/src/lib.rs`):
+  `from_label` 改為同時接受縮寫 `B/YB/G/YR/R`(schema 契約)、英文全名(既有,
+  向下相容)、國發會中文燈號 `藍/黃藍/綠/黃紅/紅`(可帶「燈」字尾);英文 / 縮寫
+  大小寫不敏感 + 前後空白容忍。+2 unit test(`monitoring_color_from_label_abbrev_and_chinese`
+  / `compute_accepts_abbreviated_monitoring_color`)。
+- 附帶修 `environment_loader/src/lib.rs` `BusinessIndicatorRaw.monitoring_color`
+  誤導性註解(原寫只收英文全名)。
+
+**仍待 user 本機 production verify**(下方 §三 SQL + §五):本 session 環境無 DB,
+無法跑診斷確認 Bronze 實際字串值,也無法排除候選 1 / 2。若 verify 後 series 仍空,
+依 §三 SQL 結果走 §四(候選 1 stock_id / 候選 2 date 太舊 / 某中間欄全 null)。
 
 ## 一、問題
 

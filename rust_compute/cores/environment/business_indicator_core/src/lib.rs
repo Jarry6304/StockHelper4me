@@ -49,13 +49,34 @@ impl Default for BusinessIndicatorParams {
 pub enum MonitoringColor { Blue, YellowBlue, Green, YellowRed, Red }
 
 impl MonitoringColor {
+    /// 解析景氣對策信號燈號字串 → MonitoringColor。
+    ///
+    /// field_mapper 不做值轉換,Bronze 存的就是 FinMind 原值,因此接受多種來源格式:
+    ///   - 縮寫:`B` / `YB` / `G` / `YR` / `R`(schema_pg.sql business_indicator_tw
+    ///     文件契約 + m2Spec/layered_schema_post_refactor.md §3.3)
+    ///   - 英文全名:`blue` / `yellow_blue` / `green` / `yellow_red` / `red`(Rust 既有)
+    ///   - 中文:`藍` / `黃藍` / `綠` / `黃紅` / `紅`(國發會景氣對策信號原始燈號,
+    ///     可帶「燈」字尾)
+    ///
+    /// 英文 / 縮寫大小寫不敏感,前後空白容忍。
     pub fn from_label(s: &str) -> Option<MonitoringColor> {
-        match s {
-            "blue" => Some(MonitoringColor::Blue),
-            "yellow_blue" => Some(MonitoringColor::YellowBlue),
-            "green" => Some(MonitoringColor::Green),
-            "yellow_red" => Some(MonitoringColor::YellowRed),
-            "red" => Some(MonitoringColor::Red),
+        let t = s.trim();
+        // 英文全名 / 縮寫(大小寫不敏感)
+        match t.to_ascii_lowercase().as_str() {
+            "b" | "blue" => return Some(MonitoringColor::Blue),
+            "yb" | "yellow_blue" => return Some(MonitoringColor::YellowBlue),
+            "g" | "green" => return Some(MonitoringColor::Green),
+            "yr" | "yellow_red" => return Some(MonitoringColor::YellowRed),
+            "r" | "red" => return Some(MonitoringColor::Red),
+            _ => {}
+        }
+        // 國發會中文燈號(可帶「燈」字尾)
+        match t.trim_end_matches('燈') {
+            "藍" => Some(MonitoringColor::Blue),
+            "黃藍" => Some(MonitoringColor::YellowBlue),
+            "綠" => Some(MonitoringColor::Green),
+            "黃紅" => Some(MonitoringColor::YellowRed),
+            "紅" => Some(MonitoringColor::Red),
             _ => None,
         }
     }
@@ -349,6 +370,42 @@ mod tests {
         assert_eq!(MonitoringColor::from_label("yellow_red"), Some(MonitoringColor::YellowRed));
         assert_eq!(MonitoringColor::from_label("red"), Some(MonitoringColor::Red));
         assert_eq!(MonitoringColor::from_label("unknown"), None);
+    }
+
+    #[test]
+    fn monitoring_color_from_label_abbrev_and_chinese() {
+        // schema_pg.sql business_indicator_tw 文件契約:R / YR / G / YB / B 縮寫
+        assert_eq!(MonitoringColor::from_label("B"), Some(MonitoringColor::Blue));
+        assert_eq!(MonitoringColor::from_label("YB"), Some(MonitoringColor::YellowBlue));
+        assert_eq!(MonitoringColor::from_label("G"), Some(MonitoringColor::Green));
+        assert_eq!(MonitoringColor::from_label("YR"), Some(MonitoringColor::YellowRed));
+        assert_eq!(MonitoringColor::from_label("R"), Some(MonitoringColor::Red));
+        // 大小寫不敏感 + 前後空白容忍
+        assert_eq!(MonitoringColor::from_label(" yb "), Some(MonitoringColor::YellowBlue));
+        assert_eq!(MonitoringColor::from_label("Green"), Some(MonitoringColor::Green));
+        // 國發會中文燈號(可帶「燈」字尾)
+        assert_eq!(MonitoringColor::from_label("綠"), Some(MonitoringColor::Green));
+        assert_eq!(MonitoringColor::from_label("黃藍燈"), Some(MonitoringColor::YellowBlue));
+        assert_eq!(MonitoringColor::from_label("紅燈"), Some(MonitoringColor::Red));
+        // 仍拒絕未知字串
+        assert_eq!(MonitoringColor::from_label("purple"), None);
+        assert_eq!(MonitoringColor::from_label(""), None);
+    }
+
+    #[test]
+    fn compute_accepts_abbreviated_monitoring_color() {
+        // 對齊 Bronze schema 文件契約(R/YR/G/YB/B)。修復前 from_label 只收英文全名,
+        // 整批 series 會被 compute 的 filter_map 全數丟棄 → 空 series(market_dashboard
+        // 缺 business_indicator_core component)。
+        let points = vec![
+            mk_raw(2025, 1, 100.0, 100.0, 100.0, 25, "G"),
+            mk_raw(2025, 2, 101.0, 100.5, 100.5, 25, "G"),
+            mk_raw(2025, 3, 102.0, 101.0, 101.0, 30, "YR"),
+        ];
+        let out = BusinessIndicatorCore::new()
+            .compute(&BusinessIndicatorSeries { points }, BusinessIndicatorParams::default())
+            .unwrap();
+        assert_eq!(out.series.len(), 3, "abbreviated-color points must not be dropped");
     }
 
     #[test]
