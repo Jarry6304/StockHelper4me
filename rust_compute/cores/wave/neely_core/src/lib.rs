@@ -409,8 +409,28 @@ impl WaveCore for NeelyCore {
         // v4.7.2 G1.2:Pre-Constructive 2-pass — Compaction 後 polywave 反查 + 重跑 rules
         //   - Pass 1(Stage 0 first run,classifid[i].polywave_size = 0)已跑完
         //   - 此處反查 forest 標記 polywave_size,再跑 Pass 2 取得 polywave-aware 候選
+        //
+        // v4.x Item 4(2026-05-20):改用 `run_pass2` 取代既有 `run`,額外回傳
+        // Pass 1 only diff(per classified index)。後續 refill loop 把 diff 寫回
+        // scenario.monowave_structure_labels[*].pass1_only_labels + 同步 .labels 為
+        // Pass 2 result,讓 LLM / Aggregation Layer 看完整 Pre-Constructive 修正軌跡。
         pre_constructive::populate_polywave_sizes(&mut classified, &forest);
-        pre_constructive::run(&mut classified, &input.bars);
+        let pass1_only_diff = pre_constructive::run_pass2(&mut classified, &input.bars);
+
+        // v4.x Item 4:把 Pass 2 result + Pass 1-only diff refill 回 forest 每個
+        // scenario 的 monowave_structure_labels(Stage 5 classify 時填的是 Pass 1)
+        for scenario in forest.iter_mut() {
+            for mwl in scenario.monowave_structure_labels.iter_mut() {
+                if let Some(cmw) = classified.get(mwl.classified_index) {
+                    // Pass 2 labels(對齊 spec「Pass 2 較 accurate」設計)
+                    mwl.labels = cmw.structure_label_candidates.clone();
+                }
+                if let Some(p1o) = pass1_only_diff.get(&mwl.classified_index) {
+                    // Pass 1 找到但 Pass 2 丟棄的 candidates(union diagnostics)
+                    mwl.pass1_only_labels = p1o.clone();
+                }
+            }
+        }
 
         // ── Stage 8.5:Three Rounds nested context + Round 3 暫停偵測(Phase 8 PR)
         //    對齊 m3Spec/neely_rules.md §Three Rounds + §Ch10 三角內 Power = 0 例外

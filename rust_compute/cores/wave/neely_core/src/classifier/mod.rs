@@ -147,7 +147,11 @@ fn build_monowave_structure_labels(
         .enumerate()
         .map(|(seq_idx, &mw_idx)| MonowaveStructureLabels {
             monowave_index: seq_idx,
+            // v4.x Item 4:保留 global classified index 供 Stage 8.5 post-Pass-2 refill lookup
+            classified_index: mw_idx,
             labels: classified[mw_idx].structure_label_candidates.clone(),
+            // v4.x Item 4:Pass 2 完成後由 lib.rs refill loop 填入(此處 Stage 5 預設空)
+            pass1_only_labels: Vec::new(),
         })
         .collect()
 }

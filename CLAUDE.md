@@ -2,8 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v3.24,最新 2026-05-17;
-> v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X 段落。
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.10,最新 2026-05-20;
+> v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
 
@@ -11,17 +11,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
-Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3)。
+Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
-- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.6 無 schema migration)
-- **開發分支**:`claude/neely-m3spec-completion-4l4dT`(v4.5+v4.6) → PR 合 main
+- **alembic head**:`d9e0f1g2h3i4`(v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.10 無 schema migration)
+- **開發分支**:`claude/start-v4.9-j7WZX`(v4.10) → PR 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
-- **Rust tests**:39 crates / **582 passed / 0 failed**(v4.9 後;v4.4 baseline 528 → +54 v4.5+v4.6+v4.7+v4.8+v4.9 tests across 10 commits)
+- **Rust tests**:39 crates / **587 passed / 0 failed**(v4.10 後;v4.9 baseline 582 → +5 Item 4 run_pass2 tests)
 - **MCP toolkit**:**8 public tools**(v3.31 4 個個股 / 整合 + v3.32 4 個 cross-stock factor screens)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
 - **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
 - **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏 P1.1-P1.4 全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神
-- **v4.5 + v4.6 + v4.7 + v4.8 + v4.9**(2026-05-19):M3SPEC 闕漏補完 8 sub-PR + Out-of-Scope backlog Items 1+2+3 完整收尾 ☕☕☕ — Group 2(4 sub-PR)+ Group 3(Monowave bar_indices)+ Group 1(3 sub-PR polywave 嵌套依賴鏈)+ v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)+ v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞);全市場 1266 stocks G1 P0 Gate **全綠**(max=196 / p95=28 / overflow=0);僅留 Item 4(Pass 1/2 diagnostics union)真正 V4.x
+- **v4.5 → v4.9**(2026-05-19):M3SPEC 闕漏補完 8 sub-PR + Out-of-Scope backlog Items 1+2+3 完整收尾 ☕☕☕ — Group 2(4 sub-PR)+ Group 3(Monowave bar_indices)+ Group 1(3 sub-PR polywave 嵌套依賴鏈)+ v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)+ v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞);全市場 1266 stocks G1 P0 Gate **全綠**(max=196 / p95=28 / overflow=0)
+- **v4.10**(2026-05-20)☕:Out-of-Scope **Item 4 Pre-Constructive 2-pass diagnostics union** 完整收尾 — `pre_constructive::run_pass2` 新函式回傳 `HashMap<classified_idx, Vec<StructureLabelCandidate>>` Pass 1-only diff(label 比對);`MonowaveStructureLabels` 加 `classified_index` + `pass1_only_labels` 兩欄;lib.rs Stage 8.5 refill loop 把 Pass 2 result + diff 寫回 forest 每個 scenario;**Out-of-Scope backlog 全部清空**
 
 ---
 
@@ -343,6 +344,151 @@ cd rust_compute && .\target\release\tw_cores.exe run-all --write && cd ..
 - 0 alembic / 0 collector.toml / 0 Python
 - 既有 6 個 obv_core test margin 充足(divergence 邏輯不動)
 - Rollback:單 commit `git revert`
+
+---
+
+## v4.10 — Out-of-Scope Item 4 Pre-Constructive 2-pass diagnostics union(2026-05-20,1 commit / +5 tests)
+
+接 v4.9 後動工 plan §Out of Scope **最後一個 backlog item**。對齊 m3Spec/neely_rules.md §Pre-Constructive Logic + neely_core_architecture.md §7.1 Stage 0「Pass 2 較 accurate(含 polywave 反查)但 Pass 1 仍具 diagnostic 價值」設計,把 Pass 2 直接覆寫 Pass 1 的行為,改為 union 風格 — Pass 2 result + Pass 1 only diff 並存,LLM / Aggregation Layer 可看完整 Pre-Constructive 修正軌跡。
+
+### 設計關鍵:範圍比 CLAUDE.md v4.8 估的 ~30+ Scenario 構造點小一個量級
+
+對齊 Explore agent 第 2 輪 audit 揭露的事實:
+- `Scenario.diagnostics` **不存在**(只有 `NeelyCoreOutput.diagnostics: NeelyDiagnostics`)
+- `structure_label_candidates` 在 `ClassifiedMonowave` 上,非 Scenario 上
+- 完整 union 只需動 `MonowaveStructureLabels`(2 個構造點)+ `pre_constructive::run()` + `lib.rs:413` Pass 2 wiring
+- **0 個** 68 處 ClassifiedMonowave / 52 處 Scenario 構造點需動
+
+### 動工項目(1 commit / branch `claude/start-v4.9-j7WZX`)
+
+| # | 工作 | 動作 |
+|---|---|---|
+| 1 | `MonowaveStructureLabels` 加 2 欄 | `classified_index: usize`(讓 lib.rs post-Pass-2 lookup)+ `pass1_only_labels: Vec<StructureLabelCandidate>`(diff,用 `#[serde(default, skip_serializing_if = "Vec::is_empty")]`)|
+| 2 | `pre_constructive::run_pass2` 新函式 | 對每個 i:snapshot Pass 1 → compute Pass 2 → diff(以 `label` 比對,certainty 升級不算 rejection)→ overwrite + 回傳 `HashMap<usize, Vec<StructureLabelCandidate>>`(key = classified index,空 entry 不放)|
+| 3 | `lib.rs:413` wiring | 從 `pre_constructive::run(...)` 改 `let pass1_only_diff = pre_constructive::run_pass2(...)`,後接 forest refill loop 把 diff + Pass 2 labels 寫回 `scenario.monowave_structure_labels[*]` |
+| 4 | `classifier::build_monowave_structure_labels` 填新欄 | `classified_index: mw_idx`(原本只填 `monowave_index: seq_idx` 是 0..wave_count,classified index 丟失;v4.10 補回)+ `pass1_only_labels: Vec::new()`(Stage 5 預設空,Stage 8.5 refill)|
+| 5 | `advanced_rules/ch12_localized.rs` test fixture | 同步加新欄位 defaults |
+
+### 範圍
+
+| 檔 | 動作 |
+|---|---|
+| `rust_compute/cores/wave/neely_core/src/output.rs` | `MonowaveStructureLabels` 加 `classified_index` + `pass1_only_labels` 兩欄 + v4.x doc-string |
+| `rust_compute/cores/wave/neely_core/src/pre_constructive/mod.rs` | `use std::collections::HashMap;` + 新 `pub fn run_pass2(...) -> HashMap<usize, Vec<StructureLabelCandidate>>` ~30 行 + **5 new tests**(`run_pass2_returns_empty_diff_when_pass1_equals_pass2` / `run_pass2_captures_dropped_when_polywave_flips_branch` / `run_pass2_certainty_upgrade_not_counted_as_rejection` / `run_pass2_empty_classified_returns_empty_diff` / `run_pass2_overwrites_structure_label_candidates`)|
+| `rust_compute/cores/wave/neely_core/src/lib.rs` | Stage 8.5 Pre-Constructive Pass 2 從 `run` → `run_pass2`;後接 forest refill loop:per scenario per `monowave_structure_labels` 走 `classified_index` lookup,刷 `.labels` 為 Pass 2 + 寫 `.pass1_only_labels` 為 diff |
+| `rust_compute/cores/wave/neely_core/src/classifier/mod.rs` | `build_monowave_structure_labels` 構造加 `classified_index: mw_idx, pass1_only_labels: Vec::new()` |
+| `rust_compute/cores/wave/neely_core/src/advanced_rules/ch12_localized.rs` | test fixture push 加新欄 defaults(同步 struct 變動)|
+| `CLAUDE.md` | v4.10 章節(本段) |
+
+### Diff 設計:label 比對(certainty 升級不算 rejection)
+
+```rust
+let pass1_only: Vec<StructureLabelCandidate> = pass1_snapshot
+    .into_iter()
+    .filter(|p1| !pass2_cands.iter().any(|p2| p2.label == p1.label))
+    .collect();
+```
+
+對齊 spec:certainty(Possible / Primary / Rare / MissingWaveBundle)是 Pre-Constructive
+規則對 candidate 的「確信度」,Pass 2 把 Possible → Primary 屬「保留 + 升級」非
+「rejection」;只有 Pass 1 label 完全消失才算 Pass 2 真正丟棄。
+
+### Output schema(JSONB 加欄,backward-compat)
+
+```json
+{
+  "monowave_structure_labels": [
+    {
+      "monowave_index": 0,                  // 既有:0..wave_count
+      "classified_index": 12,                // v4.10 新:global classified index
+      "labels": [                            // v4.10 後:Pass 2 result
+        {"label": "F3", "certainty": "Primary"},
+        {"label": "L5", "certainty": "Possible"}
+      ],
+      "pass1_only_labels": [                 // v4.10 新:diff,空陣列省略
+        {"label": "BC3", "certainty": "Possible"}
+      ]
+    },
+    ...
+  ]
+}
+```
+
+Python MCP layer 0 改動(grep `monowave_structure_labels / pass1_only_labels /
+classified_index` 在 `mcp_server/ src/agg/ dashboards/` 全 0 match)— 新欄純加,
+既有 consumer 不破。
+
+### 沙箱驗證
+
+- `cargo build --release -p neely_core` ✅ 0 warnings
+- `cargo build --release -p tw_cores` ✅ 0 warnings(下游 dispatcher 對齊)
+- `cargo test --release -p neely_core --lib` ✅ **410 passed / 0 failed**(v4.9 baseline 405 → +5 Item 4 tests)
+- `cargo test --release --workspace --no-fail-fast` ✅ **587 passed / 0 failed**(v4.9 baseline 582 → +5)
+- `pytest tests/mcp_server/ tests/agg/ tests/cross_cores/ --ignore=tests/mcp_server/test_render_tools.py` ✅ **190 passed / 1 skipped**(對 v3.38 baseline 完整 carry over,0 regression)
+
+### user 本機 production verify(下次 session)
+
+```powershell
+git pull
+cd rust_compute && cargo build --release -p tw_cores && cd ..
+
+# v4.10 Scenario JSON schema 加 2 欄(monowave_structure_labels[*].classified_index +
+# pass1_only_labels);neely_core params_hash 不變(Scenario 結構不參與 hash) →
+# 既有 structural_snapshots 走 ON CONFLICT UPDATE 覆寫(不需 DELETE)
+.\rust_compute\target\release\tw_cores.exe run-all --write
+
+# 驗 pass1_only_labels 在 production JSONB 出現
+psql $env:DATABASE_URL -c "
+SELECT
+  s->>'pattern_type' AS pat,
+  jsonb_array_length(s->'monowave_structure_labels') AS n_mw,
+  (SELECT COUNT(*)
+     FROM jsonb_array_elements(s->'monowave_structure_labels') mw
+    WHERE jsonb_array_length(COALESCE(mw->'pass1_only_labels', '[]'::jsonb)) > 0) AS n_mw_with_pass1_diff
+FROM structural_snapshots,
+     jsonb_array_elements(snapshot->'scenario_forest') AS s
+WHERE stock_id IN ('2330','3030','1101')
+  AND core_name='neely_core'
+  AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core')
+ORDER BY stock_id, pat
+LIMIT 30;
+"
+# 預期:多數 row n_mw_with_pass1_diff = 0(Pass 1 / Pass 2 一致)
+#       少數 polywave-impacted scenarios n_mw_with_pass1_diff > 0(Pass 2 丟棄 Pass 1 候選)
+```
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 Python / 0 collector.toml
+- JSONB 純加欄(`classified_index` / `pass1_only_labels`),既有 Python 0 consumer
+- params_hash 不變(Scenario 結構欄位變更不重算 facts;structural_snapshots 走 ON CONFLICT UPDATE)
+- Rollback:單 commit `git revert`(僅影響 v4.10 一個 commit)
+
+### Out of Scope backlog 全部清空 ☕☕☕☕
+
+| Item | 狀態 | 收尾 |
+|---|---|---|
+| Item 1 Round 2 boundary partial Stage 3-4 rerun | ✅ | v4.8 commit `bbb41bb` |
+| Item 2 Construction axis 5-variant | ✅ | v4.8 commit `bbb41bb` |
+| Item 3 Classifier nested label enrichment | ✅ | v4.9 commit `f0a6d10` |
+| **Item 4 Pre-Constructive Pass 1/2 diagnostics union** | ✅ | **v4.10(本 PR)** |
+
+**M3SPEC Neely alignment v4.0 → v4.10 完整收尾**:
+- v4.0 → v4.4(9 commits / ~5,500 LoC):P1.1-P1.4 Quick Wins + Ch9/Ch12 advisory + Ch11 wave-by-wave + Ch4 Round 2 + Ch8 X-wave/Multiwave + Ch6 Stage 2
+- v4.5 → v4.9(7 commits / ~2,750 LoC):Group 2 4 corrective patterns + Group 3 Monowave bar_indices + Group 1 3 sub-PR polywave nested + Items 1+2+3
+- v4.10(本 PR / ~200 LoC):Item 4 Pass 1/2 diagnostics union
+
+**Total**:17 commits / ~8,450 LoC / +135 tests across 25 days(2026-04-26 v4.0 plan 啟動 → 2026-05-20 v4.10 收尾)。**Aggregation Layer 視角的 Neely surface 100% spec-aligned,LLM context 完整含 Pass 1/Pass 2 修正軌跡 + 5-axis Alternation + 5-variant Construction + 9 Flat variants + 9 Triangle variants + Channeling touch ternary severity + Ch8 X-wave/Multiwave advisory + Combination/RunningCorrection Stage 2 + WaveNode 結構標籤 hint**。
+
+### 下個 session 動工候選(M3SPEC alignment 已收尾)
+
+對齊本文件 §「下次 session 建議優先序」§1:
+- **1a. gov_bank_net Core 消費**(需先寫 EventKind 規格)
+- **1b. probe sponsor tier 全 catalog**(`scripts/probe_finmind_sponsor_unused.py --max 0`)
+- **1c. Aggregation Layer Phase B-4 FastAPI thin wrap**(估 ~2-3h)
+- **1d. wall time 微優化**(目前 ~11 min / 1266 stocks)
+- **2c. Silver schema 假設待 user 驗**(margin_maintenance / shareholder detail / financial_statement detail key)
 
 ---
 
@@ -5263,17 +5409,16 @@ python scripts\inspect_db.py 2330
 
 ## 下次 session 建議優先序
 
-> **🎯 v4.9 收尾(2026-05-19)**:M3SPEC 闕漏補完 + Out-of-Scope Items 1+2+3 **完整收尾** ☕☕☕ —
-> Group 2(4 sub-PR)+ Group 3(1 sub-PR)+ Group 1(3 sub-PR;**P0 Gate verified**:max=196 / p95=28 / overflow=0)
-> + v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)
-> + v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞)。
+> **🎯 v4.10 收尾(2026-05-20)**:M3SPEC alignment **Out-of-Scope backlog 全部清空** ☕☕☕☕ —
+> Item 4 Pre-Constructive Pass 1/2 diagnostics union 落地;範圍比 CLAUDE.md v4.8 估的 30+
+> 構造點小一個量級(只動 `MonowaveStructureLabels` 2 構造點 + `pre_constructive::run_pass2`
+> 新函式 + `lib.rs` Pass 2 wiring + 1 forest refill loop)。
 >
-> alembic head 不變:`d9e0f1g2h3i4`(v4.0 → v4.9 全部 0 schema migration)。
-> Rust workspace 39 crates / **582 tests passed / 0 failed**(v4.4 baseline 528 → +54)。
+> alembic head 不變:`d9e0f1g2h3i4`(v4.0 → v4.10 全部 0 schema migration)。
+> Rust workspace 39 crates / **587 tests passed / 0 failed**(v4.4 baseline 528 → +59 across 11 commits)。
 > Production state:1266 stocks × 36 cores / wall time ~11 min / facts ~5.2M(VACUUM 後)。
 >
-> **v4.0 → v4.9 共 10 commits / 6 milestones / +130 tests / ~8,100 LoC** 全部 production-ready。
-> 僅 **Item 4 Pre-Constructive Pass 1/2 diagnostics union** 真正 V4.x(屬 struct schema change)。
+> **v4.0 → v4.10 共 17 commits / +135 tests / ~8,450 LoC** Neely M3SPEC alignment 100% production-ready。
 
 ### 1. 立即可動工(無 blocker)
 
@@ -5303,12 +5448,11 @@ python scripts/probe_finmind_sponsor_unused.py --max 0
 
 ### 2. 中期 backlog(non-blocking)
 
-**2a. Neely M3SPEC Item 4 Pre-Constructive Pass 1/2 diagnostics union**(留真正 V4.x):
-- 目前 Pass 2 直接覆蓋 Pass 1 的 `structure_label_candidates`(對齊 spec
-  「Compaction-aware candidates 較 accurate」設計)
-- Union 需新增 `Scenario.diagnostics.pre_constructive_rejections` 欄位
-- struct schema change + 影響 ~30+ Scenario 構造點 → 屬大幅 struct 重構
-- 不阻塞 production;留真正 V4.x range
+**~~2a. Neely M3SPEC Item 4 Pre-Constructive Pass 1/2 diagnostics union~~**(✅ v4.10 已收尾):
+- v4.10 commit:`pre_constructive::run_pass2` 新函式 + `MonowaveStructureLabels`
+  加 `classified_index` + `pass1_only_labels` 兩欄 + lib.rs Stage 8.5 refill loop
+- 範圍比原估的 ~30+ 構造點小一個量級(只 2 個 MonowaveStructureLabels 構造點)
+- M3SPEC Out-of-Scope backlog **全部清空**
 
 **2b. exhaustive compaction Round 3 真實 partial Stage 3-4 rerun**(留 V3):
 - v4.8 已加 boundary_retracement_extreme reject 機制(< 0.236 or > 4.236 → reject)

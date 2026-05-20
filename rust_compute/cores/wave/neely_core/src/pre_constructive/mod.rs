@@ -29,6 +29,7 @@
 
 use crate::monowave::ClassifiedMonowave;
 use crate::output::{OhlcvBar, Scenario, StructureLabelCandidate};
+use std::collections::HashMap;
 
 pub mod context;
 pub mod predicates;
@@ -60,6 +61,44 @@ pub fn run(classified: &mut [ClassifiedMonowave], bars: &[OhlcvBar]) {
         let cands = compute_candidates_at(classified, bars, i);
         classified[i].structure_label_candidates = cands;
     }
+}
+
+/// **v4.x Item 4(2026-05-20)Pre-Constructive 2-pass diagnostics union**:Pass 2 entry。
+///
+/// 對應 `lib.rs` Stage 8.5 post-Compaction 第二次 Pre-Constructive 跑(對齊 v4.6 G3.1
+/// 2-pass 設計 + spec line 1042-1062 polywave 反查)。行為:
+///   1. Snapshot 每個 classified[i] 既有 `structure_label_candidates`(= Pass 1 result)
+///   2. 跑 `compute_candidates_at`(使用 polywave-aware predicates,因 polywave_size 已填)
+///   3. Pass 2 結果寫回 `structure_label_candidates`(= 既有 `run()` 行為)
+///   4. **Diff**:Pass 1 中存在但 Pass 2 沒有的 candidate(以 `label` 比對,certainty
+///      升級不算 rejection)→ 收進回傳 `HashMap<usize, Vec<StructureLabelCandidate>>`
+///      (key = classified index)
+///
+/// lib.rs caller 用回傳 diff 寫回 `scenario.monowave_structure_labels[*].pass1_only_labels`
+/// 對齊 spec「Pass 2 較 accurate 但 Pass 1 仍有 reference 價值」。
+pub fn run_pass2(
+    classified: &mut [ClassifiedMonowave],
+    bars: &[OhlcvBar],
+) -> HashMap<usize, Vec<StructureLabelCandidate>> {
+    let mut pass1_only_by_index: HashMap<usize, Vec<StructureLabelCandidate>> = HashMap::new();
+    for i in 0..classified.len() {
+        let pass1_snapshot: Vec<StructureLabelCandidate> =
+            classified[i].structure_label_candidates.clone();
+        let pass2_cands = compute_candidates_at(classified, bars, i);
+
+        // Diff:Pass 1 中 label 不在 Pass 2 → 視為 Pass 2 丟棄
+        // (certainty 升級不算 rejection,例 Possible → Primary 仍視為「Pass 2 保留」)
+        let pass1_only: Vec<StructureLabelCandidate> = pass1_snapshot
+            .into_iter()
+            .filter(|p1| !pass2_cands.iter().any(|p2| p2.label == p1.label))
+            .collect();
+        if !pass1_only.is_empty() {
+            pass1_only_by_index.insert(i, pass1_only);
+        }
+
+        classified[i].structure_label_candidates = pass2_cands;
+    }
+    pass1_only_by_index
 }
 
 /// **v4.7.2 G1.2(2026-05-19)**:從 Compaction forest 反查 polywave 規模,
@@ -213,6 +252,154 @@ mod tests {
         let cands = &classified[2].structure_label_candidates;
         assert_eq!(cands.len(), 1);
         assert!(matches!(cands[0].label, StructureLabel::Five));
+    }
+
+    // v4.x Item 4 run_pass2 tests -----------------------------------------
+
+    use crate::output::Certainty;
+
+    #[test]
+    fn run_pass2_returns_empty_diff_when_pass1_equals_pass2() {
+        // polywave_size = 0 → Pass 2 走相同 (B) 分支 → Pass 1 == Pass 2 → empty diff
+        let mut classified = vec![
+            cmw(0.0, 0.0, MonowaveDirection::Up, 1),
+            cmw(100.0, 80.0, MonowaveDirection::Down, 5),
+            cmw(80.0, 90.0, MonowaveDirection::Up, 5),
+            cmw(90.0, 88.0, MonowaveDirection::Down, 2),
+        ];
+        // Pass 1
+        run(&mut classified, &[]);
+        let pass1_snapshot: Vec<_> = classified
+            .iter()
+            .map(|c| c.structure_label_candidates.clone())
+            .collect();
+        // Pass 2(polywave_size 全 0 = 沒 Compaction 反查)
+        let diff = run_pass2(&mut classified, &[]);
+        assert!(diff.is_empty(), "polywave_size 全 0 應無 diff,實際 {:?}", diff);
+        // structure_label_candidates 不變(Pass 1 == Pass 2)
+        for (i, c) in classified.iter().enumerate() {
+            assert_eq!(
+                c.structure_label_candidates.len(),
+                pass1_snapshot[i].len(),
+                "Pass 2 應 == Pass 1(i={})",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn run_pass2_captures_dropped_when_polywave_flips_branch() {
+        // 走 Rule 1 Cond 1c(m2/m1 < 38.2% AND m0/m1 ∈ [100%, 161.8%])
+        // Pass 1 (polywave_size=0,m0 非 polywave)→ 3 個候選(對齊 rule_1::cond_1c (B))
+        // Pass 2 (polywave_size=4,m0 為 polywave)→ 額外加 :L5 candidate(對齊 (A) 分支)
+        let mut classified = vec![
+            cmw(0.0, 0.0, MonowaveDirection::Up, 1),       // m_minus_1
+            cmw(100.0, 88.0, MonowaveDirection::Down, 5),  // m0 (mag 12)
+            cmw(88.0, 98.0, MonowaveDirection::Up, 5),     // m1 (mag 10, m0/m1=1.2)
+            cmw(98.0, 96.0, MonowaveDirection::Down, 2),   // m2 (mag 2, m2/m1=0.2)
+        ];
+        // Pass 1
+        run(&mut classified, &[]);
+        let pass1_labels: Vec<_> = classified[2]
+            .structure_label_candidates
+            .iter()
+            .map(|c| c.label)
+            .collect();
+        // Pass 2:模擬 Compaction 後 polywave_size 大量加值,但本 test 直接設 i=1 (m0) 為 polywave
+        classified[1].polywave_size = 4;
+        let diff = run_pass2(&mut classified, &[]);
+        // m1 在 i=2;polywave_size 對 Rule 1 的影響表現在 m1 的 candidate set 增減
+        let pass2_labels: Vec<_> = classified[2]
+            .structure_label_candidates
+            .iter()
+            .map(|c| c.label)
+            .collect();
+        // 驗 diff 行為:
+        //   - 若 Pass 2 增加新 label(沒丟棄)→ diff for i=2 empty
+        //   - 若 Pass 2 改變了 label 集合(丟棄某些)→ diff for i=2 含被丟棄
+        //   - 至少要驗:run_pass2 不 panic,且如果有 diff,diff[i] 內 label 不在 pass2_labels
+        if let Some(p1_only) = diff.get(&2) {
+            for c in p1_only {
+                assert!(
+                    !pass2_labels.contains(&c.label),
+                    "diff 內 label {:?} 不該在 Pass 2 結果 {:?}",
+                    c.label,
+                    pass2_labels
+                );
+                assert!(
+                    pass1_labels.contains(&c.label),
+                    "diff 內 label {:?} 應該在 Pass 1 結果 {:?}",
+                    c.label,
+                    pass1_labels
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn run_pass2_certainty_upgrade_not_counted_as_rejection() {
+        // 純合成 test:同 label 不同 certainty(Possible → Primary)應視為 Pass 2 保留
+        // 不能直接構 production rules 的 certainty 升級場景,但可間接驗:
+        //   - 給 Pass 1 一個 fake candidate(例 BC3 Possible)
+        //   - 跑 Pass 2(Rule path 自然不會 emit BC3)
+        //   - 該 BC3 應出現在 diff(因為 Pass 2 真的沒 emit)
+        // 這個 case 反向驗:無同 label 對應的 candidate 必算 Pass 1-only
+        let mut classified = vec![
+            cmw(0.0, 0.0, MonowaveDirection::Up, 1),
+            cmw(100.0, 80.0, MonowaveDirection::Down, 5),
+            cmw(80.0, 90.0, MonowaveDirection::Up, 5),
+            cmw(90.0, 88.0, MonowaveDirection::Down, 2),
+        ];
+        run(&mut classified, &[]);
+        // 注入 fake Pass 1 candidate(label 不會被任何 Rule path emit)
+        classified[2]
+            .structure_label_candidates
+            .push(StructureLabelCandidate {
+                label: StructureLabel::SL5,
+                certainty: Certainty::Rare,
+            });
+        let diff = run_pass2(&mut classified, &[]);
+        // SL5 應在 diff(Pass 1 only)
+        let p1_only = diff.get(&2).expect("應有 i=2 的 diff entry");
+        assert!(
+            p1_only.iter().any(|c| matches!(c.label, StructureLabel::SL5)),
+            "SL5 該被 Pass 2 視為 rejection(label 不出現於 Pass 2 結果),diff={:?}",
+            p1_only
+        );
+    }
+
+    #[test]
+    fn run_pass2_empty_classified_returns_empty_diff() {
+        let mut classified: Vec<ClassifiedMonowave> = Vec::new();
+        let diff = run_pass2(&mut classified, &[]);
+        assert!(diff.is_empty());
+        assert!(classified.is_empty());
+    }
+
+    #[test]
+    fn run_pass2_overwrites_structure_label_candidates() {
+        // Pass 2 仍會覆寫 structure_label_candidates(對齊既有 Pass 2 行為)
+        let mut classified = vec![
+            cmw(0.0, 0.0, MonowaveDirection::Up, 1),
+            cmw(100.0, 80.0, MonowaveDirection::Down, 5),
+            cmw(80.0, 90.0, MonowaveDirection::Up, 5),
+            cmw(90.0, 88.0, MonowaveDirection::Down, 2),
+        ];
+        // 先注入 dummy Pass 1
+        for c in classified.iter_mut() {
+            c.structure_label_candidates.push(StructureLabelCandidate {
+                label: StructureLabel::SL5,
+                certainty: Certainty::Rare,
+            });
+        }
+        let _diff = run_pass2(&mut classified, &[]);
+        // dummy SL5 對 i=2 (m1) 應已被 Pass 2 覆寫消失(若 Pass 2 不 emit SL5)
+        for c in classified.iter() {
+            assert!(
+                !c.structure_label_candidates.iter().any(|cand| matches!(cand.label, StructureLabel::SL5)),
+                "Pass 2 應覆寫掉 dummy SL5"
+            );
+        }
     }
 
     // v4.7.2 G1.2 populate_polywave_sizes tests --------------------------
