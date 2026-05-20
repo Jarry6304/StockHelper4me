@@ -387,7 +387,7 @@ SELECT COUNT(*) AS combination_scenarios
 FROM structural_snapshots,
      jsonb_array_elements(snapshot->'scenario_forest') AS s
 WHERE core_name='neely_core'
-  AND s->>'pattern_type' LIKE 'Combination%'
+  AND s->>'structure_label' LIKE 'Combination%'
   AND snapshot_date=(SELECT MAX(snapshot_date) FROM structural_snapshots WHERE core_name='neely_core');
 "
 # 預期 > 0(production 不再是 0 個 Combination)
