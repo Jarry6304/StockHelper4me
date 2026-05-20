@@ -11,7 +11,7 @@ v3.33 變動:
   - 對齊 v3.30 series-last-entry path fix + v3.31 stock_snapshot graceful degradation
 
 設計:
-- 走 agg.as_of(stock_id, cores=["kalman_filter_core"])
+- 走 fusion.raw.as_of(stock_id, cores=["kalman_filter_core"])
 - 從 indicator_latest 拉 multi-horizon latest state(優先 `horizons` array,fallback `series[-1]`)
 - 從 facts 拉 recent regime transition events(只 primary horizon)
 - payload ~ 2.0 KB / ~500 tokens(+0.5 KB for kalman_by_horizon)
@@ -114,7 +114,7 @@ def compute_kalman_trend(
             "narrative": "..."
           }
     """
-    from agg import as_of as agg_as_of
+    from fusion.raw import as_of as agg_as_of
 
     snapshot = agg_as_of(
         stock_id, as_of,

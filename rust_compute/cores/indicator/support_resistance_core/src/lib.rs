@@ -346,7 +346,7 @@ impl IndicatorCore for SupportResistanceCore {
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
         let mut facts: Vec<Fact> = Vec::new();
         for level in &output.support_levels {
-            facts.push(Fact {
+            facts.push(Fact { severity: fact_schema::Severity::Info,
                 stock_id: output.stock_id.clone(),
                 fact_date: level.last_seen,
                 timeframe: output.timeframe,
@@ -366,7 +366,7 @@ impl IndicatorCore for SupportResistanceCore {
             });
         }
         for level in &output.resistance_levels {
-            facts.push(Fact {
+            facts.push(Fact { severity: fact_schema::Severity::Info,
                 stock_id: output.stock_id.clone(),
                 fact_date: level.last_seen,
                 timeframe: output.timeframe,
@@ -386,7 +386,7 @@ impl IndicatorCore for SupportResistanceCore {
             });
         }
         for ev in &output.events {
-            facts.push(Fact {
+            facts.push(Fact { severity: fact_schema::Severity::Info,
                 stock_id: output.stock_id.clone(),
                 fact_date: ev.date,
                 timeframe: output.timeframe,

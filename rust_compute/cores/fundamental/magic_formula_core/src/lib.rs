@@ -158,7 +158,7 @@ impl IndicatorCore for MagicFormulaCore {
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
-        output.events.iter().map(|e| Fact {
+        output.events.iter().map(|e| Fact { severity: fact_schema::Severity::Info,
             stock_id: output.stock_id.clone(),
             fact_date: e.date,
             timeframe: output.timeframe,

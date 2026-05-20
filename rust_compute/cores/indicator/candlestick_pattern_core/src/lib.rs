@@ -478,7 +478,7 @@ impl IndicatorCore for CandlestickPatternCore {
         output
             .patterns
             .iter()
-            .map(|p| Fact {
+            .map(|p| Fact { severity: fact_schema::Severity::Info,
                 stock_id: output.stock_id.clone(),
                 fact_date: p.date,
                 timeframe: output.timeframe,

@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from agg._db import get_connection
+from fusion.raw._db import get_connection
 
 
 # 5 大類英譯 → 中文 label(narrative 用)

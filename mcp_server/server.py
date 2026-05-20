@@ -64,6 +64,22 @@ mcp = FastMCP(
         "12-1 Momentum。\n"
         "  8. `monthly_trigger_scan(date)` — Layer 5:Positive(YoY > +30% + "
         "法人買超)/ Negative(YoY < -20% + 法人賣超 > 1%)triggers。\n\n"
+        "**Fusion Layer 整合工具(10 個,跨 core 整合,不引入新規則)**:\n"
+        "  9. `market_events(start_date, end_date, severity_min)` — D 視角:大盤環境"
+        "事件時間軸(severity filter)。\n"
+        "  10. `market_dashboard(date)` — D 視角:7 個 environment cores 大盤快照 + "
+        "歷史百分位。\n"
+        "  11. `key_levels(stock_id, date)` — B 視角:支撐 / 壓力(SR + 趨勢線 + "
+        "Neely Fib,1% cluster)。\n"
+        "  12. `stop_loss_calc(stock_id, entry_price, date)` — B 視角:止損 / 止盈"
+        "計算(ATR + key_levels)。\n"
+        "  13. `pattern_scan(stock_id, date)` — B 視角:K 線型態 + 支撐 / 壓力 context。\n"
+        "  14-17. `indicator_momentum / volatility / volume / pattern(stock_id, "
+        "date)` — E 視角:各子類指標 series + events。\n"
+        "  18. `indicator_stack(stock_id, date, preset)` — E 視角:預設指標組合"
+        "(default / day_trade / swing / position)。\n"
+        "  (`stock_snapshot` 已擴為 10-in-1:加 fundamentals / institutional / "
+        "shareholder / technical_summary 四 section)\n\n"
         "設計約束:\n"
         "- 所有 tool 強制 as_of date(回測 / 即時同介面)\n"
         "- facts 已過 look-ahead bias 防衛\n"
@@ -89,6 +105,18 @@ mcp.tool(_data_tools.monthly_screen)              # Toolkit A:Persistent Mom + R
 mcp.tool(_data_tools.quarterly_screen)            # Toolkit B:F-Score + Low Vol + Industry-Adj GP
 mcp.tool(_data_tools.annual_low_risk_screen)      # Toolkit C:Long-Term Low Vol + Dividend Yield + 12-1 Mom
 mcp.tool(_data_tools.monthly_trigger_scan)        # Layer 5:Positive/Negative trigger overlay
+
+# Fusion Layer · Integration 端口 tools(P1.4)
+mcp.tool(_data_tools.market_events)               # D 視角:大盤環境事件時間軸(severity filter)
+mcp.tool(_data_tools.market_dashboard)            # D 視角:大盤環境快照(7 cores headline metric)
+mcp.tool(_data_tools.key_levels)                  # B 視角:個股支撐/壓力(SR + 趨勢線 + Neely Fib)
+mcp.tool(_data_tools.stop_loss_calc)              # B 視角:止損/止盈計算(ATR + key_levels)
+mcp.tool(_data_tools.pattern_scan)                # B 視角:K 線型態 + 支撐/壓力 context
+mcp.tool(_data_tools.indicator_momentum)          # E 視角:動量/趨勢/強度類指標
+mcp.tool(_data_tools.indicator_volatility)        # E 視角:波動/通道類指標
+mcp.tool(_data_tools.indicator_volume)            # E 視角:量能類指標
+mcp.tool(_data_tools.indicator_pattern)           # E 視角:型態/價位類指標
+mcp.tool(_data_tools.indicator_stack)             # E 視角:預設指標組合(preset)
 
 # v3.31:以下 6 個仍在 mcp_server.tools.data 內(dashboard / direct python 用),
 # 但**不再透過 MCP server.py 註冊**,LLM 看不到。stock_snapshot 內部會呼叫

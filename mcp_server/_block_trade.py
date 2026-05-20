@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-from agg._db import get_connection
+from fusion.raw._db import get_connection
 
 
 MATCHING_SPIKE_THRESHOLD = 0.80

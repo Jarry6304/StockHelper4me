@@ -209,7 +209,7 @@ impl IndicatorCore for KeltnerCore {
         output
             .events
             .iter()
-            .map(|e| Fact {
+            .map(|e| Fact { severity: fact_schema::Severity::Info,
                 stock_id: output.stock_id.clone(),
                 fact_date: e.date,
                 timeframe: output.timeframe,

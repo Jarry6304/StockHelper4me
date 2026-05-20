@@ -1,4 +1,4 @@
-"""Aggregation Layer 主入口 — as_of(stock_id, date) → AsOfSnapshot。
+"""Fusion Layer · Raw 端口主入口 — as_of(stock_id, date) → AsOfSnapshot。
 
 對齊 m3Spec/aggregation_layer.md §四 / §九 use cases。
 
@@ -14,16 +14,16 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-from agg._db import (
+from fusion.raw._db import (
     fetch_facts,
     fetch_indicator_latest,
     fetch_ohlc,
     fetch_structural_latest,
     get_connection,
 )
-from agg._lookahead import filter_visible
-from agg._market import fetch_market_facts
-from agg._types import (
+from fusion.raw._lookahead import filter_visible
+from fusion.raw._market import fetch_market_facts
+from fusion.raw._types import (
     AsOfSnapshot,
     FactRow,
     IndicatorRow,

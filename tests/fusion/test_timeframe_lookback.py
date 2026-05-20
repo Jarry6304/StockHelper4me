@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from agg.query import _filter_by_timeframe_lookback
+from fusion.raw.query import _filter_by_timeframe_lookback
 
 
 def _row(fact_date, timeframe="daily", **extra):

@@ -9,7 +9,7 @@ from datetime import date
 from typing import Any
 from unittest.mock import patch
 
-from agg import _market
+from fusion.raw import _market
 
 
 class _StubCursor:

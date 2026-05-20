@@ -3,7 +3,7 @@
 對齊 v3.4 plan §Phase C(2026-05-15)。
 
 設計:
-- 跨股 query → 不走 agg.as_of()(它是 per-stock)
+- 跨股 query → 不走 fusion.raw.as_of()(它是 per-stock)
 - 直接 SELECT magic_formula_ranked_derived 撈 latest date 的 top N
 - JOIN stock_info_ref 加公司名 + industry_category
 - payload ~ 5 KB / ~1250 tokens(對齊 toolkit v2 ≤ 5K tokens 目標)
@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from agg._db import (
+from fusion.raw._db import (
     fetch_cross_stock_ranked,
     get_connection,
 )  # v3.5 R5 C12+C13:connection single entry + cross-stock helper
@@ -32,7 +32,7 @@ def compute_magic_formula_screen(
 ) -> dict[str, Any]:
     """跑 Magic Formula top-N 篩選。
 
-    v3.5 R5 C13:cross-stock 邏輯走 `agg._db.fetch_cross_stock_ranked` 通用 helper;
+    v3.5 R5 C13:cross-stock 邏輯走 `fusion.raw._db.fetch_cross_stock_ranked` 通用 helper;
     universe_size + stats 仍是 magic_formula 特有的 percentile 統計,留在本 file。
 
     Args:

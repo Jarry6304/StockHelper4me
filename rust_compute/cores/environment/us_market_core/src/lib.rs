@@ -60,6 +60,8 @@ pub struct UsMarketPoint {
     pub vix_close: f64,
     pub vix_change_pct: f64,
     pub vix_zone: VixZone,
+    /// Fusion Layer P1.2b:spy_close 在尾段 252 個資料點內的百分位(0.0-1.0)。
+    pub percentile_252: f64,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct UsMarketEvent { pub date: NaiveDate, pub kind: UsMarketEventKind, pub value: f64, pub metadata: serde_json::Value }
@@ -86,6 +88,17 @@ fn classify_vix_zone(vix: f64, low: f64, high: f64) -> VixZone {
     else if vix < high { VixZone::Normal }
     else if vix < high * 1.5 { VixZone::High }
     else { VixZone::ExtremeHigh }
+}
+
+/// Fusion Layer P1.2b:回 `values[i]` 在尾段 `window` 個資料點(含自己)內的百分位(0.0-1.0)。
+fn percentile_trailing(values: &[f64], i: usize, window: usize) -> f64 {
+    if values.is_empty() || i >= values.len() || window == 0 {
+        return 0.0;
+    }
+    let lo = i.saturating_sub(window - 1);
+    let win = &values[lo..=i];
+    let le = win.iter().filter(|&&v| v <= values[i]).count();
+    le as f64 / win.len() as f64
 }
 
 impl IndicatorCore for UsMarketCore {
@@ -123,6 +136,7 @@ impl IndicatorCore for UsMarketCore {
                 spy_macd_histogram: macd_line[i] - macd_signal[i],
                 vix_close: vc, vix_change_pct: vix_change,
                 vix_zone: classify_vix_zone(vc, params.vix_low_threshold, params.vix_high_threshold),
+                percentile_252: percentile_trailing(&spy_closes, i, 252),
             });
             prev_spy = Some(sc); prev_vix = Some(vc);
         }
@@ -163,7 +177,7 @@ impl IndicatorCore for UsMarketCore {
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
-        output.events.iter().map(|e| Fact {
+        output.events.iter().map(|e| Fact { severity: fact_schema::Severity::Info,
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
             source_core: "us_market_core".to_string(), source_version: "0.1.0".to_string(),
             params_hash: None, statement: format!("US {:?} on {}: value={:.2}", e.kind, e.date, e.value),

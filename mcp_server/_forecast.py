@@ -111,7 +111,7 @@ def compute_neely_forecast(
     Returns:
         dict 結構對齊 plan §Tool 1 Output(~2 KB / ~500 tokens)
     """
-    from agg import as_of as agg_as_of
+    from fusion.raw import as_of as agg_as_of
 
     # 撈 Neely structural + 跨 cores 動能 / 籌碼最新值
     relevant_cores = [

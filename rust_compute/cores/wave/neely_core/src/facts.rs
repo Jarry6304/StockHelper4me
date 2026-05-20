@@ -64,7 +64,7 @@ fn scenario_to_fact(output: &NeelyCoreOutput, scenario: &Scenario) -> Fact {
         "invalidation_triggers_count": scenario.invalidation_triggers.len(),
         "expected_fib_zones_count": scenario.expected_fib_zones.len(),
     });
-    Fact {
+    Fact { severity: fact_schema::Severity::Info,
         stock_id: output.stock_id.clone(),
         fact_date: output.data_range.end,
         timeframe: output.timeframe,
@@ -96,7 +96,7 @@ fn forest_summary_fact(output: &NeelyCoreOutput) -> Fact {
         "overflow_triggered": output.diagnostics.overflow_triggered,
         "compaction_paths": output.diagnostics.compaction_paths,
     });
-    Fact {
+    Fact { severity: fact_schema::Severity::Info,
         stock_id: output.stock_id.clone(),
         fact_date: output.data_range.end,
         timeframe: output.timeframe,
@@ -220,6 +220,7 @@ mod tests {
                 timeframe: Timeframe::Daily,
                 monowave_summaries: Vec::new(),
             },
+            flat_fib_zones: Vec::new(),
         }
     }
 

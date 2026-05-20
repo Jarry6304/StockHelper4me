@@ -341,7 +341,7 @@ fn event_to_fact(output: &MarginOutput, e: &MarginEvent) -> Fact {
         MarginEventKind::EnteredMaintenanceLow => format!("Margin maintenance entered Low zone on {}: maintenance={:.1}%", e.date, e.value),
         MarginEventKind::ExitedMaintenanceLow => format!("Margin maintenance exited Low zone on {}: maintenance={:.1}%", e.date, e.value),
     };
-    Fact {
+    Fact { severity: fact_schema::Severity::Info,
         stock_id: output.stock_id.clone(),
         fact_date: e.date,
         timeframe: output.timeframe,

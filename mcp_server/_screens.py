@@ -11,7 +11,7 @@ v3.32 4 個 cross-stock screen toolkit MCP helper:
 對齊 v3.31 stock_snapshot graceful degradation 模式:某 sub-factor 失敗 →
 該 section 變 error,其他仍 surface。
 
-對齊既有 mcp_server/_magic_formula.py 風格 + agg._db.fetch_cross_stock_ranked
+對齊既有 mcp_server/_magic_formula.py 風格 + fusion.raw._db.fetch_cross_stock_ranked
 共用 helper。
 """
 
@@ -21,7 +21,7 @@ import logging
 from datetime import date
 from typing import Any
 
-from agg._db import fetch_cross_stock_ranked, get_connection
+from fusion.raw._db import fetch_cross_stock_ranked, get_connection
 
 logger = logging.getLogger("collector.mcp_server.screens")
 

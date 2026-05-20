@@ -44,8 +44,8 @@ def _fetch_snapshot_and_ohlc(
     lookback_days: int,
     include_market: bool = True,
 ):
-    """共用:agg.as_of_with_ohlc 一次撈完。回 (snapshot_dict, ohlc_rows)。"""
-    from agg import as_of_with_ohlc
+    """共用:fusion.raw.as_of_with_ohlc 一次撈完。回 (snapshot_dict, ohlc_rows)。"""
+    from fusion.raw import as_of_with_ohlc
 
     snapshot, ohlc = as_of_with_ohlc(
         stock_id,

@@ -47,8 +47,8 @@ def fetch_market_facts(
             ...
         }
     """
-    from agg._db import fetch_facts
-    from agg._lookahead import filter_visible
+    from fusion.raw._db import fetch_facts
+    from fusion.raw._lookahead import filter_visible
 
     rows = fetch_facts(
         conn,

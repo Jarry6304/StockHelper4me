@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from agg.query import health_check
+from fusion.raw.query import health_check
 
 
 class _FakeCursor:
@@ -69,7 +69,7 @@ class TestHealthCheck:
 
     def test_connect_failure(self, monkeypatch):
         # 模擬 get_connection 在 health_check 內 raise
-        from agg import query as q
+        from fusion.raw import query as q
 
         def _raise(*a, **kw):
             raise RuntimeError("PG down")

@@ -145,7 +145,7 @@ impl IndicatorCore for KdCore {
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
-        output.events.iter().map(|e| Fact {
+        output.events.iter().map(|e| Fact { severity: fact_schema::Severity::Info,
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
             source_core: "kd_core".to_string(), source_version: "0.1.0".to_string(),
             params_hash: None, statement: format!("KD {:?} on {}: k={:.2}", e.kind, e.date, e.value),

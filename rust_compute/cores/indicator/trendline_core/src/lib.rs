@@ -417,7 +417,7 @@ impl IndicatorCore for TrendlineCore {
         let mut facts: Vec<Fact> = Vec::new();
         for tl in &output.trendlines {
             let touch_total = tl.anchor_pivots.len() + tl.additional_touches.len();
-            facts.push(Fact {
+            facts.push(Fact { severity: fact_schema::Severity::Info,
                 stock_id: output.stock_id.clone(),
                 fact_date: tl.last_valid_date,
                 timeframe: output.timeframe,
@@ -441,7 +441,7 @@ impl IndicatorCore for TrendlineCore {
             });
         }
         for ev in &output.events {
-            facts.push(Fact {
+            facts.push(Fact { severity: fact_schema::Severity::Info,
                 stock_id: output.stock_id.clone(),
                 fact_date: ev.date,
                 timeframe: output.timeframe,

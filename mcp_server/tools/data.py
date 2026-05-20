@@ -62,7 +62,7 @@ def as_of_snapshot(
     Returns:
         AsOfSnapshot dict — date 欄全部 ISO 字串(JSON-serializable)
     """
-    from agg import as_of
+    from fusion.raw import as_of
 
     snapshot = as_of(
         stock_id,
@@ -94,7 +94,7 @@ def find_facts(
         當日該 fact 的 list[dict] — 每筆 fact 含 stock_id / fact_date /
         source_core / statement / metadata 等
     """
-    from agg import find_facts_today
+    from fusion.raw import find_facts_today
 
     rows = find_facts_today(
         _parse_date(date),
@@ -208,7 +208,7 @@ def stock_health(
 ) -> dict[str, Any]:
     """個股 4 維健康度評分(plan §Tool 2)。
 
-    內部:撈 agg.as_of() 全 cores → 4 維 score(technical / chip /
+    內部:撈 fusion.raw.as_of() 全 cores → 4 維 score(technical / chip /
     valuation / fundamental)加權 → top 5 訊號排序 → 1 句 narrative。
 
     輸出只回結論(~2 KB / ~500 tokens),不回 raw indicator series。
@@ -286,7 +286,7 @@ def kalman_trend(
 ) -> dict[str, Any]:
     """個股 1-D Kalman trend + 5-class regime(v3.4 plan §Phase C)。
 
-    內部:走 agg.as_of(cores=["kalman_filter_core"]) → indicator_latest 拉
+    內部:走 fusion.raw.as_of(cores=["kalman_filter_core"]) → indicator_latest 拉
     smoothed_price / velocity / uncertainty / regime → facts 拉 recent
     regime transitions → 1 句 narrative。
     輸出 ~1.5 KB / ~400 tokens。
@@ -507,112 +507,19 @@ def stock_snapshot(
     *,
     database_url: str | None = None,
 ) -> dict[str, Any]:
-    """v3.31 6-in-1 個股當下快照:health + loan + block + risk + market + commodity。
+    """Fusion A 視角:個股 10-in-1 當下快照。
 
-    對 LLM 來說 1 個 query 拿全部基本資料 → toolkit 從 9 → 4(neely / kalman /
-    magic_formula / stock_snapshot)。被合併的 6 個 helper 函式仍 callable from
-    Python(dashboard / direct caller)— 只是不再走 MCP wrapper。
+    10 sections:health / loan_collateral / block_trade / risk_alert /
+    market_context / commodity_macro(6 既有)+ fundamentals / institutional /
+    shareholder / technical_summary(4 新)+ narrative。各 section 獨立
+    graceful degradation — 某段失敗 → 該 section = {"error": ...}。
 
-    Args:
-        stock_id:     股票代號(例 "2330")
-        date:         ISO 字串(例 "2026-05-15")
-        database_url: 可選 PG 連線字串
-
-    Returns(~10 KB / ~2.5K tokens):
-      {
-        "stock_id":        "2330",
-        "as_of":           "2026-05-15",
-        "health":          {...},     # compute_stock_health 完整 dict
-        "loan_collateral": {...},     # compute_loan_collateral_snapshot 完整 dict
-        "block_trade":     {...},     # compute_block_trade_summary(30d)
-        "risk_alert":      {...},     # compute_risk_alert_status 完整 dict
-        "market_context":  {...},     # compute_market_context 完整 dict
-        "commodity_macro": {...},     # compute_commodity_macro_snapshot(["GOLD"])
-        "narrative":       "..."      # 1-3 句 aggregated overall view
-      }
-
-    Graceful degradation:某 sub-section helper 噴 exception → 該 section 變
-    `{"error": "<msg>"}`,其他 5 個仍出。LLM 看 error key 知道哪段缺。
+    Returns:
+        {stock_id, as_of, <10 sections>, narrative}
     """
-    from mcp_server._health import compute_stock_health
-    from mcp_server._climate import compute_market_context
-    from mcp_server._loan_collateral import compute_loan_collateral_snapshot
-    from mcp_server._block_trade import compute_block_trade_summary
-    from mcp_server._risk_alert import compute_risk_alert_status
-    from mcp_server._commodity_macro import compute_commodity_macro_snapshot
+    from fusion.snapshot import stock_snapshot as _stock_snapshot
 
-    as_of = _parse_date(date)
-
-    def _safe(label: str, fn):
-        try:
-            return fn()
-        except Exception as e:
-            return {"error": f"{type(e).__name__}: {e}", "section": label}
-
-    health = _safe("health",
-        lambda: compute_stock_health(stock_id, as_of))
-    loan = _safe("loan_collateral",
-        lambda: compute_loan_collateral_snapshot(stock_id, as_of, database_url=database_url))
-    block = _safe("block_trade",
-        lambda: compute_block_trade_summary(stock_id, as_of, lookback_days=30, database_url=database_url))
-    risk = _safe("risk_alert",
-        lambda: compute_risk_alert_status(stock_id, as_of, database_url=database_url))
-    market = _safe("market_context",
-        lambda: compute_market_context(as_of))
-    commodity = _safe("commodity_macro",
-        lambda: compute_commodity_macro_snapshot(as_of, commodities=["GOLD"], database_url=database_url))
-
-    return {
-        "stock_id":        stock_id,
-        "as_of":           as_of.isoformat(),
-        "health":          health,
-        "loan_collateral": loan,
-        "block_trade":     block,
-        "risk_alert":      risk,
-        "market_context":  market,
-        "commodity_macro": commodity,
-        "narrative":       _compose_snapshot_narrative(
-            stock_id=stock_id, health=health, market=market,
-            risk=risk, loan=loan,
-        ),
-    }
-
-
-def _compose_snapshot_narrative(
-    *, stock_id: str, health: dict, market: dict, risk: dict, loan: dict,
-) -> str:
-    """取 4 個主要 sub-section 各 1 個 signal 串成 1-3 句 overall view。"""
-    parts: list[str] = []
-
-    # 個股 health overall_score
-    if isinstance(health, dict) and "overall_score" in health:
-        s = health.get("overall_score")
-        if isinstance(s, (int, float)):
-            tone = "偏多" if s > 20 else "偏空" if s < -20 else "中性"
-            parts.append(f"{stock_id} 個股健康度 {s:+.0f}({tone})")
-
-    # 大盤 climate
-    if isinstance(market, dict) and "overall_climate" in market:
-        climate = market.get("overall_climate")
-        score = market.get("climate_score")
-        if climate and isinstance(score, (int, float)):
-            parts.append(f"大盤 {climate}({score:+.1f})")
-
-    # 風險警示
-    if isinstance(risk, dict):
-        cs = risk.get("current_status") or {}
-        if cs.get("in_disposition_period"):
-            lbl = cs.get("severity_label") or "處置"
-            parts.append(f"⚠️ 處置警示:{lbl}")
-
-    # 借券集中
-    if isinstance(loan, dict) and loan.get("concentration_alert"):
-        ratio = loan.get("concentration_ratio") or 0
-        parts.append(f"⚠️ 借券集中 {ratio:.0%}")
-
-    if not parts:
-        return f"{stock_id} 快照已生成 — 詳見各 sub-section。"
-    return ";".join(parts) + "。"
+    return _stock_snapshot(stock_id, _parse_date(date), database_url=database_url)
 
 
 # ────────────────────────────────────────────────────────────
@@ -728,6 +635,226 @@ def monthly_trigger_scan(
 
 
 # ────────────────────────────────────────────────────────────
+# Fusion Layer · Integration 端口 tools(P1.4)
+# ────────────────────────────────────────────────────────────
+
+
+def market_events(
+    start_date: str,
+    end_date: str,
+    severity_min: str = "info",
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion D 視角:大盤環境事件時間軸。
+
+    撈 7 個 environment cores(taiex / us_market / exchange_rate / fear_greed /
+    market_margin / business_indicator / commodity_macro)寫進 facts 的事件,
+    依日期區間 [start_date, end_date] + 最低嚴重度 filter,以統一 Event schema
+    回傳時間軸。
+
+    severity_min:info / notable / warning / critical(預設 info = 全收)。
+    嚴重度由各 core 寫入 fact 時決定,本層只 filter 不二次判斷。
+
+    Returns:
+        {start_date, end_date, severity_min, event_count, by_severity,
+         events: [{date, source, kind, severity, statement, value, metadata}, ...]}
+        events 依 (date DESC, severity DESC) 排序。
+    """
+    from fusion.market_events import market_events as _market_events
+
+    return _market_events(
+        _parse_date(start_date),
+        _parse_date(end_date),
+        severity_min=severity_min,
+        database_url=database_url,
+    )
+
+
+def market_dashboard(
+    date: str,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion D 視角:大盤環境快照。
+
+    讀 7 個 environment cores(taiex / us_market / exchange_rate / fear_greed /
+    market_margin / business_indicator / commodity_macro)的最新一筆,抽出各核心
+    headline metric + 歷史百分位(percentile_252)+ 短期變化。
+
+    純資料快照 — 不打主觀標籤,由 LLM 自行判讀大盤環境。
+
+    Returns:
+        {as_of, component_count, components, missing}
+        每個 component:{latest_date, value, change_pct, percentile_252, state, ...}
+    """
+    from fusion.market_dashboard import market_dashboard as _market_dashboard
+
+    return _market_dashboard(_parse_date(date), database_url=database_url)
+
+
+def key_levels(
+    stock_id: str,
+    date: str,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion B 視角:個股關鍵支撐 / 壓力價位。
+
+    整合三來源並以 1% bucket cluster:support_resistance_core(SR 價位)、
+    trendline_core(有效趨勢線)、neely_core flat_fib_zones(Fibonacci 區)。
+    strength = 該價位被幾個來源確認(越多越強)。
+
+    Returns:
+        {stock_id, as_of, source_point_count, level_count,
+         levels: [{price, low, high, sources, strength, member_count}, ...]}
+        levels 依 price 升序。
+    """
+    from fusion.key_levels import key_levels as _key_levels
+
+    return _key_levels(stock_id, _parse_date(date), database_url=database_url)
+
+
+def stop_loss_calc(
+    stock_id: str,
+    entry_price: float,
+    date: str,
+    direction: str = "long",
+    atr_mult: float = 2.0,
+    reward_risk_ratio: float = 2.0,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion B 視角:止損 / 止盈計算。
+
+    給定進場價,整合 ATR(atr_core)+ key_levels(SR / 趨勢線 / Neely Fib)算出
+    止損、止盈候選。純計算 — 同時呈現 ATR-based 與 level-based 候選 + 距離百分比,
+    不替你抉擇(由 LLM 判讀)。
+
+    direction:long(預設)或 short。atr_mult 為止損 ATR 倍數;reward_risk_ratio
+    為 ATR 止盈相對止損的報酬風險比。
+
+    Returns:
+        {stock_id, as_of, direction, entry_price, atr, stops, targets}
+        stops/targets 各含 atr_based + nearest_level,每筆 {price, distance,
+        distance_pct}。
+    """
+    from fusion.stop_loss import stop_loss as _stop_loss
+
+    return _stop_loss(
+        stock_id, entry_price, _parse_date(date),
+        direction=direction, atr_mult=atr_mult,
+        reward_risk_ratio=reward_risk_ratio, database_url=database_url,
+    )
+
+
+def pattern_scan(
+    stock_id: str,
+    date: str,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion B 視角:近期 K 線型態 + 支撐 / 壓力 context。
+
+    撈 candlestick_pattern_core 近期偵測到的 K 線型態,為每個型態補上
+    key_levels context(型態發生價是否貼近支撐 / 壓力 — 同型態在支撐附近
+    與在中段意義不同)。型態本身由 core 偵測,本層只整合 key_levels。
+
+    Returns:
+        {stock_id, as_of, pattern_count,
+         patterns: [{date, pattern, trend_context, strength, price,
+                     level_context}, ...]}  依 date 降序。
+    """
+    from fusion.pattern_scan import pattern_scan as _pattern_scan
+
+    return _pattern_scan(stock_id, _parse_date(date), database_url=database_url)
+
+
+def _assemble(category: str, stock_id: str, date: str,
+              indicators: list[str] | None, lookback_days: int,
+              database_url: str | None) -> dict[str, Any]:
+    """E 視角 4 個子類工具共用:依 category 過濾 indicators 後組裝。"""
+    from fusion.indicator_assembly import assemble_indicators, category_indicators
+
+    return assemble_indicators(
+        stock_id, _parse_date(date),
+        category_indicators(category, indicators),
+        lookback_days=lookback_days, database_url=database_url,
+    )
+
+
+def indicator_momentum(
+    stock_id: str, date: str, indicators: list[str] | None = None,
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:動量 / 趨勢 / 強度類指標(series + events)。
+
+    可選 indicators:macd / rsi / kd / adx / ma / ichimoku / williams_r /
+    cci / coppock(可帶或不帶 `_core` 後綴);省略 = 全部。
+
+    Returns:
+        {stock_id, as_of, indicator_count, indicators, missing}
+        indicators[<core>] = {value_date, series, events}。
+    """
+    return _assemble("momentum", stock_id, date, indicators, lookback_days, database_url)
+
+
+def indicator_volatility(
+    stock_id: str, date: str, indicators: list[str] | None = None,
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:波動 / 通道類指標(series + events)。
+
+    可選 indicators:bollinger / keltner / donchian / atr;省略 = 全部。
+    """
+    return _assemble("volatility", stock_id, date, indicators, lookback_days, database_url)
+
+
+def indicator_volume(
+    stock_id: str, date: str, indicators: list[str] | None = None,
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:量能類指標(series + events)。
+
+    可選 indicators:obv / vwap / mfi;省略 = 全部。
+    """
+    return _assemble("volume", stock_id, date, indicators, lookback_days, database_url)
+
+
+def indicator_pattern(
+    stock_id: str, date: str, indicators: list[str] | None = None,
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:型態 / 價位類指標(series + events)。
+
+    可選 indicators:candlestick_pattern / support_resistance / trendline;
+    省略 = 全部。
+    """
+    return _assemble("pattern", stock_id, date, indicators, lookback_days, database_url)
+
+
+def indicator_stack(
+    stock_id: str, date: str, preset: str = "default",
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:預設指標組合(series + events)。
+
+    preset:default(MACD+RSI+KD+Bollinger+MA)/ day_trade(KD+RSI+VWAP+
+    Bollinger)/ swing(MACD+MA+ADX+ATR)/ position(MA+Ichimoku+OBV+SR)。
+
+    Returns:
+        {stock_id, as_of, indicator_count, indicators, missing}
+    """
+    from fusion.indicator_assembly import INDICATOR_STACK_PRESETS, assemble_indicators
+
+    cores = INDICATOR_STACK_PRESETS.get(preset, INDICATOR_STACK_PRESETS["default"])
+    return assemble_indicators(
+        stock_id, _parse_date(date), cores,
+        lookback_days=lookback_days, database_url=database_url,
+    )
+
+
+# ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
 
@@ -748,7 +875,7 @@ def fetch_ohlc(
         list[dict] {date, open, high, low, close, volume},ORDER BY date ASC。
         date 欄全 ISO 字串。
     """
-    from agg._db import fetch_ohlc as _fetch, get_connection
+    from fusion.raw._db import fetch_ohlc as _fetch, get_connection
 
     conn = get_connection()
     try:

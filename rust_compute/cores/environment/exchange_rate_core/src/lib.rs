@@ -28,11 +28,14 @@ pub struct ExchangeRateParams {
     pub ma_period: usize,
     pub key_levels: Vec<f64>,
     pub significant_change_threshold: f64,
+    /// Fusion Layer P1.2:TwdStrengthenStreak 連續天數門檻(TWD 連續走強)。
+    pub strengthen_streak_days: usize,
 }
 impl Default for ExchangeRateParams {
     fn default() -> Self {
         Self { timeframe: Timeframe::Daily, currency_pairs: vec!["USD/TWD".to_string()],
-            ma_period: 20, key_levels: vec![30.0, 31.0, 32.0], significant_change_threshold: 0.5 }
+            ma_period: 20, key_levels: vec![30.0, 31.0, 32.0], significant_change_threshold: 0.5,
+            strengthen_streak_days: 5 }
     }
 }
 
@@ -50,12 +53,30 @@ pub struct ExchangeRatePoint {
     pub change_pct: f64,
     pub ma_value: f64,
     pub trend_state: TrendState,
+    /// Fusion Layer P1.2b:rate 在尾段 252 個資料點內的百分位(0.0-1.0)。
+    pub percentile_252: f64,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ExchangeRateEvent { pub date: NaiveDate, pub kind: ExchangeRateEventKind, pub value: f64, pub metadata: serde_json::Value }
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum ExchangeRateEventKind {
     KeyLevelBreakout, KeyLevelBreakdown, SignificantSingleDayMove, MaCross,
+    // Fusion Layer P1.2:供 Fusion market_events 用。
+    // 註:spec 提的 TwdBreak31 已由 KeyLevelBreakdown(key_levels 含 31.0)涵蓋,不重複新增。
+    TwdStrengthenStreak,
+}
+
+impl ExchangeRateEventKind {
+    /// Fact 嚴重度 — 本 core 自行映射(對齊 fusion_layer §9 #6)。
+    fn severity(self) -> fact_schema::Severity {
+        use fact_schema::Severity::*;
+        use ExchangeRateEventKind::*;
+        match self {
+            MaCross => Info,
+            KeyLevelBreakout | KeyLevelBreakdown | SignificantSingleDayMove
+            | TwdStrengthenStreak => Notable,
+        }
+    }
 }
 
 pub struct ExchangeRateCore;
@@ -68,6 +89,17 @@ fn sma(v: &[f64], p: usize) -> Vec<f64> {
     let mut s = 0.0;
     for i in 0..v.len() { s += v[i]; if i >= p { s -= v[i - p]; } out[i] = s / (i + 1).min(p) as f64; }
     out
+}
+
+/// Fusion Layer P1.2b:回 `values[i]` 在尾段 `window` 個資料點(含自己)內的百分位(0.0-1.0)。
+fn percentile_trailing(values: &[f64], i: usize, window: usize) -> f64 {
+    if values.is_empty() || i >= values.len() || window == 0 {
+        return 0.0;
+    }
+    let lo = i.saturating_sub(window - 1);
+    let win = &values[lo..=i];
+    let le = win.iter().filter(|&&v| v <= values[i]).count();
+    le as f64 / win.len() as f64
 }
 
 impl IndicatorCore for ExchangeRateCore {
@@ -95,6 +127,7 @@ impl IndicatorCore for ExchangeRateCore {
             series.push(ExchangeRatePoint {
                 date: input.points[i].date, currency_pair: pair.clone(),
                 rate, change_pct: change, ma_value: mas[i], trend_state: trend,
+                percentile_252: percentile_trailing(&rates, i, 252),
             });
             prev = Some(rate);
         }
@@ -125,11 +158,25 @@ impl IndicatorCore for ExchangeRateCore {
                     metadata: json!({"pair": pair, "direction": dir, "ma_period": params.ma_period}) });
             }
         }
+        // Fusion Layer P1.2:TwdStrengthenStreak — TWD 連續走強(USD/TWD 連續下跌)
+        let mut down_streak = 0usize;
+        for i in 1..series.len() {
+            if series[i].rate < series[i - 1].rate {
+                down_streak += 1;
+            } else {
+                down_streak = 0;
+            }
+            if down_streak == params.strengthen_streak_days {
+                events.push(ExchangeRateEvent { date: series[i].date, kind: ExchangeRateEventKind::TwdStrengthenStreak,
+                    value: down_streak as f64,
+                    metadata: json!({"pair": pair, "streak_days": down_streak, "rate": series[i].rate}) });
+            }
+        }
         Ok(ExchangeRateOutput { stock_id: RESERVED_STOCK_ID.to_string(), timeframe: params.timeframe, series, events })
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
-        output.events.iter().map(|e| Fact {
+        output.events.iter().map(|e| Fact { severity: e.kind.severity(),
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
             source_core: "exchange_rate_core".to_string(), source_version: "0.1.0".to_string(),
             params_hash: None, statement: format!("FX {:?} on {}: value={:.4}", e.kind, e.date, e.value),
@@ -149,5 +196,15 @@ mod tests {
         let input = ExchangeRateSeries { currency: "USD".to_string(), points: vec![] };
         let out = core.compute(&input, ExchangeRateParams::default()).unwrap();
         assert_eq!(out.stock_id, "_global_");
+    }
+
+    #[test]
+    fn severity_and_percentile() {
+        use fact_schema::Severity;
+        assert_eq!(ExchangeRateEventKind::MaCross.severity(), Severity::Info);
+        assert_eq!(ExchangeRateEventKind::TwdStrengthenStreak.severity(), Severity::Notable);
+        let v = vec![32.0, 31.5, 31.0];
+        assert_eq!(percentile_trailing(&v, 0, 252), 1.0);
+        assert!((percentile_trailing(&v, 2, 252) - (1.0 / 3.0)).abs() < 1e-9); // 31.0 為最小
     }
 }

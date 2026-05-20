@@ -215,16 +215,18 @@ Invoke-Phase 1 "Sandbox unit tests(Python + Rust workspace)" {
         Pop-Location
     }
 
-    Write-Step "Python pytest — tests/agg/"
-    pytest tests/agg/ -q 2>&1 | Tee-Object -Variable aggOut
-    if ($LASTEXITCODE -ne 0) { throw "agg tests FAILED" }
+    # 用 `python -m pytest`(非裸 pytest):把 repo root 放 sys.path[0],
+    # 否則 tests/mcp_server/ 這個測試 package 會 shadow 真正的 mcp_server 套件。
+    Write-Step "Python pytest — tests/fusion/"
+    python -m pytest tests/fusion/ -q 2>&1 | Tee-Object -Variable aggOut
+    if ($LASTEXITCODE -ne 0) { throw "fusion tests FAILED" }
 
     Write-Step "Python pytest — tests/mcp_server/(ignore render_tools fastmcp)"
-    pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py -q 2>&1 | Tee-Object -Variable mcpOut
+    python -m pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py -q 2>&1 | Tee-Object -Variable mcpOut
     if ($LASTEXITCODE -ne 0) { throw "mcp_server tests FAILED" }
 
     Write-Step "Python pytest — tests/cross_cores/"
-    pytest tests/cross_cores/ -q 2>&1 | Tee-Object -Variable ccOut
+    python -m pytest tests/cross_cores/ -q 2>&1 | Tee-Object -Variable ccOut
     if ($LASTEXITCODE -ne 0) { throw "cross_cores tests FAILED" }
 
     Write-Pass "All sandbox tests passed"
@@ -243,7 +245,7 @@ Invoke-Phase 2 "Schema health(alembic head / table row counts)" {
     }
 
     Write-Step "alembic head"
-    $expectedHead = "d9e0f1g2h3i4"  # v3.32 head;P1.x v4.x 沒新 migration
+    $expectedHead = "e0f1g2h3i4j5"  # Fusion Layer P0.2 head(facts.severity)
     # alembic current 輸出含 2 行 INFO + 1 行 "<head> (head)";
     # 用 Select-String 對整個輸出 grep,避免 -notmatch 對 string array 的奇怪行為
     $alembicOut = alembic current 2>&1 | Out-String

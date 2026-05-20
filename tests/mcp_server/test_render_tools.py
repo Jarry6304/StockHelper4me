@@ -17,7 +17,7 @@ for p in (str(_SRC_ROOT), str(_REPO_ROOT)):
 
 import pytest
 
-from agg._types import AsOfSnapshot, QueryMetadata
+from fusion.raw._types import AsOfSnapshot, QueryMetadata
 from mcp_server.tools import render as render_tools
 
 
@@ -82,7 +82,7 @@ def patch_fetch(monkeypatch):
         snapshot.as_of = as_of_date
         return snapshot, ohlc
 
-    import agg
+    import fusion.raw as agg
     monkeypatch.setattr(agg, "as_of_with_ohlc", fake_as_of_with_ohlc)
     return snapshot, ohlc
 
@@ -126,7 +126,7 @@ class TestRenderKline:
             snapshot.stock_id = stock_id
             return snapshot, []  # empty OHLC
 
-        import agg
+        import fusion.raw as agg
         monkeypatch.setattr(agg, "as_of_with_ohlc", fake)
 
         result = render_tools.render_kline("2330", "2026-05-13")

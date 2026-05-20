@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from agg.query import as_of
+from fusion.raw.query import as_of
 
 
 class TestInputValidation:

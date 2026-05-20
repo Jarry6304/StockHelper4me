@@ -45,6 +45,42 @@ impl Timeframe {
 }
 
 // ---------------------------------------------------------------------------
+// Severity
+// ---------------------------------------------------------------------------
+
+/// Fact 嚴重度。對齊 m3Spec/fusion_layer.md §7.1。
+///
+/// 由各 Core `produce_facts()` 寫入時自行決定(對齊 fusion_layer §9 #6:severity
+/// 由 cores 決定,Fusion Integration 端口只 filter 不二次判斷)。寫入
+/// `facts.severity` SMALLINT 時走 `as_i16()`(1=info / 2=notable / 3=warning /
+/// 4=critical)。`severity` 不在 `uq_facts_dedup` 內 → Fact identity 不變。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// 一般訊號(預設)。
+    #[default]
+    Info,
+    /// 值得留意。
+    Notable,
+    /// 警示。
+    Warning,
+    /// 嚴重警示。
+    Critical,
+}
+
+impl Severity {
+    /// 對齊 `facts.severity` SMALLINT 編碼:1=info / 2=notable / 3=warning / 4=critical。
+    pub fn as_i16(&self) -> i16 {
+        match self {
+            Severity::Info => 1,
+            Severity::Notable => 2,
+            Severity::Warning => 3,
+            Severity::Critical => 4,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Fact
 // ---------------------------------------------------------------------------
 
@@ -68,6 +104,10 @@ pub struct Fact {
     pub statement: String,
     /// Core 特定的結構化補充資料
     pub metadata: serde_json::Value,
+    /// Fact 嚴重度(對齊 m3Spec/fusion_layer.md §7.1)。由 Core produce_facts() 決定。
+    /// `#[serde(default)]` 讓既有(無此欄)JSON 反序列化退化為 `Severity::Info`。
+    #[serde(default)]
+    pub severity: Severity,
 }
 
 // ---------------------------------------------------------------------------
@@ -243,5 +283,27 @@ mod tests {
         let md = serde_json::json!({"event_kind": "Old"});
         let out = with_event_kind(md, &DummyKind::GoldenCross);
         assert_eq!(out["event_kind"], "GoldenCross");
+    }
+
+    #[test]
+    fn severity_as_i16_encoding() {
+        // 對齊 facts.severity SMALLINT:1=info / 2=notable / 3=warning / 4=critical
+        assert_eq!(Severity::Info.as_i16(), 1);
+        assert_eq!(Severity::Notable.as_i16(), 2);
+        assert_eq!(Severity::Warning.as_i16(), 3);
+        assert_eq!(Severity::Critical.as_i16(), 4);
+    }
+
+    #[test]
+    fn severity_default_is_info() {
+        assert_eq!(Severity::default(), Severity::Info);
+    }
+
+    #[test]
+    fn severity_serde_round_trip() {
+        let s = serde_json::to_string(&Severity::Warning).unwrap();
+        assert_eq!(s, "\"warning\"");
+        let back: Severity = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, Severity::Warning);
     }
 }
