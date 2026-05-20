@@ -44,6 +44,34 @@ def severity_to_label(value: int | None) -> str:
         return "info"
 
 
+def _extract_event_value(metadata: dict) -> float | None:
+    """從 fact metadata 取主要觸發值(常見 key);無則 None。"""
+    for key in ("value", "z", "change_pct", "drawdown_pct", "rate", "drop", "cur_slope"):
+        v = metadata.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+    return None
+
+
+def fact_to_event(row: dict) -> dict:
+    """facts row → 統一 Event schema(對齊 api_roadmap_v1.md §9.2.1)。
+
+    給各 integration 模組共用(market_events / indicator_assembly 等),
+    對齊 fusion_layer §5「共用走 _shared.py」。
+    """
+    metadata = row.get("metadata") or {}
+    fact_date = row.get("fact_date")
+    return {
+        "date": fact_date.isoformat() if fact_date else None,
+        "source": row.get("source_core"),
+        "kind": metadata.get("event_kind"),
+        "severity": severity_to_label(row.get("severity")),
+        "statement": row.get("statement"),
+        "value": _extract_event_value(metadata),
+        "metadata": metadata,
+    }
+
+
 def cluster_price_levels(
     points: list[dict],
     *,

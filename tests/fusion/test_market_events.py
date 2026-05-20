@@ -3,8 +3,8 @@
 from datetime import date
 from unittest.mock import MagicMock
 
-from fusion._shared import severity_to_int, severity_to_label
-from fusion.market_events import _extract_value, _to_event, market_events
+from fusion._shared import fact_to_event, severity_to_int, severity_to_label
+from fusion.market_events import market_events
 
 
 def _mock_conn(rows):
@@ -69,16 +69,16 @@ def test_market_events_empty():
     assert out["by_severity"] == {}
 
 
-def test_extract_value_prefers_numeric_keys():
-    assert _extract_value({"z": 2.5}) == 2.5
-    assert _extract_value({"change_pct": -3}) == -3.0
-    assert _extract_value({"event_kind": "X"}) is None
-    assert _extract_value({"value": True}) is None  # bool 不算數值
+def test_fact_to_event_extracts_numeric_value():
+    assert fact_to_event({"metadata": {"z": 2.5}})["value"] == 2.5
+    assert fact_to_event({"metadata": {"change_pct": -3}})["value"] == -3.0
+    assert fact_to_event({"metadata": {"event_kind": "X"}})["value"] is None
+    assert fact_to_event({"metadata": {"value": True}})["value"] is None  # bool 不算數值
 
 
-def test_to_event_handles_missing_metadata():
-    ev = _to_event({"fact_date": date(2026, 5, 18), "source_core": "taiex_core",
-                    "statement": "s", "severity": 1, "metadata": None})
+def test_fact_to_event_handles_missing_metadata():
+    ev = fact_to_event({"fact_date": date(2026, 5, 18), "source_core": "taiex_core",
+                        "statement": "s", "severity": 1, "metadata": None})
     assert ev["kind"] is None
     assert ev["severity"] == "info"
     assert ev["value"] is None

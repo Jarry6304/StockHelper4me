@@ -96,6 +96,11 @@ mcp.tool(_data_tools.market_dashboard)            # D 視角:大盤環境快照(
 mcp.tool(_data_tools.key_levels)                  # B 視角:個股支撐/壓力(SR + 趨勢線 + Neely Fib)
 mcp.tool(_data_tools.stop_loss_calc)              # B 視角:止損/止盈計算(ATR + key_levels)
 mcp.tool(_data_tools.pattern_scan)                # B 視角:K 線型態 + 支撐/壓力 context
+mcp.tool(_data_tools.indicator_momentum)          # E 視角:動量/趨勢/強度類指標
+mcp.tool(_data_tools.indicator_volatility)        # E 視角:波動/通道類指標
+mcp.tool(_data_tools.indicator_volume)            # E 視角:量能類指標
+mcp.tool(_data_tools.indicator_pattern)           # E 視角:型態/價位類指標
+mcp.tool(_data_tools.indicator_stack)             # E 視角:預設指標組合(preset)
 
 # v3.31:以下 6 個仍在 mcp_server.tools.data 內(dashboard / direct python 用),
 # 但**不再透過 MCP server.py 註冊**,LLM 看不到。stock_snapshot 內部會呼叫

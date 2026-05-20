@@ -12,7 +12,12 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from fusion._shared import ENVIRONMENT_CORES, severity_to_int, severity_to_label
+from fusion._shared import (
+    ENVIRONMENT_CORES,
+    fact_to_event,
+    severity_to_int,
+    severity_to_label,
+)
 from fusion.raw._db import get_connection
 
 
@@ -49,7 +54,7 @@ def market_events(
         if own_conn:
             conn.close()
 
-    events = [_to_event(r) for r in rows]
+    events = [fact_to_event(r) for r in rows]
     by_severity: dict[str, int] = {}
     for e in events:
         by_severity[e["severity"]] = by_severity.get(e["severity"], 0) + 1
@@ -84,25 +89,4 @@ def _fetch_env_events(
         return cur.fetchall()
 
 
-def _to_event(row: dict[str, Any]) -> dict[str, Any]:
-    """facts row → 統一 Event schema(對齊 api_roadmap §9.2.1)。"""
-    metadata = row.get("metadata") or {}
-    fact_date = row.get("fact_date")
-    return {
-        "date": fact_date.isoformat() if fact_date else None,
-        "source": row.get("source_core"),
-        "kind": metadata.get("event_kind"),
-        "severity": severity_to_label(row.get("severity")),
-        "statement": row.get("statement"),
-        "value": _extract_value(metadata),
-        "metadata": metadata,
-    }
-
-
-def _extract_value(metadata: dict[str, Any]) -> float | None:
-    """從 metadata 取主要觸發值(常見 key);無則 None。"""
-    for key in ("value", "z", "change_pct", "drawdown_pct", "rate", "drop", "cur_slope"):
-        v = metadata.get(key)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            return float(v)
-    return None
+# fact → 統一 Event schema 的轉換走 fusion._shared.fact_to_event(共用 helper)。

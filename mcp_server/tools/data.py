@@ -863,6 +863,90 @@ def pattern_scan(
     return _pattern_scan(stock_id, _parse_date(date), database_url=database_url)
 
 
+def _assemble(category: str, stock_id: str, date: str,
+              indicators: list[str] | None, lookback_days: int,
+              database_url: str | None) -> dict[str, Any]:
+    """E 視角 4 個子類工具共用:依 category 過濾 indicators 後組裝。"""
+    from fusion.indicator_assembly import assemble_indicators, category_indicators
+
+    return assemble_indicators(
+        stock_id, _parse_date(date),
+        category_indicators(category, indicators),
+        lookback_days=lookback_days, database_url=database_url,
+    )
+
+
+def indicator_momentum(
+    stock_id: str, date: str, indicators: list[str] | None = None,
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:動量 / 趨勢 / 強度類指標(series + events)。
+
+    可選 indicators:macd / rsi / kd / adx / ma / ichimoku / williams_r /
+    cci / coppock(可帶或不帶 `_core` 後綴);省略 = 全部。
+
+    Returns:
+        {stock_id, as_of, indicator_count, indicators, missing}
+        indicators[<core>] = {value_date, series, events}。
+    """
+    return _assemble("momentum", stock_id, date, indicators, lookback_days, database_url)
+
+
+def indicator_volatility(
+    stock_id: str, date: str, indicators: list[str] | None = None,
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:波動 / 通道類指標(series + events)。
+
+    可選 indicators:bollinger / keltner / donchian / atr;省略 = 全部。
+    """
+    return _assemble("volatility", stock_id, date, indicators, lookback_days, database_url)
+
+
+def indicator_volume(
+    stock_id: str, date: str, indicators: list[str] | None = None,
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:量能類指標(series + events)。
+
+    可選 indicators:obv / vwap / mfi;省略 = 全部。
+    """
+    return _assemble("volume", stock_id, date, indicators, lookback_days, database_url)
+
+
+def indicator_pattern(
+    stock_id: str, date: str, indicators: list[str] | None = None,
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:型態 / 價位類指標(series + events)。
+
+    可選 indicators:candlestick_pattern / support_resistance / trendline;
+    省略 = 全部。
+    """
+    return _assemble("pattern", stock_id, date, indicators, lookback_days, database_url)
+
+
+def indicator_stack(
+    stock_id: str, date: str, preset: str = "default",
+    lookback_days: int = 60, *, database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:預設指標組合(series + events)。
+
+    preset:default(MACD+RSI+KD+Bollinger+MA)/ day_trade(KD+RSI+VWAP+
+    Bollinger)/ swing(MACD+MA+ADX+ATR)/ position(MA+Ichimoku+OBV+SR)。
+
+    Returns:
+        {stock_id, as_of, indicator_count, indicators, missing}
+    """
+    from fusion.indicator_assembly import INDICATOR_STACK_PRESETS, assemble_indicators
+
+    cores = INDICATOR_STACK_PRESETS.get(preset, INDICATOR_STACK_PRESETS["default"])
+    return assemble_indicators(
+        stock_id, _parse_date(date), cores,
+        lookback_days=lookback_days, database_url=database_url,
+    )
+
+
 # ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
