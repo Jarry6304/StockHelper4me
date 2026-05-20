@@ -270,6 +270,50 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.13 — indicator_values 空序列 row shadow 修復(dispatch_indicator,2026-05-20)
+
+接 v4.12 production verify 揭露的 follow-up — `business_indicator_core` 修好後
+`market_dashboard` 仍回 6/7,缺的換成 `commodity_macro_core`。
+
+### Root cause
+
+`dispatch_indicator` 對「空序列 output」也照寫 `indicator_values` row。
+`extract_indicator_meta` 對無日期 output(空序列)fallback `Utc::now()` → 空 row 的
+`value_date` = 跑的當天。`fetch_indicator_latest`(`DISTINCT ON ... value_date DESC`)
+取最新 value_date → 空 row 反而 shadow 掉真實資料 row。
+
+production 實證(`indicator_values` 查詢):
+- `commodity_macro_core`:好 row `value_date=2026-05-15`(series 1389)+ 壞 row
+  `2026-05-17`(series 0,某日空跑留下)→ 取到 05-17 空 row → market_dashboard 判缺。
+- `business_indicator_core`:6 個 05-14~19 空 row(v4.12 修前每天空跑留下)+ 好 row
+  05-20(series 58)→ 好 row 日期最新故僥倖勝出沒中。
+
+### 修法(branch `claude/fix-execution-errors-8E8z4`)
+
+| 檔 | 動作 |
+|---|---|
+| `helpers.rs` | 新 `indicator_output_is_empty(output_json)` — 判 series / series_by_spec / series_by_index 全空。+6 unit test |
+| `dispatcher.rs` | `dispatch_indicator` 空序列 output → skip `write_indicator_value`(facts 本就空,照常 no-op);加 debug log |
+
+### 沙箱驗證
+
+- `cargo build --workspace` ✅ 0 warnings
+- `cargo test --workspace` ✅ **615 passed / 0 failed**(609 → +6)
+
+### user 端收尾
+
+1. 清既有 stale 空 row(一次性):
+   `DELETE FROM indicator_values WHERE jsonb_typeof(value->'series')='array' AND jsonb_array_length(value->'series')=0;`
+2. 重編 `tw_cores`(本修復生效,未來空跑不再留 shadow row)。
+3. `market_dashboard` → component_count: 7。
+
+### 風險
+
+🟢 低:0 alembic / 0 Python / 0 collector.toml。空序列 row 本就對 consumer 無值;
+skip 後 consumer 取到上一筆真實 row(更正確)。Rollback:單 commit `git revert`。
+
+---
+
 ## v4.12 — business_indicator_core empty-series 修復(monitoring_color 格式不匹配,2026-05-20)
 
 接 Fusion Layer P0-P2 production verify 揭露的「已知 follow-up」動工 —
