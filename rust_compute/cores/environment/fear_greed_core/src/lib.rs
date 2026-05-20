@@ -27,13 +27,15 @@ pub struct FearGreedParams {
     pub greed_threshold: f64,
     pub extreme_greed_threshold: f64,
     pub streak_min_days: usize,
+    /// Fusion Layer P1.2:EnterPanic 門檻(深度恐慌,低於 extreme_fear)。
+    pub panic_threshold: f64,
 }
 impl Default for FearGreedParams {
     fn default() -> Self {
         Self { timeframe: Timeframe::Daily,
             extreme_fear_threshold: 25.0, fear_threshold: 45.0,
             greed_threshold: 55.0, extreme_greed_threshold: 75.0,
-            streak_min_days: 5 }
+            streak_min_days: 5, panic_threshold: 10.0 }
     }
 }
 
@@ -47,11 +49,34 @@ pub struct FearGreedOutput {
     pub events: Vec<FearGreedEvent>,
 }
 #[derive(Debug, Clone, Serialize)]
-pub struct FearGreedPoint { pub date: NaiveDate, pub value: f64, pub zone: FearGreedZone }
+pub struct FearGreedPoint {
+    pub date: NaiveDate,
+    pub value: f64,
+    pub zone: FearGreedZone,
+    /// Fusion Layer P1.2b:value 在尾段 252 個資料點內的百分位(0.0-1.0)。
+    pub percentile_252: f64,
+}
 #[derive(Debug, Clone, Serialize)]
 pub struct FearGreedEvent { pub date: NaiveDate, pub kind: FearGreedEventKind, pub value: f64, pub metadata: serde_json::Value }
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub enum FearGreedEventKind { EnteredExtremeFear, ExitedExtremeFear, EnteredExtremeGreed, ExitedExtremeGreed, StreakInZone }
+pub enum FearGreedEventKind {
+    EnteredExtremeFear, ExitedExtremeFear, EnteredExtremeGreed, ExitedExtremeGreed, StreakInZone,
+    // Fusion Layer P1.2:供 Fusion market_events 用
+    EnterPanic, Drop30In5d,
+}
+
+impl FearGreedEventKind {
+    /// Fact 嚴重度 — 本 core 自行映射(對齊 fusion_layer §9 #6)。
+    fn severity(self) -> fact_schema::Severity {
+        use fact_schema::Severity::*;
+        use FearGreedEventKind::*;
+        match self {
+            EnterPanic => Critical,
+            EnteredExtremeFear | EnteredExtremeGreed | Drop30In5d => Warning,
+            ExitedExtremeFear | ExitedExtremeGreed | StreakInZone => Notable,
+        }
+    }
+}
 
 pub struct FearGreedCore;
 impl FearGreedCore { pub fn new() -> Self { FearGreedCore } }
@@ -65,6 +90,17 @@ fn classify(v: f64, p: &FearGreedParams) -> FearGreedZone {
     else { FearGreedZone::ExtremeGreed }
 }
 
+/// Fusion Layer P1.2b:回 `values[i]` 在尾段 `window` 個資料點(含自己)內的百分位(0.0-1.0)。
+fn percentile_trailing(values: &[f64], i: usize, window: usize) -> f64 {
+    if values.is_empty() || i >= values.len() || window == 0 {
+        return 0.0;
+    }
+    let lo = i.saturating_sub(window - 1);
+    let win = &values[lo..=i];
+    let le = win.iter().filter(|&&v| v <= values[i]).count();
+    le as f64 / win.len() as f64
+}
+
 impl IndicatorCore for FearGreedCore {
     type Input = FearGreedIndexSeries;
     type Params = FearGreedParams;
@@ -75,10 +111,19 @@ impl IndicatorCore for FearGreedCore {
     fn warmup_periods(&self, params: &Self::Params) -> usize { params.streak_min_days + 10 }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
-        let series: Vec<FearGreedPoint> = input.points.iter().filter_map(|p| {
-            let v = p.value?;
-            Some(FearGreedPoint { date: p.date, value: v, zone: classify(v, &params) })
-        }).collect();
+        let valid: Vec<(NaiveDate, f64)> =
+            input.points.iter().filter_map(|p| Some((p.date, p.value?))).collect();
+        let values: Vec<f64> = valid.iter().map(|&(_, v)| v).collect();
+        let series: Vec<FearGreedPoint> = valid
+            .iter()
+            .enumerate()
+            .map(|(i, &(date, v))| FearGreedPoint {
+                date,
+                value: v,
+                zone: classify(v, &params),
+                percentile_252: percentile_trailing(&values, i, 252),
+            })
+            .collect();
         let mut events = Vec::new();
         let mut prev_zone: Option<FearGreedZone> = None;
         let mut streak_zone: Option<FearGreedZone> = None;
@@ -103,6 +148,23 @@ impl IndicatorCore for FearGreedCore {
                         metadata: json!({"value": p.value, "threshold": params.extreme_greed_threshold}) });
                 }
             }
+            // Fusion Layer P1.2:EnterPanic(深度恐慌 — value 跌破 panic 門檻當日,edge)
+            if i > 0
+                && series[i - 1].value > params.panic_threshold
+                && p.value <= params.panic_threshold
+            {
+                events.push(FearGreedEvent { date: p.date, kind: FearGreedEventKind::EnterPanic, value: p.value,
+                    metadata: json!({"value": p.value, "threshold": params.panic_threshold}) });
+            }
+            // Fusion Layer P1.2:Drop30In5d(5 日內驟跌 ≥ 30 點,edge — 跨越當日 fire 一次)
+            if i >= 5 {
+                let drop_now = p.value - series[i - 5].value;
+                let drop_prev = if i >= 6 { series[i - 1].value - series[i - 6].value } else { 0.0 };
+                if drop_now <= -30.0 && drop_prev > -30.0 {
+                    events.push(FearGreedEvent { date: p.date, kind: FearGreedEventKind::Drop30In5d, value: drop_now,
+                        metadata: json!({"drop": drop_now, "from": series[i - 5].value, "to": p.value}) });
+                }
+            }
             // Streak detection
             match streak_zone {
                 Some(z) if z == p.zone => {
@@ -120,7 +182,7 @@ impl IndicatorCore for FearGreedCore {
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
-        output.events.iter().map(|e| Fact { severity: fact_schema::Severity::Info,
+        output.events.iter().map(|e| Fact { severity: e.kind.severity(),
             stock_id: output.stock_id.clone(), fact_date: e.date, timeframe: output.timeframe,
             source_core: "fear_greed_core".to_string(), source_version: "0.1.0".to_string(),
             params_hash: None, statement: format!("Fear&Greed {:?} on {}: value={:.1}", e.kind, e.date, e.value),
@@ -140,5 +202,16 @@ mod tests {
         let input = FearGreedIndexSeries { points: vec![] };
         let out = core.compute(&input, FearGreedParams::default()).unwrap();
         assert_eq!(out.stock_id, "_global_");
+    }
+
+    #[test]
+    fn severity_and_percentile() {
+        use fact_schema::Severity;
+        assert_eq!(FearGreedEventKind::EnterPanic.severity(), Severity::Critical);
+        assert_eq!(FearGreedEventKind::Drop30In5d.severity(), Severity::Warning);
+        assert_eq!(FearGreedEventKind::StreakInZone.severity(), Severity::Notable);
+        let v = vec![5.0, 50.0, 95.0];
+        assert_eq!(percentile_trailing(&v, 2, 252), 1.0);
+        assert!((percentile_trailing(&v, 0, 252) - 1.0).abs() < 1e-9);
     }
 }

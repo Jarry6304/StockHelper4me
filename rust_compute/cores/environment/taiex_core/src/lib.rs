@@ -82,6 +82,9 @@ pub struct TaiexPoint {
     pub rsi: f64,
     pub volume_z: f64,
     pub trend_state: TrendState,
+    /// Fusion Layer P1.2b:close 在尾段 252 根 K 棒內的百分位(0.0-1.0),
+    /// 供 Fusion market_dashboard 顯示「52 週區間位置」。
+    pub percentile_252: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,6 +100,22 @@ pub struct TaiexEvent {
 pub enum TaiexEventKind {
     MacdGoldenCross, MacdDeathCross, RsiOverbought, RsiOversold,
     VolumeSurge, NewHigh20d, NewLow20d, BreakdownBelowMa60, BreakoutAboveMa60,
+    // Fusion Layer P1.2:供 Fusion market_events 用
+    Ma20SlopeFlip, Drawdown5pct, NewHigh52w, NewHighAll,
+}
+
+impl TaiexEventKind {
+    /// Fact 嚴重度 — 本 core 自行映射(對齊 fusion_layer §9 #6,各 core 各自決定,無中央表)。
+    fn severity(self) -> fact_schema::Severity {
+        use fact_schema::Severity::*;
+        use TaiexEventKind::*;
+        match self {
+            MacdGoldenCross | MacdDeathCross => Info,
+            RsiOverbought | RsiOversold | VolumeSurge | NewHigh20d | NewLow20d
+            | BreakoutAboveMa60 | Ma20SlopeFlip | NewHigh52w | NewHighAll => Notable,
+            BreakdownBelowMa60 | Drawdown5pct => Warning,
+        }
+    }
 }
 
 pub struct TaiexCore;
@@ -137,6 +156,18 @@ fn wilder_rsi(closes: &[f64], period: usize) -> Vec<f64> {
     let mut rsi = vec![0.0; n];
     for i in warmup..n { rsi[i] = if al[i] < 1e-12 { 100.0 } else { let rs = ag[i] / al[i]; 100.0 - 100.0 / (1.0 + rs) }; }
     rsi
+}
+
+/// Fusion Layer P1.2b:回 `values[i]` 在尾段 `window` 根(含自己)內的百分位(0.0-1.0)。
+fn percentile_trailing(values: &[f64], i: usize, window: usize) -> f64 {
+    if values.is_empty() || i >= values.len() || window == 0 {
+        return 0.0;
+    }
+    let lo = i.saturating_sub(window - 1);
+    let win = &values[lo..=i];
+    let cur = values[i];
+    let le = win.iter().filter(|&&v| v <= cur).count();
+    le as f64 / win.len() as f64
 }
 
 /// 對單一指數(TAIEX 或 TPEx)算 series + events
@@ -180,6 +211,7 @@ fn compute_one(
             macd_line: macd_line[i], macd_signal: macd_signal[i],
             macd_histogram: macd_line[i] - macd_signal[i],
             rsi: rsi[i], volume_z: vol_z[i], trend_state,
+            percentile_252: percentile_trailing(&closes, i, 252),
         });
         prev_close = Some(close);
     }
@@ -230,6 +262,52 @@ fn compute_one(
             }
         }
     }
+    // ── Fusion Layer P1.2:供 Fusion market_events 用的新事件 ────────────────
+    const NEW_52W_LB: usize = 252;
+    // NewHigh52w:level trigger,對齊既有 NewHigh20d 慣例(taiex 為 market-level core)
+    if series.len() > NEW_52W_LB {
+        for i in NEW_52W_LB..series.len() {
+            let max_52w = series[i - NEW_52W_LB..i].iter().map(|p| p.close).fold(f64::NEG_INFINITY, f64::max);
+            if series[i].close > max_52w {
+                events.push(TaiexEvent { date: series[i].date, index_code, kind: TaiexEventKind::NewHigh52w,
+                    value: series[i].close, metadata: json!({"index": label, "close": series[i].close, "lookback": "52w"}) });
+            }
+        }
+    }
+    // NewHighAll:close 突破全期高點
+    for i in 1..series.len() {
+        let max_all = series[..i].iter().map(|p| p.close).fold(f64::NEG_INFINITY, f64::max);
+        if max_all > 0.0 && series[i].close > max_all {
+            events.push(TaiexEvent { date: series[i].date, index_code, kind: TaiexEventKind::NewHighAll,
+                value: series[i].close, metadata: json!({"index": label, "close": series[i].close}) });
+        }
+    }
+    // Ma20SlopeFlip:MA20 斜率變號(edge — flip 本身即離散事件)
+    let ma20 = sma(&closes, 20);
+    for i in 22..series.len() {
+        let prev_slope = ma20[i - 1] - ma20[i - 2];
+        let cur_slope = ma20[i] - ma20[i - 1];
+        if ma20[i - 2] > 0.0 && prev_slope != 0.0 && cur_slope != 0.0
+            && prev_slope.signum() != cur_slope.signum()
+        {
+            events.push(TaiexEvent { date: series[i].date, index_code, kind: TaiexEventKind::Ma20SlopeFlip,
+                value: cur_slope,
+                metadata: json!({"index": label, "prev_slope": prev_slope, "cur_slope": cur_slope}) });
+        }
+    }
+    // Drawdown5pct:自尾段 252 根高點回落 ≥ 5%(edge — 跌破當日 fire 一次)
+    for i in 1..series.len() {
+        let peak_now = series[i.saturating_sub(NEW_52W_LB - 1)..=i].iter().map(|p| p.close).fold(f64::NEG_INFINITY, f64::max);
+        let peak_prev = series[(i - 1).saturating_sub(NEW_52W_LB - 1)..=(i - 1)].iter().map(|p| p.close).fold(f64::NEG_INFINITY, f64::max);
+        let dd_now = if peak_now > 0.0 { (series[i].close - peak_now) / peak_now } else { 0.0 };
+        let dd_prev = if peak_prev > 0.0 { (series[i - 1].close - peak_prev) / peak_prev } else { 0.0 };
+        if dd_now <= -0.05 && dd_prev > -0.05 {
+            events.push(TaiexEvent { date: series[i].date, index_code, kind: TaiexEventKind::Drawdown5pct,
+                value: dd_now * 100.0,
+                metadata: json!({"index": label, "drawdown_pct": dd_now * 100.0, "peak": peak_now}) });
+        }
+    }
+
     (series, events)
 }
 
@@ -261,7 +339,7 @@ impl IndicatorCore for TaiexCore {
     }
 
     fn produce_facts(&self, output: &Self::Output) -> Vec<Fact> {
-        output.events.iter().map(|e| Fact { severity: fact_schema::Severity::Info,
+        output.events.iter().map(|e| Fact { severity: e.kind.severity(),
             stock_id: e.index_code.reserved_stock_id().to_string(),
             fact_date: e.date, timeframe: output.timeframe,
             source_core: "taiex_core".to_string(), source_version: "0.2.0".to_string(),
@@ -297,6 +375,24 @@ mod tests {
     fn reserved_stock_ids() {
         assert_eq!(TaiexIndexCode::Taiex.reserved_stock_id(), "_index_taiex_");
         assert_eq!(TaiexIndexCode::Tpex.reserved_stock_id(), "_index_tpex_");
+    }
+
+    #[test]
+    fn percentile_trailing_basic() {
+        let v = vec![10.0, 20.0, 30.0, 40.0];
+        assert_eq!(percentile_trailing(&v, 3, 252), 1.0); // 40 為最大 → 4/4
+        assert_eq!(percentile_trailing(&v, 0, 252), 1.0); // 視窗只 1 個
+        assert_eq!(percentile_trailing(&v, 1, 252), 1.0); // 20 在 [10,20] → 2/2
+        assert!((percentile_trailing(&v, 1, 1) - 1.0).abs() < 1e-9); // window=1 → 自己
+    }
+
+    #[test]
+    fn event_kind_severity_mapping() {
+        use fact_schema::Severity;
+        assert_eq!(TaiexEventKind::Drawdown5pct.severity(), Severity::Warning);
+        assert_eq!(TaiexEventKind::BreakdownBelowMa60.severity(), Severity::Warning);
+        assert_eq!(TaiexEventKind::MacdGoldenCross.severity(), Severity::Info);
+        assert_eq!(TaiexEventKind::NewHigh52w.severity(), Severity::Notable);
     }
 
     #[test]
