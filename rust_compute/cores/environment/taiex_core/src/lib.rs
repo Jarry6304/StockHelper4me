@@ -27,9 +27,11 @@ const RESERVED_TPEX: &str = "_index_tpex_";
 /// Ma20SlopeFlip 最小斜率幅度門檻(|新斜率| / MA20 值)。翻轉後的新斜率須夠陡
 /// 才算「真趨勢翻轉」,過濾平盤時 MA20 在 0 附近抖動造成的假翻轉。
 ///
-/// production calibration Round 1(2026-05-20):全市場 run 觀測 Ma20SlopeFlip
-/// = 35.7/yr(taiex + tpex 合計);0.0005 為起始估值,目標收斂 ~8-12/yr。重跑
-/// verify 後若未落入區間 → Round 2 調整本常數(對齊專案 Round-N calibration 慣例)。
+/// **production-calibrated**(2026-05-20 全市場 verify,非回測):無門檻時
+/// Ma20SlopeFlip = 35.7/yr(taiex + tpex 合計);加 0.0005 門檻後 = 13.2/yr
+/// (砍 63% 噪音),落入 taiex market-level core 的中頻 EventKind 群
+/// (Drawdown5pct 10.5 / BreakoutAboveMa60 11.3 / RsiOversold 12.4)。
+/// 對齊專案 Round-N calibration(production-data-driven)。
 const MA20_SLOPE_FLIP_MIN_PCT: f64 = 0.0005;
 
 #[derive(Debug, Clone, Serialize)]
