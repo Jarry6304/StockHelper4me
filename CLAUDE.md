@@ -270,6 +270,91 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.14 — Bronze incremental per_stock → all_market 大轉換(2026-05-21)
+
+User 反映 `refresh` 太慢(bronze incremental ~87 分)。Root cause:20 個 per_stock
+dataset 每次 incremental 逐檔打 FinMind(~1300 req/dataset),即使當天無新資料
+也照打。本輪把 **19/20 轉 all_market**(1 req/日)。branch `claude/fix-execution-errors-8E8z4`,9 commits。
+
+### 動工 commits
+
+| commit | 內容 |
+|---|---|
+| `9d0988e` | `scripts/probe_all_market_support.py` — probe per_stock dataset 是否支援 all_market |
+| `483b09a` | 11 個每日 dataset → all_market + segment_days=1 |
+| `b662940` | price_daily + institutional_daily → all_market + segment_days=1 + `universe_filter` |
+| `412579e` | date_segmenter incremental 切段修正 + `scripts/seed_all_market_sync_progress.py` |
+| `cbf7e6e` | `scripts/probe_finmind_date.py` — 單日 FinMind 診斷 |
+| `e1dcead` | segment_days=0 incremental backwards-segment 修復 |
+| `6aaa780` | probe_finmind_date `--multi-days` |
+| `e5d140b` | financial×3 + dividend×2 → all_market + segment_days=1 |
+| (本) | monthly_revenue_v3 → all_market + segment_days=1 + 本 doc |
+
+### FinMind all_market 兩個 quirk(probe 揭露)
+
+1. **單請求只回 1 日**:high-volume dataset(price / institutional / financial /
+   dividend ...)的 all_market 端口,給 date range 只回第一天 → 全部 `segment_days=1`。
+   date_segmenter incremental 也改成依 segment_days 切段(原本 incremental 永遠
+   單段 `[(last_sync+1, today)]`,多日 gap 只會抓到 1 天、其餘靜默遺失)。低頻
+   日曆 TaiwanStockTradingDate 例外(multi-day 正常)。
+2. **per_stock dataset 含權證**:price_daily / institutional_daily all_market 回
+   整個權證宇宙(~41k / ~105k 列/日)→ 新 `ApiConfig.universe_filter` flag,
+   segment_runner 抓回後過濾 stock_id 到 stock_resolver 宇宙(行為對齊 per_stock,
+   0 下游影響)。其餘 17 個 all_market 回 ~1000-2600 檔(真實股、無權證),不需過濾。
+
+### backwards-segment 凍結 bug(本輪揭露 + 修)
+
+incremental 在「已同步到 today」(或同日重跑)時算出 start > today,segment_days=0
+path 寫出 `(start, today)` backwards segment、mark `empty`。因 incremental 永遠
+重算同一個 start = last_sync+1,`is_completed` 永遠命中 → dataset 永久凍結在
+last_sync。production 已累積 **21626 個 backwards row**,把 `trading_calendar`
+凍在 2026-05-15 → 進而讓 `institutional_daily` 的 `pivot_institutional`
+(`filter_to_trading_days` 對齊舊日曆)丟掉 05-16 後的資料。
+
+修:date_segmenter seg=0 incremental `start > today` → 回 `[]`(seg>0 早已由
+`_split_segments` 自然處理)。一次性清理:`DELETE FROM api_sync_progress
+WHERE segment_start > segment_end`。
+
+### 其他修法
+
+- **`_run_post_process` all_market 修正**:dividend_policy 轉 all_market 後
+  `stock_ids` 只有 sentinel → post_process(dividend_policy_merge)逐股 merge
+  需真實清單;`_run_api` 改在 all_market 模式傳 `self._stock_list`。
+- **seed 工具**:`scripts/seed_all_market_sync_progress.py` — per_stock→all_market
+  轉換後 `api_sync_progress` 無 `__ALL__` 進度,incremental 會誤判從未同步、
+  重抓 7 年(~6h)。seed 用各 bronze 表 MAX(date)(clamp 到 today)補 `__ALL__`
+  sentinel 進度。**轉換後必跑一次**。
+
+### 結果
+
+| | 轉換前 | 轉換後 |
+|---|---|---|
+| per_stock dataset | 20 | **1**(只剩 capital_reduction)|
+| all_market* dataset | 14 | **34** |
+| bronze incremental | ~87 分 | **~13 分**(同日重跑實測 91s;representative ~13-25 分)|
+
+`capital_reduction`:FinMind all_market 回 400「parameter data_id can't be none」
+→ 無法轉,維持 per_stock(~1188 req ≈ 12 分,是剩餘 floor)。
+
+### 用戶端 runbook(per_stock→all_market 轉換後)
+
+```bash
+git pull
+python scripts/seed_all_market_sync_progress.py --dry-run   # 預覽
+python scripts/seed_all_market_sync_progress.py             # 補 __ALL__ sentinel 進度
+python src/main.py incremental
+```
+
+### 風險
+
+🟡 中:bronze ingestion 行為改動。sandbox 驗(`tests/bronze/` + `test_date_segmenter`
+20 passed,含 universe_filter 4 + date_segmenter 5 新 test)+ user production 驗
+(institutional all_market 1185-1191 檔/日 → universe_filter 正確;
+trading_calendar 解凍 → 05-21;dividend_policy_merge 跑 1353 檔 → post_process
+修正生效)。0 alembic / 0 Rust。Rollback:collector.toml param_mode 改回 per_stock。
+
+---
+
 ## v4.13 — indicator_values 空序列 row shadow 修復(dispatch_indicator,2026-05-20)
 
 接 v4.12 production verify 揭露的 follow-up — `business_indicator_core` 修好後

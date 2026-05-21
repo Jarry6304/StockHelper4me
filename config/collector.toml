@@ -454,12 +454,12 @@ notes        = "PR #18.5 v3.2 Bronze raw 現金流量表;PR #R3 後 target 升�
 [[api]]
 name         = "monthly_revenue_v3"
 dataset      = "TaiwanStockMonthRevenue"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "monthly_revenue"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 0
+segment_days = 1
 field_rename = {}
 notes        = "PR #18.5 v3.2 Bronze raw 月營收 — raw 欄名(revenue_year/revenue_month,Silver builder 才 rename 為 yoy/mom);PR #R3 後 target 升格主名"
 
