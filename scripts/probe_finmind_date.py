@@ -66,6 +66,8 @@ async def _probe(session, token, dataset, start_date, end_date) -> str:
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", required=True, help="single-day probe 的日期 YYYY-MM-DD")
+    parser.add_argument("--multi-days", type=int, default=7,
+                        help="multi-day probe 視窗天數(預設 7;低頻 dataset 建議用大值如 250)")
     parser.add_argument("--datasets", default=",".join(DEFAULT_DATASETS))
     args = parser.parse_args()
 
@@ -75,7 +77,7 @@ async def main() -> int:
         return 1
 
     single = date.fromisoformat(args.date)
-    multi_start = single - timedelta(days=7)
+    multi_start = single - timedelta(days=args.multi_days)
     datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
 
     print("probe FinMind all_market(no data_id)")
