@@ -74,6 +74,12 @@ class ApiConfig:
     #   "income" | "balance" | "cashflow"
     stmt_type: str | None = None
 
+    # universe_filter：all_market dataset 抓回全市場(含數萬權證)後,過濾
+    # stock_id 到 stock_resolver 解析的宇宙(= per_stock 會迭代的同一份清單)。
+    # 用於 price_daily / institutional_daily — all_market 1 請求/日但只留宇宙內
+    # 股票,避免 Bronze 灌入權證資料。
+    universe_filter: bool = False
+
 
 @dataclass
 class RateLimitConfig:
@@ -313,6 +319,7 @@ def _parse_apis(api_list: list[dict]) -> list[ApiConfig]:
             post_process     = entry.get("post_process"),
             aggregation      = entry.get("aggregation"),
             stmt_type        = entry.get("stmt_type"),
+            universe_filter  = entry.get("universe_filter", False),
             backfill_start_override = entry.get("backfill_start_override"),
         )
         results.append(cfg)

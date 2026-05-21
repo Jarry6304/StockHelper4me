@@ -68,3 +68,77 @@ pub fn extract_indicator_meta(
 
     (stock_id, last_date, timeframe)
 }
+
+/// 判斷 indicator output JSON 是否「無任何序列資料點」。
+///
+/// 空序列 output 不應寫進 `indicator_values`:對所有 consumer 無值,且
+/// `extract_indicator_meta` 對無日期 output 會 fallback 今天 → 空 row 的 `value_date`
+/// 變「今天」→ `fetch_indicator_latest`(`value_date DESC`)把空 row 排到真實資料 row
+/// 前面,consumer 取到空 series 誤判 core「缺資料」(business_indicator /
+/// commodity_macro 曾在 market_dashboard 消失即此因)。
+pub fn indicator_output_is_empty(output_json: &serde_json::Value) -> bool {
+    // 直接 series(多數 indicator + environment core)
+    if let Some(arr) = output_json.get("series").and_then(|v| v.as_array()) {
+        return arr.is_empty();
+    }
+    // 巢狀 series(ma_core: series_by_spec / taiex_core: series_by_index)
+    for key in ["series_by_spec", "series_by_index"] {
+        if let Some(outer) = output_json.get(key).and_then(|v| v.as_array()) {
+            let has_data = outer.iter().any(|entry| {
+                entry
+                    .get("series")
+                    .and_then(|s| s.as_array())
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false)
+            });
+            return !has_data;
+        }
+    }
+    // 無任何序列鍵 → 非序列型 output,不在判定範圍,保守回 false(照常寫入)
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn empty_when_series_array_empty() {
+        assert!(indicator_output_is_empty(&json!({"series": []})));
+    }
+
+    #[test]
+    fn not_empty_when_series_has_points() {
+        assert!(!indicator_output_is_empty(
+            &json!({"series": [{"date": "2026-05-15"}]})
+        ));
+    }
+
+    #[test]
+    fn empty_when_series_by_index_all_empty() {
+        assert!(indicator_output_is_empty(
+            &json!({"series_by_index": [{"index_code": "Taiex", "series": []}]})
+        ));
+    }
+
+    #[test]
+    fn not_empty_when_series_by_index_has_data() {
+        assert!(!indicator_output_is_empty(&json!({
+            "series_by_index": [{"index_code": "Taiex", "series": [{"date": "2026-05-15"}]}]
+        })));
+    }
+
+    #[test]
+    fn not_empty_when_one_series_by_spec_has_data() {
+        assert!(!indicator_output_is_empty(&json!({
+            "series_by_spec": [{"series": []}, {"series": [{"date": "2026-05-15"}]}]
+        })));
+    }
+
+    #[test]
+    fn not_empty_when_no_series_key() {
+        // 非序列型 output(e.g. P2 pattern core 的 generated_at)— 保守不擋
+        assert!(!indicator_output_is_empty(&json!({"generated_at": "2026-05-15"})));
+    }
+}

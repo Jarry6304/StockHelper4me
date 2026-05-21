@@ -1,8 +1,51 @@
-# business_indicator_core empty-series 修復 plan(下個 session)
+# business_indicator_core empty-series 修復 plan
 
-> **狀態**:📋 待動工(下個 session)
+> **狀態**:✅ 已解決 + production verified(2026-05-20)— 真因 = 候選根因 3
+>            (`monitoring_color` 存縮寫 `G/YB/YR/R/B`,`from_label` 原只收英文全名)。
+>            修復後 `tw_cores run-all --skip-stock` 確認 `business_indicator_core`
+>            events 0 → 34、facts_new 34。
 > **發現於**:2026-05-20 Fusion Layer P0-P2 production verify
 > **嚴重度**:🟡 中 — `market_dashboard` 7 個 component 缺 1;非 crash,graceful 降級
+
+## 〇、已修(2026-05-20)
+
+候選根因 **3(monitoring_color 字串不匹配)** 為從 code + schema 文件即可確認的真實
+缺陷,已修:
+
+- **Schema 契約**:`src/schema_pg.sql:213` + `m2Spec/layered_schema_post_refactor.md
+  §3.3` 兩處獨立文件都記 `business_indicator_tw.monitoring_color` 存
+  `R / YR / G / YB / B`。
+- **Bug**:`business_indicator_core::MonitoringColor::from_label` 原本只收
+  `blue / yellow_blue / green / yellow_red / red` 英文全名。`field_mapper` 對此
+  dataset 不做值轉換(只 rename leading/coincident/lagging),Bronze→Silver 原值
+  直通。故若 Bronze 存的是文件契約的 `R/YR/G/YB/B`,`from_label` 每點回 `None`,
+  `compute` 的 `filter_map` 把整批 series 丟光 → 空 series。
+- **修法**(`rust_compute/cores/environment/business_indicator_core/src/lib.rs`):
+  `from_label` 改為同時接受縮寫 `B/YB/G/YR/R`(schema 契約)、英文全名(既有,
+  向下相容)、國發會中文燈號 `藍/黃藍/綠/黃紅/紅`(可帶「燈」字尾);英文 / 縮寫
+  大小寫不敏感 + 前後空白容忍。+2 unit test(`monitoring_color_from_label_abbrev_and_chinese`
+  / `compute_accepts_abbreviated_monitoring_color`)。
+- 附帶修 `environment_loader/src/lib.rs` `BusinessIndicatorRaw.monitoring_color`
+  誤導性註解(原寫只收英文全名)。
+
+### 診斷確認(2026-05-20,`scripts/diag_business_indicator.sql`)
+
+user 跑 §三 診斷,結果確認真因 = 候選 3,其餘候選排除:
+
+| 檢查 | 結果 | 候選判定 |
+|---|---|---|
+| Silver / Bronze row 數 | 各 87 rows,2019-01 ~ 2026-03 | — |
+| 各欄 non-null count | leading / coincident / lagging / monitoring / monitoring_color **全 87/87** | 「某中間欄全 null」**排除** |
+| distinct stock_id | 只有 `_market_` | 候選 1(stock_id 不符)**排除** |
+| 通過 loader filter 的 row 數 | **58**(stock_id=`_market_` + 近 1825 天) | 候選 2(date 太舊)**排除** |
+| `monitoring_color` 值分佈 | `G`×21 / `YB`×20 / `YR`×18 / `R`×17 / `B`×11 | **候選 3 確認** — 存的是 schema 契約縮寫,非英文全名 |
+
+→ loader 撈到 58 個有效 row,但舊 `from_label` 把每個 `G/YB/YR/R/B` 都判 `None`,
+`compute` 的 `filter_map` 丟光整批 → 空 series。本 §〇 上方修法正確且充分。
+
+**✅ Production verified(2026-05-20)**:user 從 `claude/fix-execution-errors-8E8z4`
+重編 `tw_cores` 重跑 `run-all --skip-stock --write` — `business_indicator_core`
+events **0 → 34**、facts_new **34**、iv_rows 1(series 非空)。bug 結案。
 
 ## 一、問題
 

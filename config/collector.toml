@@ -252,12 +252,13 @@ notes        = "個股暫停交易事件;v3.2 B-4 新表;無需 data_id;FinMind 
 [[api]]
 name         = "price_daily"
 dataset      = "TaiwanStockPrice"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "price_daily"
 phase        = 3
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
+universe_filter = true
 field_rename = {"max" = "high", "min" = "low", "Trading_Volume" = "volume", "Trading_turnover" = "turnover", "Trading_money" = "_trading_money", "spread" = "_spread"}
 detail_fields = ["_trading_money", "_spread"]
 notes        = "日K 原始價格。⚠️ v1.2/v1.3 缺 field_rename，max/min/Trading_Volume 會被 PRAGMA 過濾掉"
@@ -291,12 +292,13 @@ notes        = "v3.23 漲跌停價:all_market + segment_days=1(FinMind quirk:mul
 [[api]]
 name         = "institutional_daily"
 dataset      = "TaiwanStockInstitutionalInvestorsBuySell"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "institutional_daily"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
+universe_filter = true
 field_rename = {}
 aggregation  = "pivot_institutional"
 notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營），需 pivot 為 1 列"
@@ -308,23 +310,23 @@ notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營�
 [[api]]
 name         = "securities_lending"
 dataset      = "TaiwanStockSecuritiesLending"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "securities_lending_tw"
 phase        = 5
 enabled      = true
 is_backer    = false
-segment_days = 365
+segment_days = 1
 notes        = "借券成交明細;v3.2 B-5 新表;PK 5 欄(議借/競價 × fee_rate);同股同日多筆;未來餵 margin_daily_derived SBL 6 欄"
 
 [[api]]
 name         = "margin_daily"
 dataset      = "TaiwanStockMarginPurchaseShortSale"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "margin_daily"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
 field_rename = {"MarginPurchaseBuy" = "margin_purchase", "MarginPurchaseSell" = "margin_sell", "MarginPurchaseTodayBalance" = "margin_balance", "ShortSaleBuy" = "short_sale", "ShortSaleSell" = "short_cover", "ShortSaleTodayBalance" = "short_balance", "MarginPurchaseCashRepayment" = "_margin_cash_repay", "MarginPurchaseYesterdayBalance" = "_margin_prev_balance", "MarginPurchaseLimit" = "_margin_limit", "ShortSaleCashRepayment" = "_short_cash_repay", "ShortSaleYesterdayBalance" = "_short_prev_balance", "ShortSaleLimit" = "_short_limit", "OffsetLoanAndShort" = "_offset_loan_short", "Note" = "_note"}
 detail_fields = ["_margin_cash_repay", "_margin_prev_balance", "_margin_limit", "_short_cash_repay", "_short_prev_balance", "_short_limit", "_offset_loan_short", "_note"]
 notes        = "融資融券；16 個 API 欄位 → 6 個直存 + 8 個入 detail JSON"
@@ -332,12 +334,12 @@ notes        = "融資融券；16 個 API 欄位 → 6 個直存 + 8 個入 deta
 [[api]]
 name         = "foreign_holding"
 dataset      = "TaiwanStockShareholding"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "foreign_holding"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
 field_rename = {"ForeignInvestmentShares" = "foreign_holding_shares", "ForeignInvestmentSharesRatio" = "foreign_holding_ratio", "ForeignInvestmentRemainingShares" = "_remaining_shares", "ForeignInvestmentRemainRatio" = "_remain_ratio", "ForeignInvestmentUpperLimitRatio" = "_upper_limit_ratio", "ChineseInvestmentUpperLimitRatio" = "_cn_upper_limit", "NumberOfSharesIssued" = "_total_issued", "RecentlyDeclareDate" = "_declare_date", "InternationalCode" = "_intl_code", "stock_name" = "_stock_name", "note" = "_note"}
 detail_fields = ["_remaining_shares", "_remain_ratio", "_upper_limit_ratio", "_cn_upper_limit", "_total_issued", "_declare_date", "_intl_code", "_stock_name", "_note"]
 notes        = "外資持股"
@@ -345,24 +347,24 @@ notes        = "外資持股"
 [[api]]
 name         = "valuation_daily"
 dataset      = "TaiwanStockPER"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "valuation_daily"
 phase        = 5
 enabled      = true
 is_backer    = false
-segment_days = 365
+segment_days = 1
 field_rename = {"PER" = "per", "PBR" = "pbr"}
 notes        = "本益比 / 殖利率 / 淨值比"
 
 [[api]]
 name         = "day_trading"
 dataset      = "TaiwanStockDayTrading"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "day_trading"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
 field_rename = {"BuyAmount" = "day_trading_buy", "SellAmount" = "day_trading_sell", "BuyAfterSale" = "_day_trading_flag", "Volume" = "_volume"}
 detail_fields = ["_day_trading_flag", "_volume"]
 notes        = "當沖。⚠️ v1.2 把 BuyAfterSale→day_trading_buy 語意錯誤，本檔改為映射 BuyAmount/SellAmount"
@@ -370,12 +372,12 @@ notes        = "當沖。⚠️ v1.2 把 BuyAfterSale→day_trading_buy 語意�
 [[api]]
 name         = "index_weight"
 dataset      = "TaiwanStockMarketValueWeight"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "index_weight_daily"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
 field_rename = {"weight_per" = "weight", "rank" = "_rank", "stock_name" = "_stock_name", "type" = "_index_type"}
 detail_fields = ["_rank", "_stock_name", "_index_type"]
 notes        = "指數成分權重"
@@ -397,12 +399,12 @@ notes        = "指數成分權重"
 [[api]]
 name         = "holding_shares_per_v3"
 dataset      = "TaiwanStockHoldingSharesPer"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "holding_shares_per"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
 field_rename = {"HoldingSharesLevel" = "holding_shares_level"}
 notes        = "PR #18.5 v3.2 Bronze raw — 1 row per holding level(無 aggregation,detail JSONB 攤平到 PK 欄);PR #R3 後 target 升格主名"
 
@@ -609,12 +611,12 @@ notes        = "PR #21-B v3.2 Bronze raw 整體市場融資融券(pivoted by nam
 [[api]]
 name         = "short_sale_securities_lending_v3"
 dataset      = "TaiwanDailyShortSaleBalances"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "short_sale_securities_lending_tw"
 phase        = 5
 enabled      = true
 is_backer    = false
-segment_days = 365
+segment_days = 1
 field_rename = {"SBLShortSalesShortSales" = "short_sales", "SBLShortSalesReturns" = "returns", "SBLShortSalesCurrentDayBalance" = "current_day_balance"}
 notes        = "PR #21-B v3.2 Bronze raw 借券賣出 daily aggregate(來源 TaiwanDailyShortSaleBalances);feed margin_daily_derived sbl_short_sales_* 3 欄"
 
@@ -633,12 +635,12 @@ notes        = "PR #21-B v3.2 Bronze raw 借券賣出 daily aggregate(來源 Tai
 [[api]]
 name         = "loan_collateral_balance"
 dataset      = "TaiwanStockLoanCollateralBalance"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "loan_collateral_balance_tw"
 phase        = 5
 enabled      = true
 is_backer    = false
-segment_days = 365
+segment_days = 1
 field_rename = {"MarginPreviousDayBalance" = "margin_previous_day_balance", "MarginBuy" = "margin_buy", "MarginSell" = "margin_sell", "MarginCashRedemption" = "margin_cash_redemption", "MarginCurrentDayBalance" = "margin_current_day_balance", "MarginNextDayQuota" = "margin_next_day_quota", "SecuritiesFirmLoanPreviousDayBalance" = "firm_loan_previous_day_balance", "SecuritiesFirmLoanBuy" = "firm_loan_buy", "SecuritiesFirmLoanSell" = "firm_loan_sell", "SecuritiesFirmLoanCashRedemption" = "firm_loan_cash_redemption", "SecuritiesFirmLoanReplacement" = "firm_loan_replacement", "SecuritiesFirmLoanCurrentDayBalance" = "firm_loan_current_day_balance", "SecuritiesFirmLoanNextDayQuota" = "firm_loan_next_day_quota", "UnrestrictedLoanPreviousDayBalance" = "unrestricted_loan_previous_day_balance", "UnrestrictedLoanBuy" = "unrestricted_loan_buy", "UnrestrictedLoanSell" = "unrestricted_loan_sell", "UnrestrictedLoanCashRedemption" = "unrestricted_loan_cash_redemption", "UnrestrictedLoanReplacement" = "unrestricted_loan_replacement", "UnrestrictedLoanCurrentDayBalance" = "unrestricted_loan_current_day_balance", "UnrestrictedLoanNextDayQuota" = "unrestricted_loan_next_day_quota", "SecuritiesFinanceSecuredLoanPreviousDayBalance" = "finance_loan_previous_day_balance", "SecuritiesFinanceSecuredLoanBuy" = "finance_loan_buy", "SecuritiesFinanceSecuredLoanSell" = "finance_loan_sell", "SecuritiesFinanceSecuredLoanCashRedemption" = "finance_loan_cash_redemption", "SecuritiesFinanceSecuredLoanReplacement" = "finance_loan_replacement", "SecuritiesFinanceSecuredLoanCurrentDayBalance" = "finance_loan_current_day_balance", "SecuritiesFinanceSecuredLoanNextDayQuota" = "finance_loan_next_day_quota", "SettlementMarginPreviousDayBalance" = "settlement_margin_previous_day_balance", "SettlementMarginBuy" = "settlement_margin_buy", "SettlementMarginSell" = "settlement_margin_sell", "SettlementMarginCashRedemption" = "settlement_margin_cash_redemption", "SettlementMarginReplacement" = "settlement_margin_replacement", "SettlementMarginCurrentDayBalance" = "settlement_margin_current_day_balance", "SettlementMarginNextDayQuota" = "settlement_margin_next_day_quota"}
 notes        = "v3.20 借券抵押餘額;5 大類 × 7 sub-fields = ~34 int 散開為 column;比 margin_daily 豐富 5x"
 
@@ -649,12 +651,12 @@ notes        = "v3.20 借券抵押餘額;5 大類 × 7 sub-fields = ~34 int 散�
 [[api]]
 name         = "block_trade"
 dataset      = "TaiwanStockBlockTrade"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "block_trade_tw"
 phase        = 5
 enabled      = true
 is_backer    = false
-segment_days = 365
+segment_days = 1
 field_rename = {"trade_type" = "trade_type", "price" = "price", "volume" = "volume", "trading_money" = "trading_money"}
 notes        = "v3.20 大宗交易;PK 加 trade_type 維度;institutional smart-money flow 補強"
 
@@ -665,12 +667,12 @@ notes        = "v3.20 大宗交易;PK 加 trade_type 維度;institutional smart-
 [[api]]
 name         = "market_value"
 dataset      = "TaiwanStockMarketValue"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "market_value_daily"
 phase        = 5
 enabled      = true
 is_backer    = false
-segment_days = 365
+segment_days = 1
 field_rename = {"market_value" = "market_value"}
 notes        = "v3.20 個股市值;比 shares × close 推算精確(處理 split / 減資 / 增資)"
 

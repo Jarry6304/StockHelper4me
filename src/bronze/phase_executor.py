@@ -237,6 +237,15 @@ class PhaseExecutor:
             f"Started, total_tasks={len(tasks)}, concurrency={concurrency}"
         )
 
+        # universe_filter dataset(price_daily / institutional_daily):all_market
+        # 一請求回全市場含權證 → 過濾到 stock_resolver 宇宙。其他 dataset universe=None。
+        # 宇宙清單為空(罕見:Phase 1 前 stock_info 未填)→ None,segment_runner 不過濾。
+        universe = (
+            set(self._stock_list)
+            if api_config.universe_filter and self._stock_list
+            else None
+        )
+
         runner = _SegmentRunner(
             api_config=api_config,
             db=self.db,
@@ -247,6 +256,7 @@ class PhaseExecutor:
             tracker=tracker,
             sem=sem,
             dry_run=self.dry_run,
+            universe=universe,
         )
 
         await asyncio.gather(

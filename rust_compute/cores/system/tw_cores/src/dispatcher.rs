@@ -9,7 +9,7 @@ use fact_schema::{params_hash, IndicatorCore, Timeframe};
 use sqlx::postgres::PgPool;
 use std::time::Instant;
 
-use crate::helpers::extract_indicator_meta;
+use crate::helpers::{extract_indicator_meta, indicator_output_is_empty};
 use crate::summary::CoreRunSummary;
 use crate::writers::{write_facts, write_indicator_value, write_structural_snapshot};
 
@@ -44,11 +44,14 @@ where
                 }
             };
             let (stock_id, value_date, timeframe_str) = extract_indicator_meta(&value_json);
+            // 空序列 output 不寫 indicator_values:value_date 會 fallback 今天,
+            // 空 row 反而 shadow 掉真實資料 row(見 helpers::indicator_output_is_empty)。
+            let output_empty = indicator_output_is_empty(&value_json);
 
             let mut iv_written = 0u64;
             let mut fact_written = 0u64;
             if write {
-                if !stock_id.is_empty() {
+                if !stock_id.is_empty() && !output_empty {
                     match write_indicator_value(
                         pool,
                         &stock_id,
@@ -69,6 +72,12 @@ where
                             e
                         ),
                     }
+                } else if output_empty {
+                    tracing::debug!(
+                        core = %core_name,
+                        stock_id,
+                        "skip empty-series indicator_values write"
+                    );
                 }
                 match write_facts(pool, &facts).await {
                     Ok(n) => fact_written = n,
