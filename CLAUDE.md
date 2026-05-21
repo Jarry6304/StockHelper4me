@@ -270,6 +270,66 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.15 — Silver Phase 7a incremental 窗口(2026-05-21)
+
+接 v4.14 後 user 反映 `refresh` 裡 `silver_7a` 每次 ~16 分。Root cause:Phase 7a
+的 15 個 builder 每次都 full rebuild — 各自 `SELECT *` 整張 Bronze(~7 年、數百萬
+列)、重算、重寫全部 Silver row。CLAUDE.md 早記「`--full-rebuild` 目前是唯一支援
+的模式;dirty queue pull 留 PR #20+」— 本輪實作 incremental。
+
+### 設計:READ 窗 / WRITE 窗
+
+`silver/_common.py` 加 incremental 窗口(`set_incremental_window` /
+`clear_incremental_window` / `incremental_read_since`):
+- 7a 非 `full_rebuild` 時 orchestrator set 窗口 → `fetch_bronze` 只讀
+  `date >= today-180`、`upsert_silver` 只寫 `date >= today-30`。
+- READ 窗(180)比 WRITE 窗(30)大 150 天 = warmup → history-dependent builder
+  (`loan_collateral` change_pct、`commodity_macro` 60d z-score)算出來仍正確。
+- WRITE 窗外的舊 row 不動(上次 full rebuild 已寫、窗外不變)→ **第一次
+  incremental 就立即正確,不需 re-backfill**(Silver 表已含完整歷史)。
+
+### builder 覆蓋
+
+`_run_7a_incremental`(orchestrator)set 窗口後跑 builder。13 個 builder 走
+`fetch_bronze` + `upsert_silver` → **0 builder 改動自動套用**。`valuation` /
+`day_trading` 自組 SQL(非 fetch_bronze)→ 各自 query 加 `incremental_read_since()`
+日期過濾。`--full-rebuild` 仍走全量(escape hatch);7b / 7c 不受影響。
+
+### builder history 依賴盤點(Explore agent)
+
+| 依賴 | builder |
+|---|---|
+| NONE(純 per-(stock,date))| institutional / margin / foreign_holding / holding_shares_per / day_trading / monthly_revenue / block_trade + 5 個 market-level |
+| PREV(change_pct vs 前一日)| loan_collateral |
+| WINDOW(60d z-score)| commodity_macro |
+| cross-stock same-date(非 cross-date)| valuation(market_value_weight 分母 = 當日全市場 SUM)|
+
+最大 history 依賴 = commodity_macro 60 天 << warmup 150 天 → 窗口安全。
+
+### 範圍(1 commit / branch `claude/fix-execution-errors-8E8z4`)
+
+| 檔 | 動作 |
+|---|---|
+| `src/silver/_common.py` | incremental 窗口 module state + set/clear/accessor;`fetch_bronze` 加 READ 過濾;`upsert_silver` 加 WRITE 過濾 |
+| `src/silver/orchestrator.py` | `_run_7a_incremental`(READ=180 / WRITE=30);7a 非 full_rebuild 走此路徑 |
+| `src/silver/builders/valuation.py` | `_fetch_market_totals` + `_fetch_per_stock_rows` SQL 加日期過濾 |
+| `src/silver/builders/day_trading.py` | `_fetch_joined_rows` SQL 加日期過濾 |
+| `tests/silver/test_incremental_window.py`(新)| 6 tests |
+
+### 預期
+
+`silver_7a` ~16 分 → ~2-3 分(institutional 341s → ~25s 等)。`refresh` 整體
+(bronze ~13 + silver_7a ~3 + 其他)從 ~106 分 → ~20 分內。
+
+### 風險
+
+🟡 中:Silver 計算行為改動。sandbox 6 tests passed;escape hatch
+`--full-rebuild` 保留;第一次 incremental 立即正確(Silver 已有完整歷史)。
+若 incremental 間隔 > 30 天(WRITE 窗)→ 跑一次 `silver phase 7a --full-rebuild`
+補。0 alembic / 0 Rust。Rollback:單 commit `git revert`。
+
+---
+
 ## v4.14 — Bronze incremental per_stock → all_market 大轉換(2026-05-21)
 
 User 反映 `refresh` 太慢(bronze incremental ~87 分)。Root cause:20 個 per_stock
