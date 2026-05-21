@@ -270,7 +270,16 @@ class PhaseExecutor:
 
         # Post-process(如 dividend_policy_merge)
         if has_post_process:
-            await self._run_post_process(api_config, stock_ids)
+            # all_market 模式 stock_ids 只有 sentinel → post_process 需真實股票
+            # 清單(dividend_policy_merge 逐股 merge,否則整段被 sentinel 跳過)
+            pp_stocks = (
+                self._stock_list
+                if api_config.param_mode in (
+                    "all_market", "all_market_no_id", "all_market_no_end"
+                )
+                else stock_ids
+            )
+            await self._run_post_process(api_config, pp_stocks)
 
     # =========================================================================
     # Phase 4（Rust）

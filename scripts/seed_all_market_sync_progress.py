@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -75,7 +76,11 @@ def main() -> int:
             skipped += 1
             continue
 
-        md = max_date.isoformat() if hasattr(max_date, "isoformat") else str(max_date)
+        # clamp 到 today:target table 可能有未來日(除息日預先公告),seed 未來日
+        # 會讓 incremental 從未來起算、跳過真實缺口。
+        if not hasattr(max_date, "isoformat"):
+            max_date = date.fromisoformat(str(max_date))
+        md = min(max_date, date.today()).isoformat()
         if args.dry_run:
             print(f"  SEED  {api.name:34} → __ALL__ completed up to {md}")
         else:
