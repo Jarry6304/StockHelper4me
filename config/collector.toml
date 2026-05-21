@@ -293,15 +293,14 @@ notes        = "v3.23 漲跌停價:all_market + segment_days=1(FinMind quirk:mul
 name         = "institutional_daily"
 dataset      = "TaiwanStockInstitutionalInvestorsBuySell"
 param_mode   = "all_market"
-target_table = "institutional_daily"
+target_table = "institutional_investors_tw"
 phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 1
 universe_filter = true
-field_rename = {}
-aggregation  = "pivot_institutional"
-notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營），需 pivot 為 1 列"
+field_rename = {"name" = "investor_type"}
+notes        = "v4.16 三大法人:直寫 Bronze-raw institutional_investors_tw(FinMind name→investor_type,不 pivot;silver builder 自己 pivot;Saturday 鬼資料由 silver filter_to_trading_days 過濾)"
 
 # v3.2 B-5(blueprint §附錄 B):借券成交明細
 # 用途:margin_core SBL 6 欄來源(blueprint §2.6.1 加 SBL 6 欄到 margin_daily_derived)
@@ -322,33 +321,31 @@ notes        = "借券成交明細;v3.2 B-5 新表;PK 5 欄(議借/競價 × fee
 name         = "margin_daily"
 dataset      = "TaiwanStockMarginPurchaseShortSale"
 param_mode   = "all_market"
-target_table = "margin_daily"
+target_table = "margin_purchase_short_sale_tw"
 phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 1
-field_rename = {"MarginPurchaseBuy" = "margin_purchase", "MarginPurchaseSell" = "margin_sell", "MarginPurchaseTodayBalance" = "margin_balance", "ShortSaleBuy" = "short_sale", "ShortSaleSell" = "short_cover", "ShortSaleTodayBalance" = "short_balance", "MarginPurchaseCashRepayment" = "_margin_cash_repay", "MarginPurchaseYesterdayBalance" = "_margin_prev_balance", "MarginPurchaseLimit" = "_margin_limit", "ShortSaleCashRepayment" = "_short_cash_repay", "ShortSaleYesterdayBalance" = "_short_prev_balance", "ShortSaleLimit" = "_short_limit", "OffsetLoanAndShort" = "_offset_loan_short", "Note" = "_note"}
-detail_fields = ["_margin_cash_repay", "_margin_prev_balance", "_margin_limit", "_short_cash_repay", "_short_prev_balance", "_short_limit", "_offset_loan_short", "_note"]
+field_rename = {"MarginPurchaseBuy" = "margin_purchase", "MarginPurchaseSell" = "margin_sell", "MarginPurchaseTodayBalance" = "margin_balance", "ShortSaleBuy" = "short_sale", "ShortSaleSell" = "short_cover", "ShortSaleTodayBalance" = "short_balance", "MarginPurchaseCashRepayment" = "margin_cash_repay", "MarginPurchaseYesterdayBalance" = "margin_prev_balance", "MarginPurchaseLimit" = "margin_limit", "ShortSaleCashRepayment" = "short_cash_repay", "ShortSaleYesterdayBalance" = "short_prev_balance", "ShortSaleLimit" = "short_limit", "OffsetLoanAndShort" = "offset_loan_short", "Note" = "note"}
 notes        = "融資融券；16 個 API 欄位 → 6 個直存 + 8 個入 detail JSON"
 
 [[api]]
 name         = "foreign_holding"
 dataset      = "TaiwanStockShareholding"
 param_mode   = "all_market"
-target_table = "foreign_holding"
+target_table = "foreign_investor_share_tw"
 phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 1
-field_rename = {"ForeignInvestmentShares" = "foreign_holding_shares", "ForeignInvestmentSharesRatio" = "foreign_holding_ratio", "ForeignInvestmentRemainingShares" = "_remaining_shares", "ForeignInvestmentRemainRatio" = "_remain_ratio", "ForeignInvestmentUpperLimitRatio" = "_upper_limit_ratio", "ChineseInvestmentUpperLimitRatio" = "_cn_upper_limit", "NumberOfSharesIssued" = "_total_issued", "RecentlyDeclareDate" = "_declare_date", "InternationalCode" = "_intl_code", "stock_name" = "_stock_name", "note" = "_note"}
-detail_fields = ["_remaining_shares", "_remain_ratio", "_upper_limit_ratio", "_cn_upper_limit", "_total_issued", "_declare_date", "_intl_code", "_stock_name", "_note"]
-notes        = "外資持股"
+field_rename = {"ForeignInvestmentShares" = "foreign_holding_shares", "ForeignInvestmentSharesRatio" = "foreign_holding_ratio", "ForeignInvestmentRemainingShares" = "remaining_shares", "ForeignInvestmentRemainRatio" = "remain_ratio", "ForeignInvestmentUpperLimitRatio" = "upper_limit_ratio", "ChineseInvestmentUpperLimitRatio" = "cn_upper_limit", "NumberOfSharesIssued" = "total_issued", "InternationalCode" = "intl_code"}
+notes        = "v4.16 外資持股:直寫 Bronze-raw foreign_investor_share_tw(11 欄 top-level;stock_name/note 同名直通;declare_date 不映射 — FinMind 對未申報回 '0' 會炸 DATE 欄)"
 
 [[api]]
 name         = "valuation_daily"
 dataset      = "TaiwanStockPER"
 param_mode   = "all_market"
-target_table = "valuation_daily"
+target_table = "valuation_per_tw"
 phase        = 5
 enabled      = true
 is_backer    = false
@@ -360,13 +357,12 @@ notes        = "本益比 / 殖利率 / 淨值比"
 name         = "day_trading"
 dataset      = "TaiwanStockDayTrading"
 param_mode   = "all_market"
-target_table = "day_trading"
+target_table = "day_trading_tw"
 phase        = 5
 enabled      = true
 is_backer    = true
 segment_days = 1
-field_rename = {"BuyAmount" = "day_trading_buy", "SellAmount" = "day_trading_sell", "BuyAfterSale" = "_day_trading_flag", "Volume" = "_volume"}
-detail_fields = ["_day_trading_flag", "_volume"]
+field_rename = {"BuyAmount" = "day_trading_buy", "SellAmount" = "day_trading_sell", "BuyAfterSale" = "day_trading_flag", "Volume" = "volume"}
 notes        = "當沖。⚠️ v1.2 把 BuyAfterSale→day_trading_buy 語意錯誤，本檔改為映射 BuyAmount/SellAmount"
 
 [[api]]

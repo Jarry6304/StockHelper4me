@@ -33,6 +33,7 @@ import time
 from typing import Any
 
 from .._common import filter_to_trading_days, get_trading_dates, fetch_bronze, upsert_silver
+from bronze.aggregators.pivot_institutional import INSTITUTIONAL_NAME_MAP
 
 
 logger = logging.getLogger("collector.silver.builders.institutional")
@@ -43,14 +44,11 @@ SILVER_TABLE  = "institutional_daily_derived"
 BRONZE_TABLES = ["institutional_investors_tw", "government_bank_buy_sell_tw"]
 
 
-# investor_type → (buy 欄, sell 欄)— Bronze investor_type 已是英文 key
-INVESTOR_TYPE_MAP: dict[str, tuple[str, str]] = {
-    "Foreign_Investor":     ("foreign_buy",              "foreign_sell"),
-    "Foreign_Dealer_Self":  ("foreign_dealer_self_buy",  "foreign_dealer_self_sell"),
-    "Investment_Trust":     ("investment_trust_buy",     "investment_trust_sell"),
-    "Dealer":               ("dealer_buy",               "dealer_sell"),
-    "Dealer_Hedging":       ("dealer_hedging_buy",       "dealer_hedging_sell"),
-}
+# investor_type → (buy 欄, sell 欄)。
+# v4.16:collector 改直寫 Bronze-raw,investor_type = FinMind 原始 name(中文)。
+# 直接複用 aggregator 的 INSTITUTIONAL_NAME_MAP — 它同時含中文 name 變體與英文
+# key(舊 reverse-pivot gap-fill 資料是英文),single source of truth、零轉寫風險。
+INVESTOR_TYPE_MAP: dict[str, tuple[str, str]] = INSTITUTIONAL_NAME_MAP
 
 
 def _build_gov_bank_lookup(
