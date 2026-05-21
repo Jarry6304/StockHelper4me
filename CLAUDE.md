@@ -270,6 +270,69 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.16 — collector 直寫 Bronze-raw _tw 表(PR #18 遷移收尾,2026-05-21)
+
+接 v4.15 silver_7a 加速後,驗證揭露一個既有(pre-existing)bug:silver 7a 的 5 個
+builder(institutional / valuation / day_trading / margin / foreign_holding)讀的
+是 Bronze-raw `_tw` 表,但 **collector 從沒寫過這些表**。
+
+### Root cause(grep + git log + schema + `_reverse_pivot_lib.py` SPECS 證實)
+
+- collector 寫 v2.0 表(`institutional_daily` / `valuation_daily` / `day_trading`
+  / `margin_daily` / `foreign_holding`);silver 讀 `_tw` 表
+  (`institutional_investors_tw` / `valuation_per_tw` / `day_trading_tw` /
+  `margin_purchase_short_sale_tw` / `foreign_investor_share_tw`)。
+- 兩者之間靠 `scripts/reverse_pivot_*.py`(PR #18 反推工具)橋接 —— 但這些 script
+  是**手動一次性工具,不在 `refresh` 裡**。`_tw` 表停在 04-30~05-07 = 上次有人
+  手動跑的時間。
+- PR #18.5 把 3 個 dataset(holding_shares / financial / monthly_revenue)改成
+  collector 直接 refetch 進 Bronze-raw(`_v3` entries)。這 5 個沒做 → 卡在手動橋。
+- 「institutional FinMind 自身停 2026-04-29」的舊紀錄是誤判:FinMind 有資料,
+  是這座橋沒人走。
+
+### 修法:collector 直寫 `_tw`(做完遷移)
+
+把 5 個 collector entry 的 `target_table` 改成 `_tw` 表,直接餵 silver 讀的表:
+
+| entry | target → | field_rename / 其他 |
+|---|---|---|
+| valuation_daily | `valuation_per_tw` | 不變(PER/PBR→per/pbr,schema 一致)|
+| day_trading | `day_trading_tw` | detail 欄拔 `_` 前綴 → top-level;移除 detail_fields |
+| margin_daily | `margin_purchase_short_sale_tw` | 同上(8 detail 欄拔前綴)|
+| foreign_holding | `foreign_investor_share_tw` | 同上;**declare_date 不映射**(FinMind 未申報回 "0" 會炸 DATE 欄)|
+| institutional_daily | `institutional_investors_tw` | 移除 `pivot_institutional` aggregation(`_tw` 是 raw per-investor);field_rename `name`→`investor_type` |
+
+silver `institutional.py` 的 `INVESTOR_TYPE_MAP` 改用 `INSTITUTIONAL_NAME_MAP`
+(含中文 name 變體 + 英文 key)—— collector 直寫的 investor_type 是 FinMind 中文
+name,舊 reverse-pivot gap-fill 資料是英文,兩者都吃。
+
+### 用戶端 runbook
+
+```bash
+git pull
+# 一次性 gap-fill:reverse-pivot v2.0 → _tw(補 _tw 04-30→05-21 缺口)
+python scripts/reverse_pivot_institutional.py
+python scripts/reverse_pivot_valuation.py
+python scripts/reverse_pivot_day_trading.py
+python scripts/reverse_pivot_margin.py
+python scripts/reverse_pivot_foreign_holding.py
+python src/main.py silver phase 7a      # 讀新鮮 _tw(incremental 30 天窗涵蓋缺口)
+```
+
+之後 `refresh` 的 incremental 會由 collector 直接維護 `_tw` 表,reverse_pivot
+script 從此不需要(只作為本次一次性 gap-fill)。v2.0 表(`institutional_daily` 等)
+變 orphan,留著無害,日後可獨立 DROP。
+
+### 風險
+
+🟡 中:collector bronze 寫入 target 改動。sandbox 驗(config load + silver
+builders import + 21 tests)。declare_date 改 NULL 是已知小損失。
+institutional `_tw` 會有 Saturday 鬼資料(collector 不再 trading-day filter)→
+silver `_pivot` 的 `filter_to_trading_days` 會濾掉,無下游影響。0 alembic / 0 Rust。
+Rollback:單 commit `git revert`(collector.toml + institutional.py)。
+
+---
+
 ## v4.15 — Silver Phase 7a incremental 窗口(2026-05-21)
 
 接 v4.14 後 user 反映 `refresh` 裡 `silver_7a` 每次 ~16 分。Root cause:Phase 7a
