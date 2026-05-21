@@ -252,12 +252,13 @@ notes        = "個股暫停交易事件;v3.2 B-4 新表;無需 data_id;FinMind 
 [[api]]
 name         = "price_daily"
 dataset      = "TaiwanStockPrice"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "price_daily"
 phase        = 3
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
+universe_filter = true
 field_rename = {"max" = "high", "min" = "low", "Trading_Volume" = "volume", "Trading_turnover" = "turnover", "Trading_money" = "_trading_money", "spread" = "_spread"}
 detail_fields = ["_trading_money", "_spread"]
 notes        = "日K 原始價格。⚠️ v1.2/v1.3 缺 field_rename，max/min/Trading_Volume 會被 PRAGMA 過濾掉"
@@ -291,12 +292,13 @@ notes        = "v3.23 漲跌停價:all_market + segment_days=1(FinMind quirk:mul
 [[api]]
 name         = "institutional_daily"
 dataset      = "TaiwanStockInstitutionalInvestorsBuySell"
-param_mode   = "per_stock"
+param_mode   = "all_market"
 target_table = "institutional_daily"
 phase        = 5
 enabled      = true
 is_backer    = true
-segment_days = 365
+segment_days = 1
+universe_filter = true
 field_rename = {}
 aggregation  = "pivot_institutional"
 notes        = "三大法人買賣超；API 每日 3 列（外資/投信/自營），需 pivot 為 1 列"

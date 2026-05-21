@@ -44,6 +44,7 @@ class _SegmentRunner:
         tracker,                          # _DatasetErrorTracker (from phase_executor)
         sem: asyncio.Semaphore,
         dry_run: bool = False,
+        universe: set[str] | None = None,
     ):
         self.api_config = api_config
         self.db = db
@@ -54,6 +55,9 @@ class _SegmentRunner:
         self.tracker = tracker
         self.sem = sem
         self.dry_run = dry_run
+        # universe:非 None 且非空 → all_market 抓回後過濾 stock_id 到此集合
+        # (price_daily / institutional_daily 走 all_market 但排除權證)
+        self.universe = universe
 
     async def run(self, stock_id: str, seg_start: str, seg_end: str) -> None:
         """單一 segment 處理(fetch → transform → aggregate → upsert → mark)。
@@ -166,6 +170,17 @@ class _SegmentRunner:
                 api_config.name, stock_id, seg_start, seg_end,
                 record_count=len(rows),
             )
+
+        # universe filter:all_market dataset(price_daily / institutional_daily)
+        # 一個請求回全市場含數萬權證;只留 stock_resolver 宇宙內股票,行為對齊
+        # per_stock(零下游影響)。universe 空 → 略過(避免清單解析失敗時丟光資料)。
+        if self.universe and rows:
+            before = len(rows)
+            rows = [r for r in rows if r.get("stock_id") in self.universe]
+            if len(rows) != before:
+                logger.debug(
+                    f"[{api_config.name}] universe filter: {before} → {len(rows)} rows"
+                )
 
         # Phase E:聚合策略(pivot / pack)
         if api_config.aggregation and rows:
