@@ -855,6 +855,165 @@ def indicator_stack(
 
 
 # ────────────────────────────────────────────────────────────
+# Fusion Layer · Consolidated 入口(v4.19 — 10 fusion tools → 3)
+#
+# 對齊 stock_snapshot 6→1 整併 pattern。每段獨立 graceful degradation
+# (某子工具失敗 → 該段 = {"error": ...},不影響其他段)。被整併的 10 個
+# fusion function 仍留本檔(dashboard / direct python 用),只是不再 MCP 註冊。
+# ────────────────────────────────────────────────────────────
+
+
+def market_overview(
+    date: str,
+    events_lookback_days: int = 30,
+    severity_min: str = "notable",
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion D 視角:大盤環境總覽(整併 market_dashboard + market_events)。
+
+    - dashboard:7 個 environment cores 最新 headline metric + 歷史百分位
+    - events:[date - events_lookback_days, date] 區間環境事件時間軸
+
+    輸出大小:events 預設 severity_min="notable"(濾掉 info 噪音)+ 30 天窗。
+    要更早 / 更全 → 調大 events_lookback_days 或 severity_min="info"。
+
+    Returns:
+        {as_of, dashboard, events} — 某段失敗 → 該段 = {"error": ..., "section": ...}
+    """
+    from datetime import timedelta
+
+    as_of = _parse_date(date)
+    out: dict[str, Any] = {"as_of": as_of.isoformat()}
+
+    try:
+        from fusion.market_dashboard import market_dashboard as _md
+        out["dashboard"] = _md(as_of, database_url=database_url)
+    except Exception as e:  # noqa: BLE001
+        out["dashboard"] = {"error": f"{type(e).__name__}: {e}", "section": "dashboard"}
+
+    try:
+        from fusion.market_events import market_events as _me
+        start = as_of - timedelta(days=max(1, events_lookback_days))
+        out["events"] = _me(start, as_of, severity_min=severity_min,
+                            database_url=database_url)
+    except Exception as e:  # noqa: BLE001
+        out["events"] = {"error": f"{type(e).__name__}: {e}", "section": "events"}
+
+    return out
+
+
+def stock_levels(
+    stock_id: str,
+    date: str,
+    entry_price: float | None = None,
+    direction: str = "long",
+    atr_mult: float = 2.0,
+    reward_risk_ratio: float = 2.0,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion B 視角:個股價位總覽(整併 key_levels + pattern_scan + stop_loss_calc)。
+
+    - key_levels:支撐 / 壓力(SR + 趨勢線 + Neely Fib,1% cluster)
+    - patterns:近期 K 線型態 + 支撐 / 壓力 context
+    - stop_loss:止損 / 止盈計算 — **僅當給 entry_price 才算**,否則 None
+
+    Returns:
+        {stock_id, as_of, key_levels, patterns, stop_loss} — 某段失敗 → 該段
+        = {"error": ..., "section": ...};未給 entry_price → stop_loss = None。
+    """
+    as_of = _parse_date(date)
+    out: dict[str, Any] = {"stock_id": stock_id, "as_of": as_of.isoformat()}
+
+    try:
+        from fusion.key_levels import key_levels as _kl
+        out["key_levels"] = _kl(stock_id, as_of, database_url=database_url)
+    except Exception as e:  # noqa: BLE001
+        out["key_levels"] = {"error": f"{type(e).__name__}: {e}", "section": "key_levels"}
+
+    try:
+        from fusion.pattern_scan import pattern_scan as _ps
+        out["patterns"] = _ps(stock_id, as_of, database_url=database_url)
+    except Exception as e:  # noqa: BLE001
+        out["patterns"] = {"error": f"{type(e).__name__}: {e}", "section": "patterns"}
+
+    if entry_price is None:
+        out["stop_loss"] = None
+    else:
+        try:
+            from fusion.stop_loss import stop_loss as _sl
+            out["stop_loss"] = _sl(
+                stock_id, entry_price, as_of,
+                direction=direction, atr_mult=atr_mult,
+                reward_risk_ratio=reward_risk_ratio, database_url=database_url,
+            )
+        except Exception as e:  # noqa: BLE001
+            out["stop_loss"] = {"error": f"{type(e).__name__}: {e}", "section": "stop_loss"}
+
+    return out
+
+
+def indicators(
+    stock_id: str,
+    date: str,
+    groups: list[str] | None = None,
+    cores: list[str] | None = None,
+    preset: str | None = None,
+    lookback_days: int = 60,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Fusion E 視角:技術指標 series + events(整併 5 個 indicator_* 工具)。
+
+    整併 indicator_momentum / volatility / volume / pattern / stack。選擇優先序:
+      1. cores  — 明確 core 清單(如 ["macd","rsi","atr"];可省略 `_core` 後綴)
+      2. groups — 子類清單,取自 {momentum, volatility, volume, pattern}
+      3. preset — {default, day_trade, swing, position}
+      4. 皆未給 → preset="default"(MACD+RSI+KD+Bollinger+MA,5 cores)
+
+    輸出大小:預設只回 5 cores。`groups` 多選會把整類 cores 攤開(momentum 一類
+    就 9 cores),series 隨之放大 — 多 group 請求請自行斟酌。
+
+    Returns:
+        {stock_id, as_of, selection, indicator_count, indicators, missing}
+    """
+    from fusion.indicator_assembly import (
+        INDICATOR_STACK_PRESETS, assemble_indicators, category_indicators,
+    )
+
+    as_of = _parse_date(date)
+
+    if cores:
+        selected = [
+            c if str(c).strip().lower().endswith("_core")
+            else f"{str(c).strip().lower()}_core"
+            for c in cores
+        ]
+        selection: dict[str, Any] = {"mode": "cores", "value": selected}
+    elif groups:
+        selected = []
+        seen: set[str] = set()
+        for g in groups:
+            for core in category_indicators(str(g).strip().lower(), None):
+                if core not in seen:
+                    seen.add(core)
+                    selected.append(core)
+        selection = {"mode": "groups", "value": [str(g) for g in groups]}
+    else:
+        key = preset if preset in INDICATOR_STACK_PRESETS else "default"
+        selected = list(INDICATOR_STACK_PRESETS[key])
+        selection = {"mode": "preset", "value": key}
+
+    result = assemble_indicators(
+        stock_id, as_of, selected,
+        lookback_days=lookback_days, database_url=database_url,
+    )
+    result["selection"] = selection
+    return result
+
+
+# ────────────────────────────────────────────────────────────
 # Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)
 # ────────────────────────────────────────────────────────────
 

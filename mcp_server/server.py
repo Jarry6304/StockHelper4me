@@ -3,7 +3,7 @@
 對齊 plan Phase D + MCP v3 重構 + v3.22 B-5 + v3.31 consolidation
 (`/root/.claude/plans/hashed-foraging-pixel.md`)。
 
-**Public toolkit(v3.32:4 + 4 cross-stock factor screens = 8 tools)**:
+**Public toolkit(v4.19:4 + 4 cross-stock + 3 fusion consolidated = 11 tools)**:
 - `neely_forecast`:Neely NEoWave 預測(Tool 1)
 - `kalman_trend`:個股 1-D Kalman trend + 5-class regime(Tool 2)
 - `magic_formula_screen`:Greenblatt 2005 跨股篩選(Tool 3,cross-stock)
@@ -12,11 +12,17 @@
 - `quarterly_screen`:Toolkit B 季度 — F-Score + Low Vol + Industry-Adj GP
 - `annual_low_risk_screen`:Toolkit C 年度 — Long-Term Low Vol + Dividend + 12-1 Mom
 - `monthly_trigger_scan`:Layer 5 — Positive/Negative trigger overlay(conviction adjustment)
+- `market_overview`:D 視角大盤總覽(dashboard + events,v4.19 整併)
+- `stock_levels`:B 視角個股價位(key_levels + patterns + stop_loss,v4.19 整併)
+- `indicators`:E 視角技術指標(groups / cores / preset,v4.19 整併)
 
 **Hidden tools(v3.31 從 MCP 隱藏 — 仍可從 Python 直接呼叫供 dashboard 用)**:
 - stock_health / market_context / loan_collateral_snapshot /
   block_trade_summary / risk_alert_status / commodity_macro_snapshot
   → 全部進 stock_snapshot 內部呼叫
+- (v4.19)market_events / market_dashboard / key_levels / stop_loss_calc /
+  pattern_scan / indicator_momentum/volatility/volume/pattern/stack
+  → 整併進 market_overview / stock_levels / indicators
 
 **Hidden tools(v3.30 暫隱藏 — production silent fail 修好後解開)**:
 - render_kline / render_chip / render_fundamental / render_environment /
@@ -64,22 +70,15 @@ mcp = FastMCP(
         "12-1 Momentum。\n"
         "  8. `monthly_trigger_scan(date)` — Layer 5:Positive(YoY > +30% + "
         "法人買超)/ Negative(YoY < -20% + 法人賣超 > 1%)triggers。\n\n"
-        "**Fusion Layer 整合工具(10 個,跨 core 整合,不引入新規則)**:\n"
-        "  9. `market_events(start_date, end_date, severity_min)` — D 視角:大盤環境"
-        "事件時間軸(severity filter)。\n"
-        "  10. `market_dashboard(date)` — D 視角:7 個 environment cores 大盤快照 + "
-        "歷史百分位。\n"
-        "  11. `key_levels(stock_id, date)` — B 視角:支撐 / 壓力(SR + 趨勢線 + "
-        "Neely Fib,1% cluster)。\n"
-        "  12. `stop_loss_calc(stock_id, entry_price, date)` — B 視角:止損 / 止盈"
-        "計算(ATR + key_levels)。\n"
-        "  13. `pattern_scan(stock_id, date)` — B 視角:K 線型態 + 支撐 / 壓力 context。\n"
-        "  14-17. `indicator_momentum / volatility / volume / pattern(stock_id, "
-        "date)` — E 視角:各子類指標 series + events。\n"
-        "  18. `indicator_stack(stock_id, date, preset)` — E 視角:預設指標組合"
-        "(default / day_trade / swing / position)。\n"
-        "  (`stock_snapshot` 已擴為 10-in-1:加 fundamentals / institutional / "
-        "shareholder / technical_summary 四 section)\n\n"
+        "**Fusion Layer 整合工具(v4.19:10 → 3 consolidated 入口)**:\n"
+        "  9. `market_overview(date, events_lookback_days=30, severity_min='notable')`"
+        " — D 視角:大盤總覽(7 cores dashboard + 環境事件時間軸)。\n"
+        "  10. `stock_levels(stock_id, date, entry_price=None)` — B 視角:個股價位"
+        "(支撐/壓力 + K 線型態 + 止損/止盈;給 entry_price 才算 stop_loss)。\n"
+        "  11. `indicators(stock_id, date, groups=None, cores=None, preset=None)`"
+        " — E 視角:技術指標 series+events;預設 preset='default' 5 cores,"
+        "groups 多選會放大輸出。\n"
+        "  (`stock_snapshot` 為個股 10-in-1 基本資料快照,與上 3 個技術面工具互補)\n\n"
         "設計約束:\n"
         "- 所有 tool 強制 as_of date(回測 / 即時同介面)\n"
         "- facts 已過 look-ahead bias 防衛\n"
@@ -106,17 +105,16 @@ mcp.tool(_data_tools.quarterly_screen)            # Toolkit B:F-Score + Low Vol 
 mcp.tool(_data_tools.annual_low_risk_screen)      # Toolkit C:Long-Term Low Vol + Dividend Yield + 12-1 Mom
 mcp.tool(_data_tools.monthly_trigger_scan)        # Layer 5:Positive/Negative trigger overlay
 
-# Fusion Layer · Integration 端口 tools(P1.4)
-mcp.tool(_data_tools.market_events)               # D 視角:大盤環境事件時間軸(severity filter)
-mcp.tool(_data_tools.market_dashboard)            # D 視角:大盤環境快照(7 cores headline metric)
-mcp.tool(_data_tools.key_levels)                  # B 視角:個股支撐/壓力(SR + 趨勢線 + Neely Fib)
-mcp.tool(_data_tools.stop_loss_calc)              # B 視角:止損/止盈計算(ATR + key_levels)
-mcp.tool(_data_tools.pattern_scan)                # B 視角:K 線型態 + 支撐/壓力 context
-mcp.tool(_data_tools.indicator_momentum)          # E 視角:動量/趨勢/強度類指標
-mcp.tool(_data_tools.indicator_volatility)        # E 視角:波動/通道類指標
-mcp.tool(_data_tools.indicator_volume)            # E 視角:量能類指標
-mcp.tool(_data_tools.indicator_pattern)           # E 視角:型態/價位類指標
-mcp.tool(_data_tools.indicator_stack)             # E 視角:預設指標組合(preset)
+# Fusion Layer · Consolidated 入口(v4.19:10 fusion tools 整併 3 個)
+mcp.tool(_data_tools.market_overview)             # D 視角:大盤總覽(dashboard + events)
+mcp.tool(_data_tools.stock_levels)                # B 視角:個股價位(key_levels + patterns + stop_loss)
+mcp.tool(_data_tools.indicators)                  # E 視角:技術指標(cores / groups / preset 選擇)
+
+# v4.19:以下 10 個 fusion tool function 仍留 mcp_server.tools.data(dashboard /
+# direct python 用),但不再透過 MCP 註冊 — 整併進上方 3 個 consolidated 入口:
+#   market_events / market_dashboard          → market_overview
+#   key_levels / pattern_scan / stop_loss_calc → stock_levels
+#   indicator_momentum/volatility/volume/pattern/stack → indicators
 
 # v3.31:以下 6 個仍在 mcp_server.tools.data 內(dashboard / direct python 用),
 # 但**不再透過 MCP server.py 註冊**,LLM 看不到。stock_snapshot 內部會呼叫
