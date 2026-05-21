@@ -293,9 +293,8 @@ options:
 | Silver derived(per-stock)| 13 | 12 `*_derived` + 4 fwd 表 + `price_limit_merge_events`(Rust)|
 | Cross-Stock Cores(Layer 2.5)| 1 | `magic_formula_ranked_derived`(v3.5 R3 新層,從 Silver 搬出)|
 | M3 Cores(Layer 3)| 3 | `facts` / `indicator_values` / `structural_snapshots`(35 cores 寫入)|
-| 退場候選(spec §7.3)| 5 | `institutional_daily` / `margin_daily` / `foreign_holding` / `day_trading` / `valuation_daily`(對齊 verify_pr19b)|
 | 系統 | 3 | `schema_metadata` / `stock_sync_status` / `api_sync_progress` |
-| **總計** | **~55 張** | v3.10 R6 後 3 張 `_legacy_v2` 永久 DROP |
+| **總計** | **~50 張** | v3.10 R6 DROP 3 張 `_legacy_v2`;v4.17 DROP 5 張 v2.0 orphan |
 
 ---
 
@@ -723,9 +722,6 @@ cd rust_compute && cargo test --release --workspace --no-fail-fast
 
 push 前必跑 verifier(已整合進 Phase 1):
 ```bash
-python scripts/verify_pr18_bronze.py        # 5 張 Bronze 反推 round-trip
-python scripts/verify_pr19b_silver.py       # 5 個簡單 builder 對 v2.0 legacy 等值
-python scripts/verify_pr19c_silver.py       # 5 個 market-level builder
 python scripts/verify_pr20_triggers.py      # 15 個 trigger 整合測試
 ```
 

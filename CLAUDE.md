@@ -125,13 +125,9 @@ Wrapper 是 `scripts/refresh_daily.ps1`,內含 venv 啟動 + .env 載入 + UTF-8
 ### 驗證腳本（push 前必跑）
 
 ```bash
-python scripts/verify_pr18_bronze.py        # Bronze 5 張反推 round-trip(5/5 OK)
-python scripts/verify_pr19b_silver.py       # Silver 5 個簡單 builder 對 v2.0 legacy 等值
-python scripts/verify_pr19c_silver.py       # Silver 5 個 market-level builder
-python scripts/verify_pr19c2_silver.py      # Silver 3 個 PR #18.5 依賴 builder(預設 1101,2317,2330)
 python scripts/verify_pr20_triggers.py      # PR #20:Bronze→Silver dirty trigger 整合測試(15 trigger)
 python scripts/test_28_apis.py              # 28 支 API 連線健檢(需 FINMIND_TOKEN)
-python scripts/inspect_db.py 2330           # ⚠️ v1.6 之前的 SQLite hardcode,v2.0 後不可用,改用 check_all_tables.py
+python scripts/check_all_tables.py          # 全表筆數體檢(v4.18 取代 inspect_db.py)
 ```
 
 ### 測試
@@ -267,6 +263,53 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.18 — 刪除 23 支過期 script(2026-05-21)
+
+接 v4.17 後 user 拍版清掉過期 script。盤點 `scripts/` 49 支,刪 23 支、留 26 支。
+
+### 刪除清單
+
+**Tier A — 確定壞掉 / 已 deprecated(13)**
+- `_reverse_pivot_lib.py` + `reverse_pivot_{institutional,valuation,day_trading,margin,foreign_holding}.py`
+  — 讀 v4.17 已 DROP 的 v2.0 表,CLAUDE.md v4.16 明文「reverse_pivot 從此不需要」
+- `verify_pr18_bronze.py`(跑 reverse-pivot 讀 v2.0)/ `verify_pr19b_silver.py`(`legacy_table` 指向 v2.0)
+- `verify_pr19c2_silver.py`(v3.10 已標 🪦 DEPRECATED)/ `verify_pr19c_silver.py`(import 已刪的 `_reverse_pivot_lib`)
+- `inspect_db.py`(SQLite hardcode,v2.0 後不可用)
+- `cleanup_non_trading_days.py`(一次性,target 含已 DROP 的 institutional_daily)
+- `fix_p1_17_stock_dividend_vf.sql`(檔頭自標 DEPRECATED)
+
+**Tier B1 — 過期一次性 probe/query(5)**
+- `probe_finmind_datasets.py`(PR #21-B,被 `probe_finmind_sponsor_unused.py` 取代)
+- `probe_finmind_taiex_ohlcv.py`(PR #22 動工前 probe)
+- `p2_calibration_data.sql` / `p2_eventkinds.sql`(P2 校準,被 `verify_event_kind_rate.sql` 取代)
+- `discover_split_candidates.sql`(av3 一次性 backfill 盤點)
+
+**Tier B2 — 老但仍可跑(5)**
+- `av3_spot_check.sql` / `av3_spot_check.md` / `run_av3.ps1`(v1.9 後復權驗證)
+- `probe_collector_tier.py`(tier 探測)/ `health_check_mcp_3030.py`(3030 MCP 健檢)
+
+### 連帶清理
+
+| 檔 | 動作 |
+|---|---|
+| `src/bronze/segment_runner.py` | dataset-reject 診斷訊息 `probe_finmind_datasets.py` → `probe_finmind_sponsor_unused.py`(被刪檔 repoint)|
+| `config/collector.toml` | SBL 註解內 probe script 名同步 repoint |
+| `CLAUDE.md` | 「驗證腳本」清單移除 verify_pr18/19b/19c2,inspect_db → check_all_tables;helper 表移 10 列;重跑流程同步 |
+| `README.md` | verify-scripts 清單移除 verify_pr18 / verify_pr19b;退場候選表列移除(5 表 v4.17 已 DROP)|
+
+audit:`src/` Python 不 import `scripts/` → 刪 script 0 程式相依。`segment_runner.py`
+一處診斷字串 + `collector.toml` 一處註解指向被刪 probe(repoint 到保留的
+`probe_finmind_sponsor_unused.py`);`verify_pr19c_silver.py` import 被刪的
+`_reverse_pivot_lib` → 一併刪除(同源 PR #19 一次性驗證)。
+
+### 風險
+
+🟢 低:純刪檔 + 文件/註解同步。`scripts/` 留 26 支 live 工具(test_pipeline 引用 /
+refresh wrapper / generic 診斷 / probe 三支 / verify_pr20+mcp / seed)。
+0 alembic / 0 Rust。Rollback:`git revert`(刪檔可從 git 還原)。
 
 ---
 
@@ -5911,18 +5954,9 @@ cd ..
 
 | 腳本 | 用途 | 範例 |
 |------|------|------|
-| `scripts/inspect_db.py` | 檢視 db 各表筆數 + 特定股票詳細內容 + Phase 6 全市場資料 + 後復權驗證 | `python scripts/inspect_db.py 2330` |
+| `scripts/check_all_tables.py` | 全表筆數體檢(v4.18 取代 inspect_db.py） | `python scripts/check_all_tables.py` |
 | `scripts/drop_table.py` | schema 變更後 drop 指定表（避免重灌全套） | `python scripts/drop_table.py institutional_market_daily` |
 | `scripts/test_28_apis.py` | 28 支 API 連線健檢（urllib + tomllib，零依賴） | 需要 token |
-| `scripts/av3_spot_check.sql` | av3 fwd 後復權驗證(Test 1~6 + 5b)+ 75 處中文段全用 COPY...TO STDOUT 走 server transcode | 不直接跑,改用 wrapper 👇 |
-| `scripts/run_av3.ps1` 🆕 v1.9 | PowerShell wrapper:三層 console UTF-8 + LC_MESSAGES=C + temp file roundtrip 完整修中文亂碼 | `.\scripts\run_av3.ps1` |
-| `scripts/_reverse_pivot_lib.py` 🆕 v1.10 | PR #18 共用 helper:SPECS dict + 5 函式(fetch / reverse / upsert / repivot / assert)。`run_reverse_pivot()` 一站式 runner | 給 5 個 reverse_pivot_*.py 呼叫,不直接跑 |
-| `scripts/reverse_pivot_institutional.py` 🆕 v1.10 | institutional_daily → institutional_investors_tw(1 → 最多 5 法人列) | `python scripts/reverse_pivot_institutional.py --stocks 2330 --dry-run` |
-| `scripts/reverse_pivot_valuation.py` 🆕 v1.10 | valuation_daily → valuation_per_tw(最簡 3 欄 1:1) | `python scripts/reverse_pivot_valuation.py` |
-| `scripts/reverse_pivot_day_trading.py` 🆕 v1.10 | day_trading → day_trading_tw(2 stored + 2 detail unpack) | `python scripts/reverse_pivot_day_trading.py` |
-| `scripts/reverse_pivot_margin.py` 🆕 v1.10 | margin_daily → margin_purchase_short_sale_tw(6 stored + 8 detail unpack) | `python scripts/reverse_pivot_margin.py` |
-| `scripts/reverse_pivot_foreign_holding.py` 🆕 v1.10 | foreign_holding → foreign_investor_share_tw(2 stored + 9 detail unpack) | `python scripts/reverse_pivot_foreign_holding.py` |
-| `scripts/verify_pr18_bronze.py` 🆕 v1.10 | PR #18 5 張 Bronze 反推聚合驗證,印 status table。push 前必跑 5/5 OK | `python scripts/verify_pr18_bronze.py` |
 | `scripts/probe_finmind_sponsor_unused.py` 🆕 v3.13 | 從 422 enum parser 拉 FinMind 全 catalog → diff vs collector.toml unused → probe 看 row+sample;ASCII labels(cp950 console OK)| `python scripts/probe_finmind_sponsor_unused.py --max 5` |
 | `scripts/verify_event_kind_rate.sql` 🆕 v3.14 | per-EventKind 觸發率 verify(對齊 v1.32 ≤ 12/yr/stock 標準),4 sections:per-stock cores / market-level cores / Round 7 verify / milestone 4 variants 顯式(v3.18 加)| `psql $env:DATABASE_URL -f scripts/verify_event_kind_rate.sql` |
 | `scripts/maintain_facts_stats.sql` 🆕 v3.19 | facts / indicator_values / structural_snapshots 三表 ANALYZE + VACUUM stats refresh;Round N DELETE+INSERT 後或 wall time 反常變慢時跑(便宜 ~50-200ms 換 query planner stats) | `psql $env:DATABASE_URL -f scripts/maintain_facts_stats.sql` |
@@ -5947,7 +5981,7 @@ python src\main.py backfill --stocks 2330,2317 --phases 3
 python src\main.py backfill --stocks 2330,2317 --phases 4
 python src\main.py backfill --stocks 2330 --phases 5      # 5 類法人
 python src\main.py backfill --stocks 2330 --phases 6      # macro
-python scripts\inspect_db.py 2330
+python scripts\check_all_tables.py
 ```
 
 預估時間：~6 分鐘（不含 cargo build）。
@@ -5997,7 +6031,7 @@ python scripts\inspect_db.py 2330
 - PowerShell 對 `python -c "..."` 的 nested quotes 處理很差，**inline SQL 改走 `psql $env:DATABASE_URL -c "..."`**（system PG client 比 Python 串好用）
 - User token 環境變數 `$env:FINMIND_TOKEN`，禁止寫進 collector.toml
 - Sandbox 環境連不到 finmindtrade.com，所有 API 實測都得 user 本機跑
-- ⚠️ `scripts/inspect_db.py` v1.6 之前是 SQLite hardcode，v2.0 後仍未升級，**已不可用**；改用 `scripts/check_all_tables.py`（已 PG 版）+ `python src\main.py status`
+- 全表體檢改用 `scripts/check_all_tables.py`（PG 版）+ `python src\main.py status`（v4.18 已刪舊 SQLite hardcode 的 inspect_db.py）
 
 ---
 

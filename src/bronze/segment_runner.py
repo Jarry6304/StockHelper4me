@@ -140,7 +140,7 @@ class _SegmentRunner:
                     f"連續 {self.tracker.streak} 次 HTTP {e.status_code} 錯誤,"
                     f"視為 dataset-level 拒絕(token quota / tier / dataset 下架)。"
                     f"Abort 此 entry 剩餘 tasks;後續 entries 繼續跑。"
-                    f"診斷:`python scripts/probe_finmind_datasets.py` 看 dataset 權限。"
+                    f"診斷:`python scripts/probe_finmind_sponsor_unused.py` 看 dataset 權限。"
                 )
             return None
         except Exception as e:
