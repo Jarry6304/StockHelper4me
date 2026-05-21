@@ -266,6 +266,32 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.20 — baseline migration exec_driver_sql 修復(fresh-init 解鎖,2026-05-21)
+
+User 全砍重跑時 `alembic upgrade head` 從空 DB 炸 —— baseline migration
+`0da6e52171b1` 做 `op.execute(sa.text(schema_sql))`,`sa.text()` 把整份
+`schema_pg.sql` 過 SQLAlchemy statement 編譯,字面 `%`(trigger `format()`
+的 `%I` 等)被當 pyformat 佔位符 → 空參數 → 整份炸。潛伏 bug:baseline 只有
+fresh-init 才整份跑,PR #20 加 trigger(`%I`)後沒人 fresh-init 過。
+
+修法:`op.execute(sa.text(sql))` → `op.get_bind().exec_driver_sql(sql)` ——
+直送 DBAPI、無參數,psycopg 不處理 `%`,schema 原樣交給 PG。
+
+### Fresh-init recovery(DB 已空、baseline 尚未修時)
+
+psql 原生跑 schema 檔不踩此 bug,是最穩的 fresh-init:
+```powershell
+psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f src/schema_pg.sql
+alembic stamp head        # 標記 DB 已在 head,不重跑 migration
+```
+
+### 範圍 / 風險
+
+`alembic/versions/2026_04_28_0da6e52171b1_baseline_schema_v2_0.py` 1 行修法。
+🟢 低:只影響 fresh-init 路徑(baseline upgrade);0 schema 改動、0 既有 DB 影響。
+
+---
+
 ## v4.19 — Fusion Layer MCP toolkit 整併 10 → 3 入口(2026-05-21)
 
 接 v4.18 後 user 拍版把 Fusion Layer 的 10 個 MCP 工具整併成更少入口(對齊

@@ -43,7 +43,10 @@ def _read_schema_sql() -> str:
 def upgrade() -> None:
     """建立 v2.0 完整 schema(對齊 src/schema_pg.sql)。"""
     sql = _read_schema_sql()
-    op.execute(sa.text(sql))
+    # exec_driver_sql 直送 DBAPI,繞過 SQLAlchemy statement 編譯 / %-參數處理。
+    # schema_pg.sql 內有字面 %(trigger format() 的 %I 等),sa.text() 會把它當
+    # pyformat 佔位符 → 空參數 → 整份 fresh-init 炸。psycopg 無參數時不處理 %。
+    op.get_bind().exec_driver_sql(sql)
 
 
 def downgrade() -> None:
