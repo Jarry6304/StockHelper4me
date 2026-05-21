@@ -306,22 +306,36 @@ silver `institutional.py` 的 `INVESTOR_TYPE_MAP` 改用 `INSTITUTIONAL_NAME_MAP
 (含中文 name 變體 + 英文 key)—— collector 直寫的 investor_type 是 FinMind 中文
 name,舊 reverse-pivot gap-fill 資料是英文,兩者都吃。
 
-### 用戶端 runbook
+### 一次性 gap-fill(2026-05-21 已執行 ✅)
 
+`_tw` 表停在 04-30~05-07,collector sync progress 卻在 05-21(遷移前舊 target 的
+進度)→ 直接 incremental 會跳過缺口。原想用 `reverse_pivot_*.py` 補,但它反推
+**全 7 年**(institutional 9.2M 列 upsert,太慢)。改用 collector 自己補缺口:
+
+```sql
+-- 1. 清掉 partial + 把 5 張 _tw 拉回 04-30 基準
+DELETE FROM institutional_investors_tw       WHERE date >= '2026-05-01';
+DELETE FROM valuation_per_tw                 WHERE date >= '2026-05-01';
+DELETE FROM day_trading_tw                   WHERE date >= '2026-05-01';
+DELETE FROM margin_purchase_short_sale_tw    WHERE date >= '2026-05-01';
+DELETE FROM foreign_investor_share_tw        WHERE date >= '2026-05-01';
+-- 2. 重設 5 entry sync progress
+DELETE FROM api_sync_progress WHERE stock_id='__ALL__'
+  AND api_name IN ('institutional_daily','valuation_daily','day_trading','margin_daily','foreign_holding');
+```
 ```bash
-git pull
-# 一次性 gap-fill:reverse-pivot v2.0 → _tw(補 _tw 04-30→05-21 缺口)
-python scripts/reverse_pivot_institutional.py
-python scripts/reverse_pivot_valuation.py
-python scripts/reverse_pivot_day_trading.py
-python scripts/reverse_pivot_margin.py
-python scripts/reverse_pivot_foreign_holding.py
-python src/main.py silver phase 7a      # 讀新鮮 _tw(incremental 30 天窗涵蓋缺口)
+python scripts/seed_all_market_sync_progress.py   # seed __ALL__ 到 _tw MAX(04-30)
+python src/main.py incremental                    # collector all_market 補 05-01~05-21(~83s)
+python src/main.py silver phase 7a                # 讀新鮮 _tw(46s)
 ```
 
-之後 `refresh` 的 incremental 會由 collector 直接維護 `_tw` 表,reverse_pivot
-script 從此不需要(只作為本次一次性 gap-fill)。v2.0 表(`institutional_daily` 等)
-變 orphan,留著無害,日後可獨立 DROP。
+**結果**:5 張 `_tw` + `institutional_daily_derived` / `valuation_daily_derived` 等
+全部到 2026-05-21 ✅。collector 走遷移後新路徑直寫 `_tw` 驗證成功(institutional
+05-01~05-21 各 ~5950 列,investor_type = FinMind 中文 name)。
+
+之後 `refresh` 的 incremental 由 collector 直接維護 `_tw` 表 — reverse_pivot
+script 從此不需要。v2.0 表(`institutional_daily` 等)變 orphan,留著無害,日後
+可獨立 DROP。
 
 ### 風險
 
