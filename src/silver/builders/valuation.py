@@ -35,7 +35,7 @@ import logging
 import time
 from typing import Any
 
-from .._common import upsert_silver
+from .._common import incremental_read_since, upsert_silver
 
 
 logger = logging.getLogger("collector.silver.builders.valuation")
@@ -52,8 +52,11 @@ def _fetch_market_totals(db: Any) -> dict[tuple[str, Any], float]:
     """SELECT (market, date) → SUM(close × total_issued)。
 
     INNER JOIN 三張 — 該股那天沒 close 或沒 total_issued 都不進分母。
-    永遠不傳 stock_ids 過濾(分母必須是全市場)。
+    永遠不傳 stock_ids 過濾(分母必須是全市場)。incremental 窗口下只算 window
+    內的日期 — 每個 date 的分母仍是該日全市場 SUM,weight 正確。
     """
+    since = incremental_read_since()
+    where = "WHERE v.date >= %s " if since is not None else ""
     sql = (
         "SELECT v.market, v.date, "
         "       SUM(pd.close * fis.total_issued) AS total_mv "
@@ -62,9 +65,10 @@ def _fetch_market_totals(db: Any) -> dict[tuple[str, Any], float]:
         "  ON v.market = pd.market AND v.stock_id = pd.stock_id AND v.date = pd.date "
         "JOIN foreign_investor_share_tw fis "
         "  ON v.market = fis.market AND v.stock_id = fis.stock_id AND v.date = fis.date "
+        f"{where}"
         "GROUP BY v.market, v.date"
     )
-    rows = db.query(sql)
+    rows = db.query(sql, [since] if since is not None else None)
     return {(r["market"], r["date"]): r["total_mv"] for r in rows}
 
 
@@ -75,12 +79,17 @@ def _fetch_per_stock_rows(
     讓 stock 不在 price_daily / foreign_investor_share_tw 的也保留 row,
     但 mv 為 NULL → weight 為 NULL)。
     """
-    where = ""
+    where_parts: list[str] = []
     params: list[Any] = []
     if stock_ids:
         placeholders = ",".join(["%s"] * len(stock_ids))
-        where = f"WHERE v.stock_id IN ({placeholders})"
-        params = list(stock_ids)
+        where_parts.append(f"v.stock_id IN ({placeholders})")
+        params.extend(stock_ids)
+    since = incremental_read_since()
+    if since is not None:
+        where_parts.append("v.date >= %s")
+        params.append(since)
+    where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     sql = (
         "SELECT v.market, v.stock_id, v.date, "
         "       v.per, v.pbr, v.dividend_yield, "

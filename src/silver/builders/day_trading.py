@@ -41,7 +41,7 @@ import logging
 import time
 from typing import Any
 
-from .._common import upsert_silver
+from .._common import incremental_read_since, upsert_silver
 
 
 logger = logging.getLogger("collector.silver.builders.day_trading")
@@ -81,12 +81,17 @@ def _fetch_joined_rows(
     歷史 pre-event 日期的 ratio 對齊現在 scale。fwd 不存在(7c 未跑)→ pd_volume NULL
     → ratio NULL。
     """
-    where = ""
+    where_parts: list[str] = []
     params: list[Any] = []
     if stock_ids:
         placeholders = ",".join(["%s"] * len(stock_ids))
-        where = f"WHERE dt.stock_id IN ({placeholders})"
-        params = list(stock_ids)
+        where_parts.append(f"dt.stock_id IN ({placeholders})")
+        params.extend(stock_ids)
+    since = incremental_read_since()
+    if since is not None:
+        where_parts.append("dt.date >= %s")
+        params.append(since)
+    where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     sql = (
         "SELECT dt.market, dt.stock_id, dt.date, "
         "       dt.day_trading_buy, dt.day_trading_sell, "

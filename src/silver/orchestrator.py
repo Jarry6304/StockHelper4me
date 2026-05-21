@@ -33,8 +33,10 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import date, timedelta
 from typing import Any
 
+from ._common import clear_incremental_window, set_incremental_window
 from .builders import BUILDERS
 
 logger = logging.getLogger("collector.silver.orchestrator")
@@ -115,8 +117,8 @@ class SilverOrchestrator:
         Args:
             phases:       e.g. ["7a"], ["7a", "7b"], ["7a", "7b", "7c"]
             stock_ids:    None = 全市場;否則只跑指定股(市場級 builder 一律忽略)
-            full_rebuild: True = 忽略 dirty queue 全部重算(目前唯一支援的模式;
-                          dirty queue pull 留 PR 後續動工)
+            full_rebuild: True = 全量重算所有 Silver row。False(預設)時 7a 走
+                          incremental 窗口(只重算最近 N 天;v4.15),7b/7c 不受影響。
 
         Returns:
             {
@@ -140,6 +142,9 @@ class SilverOrchestrator:
                 results[phase] = await self._run_7c(
                     stock_ids=stock_ids, full_rebuild=full_rebuild,
                 )
+            elif phase == "7a" and not full_rebuild:
+                # v4.15:7a 非 full_rebuild 走 incremental 窗口(不再全量重算)
+                results[phase] = self._run_7a_incremental(stock_ids=stock_ids)
             else:
                 results[phase] = self._run_builders(
                     PHASE_GROUPS[phase],
@@ -162,6 +167,36 @@ class SilverOrchestrator:
         if phase not in PHASE_GROUPS:
             raise ValueError(f"未知 phase: {phase}。可用:{sorted(PHASE_GROUPS)}")
         return PHASE_GROUPS[phase]
+
+    # ----------------------------------------------------------- 7a incremental
+    # v4.15:7a 非 full_rebuild 不再全量重算。READ 窗讀回 Bronze 給 builder
+    # warmup,WRITE 窗只 upsert 最近 N 天 Silver。warmup = READ - WRITE = 150 天
+    # >> 任何 builder 的 history 依賴(最大 commodity_macro 60d z-score)。
+    _INCR_READ_LOOKBACK_DAYS = 180
+    _INCR_WRITE_LOOKBACK_DAYS = 30
+
+    def _run_7a_incremental(
+        self, *, stock_ids: list[str] | None,
+    ) -> dict[str, dict[str, Any]]:
+        """7a 非 full_rebuild:set incremental 窗口 → 跑 builder → clear。
+
+        Silver 表已含完整歷史(過去 full rebuild 留下),incremental 只維護最近
+        WRITE 窗;窗外舊 row 不動、保持正確。要全量重算用 `--full-rebuild`。
+        若 incremental 間隔超過 WRITE 窗(預設 30 天)→ 跑一次 --full-rebuild 補。
+        """
+        today = date.today()
+        read_since  = today - timedelta(days=self._INCR_READ_LOOKBACK_DAYS)
+        write_since = today - timedelta(days=self._INCR_WRITE_LOOKBACK_DAYS)
+        logger.info(
+            f"  [7a] incremental window:read >= {read_since},write >= {write_since}"
+        )
+        set_incremental_window(read_since, write_since)
+        try:
+            return self._run_builders(
+                PHASE_GROUPS["7a"], stock_ids=stock_ids, full_rebuild=False,
+            )
+        finally:
+            clear_incremental_window()
 
     # --------------------------------------------------------------- private
     def _run_builders(

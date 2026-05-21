@@ -26,6 +26,56 @@ logger = logging.getLogger("collector.silver._common")
 
 
 # =============================================================================
+# Incremental window(v4.15:Phase 7a 不再每次 full rebuild)
+# =============================================================================
+# SilverOrchestrator 跑 7a(full_rebuild=False)前 set_incremental_window(),
+# 跑完 clear_incremental_window():
+#   - fetch_bronze 依 _READ_SINCE 過濾 Bronze 讀取(WHERE date >= read_since)
+#   - upsert_silver 依 _WRITE_SINCE 過濾寫入(只 upsert date >= write_since 的 row)
+# READ 窗 >> WRITE 窗:WRITE 窗內的 row 在 READ 窗內有充足 warmup,所以
+# history-dependent builder(loan_collateral change_pct / commodity_macro 60d
+# z-score)算出來仍正確。自組 SQL 的 builder(valuation / day_trading)走
+# incremental_read_since() 自行套日期過濾。
+_READ_SINCE: date | None = None
+_WRITE_SINCE: date | None = None
+
+
+def set_incremental_window(read_since: date | None, write_since: date | None) -> None:
+    """orchestrator 設定 7a incremental 窗口。任一為 None = 不過濾該側。"""
+    global _READ_SINCE, _WRITE_SINCE
+    _READ_SINCE = read_since
+    _WRITE_SINCE = write_since
+
+
+def clear_incremental_window() -> None:
+    """清掉窗口(7a 跑完;7b/7c 與 full_rebuild 走全量)。"""
+    global _READ_SINCE, _WRITE_SINCE
+    _READ_SINCE = None
+    _WRITE_SINCE = None
+
+
+def incremental_read_since() -> date | None:
+    """自組 SQL 的 builder(valuation / day_trading)讀窗口起點用。"""
+    return _READ_SINCE
+
+
+def _row_on_or_after(d: Any, cutoff: date) -> bool:
+    """row 的 date 是否 >= cutoff。date 為 None / 無法解析 → True(不過濾,安全側)。"""
+    if d is None:
+        return True
+    if isinstance(d, str):
+        try:
+            d = date.fromisoformat(d)
+        except ValueError:
+            return True
+    try:
+        return d >= cutoff
+    except TypeError:
+        return True
+
+
+
+# =============================================================================
 # Builder protocol(每個 silver/builders/*.py 必須符合這個介面)
 # =============================================================================
 
@@ -154,6 +204,10 @@ def fetch_bronze(
         all_params.extend(stock_ids)
     if where:
         where_parts.append(f"({where})")
+    if _READ_SINCE is not None:
+        # incremental 窗口(7a 非 full_rebuild):只讀 date >= read_since
+        where_parts.append("date >= %s")
+        all_params.append(_READ_SINCE)
     if where_parts:
         sql += " WHERE " + " AND ".join(where_parts)
     sql += f" ORDER BY {order_by}"
@@ -181,6 +235,14 @@ def upsert_silver(
     """
     if not rows:
         return 0
+
+    # incremental 窗口(7a 非 full_rebuild):只 upsert date >= write_since 的 row。
+    # READ 窗比 WRITE 窗大,builder 算出的 warmup-區 row 在這裡被濾掉不寫
+    # (那些 row 上次 full rebuild 已寫過、窗外不變)。
+    if _WRITE_SINCE is not None:
+        rows = [r for r in rows if _row_on_or_after(r.get("date"), _WRITE_SINCE)]
+        if not rows:
+            return 0
 
     if reset_dirty_on_write:
         for r in rows:
