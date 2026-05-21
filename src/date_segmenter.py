@@ -9,7 +9,9 @@ date_segmenter.py
 分段策略：
   segment_days = 0   → 單段 [(backfill_start, today)]
   segment_days = N   → 按 N 天切段（如 365 表示每次拉一年）
-  incremental 模式   → 單段 [(last_sync+1, today)]
+  incremental 模式   → segment_days=0 單段 [(last_sync+1, today)];
+                       segment_days=N 按 N 天切段（all_market 端口單請求只回
+                       1 日,多日 gap 必須切段否則資料遺失）
 
 特殊處理：
   pack_financial 系列（財報三表）的 date 欄位是「會計期間結束日」而非「公告
@@ -96,6 +98,20 @@ class DateSegmenter:
                     f"-{INCREMENTAL_LOOKBACK_DAYS} 天 → 實際 start={start.isoformat()}"
                 )
 
+            # all_market dataset(segment_days > 0)需逐段:FinMind all_market
+            # 端口單一請求只回 1 日,跨多日 range 會被截斷 → 多日 gap(例如數天
+            # 沒跑 incremental)必須切成 segment_days 大小的多段,否則只會抓到
+            # 1 天、其餘靜默遺失(對齊 price_limit v3.23 quirk)。
+            # segment_days = 0 的 per_stock 低頻 dataset 維持單段(per_stock
+            # 多日 range 正常)。
+            if api_config.segment_days and api_config.segment_days > 0:
+                return self._split_segments(start, today, api_config.segment_days)
+            # segment_days=0:start > today(已同步到 today,或同一天重跑 incremental)
+            # → 回空。否則會寫出 start>end 的 backwards segment,被 mark 成 empty
+            # 後永久 block 該 segment_start 的後續重抓(seg_days>0 已由
+            # _split_segments 自然處理 start>today,seg_days=0 需顯式擋)。
+            if start > today:
+                return []
             return [(start.isoformat(), today.isoformat())]
 
         # ── backfill 模式
