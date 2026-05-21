@@ -70,6 +70,12 @@ class TestIncrementalSegmenting:
         segs = seg.segments(_api(segment_days=1), "incremental", "__ALL__")
         assert segs == []
 
+    def test_segment_days_0_synced_today_yields_no_segments(self):
+        """segment_days=0 已同步到 today → 回空,不寫出 start>end 的 backwards segment。"""
+        seg = _segmenter(last_sync=date.today())
+        segs = seg.segments(_api(segment_days=0), "incremental", "2330")
+        assert segs == []
+
     def test_no_sync_record_splits_from_backfill_start(self):
         """無同步紀錄 → 從 backfill_start 切段(本 case 證實會切很多段)。"""
         seg = _segmenter(last_sync=None)

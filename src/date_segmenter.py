@@ -106,6 +106,12 @@ class DateSegmenter:
             # 多日 range 正常)。
             if api_config.segment_days and api_config.segment_days > 0:
                 return self._split_segments(start, today, api_config.segment_days)
+            # segment_days=0:start > today(已同步到 today,或同一天重跑 incremental)
+            # → 回空。否則會寫出 start>end 的 backwards segment,被 mark 成 empty
+            # 後永久 block 該 segment_start 的後續重抓(seg_days>0 已由
+            # _split_segments 自然處理 start>today,seg_days=0 需顯式擋)。
+            if start > today:
+                return []
             return [(start.isoformat(), today.isoformat())]
 
         # ── backfill 模式
