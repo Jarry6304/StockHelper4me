@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
-- **alembic head**:`e0f1g2h3i4j5`(Fusion Layer P0.2 加 `facts.severity`;v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived;v4.0-v4.11 無 schema migration)
+- **alembic head**:`f1g2h3i4j5k6`(v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`;v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived)
 - **開發分支**:`claude/plan-stockhelper-api-kWh9F`(Fusion Layer P0+P1+P2)→ PR #91 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
@@ -267,6 +267,94 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.17 — refresh_full.ps1 完整補完 wrapper + DROP 5 張 v2.0 orphan 表(2026-05-21)
+
+接 v4.16 PR #18 `_tw` 遷移收尾後,user 拍版兩件收尾:把「完整補完」整條 pipeline
+包成一鍵 wrapper,並 DROP 遷移後變 orphan 的 5 張 v2.0 表。
+
+### 動工 1:`scripts/refresh_full.ps1` — 完整補完 wrapper
+
+整理 `src/main.py` CLI 後,資料流水線分兩類:
+
+| | 類別 1 完整補完 | 類別 2 每日排程 |
+|---|---|---|
+| wrapper | **`refresh_full.ps1`(本 PR 新增)** | `refresh_daily.ps1`(既有)|
+| Bronze | incremental | incremental |
+| Silver 7a | `--full-rebuild` 全表 | incremental 窗口(WRITE 30 天)|
+| Cross 8 | `--full-rebuild` | latest date only |
+| M3 cores | `run-all --write`(全市場)| `run-all --write --dirty` |
+| 時間 | ~40-60 分 | ~15-20 分 |
+
+`refresh_full.ps1` 6 步:Bronze incremental → Silver 7c → 7a `--full-rebuild` →
+7b `--full-rebuild` → Cross-Stock 8 `--full-rebuild` → M3 Cores `run-all --write`。
+沿用 refresh_daily.ps1 的 venv 啟動 / .env 載入 / UTF-8 console / dated log
+(`logs/refresh_full_YYYY-MM-DD.log`)+ per-step summary table。每步獨立,前段
+失敗不阻擋後段(對齊 `python src/main.py refresh` 設計)。
+
+何時用:隔很久沒跑 / 遷移後 / 距上次 incremental > 30 天(Silver 7a WRITE 窗,
+窗外舊 row 不會被 incremental 更新)/ 想確保端到端全部重算。日常每天走
+refresh_daily.ps1 即可(Silver 表已含完整歷史,incremental 窗口每次正確)。
+
+```powershell
+.\scripts\refresh_full.ps1                    # 全市場完整補完
+.\scripts\refresh_full.ps1 -Stocks '2330'     # 限縮股票(開發測試)
+.\scripts\refresh_full.ps1 -SkipCores         # 無 Rust binary 時
+```
+
+### 動工 2:DROP 5 張 v2.0 orphan 表(alembic `f1g2h3i4j5k6`)
+
+v4.16 collector 改直寫 `_tw` Bronze-raw 表後,5 張舊 v2.0 表無人寫、無人讀:
+
+| v2.0 orphan 表 | 主路徑(現役)|
+|---|---|
+| `institutional_daily` | `institutional_investors_tw` |
+| `valuation_daily` | `valuation_per_tw` |
+| `day_trading` | `day_trading_tw` |
+| `margin_daily` | `margin_purchase_short_sale_tw` |
+| `foreign_holding` | `foreign_investor_share_tw` |
+
+audit(grep `src/`):0 處讀寫這 5 張表 — Silver builder 全走 `_tw` 主名;只有
+`reverse_pivot_*` / `verify_pr18` / `verify_pr19b` / `cleanup_non_trading_days`
+等 obsolete 遷移工具引用(DROP 後失效屬已知,本就不再需要)。
+
+### 範圍(1 commit / branch `claude/fix-execution-errors-8E8z4`)
+
+| 檔 | 動作 |
+|---|---|
+| `scripts/refresh_full.ps1`(新)| 完整補完 6 步 wrapper(對齊 refresh_daily.ps1 風格)|
+| `alembic/versions/2026_05_21_f1g2h3i4j5k6_v4_17_drop_v2_orphan_tables.py`(新)| DROP 5 表 CASCADE;downgrade no-op(對齊 PR #R6 destructive 先例)|
+| `src/schema_pg.sql` | 移除 5 個 CREATE TABLE(fresh-init 不再重建)|
+| `scripts/check_all_tables.py` | 表清單移除 5 個 v2.0 表 |
+| `CLAUDE.md` | 本段 + Quick Reference alembic head `e0f1g2h3i4j5` → `f1g2h3i4j5k6` |
+
+### user 端 runbook
+
+```powershell
+git pull
+# 建議先備份(destructive,downgrade 不可回復;v2.0 表資料 = FinMind raw 亦可重抓)
+pg_dump $env:DATABASE_URL -t institutional_daily -t valuation_daily -t day_trading -t margin_daily -t foreign_holding -f backup_v2_orphan_tables.sql
+alembic upgrade head      # head: e0f1g2h3i4j5 → f1g2h3i4j5k6
+```
+
+### 已知小事(user 拍版接受)
+
+- `capital_reduction` 仍是 per_stock(~12 分;FinMind 對它的 all_market 硬回 400,無解)。
+- `foreign_investor_share_tw.declare_date` 新資料為 NULL(FinMind 未申報回 "0" 會炸 DATE 欄,v4.16 已知小損失)。
+
+### 風險
+
+🟡 destructive:
+- `alembic upgrade head` 後 5 表永久 DROP;downgrade no-op(對齊 PR #R6)
+- 建議先 `pg_dump` 備份
+- 既有 Silver pipeline 0 影響(全走 `_tw` 主名)
+- reverse_pivot / verify_pr18 / verify_pr19b 等 obsolete script 引用 v2.0 表,
+  DROP 後失效(已知,本就 obsolete)
+- 0 collector.toml / 0 Rust;`refresh_full.ps1` 純新增
+- Rollback:`git revert` 還原 schema_pg.sql / check_all_tables.py / wrapper;
+  已 DROP 的表須從備份還原
 
 ---
 

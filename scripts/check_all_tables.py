@@ -26,12 +26,9 @@ TABLES_TO_CHECK = [
     "price_weekly_fwd",
     "price_monthly_fwd",
     # Phase 5
-    "institutional_daily",
-    "margin_daily",
-    "foreign_holding",
-    "valuation_daily",
-    "day_trading",
     "index_weight_daily",
+    # v4.17(2026-05-21):5 張 v2.0 表(institutional_daily / margin_daily /
+    #   foreign_holding / valuation_daily / day_trading)永久 DROP — _tw 為主路徑
     # PR #R6(2026-05-16):3 張 _legacy_v2 永久 DROP — holding_shares_per / monthly_revenue / financial_statement 為主路徑
     # Phase 6
     "market_index_us",

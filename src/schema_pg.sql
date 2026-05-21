@@ -312,83 +312,16 @@ CREATE TABLE IF NOT EXISTS price_monthly_fwd (
 -- Phase 5 — CHIP / FUNDAMENTAL
 -- =============================================================================
 
--- 三大法人買賣超(per stock,5 類)
-CREATE TABLE IF NOT EXISTS institutional_daily (
-    market                      TEXT NOT NULL,
-    stock_id                    TEXT NOT NULL,
-    date                        DATE NOT NULL,
-    foreign_buy                 BIGINT,
-    foreign_sell                BIGINT,
-    foreign_dealer_self_buy     BIGINT,
-    foreign_dealer_self_sell    BIGINT,
-    investment_trust_buy        BIGINT,
-    investment_trust_sell       BIGINT,
-    dealer_buy                  BIGINT,
-    dealer_sell                 BIGINT,
-    dealer_hedging_buy          BIGINT,
-    dealer_hedging_sell         BIGINT,
-    source                      TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date)
-);
-
-
--- 融資融券
-CREATE TABLE IF NOT EXISTS margin_daily (
-    market              TEXT NOT NULL,
-    stock_id            TEXT NOT NULL,
-    date                DATE NOT NULL,
-    margin_purchase     BIGINT,
-    margin_sell         BIGINT,
-    margin_balance      BIGINT,
-    short_sale          BIGINT,
-    short_cover         BIGINT,
-    short_balance       BIGINT,
-    detail              JSONB,
-    source              TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date)
-);
-
-
--- 外資持股
-CREATE TABLE IF NOT EXISTS foreign_holding (
-    market                      TEXT NOT NULL,
-    stock_id                    TEXT NOT NULL,
-    date                        DATE NOT NULL,
-    foreign_holding_shares      BIGINT,
-    foreign_holding_ratio       NUMERIC(8, 4),  -- 百分比,如 75.1234
-    detail                      JSONB,
-    source                      TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date)
-);
+-- (v4.17 2026-05-21:institutional_daily / margin_daily / foreign_holding 永久 DROP
+--  — PR #18 _tw 遷移收尾後成 orphan;主路徑 institutional_investors_tw /
+--  margin_purchase_short_sale_tw / foreign_investor_share_tw 為唯一)
 
 
 -- (PR #R6 2026-05-16:holding_shares_per_legacy_v2 永久 DROP;主路徑 holding_shares_per 為唯一)
 
 
--- 本益比 / 殖利率 / 淨值比
-CREATE TABLE IF NOT EXISTS valuation_daily (
-    market          TEXT NOT NULL,
-    stock_id        TEXT NOT NULL,
-    date            DATE NOT NULL,
-    per             NUMERIC(10, 4),
-    dividend_yield  NUMERIC(8, 4),
-    pbr             NUMERIC(10, 4),
-    source          TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date)
-);
-
-
--- 當沖資訊
-CREATE TABLE IF NOT EXISTS day_trading (
-    market              TEXT NOT NULL,
-    stock_id            TEXT NOT NULL,
-    date                DATE NOT NULL,
-    day_trading_buy     BIGINT,            -- 當沖買進金額(v1.6 修正後語意)
-    day_trading_sell    BIGINT,            -- 當沖賣出金額
-    detail              JSONB,
-    source              TEXT NOT NULL DEFAULT 'finmind',
-    PRIMARY KEY (market, stock_id, date)
-);
+-- (v4.17 2026-05-21:valuation_daily / day_trading 永久 DROP — PR #18 _tw 遷移
+--  收尾後成 orphan;主路徑 valuation_per_tw / day_trading_tw 為唯一)
 
 
 -- 指數成分權重
