@@ -13,8 +13,8 @@ from db import create_writer
 
 TABLES_TO_CHECK = [
     # Phase 0 / 1
-    "trading_calendar",
-    "stock_info",
+    "trading_date_ref",
+    "stock_info_ref",
     "market_index_tw",
     # Phase 2
     "price_adjustment_events",
