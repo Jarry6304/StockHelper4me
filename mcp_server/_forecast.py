@@ -674,9 +674,11 @@ def _compute_quality_caveat(
             if current_price > fib_max + buffer or current_price < fib_min - buffer:
                 is_decoupled = True
                 warnings.append(
-                    f"current_price={current_price:.2f} 在 primary scenario fib zones "
-                    f"[{fib_min:.2f}, {fib_max:.2f}] 之外(+/- 50% buffer)— forecasts 區間"
-                    f"基於短期 swing anchor 投影,不適用當前 price level。"
+                    f"current_price={current_price:.2f} 落在 primary scenario Fib 投影區 "
+                    f"[{fib_min:.2f}, {fib_max:.2f}] 外(±50% buffer)。Neely 引擎對此股近期"
+                    f"結構未產出有效 scenario(NEoWave validator 依 Ch5 規則拒絕),primary "
+                    f"錨在較早波段 — 對齊 neely_core spec §7.2,此屬合法的「Neely 對現況無解」"
+                    f"結果,非資料問題。此股當前不適用 Neely 波浪預測,forecasts 區間請忽略。"
                 )
 
     return {

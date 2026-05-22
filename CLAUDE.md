@@ -266,6 +266,35 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.22 — Neely quality_caveat 警告文字 spec 對齊(2026-05-22)
+
+User 全砍重建後 MCP `neely_forecast` 對 3030 / 2330 仍報 Fib 投影脫鉤(現價 381 /
+2230,primary Fib 區 65-80 / 533-862)。完整診斷鏈確認:**資料 100% 正常**
+(`price_daily_fwd` / `price_weekly_fwd` 都到當前週)— 是 Neely 引擎對這類「急漲股」
+近期結構產不出有效 scenario(3030 weekly forest 只剩 3 個、全停在 2020-2022)。
+
+查 `neely_core_architecture.md §7.2`(Hybrid 失敗模型):Validator 拒絕不符 NEoWave
+Ch5 Essential Rules 的結構 → 無有效 scenario 是**明文合法的「Neely 認為現在無解」
+結果**(§7.4 Round 3 `awaiting_l_label` 同理)。→ 引擎嚴格拒絕 = NEoWave 設計如此,
+非 bug;要強行讓引擎對 3030 產近期 scenario 須放寬 Ch5 = 違反 NEoWave spec。
+
+### 修法
+
+`_forecast.py` `_compute_quality_caveat` 的脫鉤警告文字改 spec-grounded —— 原文
+「基於短期 swing anchor 投影」(誤導成可修的資料/picker bug),改明說「Neely 引擎
+對近期結構無有效 scenario、對齊 spec §7.2、非資料問題、forecasts 請忽略」。
+`is_usable=false` 行為與 picker 邏輯不變。
+
+### 結論
+
+Neely 對 3030/2330 這類急漲股被 flag `is_usable=false` 是**設計內、spec 合法**行為。
+`quality_caveat` 誠實標示「不可用」即正確處理。其餘 MCP 工具(kalman / stock_snapshot
+/ indicators / market_overview / stock_levels / 4 screens)資料正常。
+
+🟢 低風險:純 MCP layer 警告字串。0 Rust / 0 schema / 0 alembic。
+
+---
+
 ## v4.21 — schema_pg.sql 補回 M3 + v3.32 共 14 張表(fresh-init 完整性,2026-05-21)
 
 User 全砍重建後 `tw_cores run-all` 所有 core `facts_new=0` —— root cause:`schema_pg.sql`
