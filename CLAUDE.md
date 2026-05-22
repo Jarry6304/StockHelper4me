@@ -266,6 +266,32 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.21 — schema_pg.sql 補回 M3 + v3.32 共 14 張表(fresh-init 完整性,2026-05-21)
+
+User 全砍重建後 `tw_cores run-all` 所有 core `facts_new=0` —— root cause:`schema_pg.sql`
+自始**漏了 14 張表**:
+- M3 三表 `facts` / `indicator_values` / `structural_snapshots`(migration `w2x3y4z5a6b7`)
+- v3.32 cross_cores 11 表(10 `*_ranked_derived` + `monthly_trigger_signals_derived`,
+  migration `d9e0f1g2h3i4`)
+
+這些表只在 alembic migration 建、從沒回寫 `schema_pg.sql`。平時不影響(各 migration
+自己建表),但 fresh-init 走 `psql -f schema_pg.sql` 就漏建 → M3 cores 寫不進 facts、
+cross_cores 寫不進 ranked 表 → MCP 讀到空。
+
+### 修法
+
+| 動作 | 內容 |
+|---|---|
+| 補 14 張表 DDL | 從對應 migration verbatim 抄;`facts.severity`(e0f1g2h3i4j5)內聯;v3.32 `_BASE_TAIL` 展開 |
+| 21 個 trigger → `CREATE OR REPLACE TRIGGER` | 讓 `psql -f schema_pg.sql` 可在既有 DB 重跑(idempotent),不撞「trigger already exists」 |
+
+### 風險
+
+🟢 低:純補 DDL,14 張表全 `CREATE TABLE IF NOT EXISTS`;既有 DB 重跑只新增缺的表、
+0 既有資料影響。`CREATE OR REPLACE TRIGGER` 為 PG 14+ 標準語法。
+
+---
+
 ## v4.20 — baseline migration exec_driver_sql 修復(fresh-init 解鎖,2026-05-21)
 
 User 全砍重跑時 `alembic upgrade head` 從空 DB 炸 —— baseline migration

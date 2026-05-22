@@ -989,64 +989,64 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- 10 個 generic trigger
-CREATE TRIGGER mark_institutional_derived_dirty
+CREATE OR REPLACE TRIGGER mark_institutional_derived_dirty
     AFTER INSERT OR UPDATE ON institutional_investors_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('institutional_daily_derived');
 
-CREATE TRIGGER mark_margin_derived_from_margin_dirty
+CREATE OR REPLACE TRIGGER mark_margin_derived_from_margin_dirty
     AFTER INSERT OR UPDATE ON margin_purchase_short_sale_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('margin_daily_derived');
 
-CREATE TRIGGER mark_margin_derived_from_sbl_dirty
+CREATE OR REPLACE TRIGGER mark_margin_derived_from_sbl_dirty
     AFTER INSERT OR UPDATE ON securities_lending_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('margin_daily_derived');
 
-CREATE TRIGGER mark_foreign_holding_derived_dirty
+CREATE OR REPLACE TRIGGER mark_foreign_holding_derived_dirty
     AFTER INSERT OR UPDATE ON foreign_investor_share_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('foreign_holding_derived');
 
-CREATE TRIGGER mark_holding_shares_per_derived_dirty
+CREATE OR REPLACE TRIGGER mark_holding_shares_per_derived_dirty
     AFTER INSERT OR UPDATE ON holding_shares_per
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('holding_shares_per_derived');
 
-CREATE TRIGGER mark_day_trading_derived_dirty
+CREATE OR REPLACE TRIGGER mark_day_trading_derived_dirty
     AFTER INSERT OR UPDATE ON day_trading_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('day_trading_derived');
 
-CREATE TRIGGER mark_valuation_derived_dirty
+CREATE OR REPLACE TRIGGER mark_valuation_derived_dirty
     AFTER INSERT OR UPDATE ON valuation_per_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('valuation_daily_derived');
 
-CREATE TRIGGER mark_monthly_revenue_derived_dirty
+CREATE OR REPLACE TRIGGER mark_monthly_revenue_derived_dirty
     AFTER INSERT OR UPDATE ON monthly_revenue
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('monthly_revenue_derived');
 
-CREATE TRIGGER mark_taiex_index_derived_dirty
+CREATE OR REPLACE TRIGGER mark_taiex_index_derived_dirty
     AFTER INSERT OR UPDATE ON market_ohlcv_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('taiex_index_derived');
 
-CREATE TRIGGER mark_us_market_index_derived_dirty
+CREATE OR REPLACE TRIGGER mark_us_market_index_derived_dirty
     AFTER INSERT OR UPDATE ON market_index_us
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('us_market_index_derived');
 
 -- 5 個 special trigger
-CREATE TRIGGER mark_financial_stmt_derived_dirty
+CREATE OR REPLACE TRIGGER mark_financial_stmt_derived_dirty
     AFTER INSERT OR UPDATE ON financial_statement
     FOR EACH ROW EXECUTE FUNCTION trg_mark_financial_stmt_dirty();
 
-CREATE TRIGGER mark_exchange_rate_derived_dirty
+CREATE OR REPLACE TRIGGER mark_exchange_rate_derived_dirty
     AFTER INSERT OR UPDATE ON exchange_rate
     FOR EACH ROW EXECUTE FUNCTION trg_mark_exchange_rate_dirty();
 
-CREATE TRIGGER mark_market_margin_derived_dirty
+CREATE OR REPLACE TRIGGER mark_market_margin_derived_dirty
     AFTER INSERT OR UPDATE ON market_margin_maintenance
     FOR EACH ROW EXECUTE FUNCTION trg_mark_market_margin_dirty();
 
-CREATE TRIGGER mark_business_indicator_derived_dirty
+CREATE OR REPLACE TRIGGER mark_business_indicator_derived_dirty
     AFTER INSERT OR UPDATE ON business_indicator_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_business_indicator_dirty();
 
-CREATE TRIGGER mark_fwd_dirty_on_event
+CREATE OR REPLACE TRIGGER mark_fwd_dirty_on_event
     AFTER INSERT OR UPDATE ON price_adjustment_events
     FOR EACH ROW EXECUTE FUNCTION trg_mark_fwd_silver_dirty();
 
@@ -1109,15 +1109,15 @@ CREATE INDEX IF NOT EXISTS idx_short_sale_sbl_tw_stock_date_desc
     ON short_sale_securities_lending_tw (stock_id, date DESC);
 
 -- 3 個新 trigger(2 generic + 1 reuse 既有 trg_mark_market_margin_dirty)
-CREATE TRIGGER mark_institutional_derived_from_gov_bank_dirty
+CREATE OR REPLACE TRIGGER mark_institutional_derived_from_gov_bank_dirty
     AFTER INSERT OR UPDATE ON government_bank_buy_sell_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('institutional_daily_derived');
 
-CREATE TRIGGER mark_market_margin_derived_from_total_dirty
+CREATE OR REPLACE TRIGGER mark_market_margin_derived_from_total_dirty
     AFTER INSERT OR UPDATE ON total_margin_purchase_short_sale_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_market_margin_dirty();
 
-CREATE TRIGGER mark_margin_derived_from_short_sale_dirty
+CREATE OR REPLACE TRIGGER mark_margin_derived_from_short_sale_dirty
     AFTER INSERT OR UPDATE ON short_sale_securities_lending_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_silver_dirty('margin_daily_derived');
 
@@ -1151,7 +1151,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_pae_dedup_par_value_split
+CREATE OR REPLACE TRIGGER trg_pae_dedup_par_value_split
     AFTER INSERT OR UPDATE ON price_adjustment_events
     FOR EACH ROW
     WHEN (NEW.event_type IN ('split', 'par_value_change'))
@@ -1209,12 +1209,12 @@ END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS mark_magic_formula_dirty_from_fs ON financial_statement;
-CREATE TRIGGER mark_magic_formula_dirty_from_fs
+CREATE OR REPLACE TRIGGER mark_magic_formula_dirty_from_fs
     AFTER INSERT OR UPDATE ON financial_statement
     FOR EACH ROW EXECUTE FUNCTION trg_mark_magic_formula_dirty();
 
 DROP TRIGGER IF EXISTS mark_magic_formula_dirty_from_val ON valuation_per_tw;
-CREATE TRIGGER mark_magic_formula_dirty_from_val
+CREATE OR REPLACE TRIGGER mark_magic_formula_dirty_from_val
     AFTER INSERT OR UPDATE ON valuation_per_tw
     FOR EACH ROW EXECUTE FUNCTION trg_mark_magic_formula_dirty();
 
@@ -1378,6 +1378,285 @@ CREATE TABLE IF NOT EXISTS commodity_price_daily_derived (
     dirty_at                TIMESTAMPTZ,
     PRIMARY KEY (market, commodity, date)
 );
+
+
+-- =============================================================================
+-- M3 Cores 三表(alembic w2x3y4z5a6b7;facts.severity 來自 e0f1g2h3i4j5)
+-- =============================================================================
+-- v4.21:這 3 張表原本只在 migration 建、漏回寫 schema_pg.sql,fresh-init
+-- (psql -f schema_pg.sql)會漏建 → M3 cores 寫不進 facts。本次補回。
+-- facts.severity(e0f1g2h3i4j5)直接內聯進 CREATE。
+
+CREATE TABLE IF NOT EXISTS indicator_values (
+    stock_id       TEXT NOT NULL,
+    value_date     DATE NOT NULL,
+    timeframe      TEXT NOT NULL,
+    source_core    TEXT NOT NULL,
+    source_version TEXT NOT NULL,
+    params_hash    TEXT NOT NULL DEFAULT '',
+    value          JSONB NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (stock_id, value_date, timeframe, source_core, params_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_indicator_values_stock_date_desc
+    ON indicator_values(stock_id, value_date DESC);
+CREATE INDEX IF NOT EXISTS idx_indicator_values_core
+    ON indicator_values(source_core, value_date DESC);
+
+
+CREATE TABLE IF NOT EXISTS structural_snapshots (
+    stock_id          TEXT NOT NULL,
+    snapshot_date     DATE NOT NULL,
+    timeframe         TEXT NOT NULL,
+    core_name         TEXT NOT NULL,
+    source_version    TEXT NOT NULL,
+    params_hash       TEXT NOT NULL DEFAULT '',
+    snapshot          JSONB NOT NULL,
+    derived_from_core TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (stock_id, snapshot_date, timeframe, core_name, params_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_structural_snapshots_stock_date_desc
+    ON structural_snapshots(stock_id, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_structural_snapshots_core
+    ON structural_snapshots(core_name, snapshot_date DESC);
+
+
+CREATE TABLE IF NOT EXISTS facts (
+    id             BIGSERIAL PRIMARY KEY,
+    stock_id       TEXT NOT NULL,
+    fact_date      DATE NOT NULL,
+    timeframe      TEXT NOT NULL,
+    source_core    TEXT NOT NULL,
+    source_version TEXT NOT NULL,
+    params_hash    TEXT,
+    statement      TEXT NOT NULL,
+    statement_md5  TEXT GENERATED ALWAYS AS (md5(statement)) STORED,
+    metadata       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    severity       SMALLINT NOT NULL DEFAULT 1,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_facts_dedup
+    ON facts(stock_id, fact_date, timeframe, source_core,
+             COALESCE(params_hash, ''), statement_md5);
+CREATE INDEX IF NOT EXISTS idx_facts_stock_date_desc
+    ON facts(stock_id, fact_date DESC);
+CREATE INDEX IF NOT EXISTS idx_facts_core
+    ON facts(source_core, fact_date DESC);
+CREATE INDEX IF NOT EXISTS idx_facts_metadata_gin
+    ON facts USING GIN (metadata jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS idx_facts_severity_date
+    ON facts(severity, fact_date DESC);
+
+
+-- =============================================================================
+-- v3.32 Cross-Stock Cores ranked 表(alembic d9e0f1g2h3i4)
+-- =============================================================================
+-- v4.21:10 張 *_ranked_derived + monthly_trigger_signals_derived 原只在 migration
+-- 建、漏回寫 schema_pg.sql。本次補回(migration 的 _BASE_TAIL 已展開)。
+
+CREATE TABLE IF NOT EXISTS persistent_momentum_ranked_derived (
+    market            TEXT NOT NULL,
+    stock_id          TEXT NOT NULL,
+    date              DATE NOT NULL,
+    return_6m         NUMERIC(10, 6),
+    return_12m_1m     NUMERIC(10, 6),
+    persistent_months INTEGER,
+    momentum_rank     INTEGER,
+    universe_size     INTEGER,
+    is_top_n          BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason   TEXT,
+    detail            JSONB,
+    is_dirty          BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at          TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_persistent_momentum_top
+    ON persistent_momentum_ranked_derived (market, date, momentum_rank)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS revenue_momentum_ranked_derived (
+    market               TEXT NOT NULL,
+    stock_id             TEXT NOT NULL,
+    date                 DATE NOT NULL,
+    revenue_yoy_latest   NUMERIC(10, 4),
+    consecutive_positive INTEGER,
+    revenue_rank         INTEGER,
+    universe_size        INTEGER,
+    is_top_n             BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason      TEXT,
+    detail               JSONB,
+    is_dirty             BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at             TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_revenue_momentum_top
+    ON revenue_momentum_ranked_derived (market, date, revenue_rank)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS institutional_concert_ranked_derived (
+    market                 TEXT NOT NULL,
+    stock_id               TEXT NOT NULL,
+    date                   DATE NOT NULL,
+    concert_days           INTEGER,
+    foreign_cumulative_20d NUMERIC(20, 2),
+    shares_outstanding     NUMERIC(20, 0),
+    cumulative_pct         NUMERIC(10, 6),
+    concert_rank           INTEGER,
+    universe_size          INTEGER,
+    is_top_n               BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason        TEXT,
+    detail                 JSONB,
+    is_dirty               BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at               TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_institutional_concert_top
+    ON institutional_concert_ranked_derived (market, date, concert_rank)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS f_score_ranked_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    f_score        INTEGER,
+    profitability  INTEGER,
+    leverage       INTEGER,
+    efficiency     INTEGER,
+    score_rank     INTEGER,
+    universe_size  INTEGER,
+    is_top_n       BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason TEXT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_f_score_top
+    ON f_score_ranked_derived (market, date, f_score DESC)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS low_volatility_ranked_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    std_252d       NUMERIC(10, 6),
+    vol_rank       INTEGER,
+    universe_size  INTEGER,
+    is_top_n       BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason TEXT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_low_vol_top
+    ON low_volatility_ranked_derived (market, date, vol_rank)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS industry_adj_gp_ranked_derived (
+    market              TEXT NOT NULL,
+    stock_id            TEXT NOT NULL,
+    date                DATE NOT NULL,
+    gross_profitability NUMERIC(10, 6),
+    industry            TEXT,
+    industry_median_gp  NUMERIC(10, 6),
+    industry_adj_gp     NUMERIC(10, 6),
+    gp_rank             INTEGER,
+    universe_size       INTEGER,
+    is_top_n            BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason     TEXT,
+    detail              JSONB,
+    is_dirty            BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at            TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_industry_adj_gp_top
+    ON industry_adj_gp_ranked_derived (market, date, gp_rank)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS long_term_low_vol_ranked_derived (
+    market         TEXT NOT NULL,
+    stock_id       TEXT NOT NULL,
+    date           DATE NOT NULL,
+    std_36m        NUMERIC(10, 6),
+    vol_rank       INTEGER,
+    universe_size  INTEGER,
+    is_top_n       BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason TEXT,
+    detail         JSONB,
+    is_dirty       BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at       TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_long_term_low_vol_top
+    ON long_term_low_vol_ranked_derived (market, date, vol_rank)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS dividend_yield_ranked_derived (
+    market             TEXT NOT NULL,
+    stock_id           TEXT NOT NULL,
+    date               DATE NOT NULL,
+    dividend_yield_pct NUMERIC(10, 4),
+    return_12m_pct     NUMERIC(10, 4),
+    payout_years_5y    INTEGER,
+    yield_rank         INTEGER,
+    universe_size      INTEGER,
+    is_top_n           BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason    TEXT,
+    detail             JSONB,
+    is_dirty           BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at           TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_dividend_yield_top
+    ON dividend_yield_ranked_derived (market, date, yield_rank)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS mom_12_1_ranked_derived (
+    market        TEXT NOT NULL,
+    stock_id      TEXT NOT NULL,
+    date          DATE NOT NULL,
+    return_12m_1m NUMERIC(10, 6),
+    mom_rank      INTEGER,
+    universe_size INTEGER,
+    is_top_n      BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_reason TEXT,
+    detail        JSONB,
+    is_dirty      BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at      TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_mom_12_1_top
+    ON mom_12_1_ranked_derived (market, date, mom_rank)
+    WHERE is_top_n = TRUE;
+
+
+CREATE TABLE IF NOT EXISTS monthly_trigger_signals_derived (
+    market             TEXT NOT NULL,
+    stock_id           TEXT NOT NULL,
+    date               DATE NOT NULL,
+    trigger_type       TEXT NOT NULL,
+    revenue_yoy_pct    NUMERIC(10, 4),
+    institutional_20d  NUMERIC(20, 2),
+    shares_outstanding NUMERIC(20, 0),
+    institutional_pct  NUMERIC(10, 6),
+    action_hint        TEXT,
+    detail             JSONB,
+    is_dirty           BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty_at           TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date, trigger_type)
+);
+CREATE INDEX IF NOT EXISTS idx_monthly_trigger_date
+    ON monthly_trigger_signals_derived (market, date, trigger_type);
 
 
 -- =============================================================================
