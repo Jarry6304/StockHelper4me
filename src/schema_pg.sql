@@ -1738,7 +1738,7 @@ CREATE TABLE IF NOT EXISTS forecast_log (
     pinball_loss    NUMERIC(15, 6),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_forecast_log_lookup
-        UNIQUE (stock_id, forecast_date, horizon_days, source_core),
+        UNIQUE (stock_id, forecast_date, horizon_days, source_core, confidence),
     CONSTRAINT chk_forecast_confidence
         CHECK (confidence > 0 AND confidence < 1),
     CONSTRAINT chk_forecast_horizon
