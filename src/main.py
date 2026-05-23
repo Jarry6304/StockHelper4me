@@ -386,6 +386,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="最少校準集 size(< 此值不寫 row;預設 30)",
     )
 
+    # forecast fuse --stocks 2330 --since 2022-01-01 [--until TODAY]
+    f_fuse = forecast_subparsers.add_parser(
+        "fuse",
+        help="零參數 fusion(intersection / divergence fallback;只接 calibrated=True 且勝 baseline)",
+    )
+    f_fuse.add_argument("--stocks", required=True, help="股票清單(逗號分隔)")
+    f_fuse.add_argument("--since", required=True, help="起算 forecast_date(YYYY-MM-DD)")
+    f_fuse.add_argument("--until", help="結束 forecast_date(YYYY-MM-DD;預設 today)")
+    f_fuse.add_argument("--horizons", default="21,63,126")
+    f_fuse.add_argument("--confidences", default="0.50,0.80,0.95")
+    f_fuse.add_argument(
+        "--eligibility-window", type=int, default=100,
+        help="eligible_cores 對 baseline pinball 比較的 lookback row 數",
+    )
+    f_fuse.add_argument(
+        "--min-samples", type=int, default=30,
+        help="eligible 比較需最少 settled rows(預設 30)",
+    )
+
     # forecast score [--core baseline] [--horizon 63] [--group-by source_core]
     f_score = forecast_subparsers.add_parser(
         "score",
@@ -985,6 +1004,37 @@ def _run_forecast(args) -> None:
                 note=args.note,
             )
             print(res)
+
+    elif sub == "fuse":
+        from forecast.fusion import fuse_batch
+        from forecast._db import get_connection
+
+        stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
+        since = _parse_date(args.since)
+        until = _parse_date(args.until) or _date.today()
+        horizons = [int(h) for h in args.horizons.split(",") if h.strip()]
+        confidences = [float(c) for c in args.confidences.split(",") if c.strip()]
+
+        # Generate every calendar date in [since, until] — fuse_batch handles
+        # missing-data dates gracefully via no_calibrated_inputs_for_date status.
+        from datetime import timedelta as _td
+        dates = []
+        d = since
+        while d <= until:
+            dates.append(d)
+            d += _td(days=1)
+
+        with get_connection() as conn:
+            summary = fuse_batch(
+                conn,
+                stock_ids=stocks,
+                forecast_dates=dates,
+                horizons=horizons,
+                confidences=confidences,
+                eligibility_window=args.eligibility_window,
+                min_samples=args.min_samples,
+            )
+            print(f"fuse summary: {summary}")
 
     elif sub == "conformalize":
         from forecast.calibration import conformalize_batch

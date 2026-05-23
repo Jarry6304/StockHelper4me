@@ -30,6 +30,7 @@ from forecast.calibration import (
 )
 from forecast.neely_emitter import emit_neely_fib
 from forecast.manual import write_manual_forecast
+from forecast.fusion import eligible_cores, fuse_one, fuse_batch
 
 __all__ = [
     "get_connection",
@@ -47,4 +48,7 @@ __all__ = [
     "cqr_quantile",
     "emit_neely_fib",
     "write_manual_forecast",
+    "eligible_cores",
+    "fuse_one",
+    "fuse_batch",
 ]
