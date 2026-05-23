@@ -57,12 +57,14 @@ pub struct KalmanForecastParams {
     pub timeframe: Timeframe,
     pub horizons_days: Vec<u16>,
     pub confidence_levels: Vec<f64>,
-    /// Process noise for level component(LLT trend variance)
+    /// Process noise for level component(LLT trend variance)。
+    /// 0.0 = sentinel for adaptive(0.005·mean_price)²。
     pub q_level: f64,
-    /// Process noise for slope component
+    /// Process noise for slope component。
+    /// 0.0 = sentinel for adaptive(0.0005·mean_price)²。
     pub q_slope: f64,
-    /// Observation noise(spec calls for R = (0.01·p)² in calibration;
-    /// default uses adaptive R = σ_returns² × p_t² scale per stock — see notes)
+    /// Observation noise。
+    /// 0.0 = sentinel for adaptive(0.01·mean_price)²。
     pub r: f64,
 }
 
@@ -72,12 +74,17 @@ impl Default for KalmanForecastParams {
             timeframe: Timeframe::Daily,
             horizons_days: DEFAULT_HORIZONS_DAYS.to_vec(),
             confidence_levels: DEFAULT_CONFIDENCES.to_vec(),
-            // Initial best-guess(Phase 3 ships these constants; Phase 4 CQR
-            // calibrates intervals empirically so coverage matches confidence).
-            // Q_level small(trend 緩慢漂移);Q_slope tiny(slope 更穩定)。
-            q_level: 1e-3,
-            q_slope: 1e-5,
-            // R will be auto-adapted per-stock if r == 0.0(see compute()).
+            // v0.3 tuning(2026-05-23):全部用 0.0 sentinel,讓 R/Q 都 price-scale
+            // adaptive。原 absolute defaults(1e-3 / 1e-5)對 $100 vs $2000 股
+            // 不分尺度,raw band 過窄(production 觀察 sharpness 5.79 對 $2200 股
+            // → 0.3% 寬,荒謬)。Adaptive:
+            //   R       = (1.0% × mean_p)²    obs noise(spec §11)
+            //   Q_level = (0.5% × mean_p)²    ~ R/4,讓 Kalman 仍平滑而非 pass-through
+            //   Q_slope = (0.05% × mean_p)²   slope 變化緩慢,~Q_level/100
+            // 各 magnitude 對齊典型股價 daily innovation。CQR phase 4 後仍會校準,
+            // 但 raw band 越接近實際 → CQR q 越小 → 整體 sharpness 越好。
+            q_level: 0.0,
+            q_slope: 0.0,
             r: 0.0,
         }
     }
@@ -105,6 +112,9 @@ pub struct KalmanForecastOutput {
     pub p_00: f64,
     pub p_01: f64,
     pub p_11: f64,
+    /// Effective process noise actually used(diagnostic)
+    pub effective_q_level: f64,
+    pub effective_q_slope: f64,
     /// Effective observation noise actually used(if adapted from data)
     pub effective_r: f64,
     /// All forecast intervals(horizon × confidence cartesian)
@@ -125,22 +135,35 @@ impl Default for KalmanForecastCore {
 
 /// One-pass LLT Kalman filter forward sweep(filtered state only).
 ///
-/// Returns (level_t|t, slope_t|t, P_t|t as (p00, p01, p11), effective_r).
+/// Returns (level_t|t, slope_t|t, P_t|t as (p00, p01, p11),
+///          effective_q_level, effective_q_slope, effective_r).
 fn kalman_llt_filter(
     prices: &[f64],
-    q_level: f64,
-    q_slope: f64,
+    q_level_input: f64,
+    q_slope_input: f64,
     r_input: f64,
-) -> (f64, f64, (f64, f64, f64), f64) {
+) -> (f64, f64, (f64, f64, f64), f64, f64, f64) {
     debug_assert!(!prices.is_empty(), "kalman_llt_filter: empty input");
 
-    // Auto-adapt R if user gave 0: use observation noise = (1% × mean_price)²
-    // (對齊 spec §11 reference R=(0.01·p)² 公式)
+    // Price-scale adaptive R/Q if user gave 0(v0.3 tuning,2026-05-23):
+    //   R       = (1.0% × mean_p)²    obs noise(spec §11)
+    //   Q_level = (0.5% × mean_p)²    ~ R/4,讓 Kalman 仍平滑
+    //   Q_slope = (0.05% × mean_p)²   slope 變化緩慢
+    let mean_p = prices.iter().sum::<f64>() / prices.len() as f64;
     let r = if r_input > 0.0 {
         r_input
     } else {
-        let mean_p = prices.iter().sum::<f64>() / prices.len() as f64;
         (0.01 * mean_p).powi(2).max(1e-9)
+    };
+    let q_level = if q_level_input > 0.0 {
+        q_level_input
+    } else {
+        (0.005 * mean_p).powi(2).max(1e-9)
+    };
+    let q_slope = if q_slope_input > 0.0 {
+        q_slope_input
+    } else {
+        (0.0005 * mean_p).powi(2).max(1e-11)
     };
 
     // Initial state: level = first observation, slope = 0
@@ -187,7 +210,7 @@ fn kalman_llt_filter(
         p11 = new_p11;
     }
 
-    (level, slope, (p00, p01, p11), r)
+    (level, slope, (p00, p01, p11), q_level, q_slope, r)
 }
 
 /// Project h-step ahead from filtered state(x_t|t, P_t|t).
@@ -326,7 +349,7 @@ impl IndicatorCore for KalmanForecastCore {
         let prices: Vec<f64> = input.bars.iter().map(|b| b.close).collect();
         let last_bar = input.bars.last().unwrap();
 
-        let (level, slope, (p00, p01, p11), effective_r) =
+        let (level, slope, (p00, p01, p11), effective_q_level, effective_q_slope, effective_r) =
             kalman_llt_filter(&prices, params.q_level, params.q_slope, params.r);
 
         // Multi-horizon × multi-confidence cartesian
@@ -345,8 +368,10 @@ impl IndicatorCore for KalmanForecastCore {
             // ≈ h_days × 5/7.  This makes the analytical variance scale
             // correctly with trading-bar units.
             let h_steps = ((h_days as f64) * 5.0 / 7.0).round().max(1.0) as u32;
+            // Use EFFECTIVE Q values (adapted) for projection variance, not raw params
+            // (which could be 0 sentinels)
             let (mean, var) = project_h_steps(
-                level, slope, p00, p01, p11, params.q_level, params.q_slope, h_steps,
+                level, slope, p00, p01, p11, effective_q_level, effective_q_slope, h_steps,
             );
             let std = var.sqrt();
             for &c in &params.confidence_levels {
@@ -371,6 +396,8 @@ impl IndicatorCore for KalmanForecastCore {
             p_00: p00,
             p_01: p01,
             p_11: p11,
+            effective_q_level,
+            effective_q_slope,
             effective_r,
             forecasts,
         })
@@ -531,6 +558,42 @@ mod tests {
         let core = KalmanForecastCore::new();
         let out = core.compute(&s, KalmanForecastParams::default()).unwrap();
         assert_eq!(core.produce_facts(&out).len(), 0);
+    }
+
+    #[test]
+    fn adaptive_q_scales_with_price() {
+        // Two flat series at different price scales:
+        // p=100 stock vs p=2000 stock should get Q values 400x apart
+        // (since Q ∝ p²)
+        let s_low = make_series(&vec![100.0; 200]);
+        let s_high = make_series(&vec![2000.0; 200]);
+        let core = KalmanForecastCore::new();
+        let out_low = core.compute(&s_low, KalmanForecastParams::default()).unwrap();
+        let out_high = core.compute(&s_high, KalmanForecastParams::default()).unwrap();
+        // q_level should scale as (0.005 × p)² → 400x for 20x price ratio
+        let ratio = out_high.effective_q_level / out_low.effective_q_level;
+        assert!(
+            (ratio - 400.0).abs() < 1.0,
+            "expected ~400x scaling, got {}",
+            ratio
+        );
+        // Similar for r and q_slope
+        assert!((out_high.effective_r / out_low.effective_r - 400.0).abs() < 1.0);
+        assert!((out_high.effective_q_slope / out_low.effective_q_slope - 400.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn explicit_q_overrides_adaptive() {
+        // User-provided non-zero Q should be used, not adapted
+        let s = make_series(&vec![100.0; 100]);
+        let mut params = KalmanForecastParams::default();
+        params.q_level = 12.34;
+        params.q_slope = 5.67;
+        params.r = 89.0;
+        let out = KalmanForecastCore::new().compute(&s, params).unwrap();
+        assert_eq!(out.effective_q_level, 12.34);
+        assert_eq!(out.effective_q_slope, 5.67);
+        assert_eq!(out.effective_r, 89.0);
     }
 
     #[test]

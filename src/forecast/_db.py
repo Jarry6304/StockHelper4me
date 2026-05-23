@@ -39,12 +39,11 @@ def upsert_forecast(conn, row: dict[str, Any]) -> None:
             %(confidence)s, %(calibrated)s, %(source_core)s,
             %(regime_tag)s, %(params_hash)s
         )
-        ON CONFLICT (stock_id, forecast_date, horizon_days, source_core)
+        ON CONFLICT (stock_id, forecast_date, horizon_days, source_core, confidence)
         DO UPDATE SET
             lower       = EXCLUDED.lower,
             upper       = EXCLUDED.upper,
             point       = EXCLUDED.point,
-            confidence  = EXCLUDED.confidence,
             calibrated  = EXCLUDED.calibrated,
             regime_tag  = EXCLUDED.regime_tag,
             params_hash = EXCLUDED.params_hash

@@ -198,12 +198,11 @@ pub async fn write_forecast_log(pool: &PgPool, rows: &[ForecastLogRow]) -> Resul
                 $7::numeric[], $8::bool[], $9::text[],
                 $10::text[], $11::text[]
             )
-            ON CONFLICT (stock_id, forecast_date, horizon_days, source_core)
+            ON CONFLICT (stock_id, forecast_date, horizon_days, source_core, confidence)
             DO UPDATE SET
                 lower       = EXCLUDED.lower,
                 upper       = EXCLUDED.upper,
                 point       = EXCLUDED.point,
-                confidence  = EXCLUDED.confidence,
                 calibrated  = EXCLUDED.calibrated,
                 regime_tag  = EXCLUDED.regime_tag,
                 params_hash = EXCLUDED.params_hash
