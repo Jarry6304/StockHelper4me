@@ -21,6 +21,12 @@ from forecast.scorer import score
 from forecast.settlement import resolve_pending
 from forecast.baseline import make_baseline_forecast
 from forecast.backtest import run_backtest
+from forecast.calibration import (
+    conformalize_one,
+    conformalize_batch,
+    nonconformity_score,
+    cqr_quantile,
+)
 
 __all__ = [
     "get_connection",
@@ -31,4 +37,8 @@ __all__ = [
     "resolve_pending",
     "make_baseline_forecast",
     "run_backtest",
+    "conformalize_one",
+    "conformalize_batch",
+    "nonconformity_score",
+    "cqr_quantile",
 ]

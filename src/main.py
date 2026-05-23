@@ -302,6 +302,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="只結算指定 stock_id(逗號分隔;預設全部)",
     )
 
+    # forecast conformalize --stocks 2330 --since 2022-01-01 --until TODAY
+    f_conf = forecast_subparsers.add_parser(
+        "conformalize",
+        help="CQR 校準 raw forecasts(寫 source_core='kalman_cqr' calibrated=True)",
+    )
+    f_conf.add_argument(
+        "--raw-core",
+        default="kalman_forecast_core",
+        help="raw forecast core 名(預設 kalman_forecast_core)",
+    )
+    f_conf.add_argument(
+        "--target-core",
+        default="kalman_cqr",
+        help="輸出 source_core(預設 kalman_cqr)",
+    )
+    f_conf.add_argument(
+        "--stocks",
+        required=True,
+        help="股票清單(逗號分隔,如 2330,2317)",
+    )
+    f_conf.add_argument(
+        "--since",
+        required=True,
+        help="起算 asof_t(YYYY-MM-DD)",
+    )
+    f_conf.add_argument(
+        "--until",
+        help="結束 asof_t(YYYY-MM-DD;預設 today)",
+    )
+    f_conf.add_argument(
+        "--horizons",
+        default="21,63,126",
+        help="逗號分隔 horizon 天數",
+    )
+    f_conf.add_argument(
+        "--confidences",
+        default="0.50,0.80,0.95",
+        help="逗號分隔 confidence",
+    )
+    f_conf.add_argument(
+        "--calibration-window",
+        type=int,
+        default=500,
+        help="校準集大小(最近 N 個已結算 row;預設 500)",
+    )
+    f_conf.add_argument(
+        "--min-calibration-size",
+        type=int,
+        default=30,
+        help="最少校準集 size(< 此值不寫 row;預設 30)",
+    )
+
     # forecast score [--core baseline] [--horizon 63] [--group-by source_core]
     f_score = forecast_subparsers.add_parser(
         "score",
@@ -863,6 +915,35 @@ def _run_forecast(args) -> None:
                 tag = sid if sid else "ALL"
                 print(f"settle asof={asof} stock={tag} core={args.core or 'ALL'} -> {summary}")
             print(f"\ntotal: {grand}")
+
+    elif sub == "conformalize":
+        from forecast.calibration import conformalize_batch
+        from forecast._db import get_connection
+
+        stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
+        since = _parse_date(args.since)
+        until = _parse_date(args.until) or _date.today()
+        horizons = [int(h) for h in args.horizons.split(",") if h.strip()]
+        confidences = [float(c) for c in args.confidences.split(",") if c.strip()]
+
+        with get_connection() as conn:
+            logger.info(
+                "forecast conformalize stocks=%s raw=%s target=%s [%s, %s] horizons=%s confs=%s",
+                stocks, args.raw_core, args.target_core, since, until, horizons, confidences,
+            )
+            summary = conformalize_batch(
+                conn,
+                raw_core=args.raw_core,
+                target_core=args.target_core,
+                stock_ids=stocks,
+                start=since,
+                end=until,
+                horizons=horizons,
+                confidences=confidences,
+                calibration_window=args.calibration_window,
+                min_calibration_size=args.min_calibration_size,
+            )
+            print(f"conformalize summary: {summary}")
 
     elif sub == "score":
         from forecast.scorer import score
