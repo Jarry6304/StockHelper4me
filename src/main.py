@@ -256,8 +256,8 @@ def build_parser() -> argparse.ArgumentParser:
     f_backtest.add_argument(
         "--core",
         default="baseline",
-        choices=["baseline"],  # phase 1 only; kalman/log_channel 後續加
-        help="forecast core 名(目前只有 baseline)",
+        choices=["baseline", "log_channel"],  # v0.3 Python forecast cores
+        help="forecast core 名(baseline / log_channel;Kalman 走 Rust run-backtest)",
     )
     f_backtest.add_argument(
         "--stocks",
@@ -856,11 +856,13 @@ def _run_forecast(args) -> None:
     if sub == "backtest":
         from forecast.backtest import run_backtest
         from forecast.baseline import make_baseline_forecast
+        from forecast.log_channel import make_log_channel_forecast
         from forecast._db import get_connection
 
         # core 對映 forecast_fn
         core_to_fn = {
             "baseline": make_baseline_forecast,
+            "log_channel": make_log_channel_forecast,
         }
         if args.core not in core_to_fn:
             print(f"[ERROR] 未知 forecast core:{args.core}", file=sys.stderr)
