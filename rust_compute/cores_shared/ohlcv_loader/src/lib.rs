@@ -327,7 +327,8 @@ pub async fn load_asof_daily(
                close::float8 AS close,
                volume
         FROM price_daily
-        WHERE stock_id = $1
+        WHERE market = 'TW'
+          AND stock_id = $1
           AND date >= $2 AND date <= $3
           AND open IS NOT NULL AND high IS NOT NULL
           AND low IS NOT NULL AND close IS NOT NULL
@@ -361,7 +362,8 @@ pub async fn load_asof_daily(
                volume_factor::float8    AS volume_factor,
                detail
         FROM price_adjustment_events
-        WHERE stock_id = $1
+        WHERE market = 'TW'
+          AND stock_id = $1
           AND date > $2 AND date <= $3
         ORDER BY date ASC
         "#,
