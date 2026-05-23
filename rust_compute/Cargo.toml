@@ -32,6 +32,7 @@ members = [
     "cores/indicator/candlestick_pattern_core",
     "cores/indicator/trendline_core",
     "cores/indicator/kalman_filter_core",
+    "cores/indicator/kalman_forecast_core",
     # Chip Cores(P2 — 5 個 + v3.21 3 個)
     "cores/chip/day_trading_core",
     "cores/chip/institutional_core",

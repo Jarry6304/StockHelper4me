@@ -245,6 +245,17 @@ enabled  = true
 priority = "P3"
 
 # ─────────────────────────────────────────────────────────
+# v0.3(2026-05-23):interval-forecast spine phase 3
+# ─────────────────────────────────────────────────────────
+# kalman_forecast_core 寫 forecast_log(非 facts / indicator_values)。
+# Live mode 用 load_daily;backtest mode 走 `tw_cores run-backtest` 子命令。
+# raw 帶寫入 calibrated=false;phase 4 CQR/ACI 包成校準帶(source_core='kalman_cqr')。
+[[cores]]
+name     = "kalman_forecast_core"
+enabled  = true
+priority = "P3"
+
+# ─────────────────────────────────────────────────────────
 # v3.21(2026-05-17):4 new cores
 # ─────────────────────────────────────────────────────────
 [[cores]]

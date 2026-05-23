@@ -1164,6 +1164,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kalman_forecast_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "ohlcv_loader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kd_core"
 version = "0.1.0"
 dependencies = [
@@ -1509,6 +1524,7 @@ dependencies = [
  "fact_schema",
  "neely_core",
  "serde",
+ "serde_json",
  "sqlx",
 ]
 
@@ -2605,6 +2621,7 @@ dependencies = [
  "ichimoku_core",
  "institutional_core",
  "kalman_filter_core",
+ "kalman_forecast_core",
  "kd_core",
  "keltner_core",
  "loan_collateral_core",

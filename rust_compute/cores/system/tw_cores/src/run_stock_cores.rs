@@ -8,7 +8,7 @@
 use fact_schema::Timeframe;
 use sqlx::postgres::PgPool;
 
-use crate::dispatcher::{dispatch_indicator, dispatch_neely, dispatch_structural};
+use crate::dispatcher::{dispatch_forecast, dispatch_indicator, dispatch_neely, dispatch_structural};
 use crate::summary::{loader_err_summary, CoreRunSummary};
 use crate::workflow::CoreFilter;
 
@@ -333,6 +333,28 @@ pub async fn run_stock_cores(
             ),
             Err(e) => summary.push(loader_err_summary(
                 "kalman_filter_core", stock_id, "load_daily", &e,
+            )),
+        }
+    }
+
+    // ---- 19b. kalman_forecast_core(v0.3 spine phase 3)— live mode 用
+    // load_daily(asof=today,price_daily_fwd 在 today 不 leak future);
+    // backtest mode 走 run-backtest subcommand + load_asof_daily ----
+    if filter.is_enabled("kalman_forecast_core") {
+        match ohlcv_loader::load_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
+            Ok(series) => summary.push(
+                dispatch_forecast(
+                    pool,
+                    &kalman_forecast_core::KalmanForecastCore::new(),
+                    &series,
+                    kalman_forecast_core::KalmanForecastParams::default(),
+                    write,
+                    "kalman_forecast_core",
+                    false, // raw Kalman intervals;phase 4 CQR 才 calibrated=true
+                ).await,
+            ),
+            Err(e) => summary.push(loader_err_summary(
+                "kalman_forecast_core", stock_id, "load_daily", &e,
             )),
         }
     }

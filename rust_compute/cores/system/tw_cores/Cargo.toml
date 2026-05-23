@@ -46,6 +46,9 @@ trendline_core              = { path = "../../indicator/trendline_core" }
 # Statistical / state-space Cores(P3 — v3.4)
 kalman_filter_core          = { path = "../../indicator/kalman_filter_core" }
 
+# Forecast Cores(v0.3 interval-forecast spine,phase 3+)
+kalman_forecast_core        = { path = "../../indicator/kalman_forecast_core" }
+
 # Chip Cores(P2 — 5 + v3.21 3 個)
 day_trading_core      = { path = "../../chip/day_trading_core" }
 institutional_core    = { path = "../../chip/institutional_core" }

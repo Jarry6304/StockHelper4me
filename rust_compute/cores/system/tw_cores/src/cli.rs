@@ -32,6 +32,33 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         write: bool,
     },
+    /// v0.3 spine — Causal one-pass backtest:每個歷史日 T 跑 forecast core,
+    /// 寫 forecast_log。PIT-aware loader 保證沒有 lookahead。
+    #[command(name = "run-backtest")]
+    RunBacktest {
+        /// 股票清單(逗號分隔,例 2330,2317)
+        #[arg(long)]
+        stocks: String,
+        /// 起始 forecast_date(YYYY-MM-DD,含)
+        #[arg(long)]
+        start: String,
+        /// 結束 forecast_date(YYYY-MM-DD,含;不指定 = today)
+        #[arg(long)]
+        end: Option<String>,
+        /// Forecast core 名(目前只支援 kalman_forecast_core)
+        #[arg(long, default_value = "kalman_forecast_core")]
+        core: String,
+        /// 寫入 forecast_log — 不指定僅 dry-run
+        #[arg(long, default_value_t = false)]
+        write: bool,
+        /// load_asof_daily 的 lookback calendar days(預設 730 = 2 年,確保 LLT warmup 充足)
+        #[arg(long, default_value_t = 730)]
+        lookback_days: i32,
+        /// per-stock task 並行度(對齊 run-all default 32,但 backtest 路徑 PG round-trip
+        /// 較重,建議起步 8)
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
+    },
     /// 全市場 × 全 cores production run
     #[command(name = "run-all")]
     RunAll {

@@ -65,6 +65,15 @@ async fn main() -> Result<()> {
             timeframe,
             write,
         } => run_neely_single(&stock_id, &timeframe, write).await,
+        Command::RunBacktest {
+            stocks,
+            start,
+            end,
+            core,
+            write,
+            lookback_days,
+            concurrency,
+        } => run_backtest(stocks, start, end, core, write, lookback_days, concurrency).await,
         Command::RunAll {
             stocks,
             limit,
@@ -138,6 +147,7 @@ fn list_cores() -> Result<()> {
     let _ = financial_statement_core::FinancialStatementCore::new();
     let _ = magic_formula_core::MagicFormulaCore::new();    // v3.4
     let _ = kalman_filter_core::KalmanFilterCore::new();    // v3.4
+    let _ = kalman_forecast_core::KalmanForecastCore::new(); // v0.3 spine
     let _ = taiex_core::TaiexCore::new();
     let _ = us_market_core::UsMarketCore::new();
     let _ = exchange_rate_core::ExchangeRateCore::new();
@@ -218,6 +228,147 @@ async fn run_neely_single(stock_id: &str, timeframe: &str, write: bool) -> Resul
     // entry point 用 dispatch_neely;keep ref alive 避免 warning)
     let _ = dispatch_neely;
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// run-backtest(v0.3 spine phase 3 — causal one-pass forecast)
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+async fn run_backtest(
+    stocks: String,
+    start: String,
+    end: Option<String>,
+    core_name: String,
+    write: bool,
+    lookback_days: i32,
+    concurrency: usize,
+) -> Result<()> {
+    use chrono::NaiveDate;
+    use dispatcher::dispatch_forecast;
+    use futures::stream::{self, StreamExt};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Mutex;
+
+    if core_name != "kalman_forecast_core" {
+        anyhow::bail!(
+            "run-backtest: 目前只支援 kalman_forecast_core(其他 forecast core 後續 milestone 加入)"
+        );
+    }
+
+    let start_d = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
+        .map_err(|e| anyhow::anyhow!("invalid --start (expect YYYY-MM-DD): {}", e))?;
+    let end_d = match end {
+        Some(s) => NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+            .map_err(|e| anyhow::anyhow!("invalid --end (expect YYYY-MM-DD): {}", e))?,
+        None => chrono::Local::now().date_naive(),
+    };
+    if start_d > end_d {
+        anyhow::bail!("run-backtest: --start ({}) > --end ({})", start_d, end_d);
+    }
+
+    let stock_ids: Vec<String> = stocks
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if stock_ids.is_empty() {
+        anyhow::bail!("run-backtest: --stocks 不能為空");
+    }
+
+    let max_conns: u32 = (concurrency.max(2) + 4) as u32;
+    let pool = connect_pg(max_conns).await?;
+
+    // Trading days in [start_d, end_d]
+    let trading_days: Vec<NaiveDate> = sqlx::query_as::<_, (NaiveDate,)>(
+        r#"SELECT date FROM trading_date_ref
+           WHERE market = 'TW' AND date BETWEEN $1 AND $2
+           ORDER BY date"#,
+    )
+    .bind(start_d)
+    .bind(end_d)
+    .fetch_all(&pool)
+    .await?
+    .into_iter()
+    .map(|(d,)| d)
+    .collect();
+
+    if trading_days.is_empty() {
+        tracing::warn!(
+            "run-backtest: 沒有 trading days in [{}, {}](trading_date_ref 為空?)",
+            start_d, end_d
+        );
+        return Ok(());
+    }
+
+    let total_pairs = trading_days.len() * stock_ids.len();
+    tracing::info!(
+        "== Backtest: {} stocks × {} trading days = {} (stock, T) pairs (core={}, concurrency={}) ==",
+        stock_ids.len(), trading_days.len(), total_pairs, core_name, concurrency
+    );
+
+    let total_start = Instant::now();
+    let summary: Arc<Mutex<Vec<CoreRunSummary>>> = Arc::new(Mutex::new(Vec::new()));
+    let progress = Arc::new(AtomicUsize::new(0));
+
+    // Build the cartesian iterator (stock, T) — stream concurrent per pair.
+    let pairs: Vec<(String, NaiveDate)> = stock_ids
+        .iter()
+        .flat_map(|sid| trading_days.iter().map(move |d| (sid.clone(), *d)))
+        .collect();
+
+    stream::iter(pairs)
+        .for_each_concurrent(concurrency, |(sid, asof)| {
+            let pool = pool.clone();
+            let summary = summary.clone();
+            let progress = progress.clone();
+            async move {
+                // PIT-aware loader — only events with date ≤ asof are applied
+                let series = match ohlcv_loader::load_asof_daily(&pool, &sid, asof, lookback_days)
+                    .await
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        summary.lock().await.push(summary::loader_err_summary(
+                            "kalman_forecast_core", &sid, "load_asof_daily", &e,
+                        ));
+                        let n = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                        if n % 200 == 0 || n == total_pairs {
+                            tracing::info!("backtest progress: {}/{}", n, total_pairs);
+                        }
+                        return;
+                    }
+                };
+
+                if series.bars.is_empty() {
+                    // No data this early — skip silently
+                    progress.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+
+                let res = dispatch_forecast(
+                    &pool,
+                    &kalman_forecast_core::KalmanForecastCore::new(),
+                    &series,
+                    kalman_forecast_core::KalmanForecastParams::default(),
+                    write,
+                    "kalman_forecast_core",
+                    false,
+                )
+                .await;
+                summary.lock().await.push(res);
+
+                let n = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                if n % 200 == 0 || n == total_pairs {
+                    tracing::info!("backtest progress: {}/{}", n, total_pairs);
+                }
+            }
+        })
+        .await;
+
+    let final_summary = summary.lock().await.clone();
+    print_summary(&final_summary, total_start.elapsed(), write);
     Ok(())
 }
 
