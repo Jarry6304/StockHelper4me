@@ -891,6 +891,10 @@ CREATE INDEX IF NOT EXISTS idx_financial_statement_report_date
 -- column,自 create_time 派生(FinMind publish timestamp,TEXT;PR #18.5 hotfix
 -- m2n3o4p5q6r7 確認某些 row 是 "")。CASE 防禦非法 / 空字串 → NULL,PIT 層
 -- fallback heuristic(date + 11 天)補。
+--
+-- ⚠️ PG STORED generated column 要求 IMMUTABLE expression。text::DATE 走
+-- DateStyle GUC → STABLE,不可用;to_date(text, 'YYYY-MM-DD') 顯式 format
+-- → IMMUTABLE,可用。
 CREATE TABLE IF NOT EXISTS monthly_revenue (
     market         TEXT NOT NULL,
     stock_id       TEXT NOT NULL,
@@ -905,7 +909,7 @@ CREATE TABLE IF NOT EXISTS monthly_revenue (
         CASE
             WHEN create_time IS NULL OR create_time = '' THEN NULL
             WHEN create_time !~ '^\d{4}-\d{2}-\d{2}' THEN NULL
-            ELSE substring(create_time, 1, 10)::DATE
+            ELSE to_date(substring(create_time, 1, 10), 'YYYY-MM-DD')
         END
     ) STORED,
     PRIMARY KEY (market, stock_id, date)

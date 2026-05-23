@@ -45,9 +45,13 @@ def upgrade() -> None:
     # ─────────────────────────────────────────────────────────────────────
     # FinMind create_time 是 TIMESTAMPTZ-shaped TEXT(e.g. "2024-01-15 10:30:00")。
     # PR #18.5 hotfix m2n3o4p5q6r7 確認 Bronze 用 TEXT 收(因某些 row 是 "")。
-    # GENERATED 表達式必須 PURE,所以正則先濾掉非「YYYY-MM-DD」開頭的字串,
-    # 避免 ::DATE cast 在不合法輸入下噴錯。NULL / "" / 非法 → 結果為 NULL,
-    # PIT 層 fallback heuristic(date + 11 天)補。
+    #
+    # PG STORED generated column **要求 IMMUTABLE expression**:
+    #   - text::DATE cast 用 DateStyle GUC → STABLE,不能用
+    #   - to_date(text, 'YYYY-MM-DD') 顯式格式 → IMMUTABLE,可用
+    #
+    # CASE 第二支防線濾掉非「YYYY-MM-DD」開頭字串,避免 to_date 對非法輸入噴錯;
+    # NULL / "" / 非法 → 結果 NULL,PIT 層 fallback heuristic(date + 11 天)補。
     op.execute(
         """
         ALTER TABLE monthly_revenue
@@ -56,7 +60,7 @@ def upgrade() -> None:
                 CASE
                     WHEN create_time IS NULL OR create_time = '' THEN NULL
                     WHEN create_time !~ '^\\d{4}-\\d{2}-\\d{2}' THEN NULL
-                    ELSE substring(create_time, 1, 10)::DATE
+                    ELSE to_date(substring(create_time, 1, 10), 'YYYY-MM-DD')
                 END
             ) STORED
         """
