@@ -257,6 +257,12 @@ CREATE TABLE IF NOT EXISTS price_limit (
 -- 後復權日 K
 -- v3.2 PR #17 (B-3) 加 4 欄:Rust 算完 multiplier 後落地此處,Wave Cores /
 -- Aggregation Layer 反推 raw 用(blueprint §5.2 amend + §4.4 r3.1)
+--
+-- ⚠️ AS-OF-TODAY snapshot — 此表的每一 row 都套用了「截至 Rust binary 最後一次
+-- 跑」當下所有 future-events 的 cumulative AF。**禁止用於 backtest** 或任何
+-- 需要 as-of-T(T < today)視角的計算 — 那會 lookahead 未來除權息。
+-- 取 as-of-T 視圖請呼叫 `src.pit.asof_close_series(conn, stock_id, asof_t, ...)`
+-- (Bronze price_daily + price_adjustment_events 純函數重建,單股查詢 < 50 ms)。
 CREATE TABLE IF NOT EXISTS price_daily_fwd (
     market                       TEXT NOT NULL,
     stock_id                     TEXT NOT NULL,
@@ -1657,6 +1663,59 @@ CREATE TABLE IF NOT EXISTS monthly_trigger_signals_derived (
 );
 CREATE INDEX IF NOT EXISTS idx_monthly_trigger_date
     ON monthly_trigger_signals_derived (market, date, trigger_type);
+
+
+-- =============================================================================
+-- Interval-forecast spine(v0.3 spec,2026-05-23,branch
+-- claude/stockhelper-interval-forecast-spine-j9xJt)
+--
+-- forecast_log 是區間預測的 sink(機械軌 backtest + 裁量軌 forward log 共用)。
+-- 與 facts 表並列(同 PG schema,non-overlapping role)— facts 是「已發生事件」、
+-- forecast_log 是「未來區間 + 結算」。
+--
+-- UNIQUE(stock_id, forecast_date, horizon_days, source_core):一個 source_core
+-- 對同一 (stock, T, horizon) 只能有一筆;重跑會 ON CONFLICT UPDATE。
+--
+-- chk_calibrated_or_unsigned:source_core 不在 known-uncalibrated 名單(baseline /
+-- log_channel / fib / manual / kalman_raw)時,calibrated 必為 TRUE。擋未來新增
+-- core 忘記宣告校準狀態(spec rule:未校準者不得宣稱覆蓋率)。
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS forecast_log (
+    id              BIGSERIAL PRIMARY KEY,
+    stock_id        TEXT NOT NULL,
+    forecast_date   DATE NOT NULL,
+    horizon_days    SMALLINT NOT NULL,
+    lower           NUMERIC(15, 4),
+    upper           NUMERIC(15, 4),
+    point           NUMERIC(15, 4),
+    confidence      NUMERIC(5, 4) NOT NULL,
+    calibrated      BOOLEAN NOT NULL DEFAULT FALSE,
+    source_core     TEXT NOT NULL,
+    regime_tag      TEXT,
+    params_hash     TEXT,
+    resolved_date   DATE,
+    realized_price  NUMERIC(15, 4),
+    hit             BOOLEAN,
+    pinball_loss    NUMERIC(15, 6),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_forecast_log_lookup
+        UNIQUE (stock_id, forecast_date, horizon_days, source_core),
+    CONSTRAINT chk_forecast_confidence
+        CHECK (confidence > 0 AND confidence < 1),
+    CONSTRAINT chk_forecast_horizon
+        CHECK (horizon_days > 0),
+    CONSTRAINT chk_forecast_calibrated_or_unsigned CHECK (
+        calibrated = TRUE
+        OR source_core IN ('baseline', 'log_channel', 'fib', 'manual',
+                           'kalman_raw', 'neely_fib', 'kalman_forecast_core')
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_forecast_log_pending
+    ON forecast_log (forecast_date, horizon_days)
+    WHERE resolved_date IS NULL;
+CREATE INDEX IF NOT EXISTS idx_forecast_log_scoring
+    ON forecast_log (source_core, forecast_date)
+    WHERE resolved_date IS NOT NULL;
 
 
 -- =============================================================================

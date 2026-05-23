@@ -239,6 +239,87 @@ def build_parser() -> argparse.ArgumentParser:
         help="跳過 Bronze incremental(只跑 Silver + Cores,若已單獨跑過 incremental)",
     )
 
+    # ── forecast 子命令(區間預測 spine,v0.3 spec)
+    forecast_parser = subparsers.add_parser(
+        "forecast",
+        help="區間預測 spine:backtest / settle / score / manual",
+    )
+    forecast_subparsers = forecast_parser.add_subparsers(
+        dest="forecast_command", required=True
+    )
+
+    # forecast backtest --core baseline --stocks 2330 --since 2020-01-01
+    f_backtest = forecast_subparsers.add_parser(
+        "backtest",
+        help="跑指定 forecast core 的因果回測,寫進 forecast_log",
+    )
+    f_backtest.add_argument(
+        "--core",
+        default="baseline",
+        choices=["baseline"],  # phase 1 only; kalman/log_channel 後續加
+        help="forecast core 名(目前只有 baseline)",
+    )
+    f_backtest.add_argument(
+        "--stocks",
+        required=True,
+        help="股票清單(逗號分隔,如 2330,2317);MVP 一次跑一檔較穩",
+    )
+    f_backtest.add_argument(
+        "--since",
+        required=True,
+        help="起算 forecast_date(YYYY-MM-DD)",
+    )
+    f_backtest.add_argument(
+        "--until",
+        help="結束 forecast_date(YYYY-MM-DD;預設 today)",
+    )
+    f_backtest.add_argument(
+        "--horizons",
+        default="21,63,126",
+        help="逗號分隔 horizon 天數(預設 21,63,126)",
+    )
+    f_backtest.add_argument(
+        "--confidences",
+        default="0.50,0.80,0.95",
+        help="逗號分隔 confidence(預設 0.50,0.80,0.95)",
+    )
+
+    # forecast settle [--asof TODAY] [--core baseline]
+    f_settle = forecast_subparsers.add_parser(
+        "settle",
+        help="結算所有已到期(forecast_date + horizon ≤ asof)的 forecast_log row",
+    )
+    f_settle.add_argument(
+        "--asof",
+        help="結算 asof 日期(YYYY-MM-DD;預設 today)",
+    )
+    f_settle.add_argument(
+        "--core",
+        help="只結算指定 source_core(預設全部)",
+    )
+    f_settle.add_argument(
+        "--stocks",
+        help="只結算指定 stock_id(逗號分隔;預設全部)",
+    )
+
+    # forecast score [--core baseline] [--horizon 63] [--group-by source_core]
+    f_score = forecast_subparsers.add_parser(
+        "score",
+        help="對已結算 row 算 pinball / sharpness / reliability",
+    )
+    f_score.add_argument("--core", help="只看指定 source_core")
+    f_score.add_argument("--horizon", type=int, help="只看指定 horizon")
+    f_score.add_argument("--stock", help="只看指定 stock_id")
+    f_score.add_argument(
+        "--since",
+        help="只看 forecast_date >= 指定日(YYYY-MM-DD)",
+    )
+    f_score.add_argument(
+        "--group-by",
+        choices=["source_core", "horizon_days", "regime_tag"],
+        help="分組統計(預設不分組)",
+    )
+
     # ── status 子命令（不需要執行選項）
     subparsers.add_parser("status", help="顯示同步進度摘要")
 
@@ -296,6 +377,11 @@ def main() -> None:
     # refresh 指令(一鍵手動更新最新資料)
     if args.command == "refresh":
         asyncio.run(_run_refresh(args, config, stock_list_cfg))
+        return
+
+    # forecast 指令(區間預測 spine,v0.3 spec)
+    if args.command == "forecast":
+        _run_forecast(args)
         return
 
     # 其他指令（backfill / incremental / phase）需要執行引擎
@@ -694,6 +780,118 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
     print()
     ok = sum(1 for _, s, _ in step_results if s == "ok")
     print(f"OK: {ok}/{len(step_results)} steps")
+
+
+# =============================================================================
+# 子命令:forecast(區間預測 spine,v0.3 spec — backtest / settle / score)
+# =============================================================================
+
+def _run_forecast(args) -> None:
+    """forecast 子命令 dispatcher。
+
+    走 src.forecast 模組;同步流程(psycopg sync)。每 action 自己開 / 關 conn。
+    """
+    from datetime import date as _date, datetime as _dt
+    import json as _json
+
+    sub = args.forecast_command
+
+    def _parse_date(s: str | None) -> _date | None:
+        if s is None:
+            return None
+        return _dt.strptime(s, "%Y-%m-%d").date()
+
+    if sub == "backtest":
+        from forecast.backtest import run_backtest
+        from forecast.baseline import make_baseline_forecast
+        from forecast._db import get_connection
+
+        # core 對映 forecast_fn
+        core_to_fn = {
+            "baseline": make_baseline_forecast,
+        }
+        if args.core not in core_to_fn:
+            print(f"[ERROR] 未知 forecast core:{args.core}", file=sys.stderr)
+            sys.exit(1)
+        fn = core_to_fn[args.core]
+
+        stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
+        since = _parse_date(args.since)
+        until = _parse_date(args.until) or _date.today()
+        horizons = [int(h) for h in args.horizons.split(",") if h.strip()]
+        confidences = [float(c) for c in args.confidences.split(",") if c.strip()]
+
+        with get_connection() as conn:
+            total = {"trading_days": 0, "attempted": 0, "written": 0, "skipped": 0}
+            for stock_id in stocks:
+                logger.info(
+                    "forecast backtest stock=%s core=%s [%s, %s] horizons=%s confs=%s",
+                    stock_id, args.core, since, until, horizons, confidences,
+                )
+                summary = run_backtest(
+                    conn,
+                    stock_id=stock_id,
+                    forecast_fn=fn,
+                    source_core=args.core,
+                    start=since,
+                    end=until,
+                    horizons=horizons,
+                    confidences=confidences,
+                )
+                for k in total:
+                    total[k] += summary[k]
+                print(f"{stock_id}: {summary}")
+            print(f"\ntotal: {total}")
+
+    elif sub == "settle":
+        from forecast.settlement import resolve_pending
+        from forecast._db import get_connection
+
+        asof = _parse_date(args.asof) or _date.today()
+        stocks = (
+            [s.strip() for s in args.stocks.split(",") if s.strip()]
+            if args.stocks else [None]
+        )
+        with get_connection() as conn:
+            grand = {"settled": 0, "missing_realized": 0, "errored": 0}
+            for sid in stocks:
+                summary = resolve_pending(
+                    conn, asof=asof, source_core=args.core, stock_id=sid,
+                )
+                for k in grand:
+                    grand[k] += summary[k]
+                tag = sid if sid else "ALL"
+                print(f"settle asof={asof} stock={tag} core={args.core or 'ALL'} -> {summary}")
+            print(f"\ntotal: {grand}")
+
+    elif sub == "score":
+        from forecast.scorer import score
+        from forecast._db import fetch_resolved, get_connection
+
+        since = _parse_date(args.since)
+        with get_connection() as conn:
+            rows = fetch_resolved(
+                conn,
+                source_core=args.core,
+                horizon_days=args.horizon,
+                stock_id=args.stock,
+                since=since,
+            )
+        result = score(rows, group_by=args.group_by)
+        # 整理輸出:reliability 是 [(c, cov)] 不適合 json.dumps default,轉 list
+        def _serialize(v):
+            if isinstance(v, dict):
+                return {k: _serialize(x) for k, x in v.items()}
+            if isinstance(v, tuple):
+                return list(v)
+            if isinstance(v, list):
+                return [_serialize(x) for x in v]
+            return v
+        print(_json.dumps(_serialize(result), ensure_ascii=False, indent=2, default=str))
+
+    else:
+        print(f"[ERROR] 未知 forecast 子命令:{sub}", file=sys.stderr)
+        sys.exit(1)
 
 
 # =============================================================================
