@@ -143,6 +143,91 @@ pub async fn write_facts(pool: &PgPool, facts: &[Fact]) -> Result<u64> {
     Ok(total_inserted)
 }
 
+/// One forecast row matching the `forecast_log` table shape.
+///
+/// v0.3 spec phase 3:Kalman LLT (and future forecast cores) emit a list of
+/// these; `write_forecast_log` UNNEST-batches them in a single INSERT.
+#[derive(Debug, Clone)]
+pub struct ForecastLogRow {
+    pub stock_id: String,
+    pub forecast_date: NaiveDate,
+    pub horizon_days: i16,
+    pub lower: Option<f64>,
+    pub upper: Option<f64>,
+    pub point: Option<f64>,
+    pub confidence: f64,
+    pub calibrated: bool,
+    pub source_core: String,
+    pub regime_tag: Option<String>,
+    pub params_hash: Option<String>,
+}
+
+/// Batch INSERT into forecast_log with ON CONFLICT UPDATE.  UNIQUE key is
+/// (stock_id, forecast_date, horizon_days, source_core) so the same core
+/// re-running for the same (stock, T, horizon) overwrites rather than duplicates.
+///
+/// 對齊 forecast_log alembic a7b8c9d0e1f2 + Python `forecast._db.upsert_forecast`
+/// 的 ON CONFLICT UPDATE 行為。
+pub async fn write_forecast_log(pool: &PgPool, rows: &[ForecastLogRow]) -> Result<u64> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    const BATCH_SIZE: usize = 4000;
+    let mut total = 0u64;
+    for chunk in rows.chunks(BATCH_SIZE) {
+        let stock_ids:     Vec<&str>        = chunk.iter().map(|r| r.stock_id.as_str()).collect();
+        let forecast_dates:Vec<NaiveDate>   = chunk.iter().map(|r| r.forecast_date).collect();
+        let horizons:      Vec<i16>         = chunk.iter().map(|r| r.horizon_days).collect();
+        let lowers:        Vec<Option<f64>> = chunk.iter().map(|r| r.lower).collect();
+        let uppers:        Vec<Option<f64>> = chunk.iter().map(|r| r.upper).collect();
+        let points:        Vec<Option<f64>> = chunk.iter().map(|r| r.point).collect();
+        let confidences:   Vec<f64>         = chunk.iter().map(|r| r.confidence).collect();
+        let calibrateds:   Vec<bool>        = chunk.iter().map(|r| r.calibrated).collect();
+        let source_cores:  Vec<&str>        = chunk.iter().map(|r| r.source_core.as_str()).collect();
+        let regime_tags:   Vec<Option<&str>> = chunk.iter().map(|r| r.regime_tag.as_deref()).collect();
+        let params_hashes: Vec<Option<&str>> = chunk.iter().map(|r| r.params_hash.as_deref()).collect();
+
+        let res = sqlx::query(
+            r#"
+            INSERT INTO forecast_log
+                (stock_id, forecast_date, horizon_days, lower, upper, point,
+                 confidence, calibrated, source_core, regime_tag, params_hash)
+            SELECT * FROM UNNEST(
+                $1::text[], $2::date[], $3::smallint[],
+                $4::numeric[], $5::numeric[], $6::numeric[],
+                $7::numeric[], $8::bool[], $9::text[],
+                $10::text[], $11::text[]
+            )
+            ON CONFLICT (stock_id, forecast_date, horizon_days, source_core)
+            DO UPDATE SET
+                lower       = EXCLUDED.lower,
+                upper       = EXCLUDED.upper,
+                point       = EXCLUDED.point,
+                confidence  = EXCLUDED.confidence,
+                calibrated  = EXCLUDED.calibrated,
+                regime_tag  = EXCLUDED.regime_tag,
+                params_hash = EXCLUDED.params_hash
+            "#,
+        )
+        .bind(&stock_ids)
+        .bind(&forecast_dates)
+        .bind(&horizons)
+        .bind(&lowers)
+        .bind(&uppers)
+        .bind(&points)
+        .bind(&confidences)
+        .bind(&calibrateds)
+        .bind(&source_cores)
+        .bind(&regime_tags)
+        .bind(&params_hashes)
+        .execute(pool)
+        .await
+        .context("batch insert forecast_log failed")?;
+        total += res.rows_affected();
+    }
+    Ok(total)
+}
+
 pub async fn resolve_stock_list(
     pool: &PgPool,
     stocks: Option<&str>,

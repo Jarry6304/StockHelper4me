@@ -211,6 +211,234 @@ pub async fn load_for_neely(
     }
 }
 
+// ─── PIT-aware loader(v0.3 spec phase 3,2026-05-23)─────────────────────
+//
+// Reconstructs as-of-T OHLCV view from raw Bronze tables (price_daily +
+// price_adjustment_events).  Critical for backtest paths: `price_daily_fwd`
+// bakes in future events, but `load_asof_daily(stock, asof_t, lookback)` only
+// applies AF for events with date ≤ asof_t.
+//
+// Python mirror: src/pit/ohlcv.py::asof_close_series.  AF formula priorities
+// mirror silver_s1_adjustment::derive_simple_event_af (Priority 1 API exact /
+// Priority 2 dividend fallback / Priority 3 capital_increase from detail).
+//
+// Forward loop rule: "先 push 再更新 multiplier" — multiplier for row T₀ =
+// product of AFs for events with date strictly > T₀.
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct RawPriceRow {
+    date: NaiveDate,
+    open: Option<f64>,
+    high: Option<f64>,
+    low: Option<f64>,
+    close: Option<f64>,
+    volume: Option<i64>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AdjEventRow {
+    date: NaiveDate,
+    event_type: String,
+    before_price: Option<f64>,
+    reference_price: Option<f64>,
+    cash_dividend: Option<f64>,
+    stock_dividend: Option<f64>,
+    volume_factor: f64,
+    detail: Option<serde_json::Value>,
+}
+
+/// Compute (af, vf) for a single event.  Mirror of Python
+/// `src.pit.ohlcv._compute_event_af`.
+fn compute_event_af(ev: &AdjEventRow, raw_prev_close: Option<f64>) -> (f64, f64) {
+    let cash = ev.cash_dividend.unwrap_or(0.0);
+    let stock = ev.stock_dividend.unwrap_or(0.0);
+    let vf = ev.volume_factor;
+
+    // Priority 1: API exact values with reliability check
+    if let (Some(bp), Some(rp)) = (ev.before_price, ev.reference_price) {
+        if rp > 0.0 && bp > 0.0 {
+            let bp_eq_rp = (bp - rp).abs() < 1e-4;
+            let unreliable = ev.event_type == "dividend"
+                && stock > 0.0
+                && cash == 0.0
+                && bp_eq_rp;
+            if !unreliable {
+                return (bp / rp, vf);
+            }
+        }
+    }
+
+    // Priority 2: dividend fallback formula
+    if ev.event_type == "dividend" {
+        let bp_use = ev.before_price.or(raw_prev_close);
+        if let Some(bp) = bp_use {
+            if bp > 0.0 && (cash > 0.0 || stock > 0.0) {
+                let p_after = (bp - cash) / (1.0 + stock / 10.0);
+                if p_after > 0.0 {
+                    return (bp / p_after, vf);
+                }
+            }
+        }
+    }
+
+    // Priority 3: capital_increase from detail JSONB
+    if ev.event_type == "capital_increase" {
+        if let Some(detail) = &ev.detail {
+            let sub_price = detail.get("subscription_price").and_then(|v| v.as_f64());
+            let sub_rate = detail.get("subscription_rate_raw").and_then(|v| v.as_f64());
+            if let (Some(sub_price), Some(sub_rate), Some(prev)) = (sub_price, sub_rate, raw_prev_close) {
+                if sub_price > 0.0 && sub_rate > 0.0 && prev > 0.0 {
+                    let r = sub_rate / 1000.0;
+                    let after_price = (prev + sub_price * r) / (1.0 + r);
+                    if after_price > 0.0 {
+                        return (prev / after_price, vf);
+                    }
+                }
+            }
+        }
+    }
+
+    // Default: no adjustment
+    (1.0, vf)
+}
+
+/// As-of-T view of daily OHLC from raw Bronze.
+///
+/// Returns OhlcvSeries with bars adjusted using only events with date ≤ asof.
+/// For asof = today, this gives the same as price_daily_fwd; for any earlier
+/// asof, no future events leak into past bars.
+///
+/// `lookback_days`: calendar days back from asof to fetch.  Caller is
+/// responsible for ensuring enough history for downstream warmup needs.
+pub async fn load_asof_daily(
+    pool: &PgPool,
+    stock_id: &str,
+    asof: NaiveDate,
+    lookback_days: i32,
+) -> Result<OhlcvSeries> {
+    let earliest = asof - chrono::Duration::days(lookback_days as i64);
+
+    let raw_rows: Vec<RawPriceRow> = sqlx::query_as(
+        r#"
+        SELECT date,
+               open::float8  AS open,
+               high::float8  AS high,
+               low::float8   AS low,
+               close::float8 AS close,
+               volume
+        FROM price_daily
+        WHERE market = 'TW'
+          AND stock_id = $1
+          AND date >= $2 AND date <= $3
+          AND open IS NOT NULL AND high IS NOT NULL
+          AND low IS NOT NULL AND close IS NOT NULL
+        ORDER BY date ASC
+        "#,
+    )
+    .bind(stock_id)
+    .bind(earliest)
+    .bind(asof)
+    .fetch_all(pool)
+    .await
+    .context("load_asof_daily: query price_daily failed")?;
+
+    if raw_rows.is_empty() {
+        return Ok(OhlcvSeries {
+            stock_id: stock_id.to_string(),
+            timeframe: Timeframe::Daily,
+            bars: vec![],
+        });
+    }
+
+    let earliest_raw = raw_rows[0].date;
+    let event_rows: Vec<AdjEventRow> = sqlx::query_as(
+        r#"
+        SELECT date,
+               event_type,
+               before_price::float8     AS before_price,
+               reference_price::float8  AS reference_price,
+               cash_dividend::float8    AS cash_dividend,
+               stock_dividend::float8   AS stock_dividend,
+               volume_factor::float8    AS volume_factor,
+               detail
+        FROM price_adjustment_events
+        WHERE market = 'TW'
+          AND stock_id = $1
+          AND date > $2 AND date <= $3
+        ORDER BY date ASC
+        "#,
+    )
+    .bind(stock_id)
+    .bind(earliest_raw)
+    .bind(asof)
+    .fetch_all(pool)
+    .await
+    .context("load_asof_daily: query price_adjustment_events failed")?;
+
+    // Build per-date event multipliers (same-day events combine multiplicatively).
+    use std::collections::HashMap;
+    let close_by_date: HashMap<NaiveDate, f64> = raw_rows
+        .iter()
+        .filter_map(|r| r.close.map(|c| (r.date, c)))
+        .collect();
+    let raw_dates: Vec<NaiveDate> = raw_rows.iter().map(|r| r.date).collect();
+
+    let mut event_af: HashMap<NaiveDate, f64> = HashMap::new();
+    let mut event_vf: HashMap<NaiveDate, f64> = HashMap::new();
+    for ev in &event_rows {
+        let prev_close = raw_dates
+            .iter()
+            .rev()
+            .find(|d| **d < ev.date)
+            .and_then(|d| close_by_date.get(d).copied());
+        let (af, vf) = compute_event_af(ev, prev_close);
+        if (af - 1.0).abs() > 1e-12 {
+            *event_af.entry(ev.date).or_insert(1.0) *= af;
+        }
+        if (vf - 1.0).abs() > 1e-12 {
+            *event_vf.entry(ev.date).or_insert(1.0) *= vf;
+        }
+    }
+
+    // Forward loop in reverse: push current row first, then update multiplier
+    // for earlier dates.
+    let mut result_reversed: Vec<OhlcvBar> = Vec::with_capacity(raw_rows.len());
+    let mut price_mult = 1.0_f64;
+    let mut volume_mult = 1.0_f64;
+    for r in raw_rows.iter().rev() {
+        // SQL filters NULLs but defense-in-depth via Option chain
+        let (Some(open), Some(high), Some(low), Some(close)) =
+            (r.open, r.high, r.low, r.close)
+        else {
+            continue;
+        };
+        let adj_volume = r.volume.map(|v| {
+            ((v as f64) / volume_mult).round() as i64
+        });
+        result_reversed.push(OhlcvBar {
+            date: r.date,
+            open: (open * price_mult * 10000.0).round() / 10000.0,
+            high: (high * price_mult * 10000.0).round() / 10000.0,
+            low: (low * price_mult * 10000.0).round() / 10000.0,
+            close: (close * price_mult * 10000.0).round() / 10000.0,
+            volume: adj_volume,
+        });
+        if let Some(&af) = event_af.get(&r.date) {
+            price_mult *= af;
+        }
+        if let Some(&vf) = event_vf.get(&r.date) {
+            volume_mult *= vf;
+        }
+    }
+    result_reversed.reverse();
+
+    Ok(OhlcvSeries {
+        stock_id: stock_id.to_string(),
+        timeframe: Timeframe::Daily,
+        bars: result_reversed,
+    })
+}
+
 fn rows_to_series(stock_id: &str, timeframe: Timeframe, rows: Vec<FwdBarRow>) -> OhlcvSeries {
     let bars: Vec<OhlcvBar> = rows
         .into_iter()

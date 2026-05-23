@@ -203,6 +203,9 @@ CREATE INDEX IF NOT EXISTS idx_sbl_stock_date
 -- 砍 v3.1 提案的 leading_notrend / coincident_notrend / lagging_notrend(總經學家用,Beta 不需)
 -- 🔧 hotfix:leading / coincident / lagging 加 _indicator 後綴
 -- 「leading」是 PG 保留字(TRIM(LEADING ...))不能直接當欄位名,所以全部統一加後綴
+-- v0.3 phase 2(alembic b8c9d0e1f2g3,2026-05-23):加 report_date DATE 欄,
+-- backfill heuristic = date + 27 天(國發會發佈日)。後續 FinMind probe 找到
+-- 真實 publish-date 欄後切真實值;見 scripts/probe_finmind_report_date.py。
 CREATE TABLE IF NOT EXISTS business_indicator_tw (
     market                  TEXT NOT NULL DEFAULT 'tw',
     date                    DATE NOT NULL,           -- 月初
@@ -212,8 +215,11 @@ CREATE TABLE IF NOT EXISTS business_indicator_tw (
     monitoring              INT,                     -- 綜合分數
     monitoring_color        TEXT,                    -- R / YR / G / YB / B
     detail                  JSONB,
+    report_date             DATE,                    -- v0.3 phase 2(heuristic 或 future probe)
     PRIMARY KEY (market, date)
 );
+CREATE INDEX IF NOT EXISTS idx_business_indicator_report_date
+    ON business_indicator_tw (report_date);
 
 
 -- =============================================================================
@@ -257,6 +263,12 @@ CREATE TABLE IF NOT EXISTS price_limit (
 -- 後復權日 K
 -- v3.2 PR #17 (B-3) 加 4 欄:Rust 算完 multiplier 後落地此處,Wave Cores /
 -- Aggregation Layer 反推 raw 用(blueprint §5.2 amend + §4.4 r3.1)
+--
+-- ⚠️ AS-OF-TODAY snapshot — 此表的每一 row 都套用了「截至 Rust binary 最後一次
+-- 跑」當下所有 future-events 的 cumulative AF。**禁止用於 backtest** 或任何
+-- 需要 as-of-T(T < today)視角的計算 — 那會 lookahead 未來除權息。
+-- 取 as-of-T 視圖請呼叫 `src.pit.asof_close_series(conn, stock_id, asof_t, ...)`
+-- (Bronze price_daily + price_adjustment_events 純函數重建,單股查詢 < 50 ms)。
 CREATE TABLE IF NOT EXISTS price_daily_fwd (
     market                       TEXT NOT NULL,
     stock_id                     TEXT NOT NULL,
@@ -857,6 +869,7 @@ CREATE TABLE IF NOT EXISTS financial_statement (
     origin_name TEXT NOT NULL,
     value       NUMERIC(20, 4),
     source      TEXT NOT NULL DEFAULT 'finmind',
+    report_date DATE,    -- v0.3 phase 2(heuristic T+45 或 future probe)
     -- PK uses type (FinMind English code e.g. 'TotalAssets' vs 'TotalAssets_per') so both
     -- element value and common-size % row for the same origin_name can coexist.
     -- PR #18.5 originally keyed on origin_name; x3y4z5a6b7c8 changed to type.
@@ -865,6 +878,8 @@ CREATE TABLE IF NOT EXISTS financial_statement (
 );
 CREATE INDEX IF NOT EXISTS idx_financial_statement_stock_date_desc
     ON financial_statement (stock_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_financial_statement_report_date
+    ON financial_statement (report_date);
 
 
 -- 月營收(raw FinMind 欄名;Silver builder 才 rename revenue_year → revenue_yoy 等)
@@ -872,6 +887,10 @@ CREATE INDEX IF NOT EXISTS idx_financial_statement_stock_date_desc
 -- 不是 NULL,Bronze raw 保留原始字串,Silver builder cast 用 NULLIF(...)::TIMESTAMPTZ
 -- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補上(spec §3.6 表格漏寫,依 Bronze 一致原則補回)
 -- PR #R3(alembic t9u0v1w2x3y4)去 `_tw` 後綴升格成主名
+-- v0.3 phase 2(alembic b8c9d0e1f2g3,2026-05-23):加 report_date 為 GENERATED
+-- column,自 create_time 派生(FinMind publish timestamp,TEXT;PR #18.5 hotfix
+-- m2n3o4p5q6r7 確認某些 row 是 "")。CASE 防禦非法 / 空字串 → NULL,PIT 層
+-- fallback heuristic(date + 11 天)補。
 CREATE TABLE IF NOT EXISTS monthly_revenue (
     market         TEXT NOT NULL,
     stock_id       TEXT NOT NULL,
@@ -882,10 +901,19 @@ CREATE TABLE IF NOT EXISTS monthly_revenue (
     country        TEXT,
     create_time    TEXT,
     source         TEXT NOT NULL DEFAULT 'finmind',
+    report_date    DATE GENERATED ALWAYS AS (
+        CASE
+            WHEN create_time IS NULL OR create_time = '' THEN NULL
+            WHEN create_time !~ '^\d{4}-\d{2}-\d{2}' THEN NULL
+            ELSE substring(create_time, 1, 10)::DATE
+        END
+    ) STORED,
     PRIMARY KEY (market, stock_id, date)
 );
 CREATE INDEX IF NOT EXISTS idx_monthly_revenue_stock_date_desc
     ON monthly_revenue (stock_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_monthly_revenue_report_date
+    ON monthly_revenue (report_date);
 
 
 -- =============================================================================
@@ -1657,6 +1685,59 @@ CREATE TABLE IF NOT EXISTS monthly_trigger_signals_derived (
 );
 CREATE INDEX IF NOT EXISTS idx_monthly_trigger_date
     ON monthly_trigger_signals_derived (market, date, trigger_type);
+
+
+-- =============================================================================
+-- Interval-forecast spine(v0.3 spec,2026-05-23,branch
+-- claude/stockhelper-interval-forecast-spine-j9xJt)
+--
+-- forecast_log 是區間預測的 sink(機械軌 backtest + 裁量軌 forward log 共用)。
+-- 與 facts 表並列(同 PG schema,non-overlapping role)— facts 是「已發生事件」、
+-- forecast_log 是「未來區間 + 結算」。
+--
+-- UNIQUE(stock_id, forecast_date, horizon_days, source_core):一個 source_core
+-- 對同一 (stock, T, horizon) 只能有一筆;重跑會 ON CONFLICT UPDATE。
+--
+-- chk_calibrated_or_unsigned:source_core 不在 known-uncalibrated 名單(baseline /
+-- log_channel / fib / manual / kalman_raw)時,calibrated 必為 TRUE。擋未來新增
+-- core 忘記宣告校準狀態(spec rule:未校準者不得宣稱覆蓋率)。
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS forecast_log (
+    id              BIGSERIAL PRIMARY KEY,
+    stock_id        TEXT NOT NULL,
+    forecast_date   DATE NOT NULL,
+    horizon_days    SMALLINT NOT NULL,
+    lower           NUMERIC(15, 4),
+    upper           NUMERIC(15, 4),
+    point           NUMERIC(15, 4),
+    confidence      NUMERIC(5, 4) NOT NULL,
+    calibrated      BOOLEAN NOT NULL DEFAULT FALSE,
+    source_core     TEXT NOT NULL,
+    regime_tag      TEXT,
+    params_hash     TEXT,
+    resolved_date   DATE,
+    realized_price  NUMERIC(15, 4),
+    hit             BOOLEAN,
+    pinball_loss    NUMERIC(15, 6),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_forecast_log_lookup
+        UNIQUE (stock_id, forecast_date, horizon_days, source_core),
+    CONSTRAINT chk_forecast_confidence
+        CHECK (confidence > 0 AND confidence < 1),
+    CONSTRAINT chk_forecast_horizon
+        CHECK (horizon_days > 0),
+    CONSTRAINT chk_forecast_calibrated_or_unsigned CHECK (
+        calibrated = TRUE
+        OR source_core IN ('baseline', 'log_channel', 'fib', 'manual',
+                           'kalman_raw', 'neely_fib', 'kalman_forecast_core')
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_forecast_log_pending
+    ON forecast_log (forecast_date, horizon_days)
+    WHERE resolved_date IS NULL;
+CREATE INDEX IF NOT EXISTS idx_forecast_log_scoring
+    ON forecast_log (source_core, forecast_date)
+    WHERE resolved_date IS NOT NULL;
 
 
 -- =============================================================================

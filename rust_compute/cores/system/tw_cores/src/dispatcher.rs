@@ -11,7 +11,10 @@ use std::time::Instant;
 
 use crate::helpers::{extract_indicator_meta, indicator_output_is_empty};
 use crate::summary::CoreRunSummary;
-use crate::writers::{write_facts, write_indicator_value, write_structural_snapshot};
+use crate::writers::{
+    write_facts, write_forecast_log, write_indicator_value, write_structural_snapshot,
+    ForecastLogRow,
+};
 
 /// dispatch_indicator — 標準走 indicator_values 表的 IndicatorCore dispatch。
 pub async fn dispatch_indicator<C>(
@@ -172,6 +175,128 @@ where
                 status: "ok".to_string(),
                 events: facts.len() as u64,
                 iv_written,
+                fact_written,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                error: None,
+            }
+        }
+        Err(e) => CoreRunSummary::err(&core_name, "", format!("compute failed: {:#}", e), start),
+    }
+}
+
+/// dispatch_forecast — v0.3 interval-forecast spine 第 4 個 dispatch。
+///
+/// Calls IndicatorCore::compute, serializes the resulting forecasts into
+/// forecast_log rows, and batch-writes them.  Does NOT write facts or
+/// indicator_values(forecast cores 不寫 facts;forecast_log 是專屬 sink)。
+///
+/// Used by kalman_forecast_core(initial)+ future forecast cores
+/// (log_channel_core, neely_fib emitter, fusion)。
+pub async fn dispatch_forecast<C>(
+    pool: &PgPool,
+    core: &C,
+    input: &C::Input,
+    params: C::Params,
+    write: bool,
+    source_core_tag: &str,
+    calibrated: bool,
+) -> CoreRunSummary
+where
+    C: IndicatorCore,
+{
+    let start = Instant::now();
+    let core_name = core.name().to_string();
+    let hash = params_hash(&params).unwrap_or_default();
+
+    match core.compute(input, params) {
+        Ok(output) => {
+            let value_json = match serde_json::to_value(&output) {
+                Ok(v) => v,
+                Err(e) => {
+                    return CoreRunSummary::err(
+                        &core_name,
+                        "",
+                        format!("serialize output failed: {}", e),
+                        start,
+                    );
+                }
+            };
+
+            // Extract forecast rows from the output's `forecasts` array.
+            // Convention: all forecast cores output {stock_id, forecast_date,
+            // forecasts: [{horizon_days, confidence, lower, upper, point}]}.
+            let stock_id = value_json
+                .get("stock_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let forecast_date_str = value_json
+                .get("forecast_date")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let forecast_date = match chrono::NaiveDate::parse_from_str(forecast_date_str, "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(e) => {
+                    return CoreRunSummary::err(
+                        &core_name,
+                        &stock_id,
+                        format!("missing/invalid forecast_date in output: {}", e),
+                        start,
+                    );
+                }
+            };
+
+            let mut rows: Vec<ForecastLogRow> = Vec::new();
+            if let Some(forecasts) = value_json.get("forecasts").and_then(|v| v.as_array()) {
+                for f in forecasts {
+                    let horizon_days = match f.get("horizon_days").and_then(|v| v.as_i64()) {
+                        Some(h) => h as i16,
+                        None => continue,
+                    };
+                    let confidence = match f.get("confidence").and_then(|v| v.as_f64()) {
+                        Some(c) => c,
+                        None => continue,
+                    };
+                    let lower = f.get("lower").and_then(|v| v.as_f64());
+                    let upper = f.get("upper").and_then(|v| v.as_f64());
+                    let point = f.get("point").and_then(|v| v.as_f64());
+
+                    rows.push(ForecastLogRow {
+                        stock_id: stock_id.clone(),
+                        forecast_date,
+                        horizon_days,
+                        lower,
+                        upper,
+                        point,
+                        confidence,
+                        calibrated,
+                        source_core: source_core_tag.to_string(),
+                        regime_tag: None,
+                        params_hash: Some(hash.clone()),
+                    });
+                }
+            }
+
+            let events = rows.len() as u64;
+            let mut fact_written = 0u64;
+            if write && !rows.is_empty() {
+                match write_forecast_log(pool, &rows).await {
+                    Ok(n) => fact_written = n,
+                    Err(e) => tracing::warn!(
+                        core = %core_name,
+                        stock_id,
+                        "write_forecast_log failed: {:#}",
+                        e
+                    ),
+                }
+            }
+
+            CoreRunSummary {
+                core: core_name,
+                stock_id,
+                status: "ok".to_string(),
+                events,
+                iv_written: 0,
                 fact_written,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 error: None,
