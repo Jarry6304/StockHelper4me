@@ -203,6 +203,9 @@ CREATE INDEX IF NOT EXISTS idx_sbl_stock_date
 -- 砍 v3.1 提案的 leading_notrend / coincident_notrend / lagging_notrend(總經學家用,Beta 不需)
 -- 🔧 hotfix:leading / coincident / lagging 加 _indicator 後綴
 -- 「leading」是 PG 保留字(TRIM(LEADING ...))不能直接當欄位名,所以全部統一加後綴
+-- v0.3 phase 2(alembic b8c9d0e1f2g3,2026-05-23):加 report_date DATE 欄,
+-- backfill heuristic = date + 27 天(國發會發佈日)。後續 FinMind probe 找到
+-- 真實 publish-date 欄後切真實值;見 scripts/probe_finmind_report_date.py。
 CREATE TABLE IF NOT EXISTS business_indicator_tw (
     market                  TEXT NOT NULL DEFAULT 'tw',
     date                    DATE NOT NULL,           -- 月初
@@ -212,8 +215,11 @@ CREATE TABLE IF NOT EXISTS business_indicator_tw (
     monitoring              INT,                     -- 綜合分數
     monitoring_color        TEXT,                    -- R / YR / G / YB / B
     detail                  JSONB,
+    report_date             DATE,                    -- v0.3 phase 2(heuristic 或 future probe)
     PRIMARY KEY (market, date)
 );
+CREATE INDEX IF NOT EXISTS idx_business_indicator_report_date
+    ON business_indicator_tw (report_date);
 
 
 -- =============================================================================
@@ -863,6 +869,7 @@ CREATE TABLE IF NOT EXISTS financial_statement (
     origin_name TEXT NOT NULL,
     value       NUMERIC(20, 4),
     source      TEXT NOT NULL DEFAULT 'finmind',
+    report_date DATE,    -- v0.3 phase 2(heuristic T+45 或 future probe)
     -- PK uses type (FinMind English code e.g. 'TotalAssets' vs 'TotalAssets_per') so both
     -- element value and common-size % row for the same origin_name can coexist.
     -- PR #18.5 originally keyed on origin_name; x3y4z5a6b7c8 changed to type.
@@ -871,6 +878,8 @@ CREATE TABLE IF NOT EXISTS financial_statement (
 );
 CREATE INDEX IF NOT EXISTS idx_financial_statement_stock_date_desc
     ON financial_statement (stock_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_financial_statement_report_date
+    ON financial_statement (report_date);
 
 
 -- 月營收(raw FinMind 欄名;Silver builder 才 rename revenue_year → revenue_yoy 等)
@@ -878,6 +887,10 @@ CREATE INDEX IF NOT EXISTS idx_financial_statement_stock_date_desc
 -- 不是 NULL,Bronze raw 保留原始字串,Silver builder cast 用 NULLIF(...)::TIMESTAMPTZ
 -- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補上(spec §3.6 表格漏寫,依 Bronze 一致原則補回)
 -- PR #R3(alembic t9u0v1w2x3y4)去 `_tw` 後綴升格成主名
+-- v0.3 phase 2(alembic b8c9d0e1f2g3,2026-05-23):加 report_date 為 GENERATED
+-- column,自 create_time 派生(FinMind publish timestamp,TEXT;PR #18.5 hotfix
+-- m2n3o4p5q6r7 確認某些 row 是 "")。CASE 防禦非法 / 空字串 → NULL,PIT 層
+-- fallback heuristic(date + 11 天)補。
 CREATE TABLE IF NOT EXISTS monthly_revenue (
     market         TEXT NOT NULL,
     stock_id       TEXT NOT NULL,
@@ -888,10 +901,19 @@ CREATE TABLE IF NOT EXISTS monthly_revenue (
     country        TEXT,
     create_time    TEXT,
     source         TEXT NOT NULL DEFAULT 'finmind',
+    report_date    DATE GENERATED ALWAYS AS (
+        CASE
+            WHEN create_time IS NULL OR create_time = '' THEN NULL
+            WHEN create_time !~ '^\d{4}-\d{2}-\d{2}' THEN NULL
+            ELSE substring(create_time, 1, 10)::DATE
+        END
+    ) STORED,
     PRIMARY KEY (market, stock_id, date)
 );
 CREATE INDEX IF NOT EXISTS idx_monthly_revenue_stock_date_desc
     ON monthly_revenue (stock_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_monthly_revenue_report_date
+    ON monthly_revenue (report_date);
 
 
 -- =============================================================================

@@ -13,12 +13,13 @@ adjustment events.  Use `asof_close_series` / `asof_ohlc` instead.
 
 from pit.ohlcv import asof_close_series, asof_ohlc
 from pit._calendar import trading_days_between
-from pit.fundamental import asof_revenue, asof_financial
+from pit.fundamental import asof_revenue, asof_financial, asof_business_indicator
 
 __all__ = [
     "asof_close_series",
     "asof_ohlc",
     "asof_revenue",
     "asof_financial",
+    "asof_business_indicator",
     "trading_days_between",
 ]
