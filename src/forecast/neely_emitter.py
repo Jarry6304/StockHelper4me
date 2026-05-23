@@ -218,6 +218,16 @@ def emit_neely_fib(
                 "snapshot_date": str(snapshot_date)}
 
     zones = primary.get("expected_fib_zones") or []
+    fallback_used = False
+    if not zones:
+        # v4.11 起 neely_core top-level 加 `flat_fib_zones`:全 forest scenario
+        # expected_fib_zones 去重聯集(Fusion Layer P1.1)。primary picker 選的
+        # scenario 可能沒填 zones(spec 允許);此時退而求其次用 union 仍可給
+        # LLM 看一個粗略 envelope。
+        flat = snapshot.get("flat_fib_zones") or []
+        if flat:
+            zones = flat
+            fallback_used = True
     if not zones:
         return {"status": "no_fib_zones", "zones_emitted": 0,
                 "snapshot_date": str(snapshot_date)}
@@ -258,6 +268,7 @@ def emit_neely_fib(
                  if z.get("low") is not None and z.get("high") is not None]
     point = sum(midpoints) / len(midpoints) if midpoints else None
 
+    source_tag = "flat_union" if fallback_used else "primary"
     upsert_forecast(
         conn,
         {
@@ -271,7 +282,11 @@ def emit_neely_fib(
             "calibrated": False,
             "source_core": "neely_fib",
             "regime_tag": regime_tag,
-            "params_hash": f"neely_fib|n_zones={n_emitted}|degree={_effective_degree(primary) or 'unk'}",
+            "params_hash": (
+                f"neely_fib|n_zones={n_emitted}|"
+                f"degree={_effective_degree(primary) or 'unk'}|"
+                f"source={source_tag}"
+            ),
         },
     )
     return {
@@ -281,4 +296,5 @@ def emit_neely_fib(
         "zones_emitted": n_emitted,
         "envelope": (round(envelope_lower, 4), round(envelope_upper, 4)),
         "snapshot_date": str(snapshot_date),
+        "fallback_to_flat_union": fallback_used,
     }

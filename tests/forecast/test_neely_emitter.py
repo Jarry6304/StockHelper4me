@@ -156,3 +156,39 @@ class TestEmitNeelyFib:
             res = emit_neely_fib(None, "2330", date(2024, 6, 1), overwrite_horizon=126)
         assert res["horizon_days"] == 126
         assert written[0]["horizon_days"] == 126
+
+    def test_fallback_to_flat_union_when_primary_empty(self):
+        # primary scenario has no fib zones, but top-level flat_fib_zones populated
+        # (v4.11+ neely_core output structure)
+        primary = _make_scenario(span_days=400, fib_zones=[])
+        snap = {
+            "snapshot_date": date(2024, 5, 30),
+            "snapshot": {
+                "scenario_forest": [primary],
+                "flat_fib_zones": [
+                    {"label": "u_0.382", "low": 88.0, "high": 92.0},
+                    {"label": "u_0.618", "low": 95.0, "high": 105.0},
+                ],
+            },
+        }
+        written = []
+        with patch("forecast.neely_emitter._fetch_latest_neely_snapshot", return_value=snap), \
+             patch("forecast.neely_emitter.upsert_forecast",
+                   side_effect=lambda conn, row: written.append(row)):
+            res = emit_neely_fib(None, "2330", date(2024, 6, 1))
+        assert res["status"] == "written"
+        assert res["fallback_to_flat_union"] is True
+        assert res["envelope"] == (88.0, 105.0)
+        assert "source=flat_union" in written[0]["params_hash"]
+
+    def test_no_fib_zones_when_both_primary_and_flat_empty(self):
+        primary = _make_scenario(span_days=400, fib_zones=[])
+        snap = {
+            "snapshot_date": date(2024, 5, 30),
+            "snapshot": {"scenario_forest": [primary], "flat_fib_zones": []},
+        }
+        with patch("forecast.neely_emitter._fetch_latest_neely_snapshot", return_value=snap), \
+             patch("forecast.neely_emitter.upsert_forecast") as upd:
+            res = emit_neely_fib(None, "2330", date(2024, 6, 1))
+        assert res["status"] == "no_fib_zones"
+        upd.assert_not_called()
