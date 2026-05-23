@@ -887,14 +887,12 @@ CREATE INDEX IF NOT EXISTS idx_financial_statement_report_date
 -- 不是 NULL,Bronze raw 保留原始字串,Silver builder cast 用 NULLIF(...)::TIMESTAMPTZ
 -- source 欄為 PR #R1(alembic r7s8t9u0v1w2)補上(spec §3.6 表格漏寫,依 Bronze 一致原則補回)
 -- PR #R3(alembic t9u0v1w2x3y4)去 `_tw` 後綴升格成主名
--- v0.3 phase 2(alembic b8c9d0e1f2g3,2026-05-23):加 report_date 為 GENERATED
--- column,自 create_time 派生(FinMind publish timestamp,TEXT;PR #18.5 hotfix
--- m2n3o4p5q6r7 確認某些 row 是 "")。CASE 防禦非法 / 空字串 → NULL,PIT 層
--- fallback heuristic(date + 11 天)補。
---
--- ⚠️ PG STORED generated column 要求 IMMUTABLE expression。text::DATE 走
--- DateStyle GUC → STABLE,不可用;to_date(text, 'YYYY-MM-DD') 顯式 format
--- → IMMUTABLE,可用。
+-- v0.3 phase 2(alembic b8c9d0e1f2g3,2026-05-23):report_date 從 create_time
+-- TEXT 派生。原想用 GENERATED STORED column 但 PG IMMUTABLE 限制不允許
+-- (text::DATE 走 DateStyle GUC、to_date(text,fmt) 走 lc_time GUC,都 STABLE
+-- 不 IMMUTABLE),改 plain DATE + BEFORE INSERT/UPDATE trigger(trigger 無
+-- IMMUTABLE 限制)。CASE 防禦非法 / 空字串 → NULL,PIT 層 fallback
+-- heuristic(date + 11 天)補。
 CREATE TABLE IF NOT EXISTS monthly_revenue (
     market         TEXT NOT NULL,
     stock_id       TEXT NOT NULL,
@@ -905,19 +903,34 @@ CREATE TABLE IF NOT EXISTS monthly_revenue (
     country        TEXT,
     create_time    TEXT,
     source         TEXT NOT NULL DEFAULT 'finmind',
-    report_date    DATE GENERATED ALWAYS AS (
-        CASE
-            WHEN create_time IS NULL OR create_time = '' THEN NULL
-            WHEN create_time !~ '^\d{4}-\d{2}-\d{2}' THEN NULL
-            ELSE to_date(substring(create_time, 1, 10), 'YYYY-MM-DD')
-        END
-    ) STORED,
+    report_date    DATE,    -- v0.3 phase 2(由 trigger 從 create_time 自動填)
     PRIMARY KEY (market, stock_id, date)
 );
 CREATE INDEX IF NOT EXISTS idx_monthly_revenue_stock_date_desc
     ON monthly_revenue (stock_id, date DESC);
 CREATE INDEX IF NOT EXISTS idx_monthly_revenue_report_date
     ON monthly_revenue (report_date);
+
+-- v0.3 phase 2:report_date 自動填 trigger function
+CREATE OR REPLACE FUNCTION trg_monthly_revenue_set_report_date()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.create_time IS NOT NULL
+       AND NEW.create_time != ''
+       AND NEW.create_time ~ '^\d{4}-\d{2}-\d{2}'
+    THEN
+        NEW.report_date := (substring(NEW.create_time, 1, 10))::DATE;
+    ELSE
+        NEW.report_date := NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_monthly_revenue_report_date
+    BEFORE INSERT OR UPDATE ON monthly_revenue
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_monthly_revenue_set_report_date();
 
 
 -- =============================================================================
