@@ -302,6 +302,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="只結算指定 stock_id(逗號分隔;預設全部)",
     )
 
+    # forecast emit-neely --stocks 2330 [--asof TODAY]
+    f_neely = forecast_subparsers.add_parser(
+        "emit-neely",
+        help="從 neely_core structural_snapshots 派 fib zone envelope 進 forecast_log(裁量軌 forward-only)",
+    )
+    f_neely.add_argument("--stocks", required=True, help="股票清單(逗號分隔)")
+    f_neely.add_argument("--asof", help="forecast_date(預設 today)")
+    f_neely.add_argument("--timeframe", default="daily", choices=["daily", "weekly", "monthly"])
+    f_neely.add_argument(
+        "--confidence", type=float, default=0.60,
+        help="nominal confidence(fib 非統計帶,calibrated=False;預設 0.60)",
+    )
+    f_neely.add_argument(
+        "--horizon", type=int,
+        help="覆寫 horizon_days(預設由 scenario degree 推算)",
+    )
+
+    # forecast manual --stock 2330 --date 2026-05-23 --horizon 63 --lower 1200 --upper 1500
+    f_manual = forecast_subparsers.add_parser(
+        "manual",
+        help="寫一筆手動情景 forecast_log row(裁量軌 forward-only)",
+    )
+    f_manual.add_argument("--stock", required=True, help="單一股票 ID")
+    f_manual.add_argument("--date", required=True, help="forecast_date YYYY-MM-DD")
+    f_manual.add_argument("--horizon", type=int, required=True, help="horizon_days")
+    f_manual.add_argument("--lower", type=float, required=True)
+    f_manual.add_argument("--upper", type=float, required=True)
+    f_manual.add_argument("--point", type=float, help="中樞(預設 (lower+upper)/2)")
+    f_manual.add_argument("--confidence", type=float, default=0.70)
+    f_manual.add_argument("--regime", help="regime_tag(e.g. 5wave_completion)")
+    f_manual.add_argument("--note", help="短註解寫入 params_hash 後綴")
+
     # forecast conformalize --stocks 2330 --since 2022-01-01 --until TODAY
     f_conf = forecast_subparsers.add_parser(
         "conformalize",
@@ -917,6 +949,42 @@ def _run_forecast(args) -> None:
                 tag = sid if sid else "ALL"
                 print(f"settle asof={asof} stock={tag} core={args.core or 'ALL'} -> {summary}")
             print(f"\ntotal: {grand}")
+
+    elif sub == "emit-neely":
+        from forecast.neely_emitter import emit_neely_fib
+        from forecast._db import get_connection
+
+        stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
+        asof = _parse_date(args.asof) or _date.today()
+        with get_connection() as conn:
+            for sid in stocks:
+                res = emit_neely_fib(
+                    conn, sid, asof,
+                    timeframe=args.timeframe,
+                    confidence=args.confidence,
+                    overwrite_horizon=args.horizon,
+                )
+                print(f"{sid} @ {asof}: {res}")
+
+    elif sub == "manual":
+        from forecast.manual import write_manual_forecast
+        from forecast._db import get_connection
+
+        fd = _parse_date(args.date)
+        with get_connection() as conn:
+            res = write_manual_forecast(
+                conn,
+                stock_id=args.stock,
+                forecast_date=fd,
+                horizon_days=args.horizon,
+                lower=args.lower,
+                upper=args.upper,
+                point=args.point,
+                confidence=args.confidence,
+                regime=args.regime,
+                note=args.note,
+            )
+            print(res)
 
     elif sub == "conformalize":
         from forecast.calibration import conformalize_batch

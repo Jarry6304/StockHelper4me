@@ -28,6 +28,8 @@ from forecast.calibration import (
     nonconformity_score,
     cqr_quantile,
 )
+from forecast.neely_emitter import emit_neely_fib
+from forecast.manual import write_manual_forecast
 
 __all__ = [
     "get_connection",
@@ -43,4 +45,6 @@ __all__ = [
     "conformalize_batch",
     "nonconformity_score",
     "cqr_quantile",
+    "emit_neely_fib",
+    "write_manual_forecast",
 ]
