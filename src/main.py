@@ -256,8 +256,15 @@ def build_parser() -> argparse.ArgumentParser:
     f_backtest.add_argument(
         "--core",
         default="baseline",
-        choices=["baseline", "log_channel"],  # v0.3 Python forecast cores
-        help="forecast core 名(baseline / log_channel;Kalman 走 Rust run-backtest)",
+        choices=["baseline", "log_channel",
+                 # M8 non-price cores(v4.24,2026-05-24)
+                 "chip_forecast_core", "macro_forecast_core",
+                 "fundamental_forecast_core"],
+        help=(
+            "forecast core 名 — price-only: baseline / log_channel;"
+            " non-price (M8): chip_forecast_core / macro_forecast_core /"
+            " fundamental_forecast_core;Kalman 走 Rust run-backtest"
+        ),
     )
     f_backtest.add_argument(
         "--stocks",
@@ -906,19 +913,54 @@ def _run_forecast(args) -> None:
 
     if sub == "backtest":
         from forecast.backtest import run_backtest
-        from forecast.baseline import make_baseline_forecast
-        from forecast.log_channel import make_log_channel_forecast
         from forecast._db import get_connection
 
-        # core 對映 forecast_fn
-        core_to_fn = {
-            "baseline": make_baseline_forecast,
-            "log_channel": make_log_channel_forecast,
+        # Two flavors of core:
+        # (A) price-only — forecast_fn(series, T, h, c) — closed over nothing
+        # (B) DB-aware (M8 non-price cores) — needs conn + stock_id;
+        #     wrap in per-stock closure inside the loop
+        PRICE_ONLY_CORES = {"baseline", "log_channel"}
+        DB_AWARE_CORES = {
+            "chip_forecast_core",
+            "macro_forecast_core",
+            "fundamental_forecast_core",
         }
-        if args.core not in core_to_fn:
+
+        def _build_price_only_fn(core_name: str):
+            if core_name == "baseline":
+                from forecast.baseline import make_baseline_forecast as _f
+            elif core_name == "log_channel":
+                from forecast.log_channel import make_log_channel_forecast as _f
+            else:
+                raise ValueError(f"unknown price-only core: {core_name}")
+            return _f
+
+        def _build_db_aware_factory(core_name: str):
+            if core_name == "fundamental_forecast_core":
+                from forecast.fundamental_forecast import make_fundamental_forecast as _f
+            elif core_name == "macro_forecast_core":
+                from forecast.macro_forecast import make_macro_forecast as _f
+            elif core_name == "chip_forecast_core":
+                from forecast.chip_forecast import make_chip_forecast as _f
+            else:
+                raise ValueError(f"unknown DB-aware core: {core_name}")
+
+            def factory(conn, stock_id):
+                def fn(series, fdate, horizon, conf):
+                    return _f(series, fdate, horizon, conf,
+                              conn=conn, stock_id=stock_id)
+                return fn
+            return factory
+
+        if args.core in PRICE_ONLY_CORES:
+            fn = _build_price_only_fn(args.core)
+            factory = None
+        elif args.core in DB_AWARE_CORES:
+            fn = None
+            factory = _build_db_aware_factory(args.core)
+        else:
             print(f"[ERROR] 未知 forecast core:{args.core}", file=sys.stderr)
             sys.exit(1)
-        fn = core_to_fn[args.core]
 
         stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
         since = _parse_date(args.since)
@@ -933,10 +975,11 @@ def _run_forecast(args) -> None:
                     "forecast backtest stock=%s core=%s [%s, %s] horizons=%s confs=%s",
                     stock_id, args.core, since, until, horizons, confidences,
                 )
+                stock_fn = fn if factory is None else factory(conn, stock_id)
                 summary = run_backtest(
                     conn,
                     stock_id=stock_id,
-                    forecast_fn=fn,
+                    forecast_fn=stock_fn,
                     source_core=args.core,
                     start=since,
                     end=until,

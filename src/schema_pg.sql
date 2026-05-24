@@ -1746,7 +1746,9 @@ CREATE TABLE IF NOT EXISTS forecast_log (
     CONSTRAINT chk_forecast_calibrated_or_unsigned CHECK (
         calibrated = TRUE
         OR source_core IN ('baseline', 'log_channel', 'fib', 'manual',
-                           'kalman_raw', 'neely_fib', 'kalman_forecast_core')
+                           'kalman_raw', 'neely_fib', 'kalman_forecast_core',
+                           'chip_forecast_core', 'macro_forecast_core',
+                           'fundamental_forecast_core')
     )
 );
 CREATE INDEX IF NOT EXISTS idx_forecast_log_pending

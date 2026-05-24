@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
-- **alembic head**:`f1g2h3i4j5k6`(v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`;v3.32 加 10 張 cross_cores ranked + 1 張 monthly_trigger_signals_derived)
+- **alembic head**:`d0e1f2g3h4i5`(v4.24 M8 forecast_log whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
 - **開發分支**:`claude/plan-stockhelper-api-kWh9F`(Fusion Layer P0+P1+P2)→ PR #91 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
@@ -263,6 +263,154 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.24 — M8 sprint:3 non-price forecast cores 全套(2026-05-24)
+
+接 v4.23 揭露 fusion 因 3 cores 全 price-only(誤差高度相關)無法收 Bates-Granger
+1969 變異數縮減後,動工 M8 sprint:把 v4.23 §future work 提案的 3 個 non-price
+forecast core 全部落地 — 讓 fusion 真正能消費 uncorrelated signal sources。
+
+### 動工(5 commits / branch `claude/fusion-forecast-cores-nh6MQ`)
+
+| Commit | 範圍 |
+|---|---|
+| 1 alembic | `d0e1f2g3h4i5_m8_forecast_cores_whitelist`:擴 `chk_forecast_calibrated_or_unsigned` IN 列表收 3 個新 core;DROP + RE-ADD pattern(PG 14+ 沒 ALTER CONSTRAINT mutate);schema_pg.sql 同步 |
+| 2 fundamental | `src/forecast/fundamental_forecast.py` 134 行 + 19 tests + CLI factory dispatch |
+| 3 macro | `src/forecast/macro_forecast.py` 235 行 + 43 tests |
+| 4 chip | `src/forecast/chip_forecast.py` 312 行 + 26 tests |
+| 5 doc(本)| CLAUDE.md v4.24 章節 |
+
+### 3 cores 訊號設計
+
+| Core | 訊號 | weight 合成 | fade × cap |
+|---|---|---|---|
+| `fundamental_forecast_core` | revenue YoY 3-month avg(via `pit.fundamental.asof_revenue`)| 單訊號 | 0.30 × ±20% |
+| `macro_forecast_core` | TWD/USD 21d ROC + business indicator monitoring color | 0.5 × twd + 0.5 × biz | 0.40 × ±15% |
+| `chip_forecast_core` | 法人 net flow z-score(20d vs 60d baseline)+ margin balance 20d roc(contrarian) | 0.7 × inst + 0.3 × margin | 0.35 × ±18% |
+
+通用模型:`drift_h = clamp(score × fade × (h/252), ±cap)`;
+variance 從 price 殘差(60d realized log return std)算;
+interval = `point ± z(c) × σ × √h`。
+
+variance 走 price 是設計接受 — fusion 的 Bates-Granger 變異數縮減效益來自
+*點預測* 誤差 uncorrelated,寬度 correlation 是 second-order。
+
+### PIT-safety
+
+| Source table | Filter |
+|---|---|
+| `monthly_revenue` | `COALESCE(report_date, date + 11d) ≤ asof_t`(既有 PIT helper) |
+| `exchange_rate` | `date ≤ asof_t - 1 day`(BoT 隔日早上釋出 spot rate) |
+| `business_indicator_tw` | `COALESCE(report_date, date + 27d) ≤ asof_t`(既有 PIT helper) |
+| `institutional_daily_derived` | `date ≤ asof_t`(同日盤後公布) |
+| `margin_daily_derived` | `date ≤ asof_t`(同上) |
+
+### CLI 改動(`src/main.py`)
+
+`forecast backtest --core` choices 從 `{baseline, log_channel}` 擴
+`{baseline, log_channel, chip_forecast_core, macro_forecast_core,
+fundamental_forecast_core}`。
+
+dispatch 拆兩 path:
+- **PRICE_ONLY_CORES**(baseline / log_channel):走原既有路徑,forecast_fn 無 DB 依賴
+- **DB_AWARE_CORES**(3 個新)走 factory pattern:per-stock 建 closure 帶 conn + stock_id
+
+既有 baseline / log_channel 行為 0 改動。
+
+### Bates-Granger 1969 預期啟動條件
+
+每個新 core 跑完 backtest → conformalize(`forecast conformalize --raw-core
+chip_forecast_core --target-core chip_forecast_core_cqr ...`)→ 進
+`forecast_log calibrated=TRUE` → `fusion.eligible_cores()` 自動發現 → 若
+mean_pinball 過去 100 期勝過 baseline AND n_samples ≥ 30 → 進 eligible 列表
+→ `fusion._intersect_all` 對 baseline + kalman_cqr + log_channel_cqr +
+chip_cqr + macro_cqr + fundamental_cqr 取交集 → 區間真正窄化 + 點預測平均
+
+預期 production 行為(待 user 跑 backtest 後 verify):
+- 3 個新 core 個別 pinball 可能略低於 baseline(noisier signal sources)
+- 但跨 core 誤差相關性 → 下降(price / macro / chip / fundamental 各自獨立)
+- fusion 點預測穩定性 ↑(variance reduction);區間 reliability ≥ baseline
+
+### Tests(本 PR)
+
+| Module | 新 tests |
+|---|---|
+| `test_fundamental_forecast.py` | 19 cases(_compute_yoy_3m_avg ×6 / _compute_realized_vol ×3 / make ×10) |
+| `test_macro_forecast.py` | 43 cases(_parse_color_score parametrized ×21 / _compute_twd ×6 / _compute_biz ×7 / make ×9) |
+| `test_chip_forecast.py` | 26 cases(_net_flow ×6 / _compute_inst_score ×5 / _compute_margin_score ×6 / make ×9) |
+| **Total** | **+88 tests(`tests/forecast/` 從 73 → 161)** |
+
+`pytest tests/forecast/` ✅ 161 passed / 0 failed。0 既有 forecast tests regression。
+
+### user 本機 production verify(下次 session)
+
+```powershell
+git pull
+alembic upgrade head   # c9d0e1f2g3h4 → d0e1f2g3h4i5
+
+# 1. 跑每個新 core 的 backtest(估各 ~30 分 / stock / 5 年)
+python src/main.py forecast backtest --core fundamental_forecast_core --stocks 2330 --since 2020-01-01
+python src/main.py forecast backtest --core macro_forecast_core --stocks 2330 --since 2020-01-01
+python src/main.py forecast backtest --core chip_forecast_core --stocks 2330 --since 2020-01-01
+
+# 2. settle past forecasts(同既有 pipeline)
+python src/main.py forecast settle --core fundamental_forecast_core
+python src/main.py forecast settle --core macro_forecast_core
+python src/main.py forecast settle --core chip_forecast_core
+
+# 3. conformalize 三個新 core
+python src/main.py forecast conformalize \
+    --raw-core fundamental_forecast_core --target-core fundamental_forecast_core_cqr \
+    --stocks 2330 --since 2020-01-01
+# 同理 macro / chip
+
+# 4. fusion 自動 pick up(fusion 邏輯不需改;eligible_cores 自動發現)
+python src/main.py forecast fusion --stocks 2330 --since 2020-01-01
+
+# 5. 對比 v4.23 baseline 表(83,646 forecasts × 6 stocks × 3 horizons × 3 conf)
+python src/main.py forecast score --stocks 2330,1101,2317,2330,2454,2618,2603
+```
+
+### 範圍
+
+| | |
+|---|---|
+| 程式 | 681 行(3 cores)+ 60 行(CLI dispatch)+ ~1,400 行 tests |
+| schema | 1 alembic migration(whitelist 擴 IN 列表)|
+| Rust | **0** |
+| collector.toml | **0** |
+| 行為向下相容 | 既有 baseline / log_channel / kalman_cqr / fusion 0 改動;tests 0 regression |
+
+### 風險
+
+🟢 低:
+- 0 Rust / 0 collector.toml,純 Python module 加 + alembic CHECK constraint 擴
+- DB-aware factory pattern 從 dispatch table 嚴格分流,price-only cores 0 影響
+- 既有 forecast tests 161 passed(73 baseline + 88 新)0 regression
+- alembic upgrade 用 DROP + RE-ADD constraint,downgrade no-op-safe 回原 7 entries
+- Rollback:每 commit 獨立 `git revert`;alembic downgrade 反向
+
+🟡 中:
+- **3 cores 個別預測力未在 production 驗**(沙箱 synthetic data only);user 跑
+  backtest 後若 pinball 比 baseline 差太多(> 1.5×),fade_factor 需重 calibrate
+- **fade_factor / drift_cap / saturation 全部 best-guess 初版**;預期跑完
+  conformalize → CQR 自動把區間調寬正確覆蓋率;但若校準後 width >> baseline,
+  pinball 仍會輸 → 個別 core 可能不進 fusion eligible 列表
+- **chip_forecast_core 不消費 loan_collateral_balance_derived**(v3.21 新表)—
+  V2 加入後 chip_score 改 3 訊號合成;當前 V1 範圍對齊「先有 working 版本」
+
+🔴 高:**無**
+
+### Out of scope(V2 議題,等 production verify 後再評估)
+
+- **chip_forecast_core 加 loan_collateral 第三訊號**(v3.21 新表,信號獨立)
+- **macro_forecast_core 加 sector beta**(電子 / 金融 / 傳產對 TWD 反應不同)
+- **fundamental_forecast_core 加 financial_statement signal**(EPS YoY / 毛利率 trend)
+- **per-stock fade_factor calibration**(不同產業有不同 revenue→price 彈性)
+- **MCP 暴露**:目前 forecast 只 internally 跑 backtest/score;若要 LLM 對話內看
+  per-horizon prediction,需新加 MCP tool(對齊 neely_forecast pattern)
 
 ---
 
