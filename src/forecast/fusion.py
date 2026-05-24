@@ -18,6 +18,27 @@ Excluded source_cores(全是 calibrated=False — 強制規則:未校準者不�
     baseline / log_channel / kalman_forecast_core / neely_fib / manual / fib
 
 通常 eligible 名單:kalman_cqr(M4 校準)+ 後續其他 conformalized cores。
+
+實證限制(2026-05-23 production verify,6 stocks × 1549 days × 3h × 3conf):
+    Fusion **strictly dominated by kalman_cqr** on pinball / sharpness /
+    reliability 三項 across 21/63/126 天 horizons。Root cause:現有 3 個 cores
+    (baseline / kalman_cqr / log_channel_cqr)全部基於 daily close price →
+    誤差高度相關 → 違反 Bates-Granger 1969 forecast combination puzzle 前提
+    (multi forecaster 等權平均勝單一者的前提是「誤差 uncorrelated」)。
+    Intersection 路徑實際上等同 kalman_cqr 的 pass-through + selection bias
+    (子集偏難 — 只在 kalman_cqr 過去勝 baseline 才寫)。
+
+    保留 fusion 是因為(1) spec compliance(2) 理論上正確(3) 未來性 — 加入
+    非 price 信號源 cores 後 fusion 將真正展現變異數縮減。
+
+Future work(M8+,獨立 sprint):
+    加非 price-based forecast cores 讓誤差 uncorrelated:
+      - chip_forecast_core      ← institutional flow + margin / loan_collateral
+      - macro_forecast_core     ← FX / commodity / business_indicator
+      - fundamental_forecast_core ← revenue YoY + financial_statement
+    每個 follow 既有 5 接點 pattern(寫 forecast_log calibrated=False →
+    conformalize 加 X / X_cqr → 進 eligible_cores 自動 picked up)。完整紀錄
+    見 CLAUDE.md §v4.23。
 """
 
 from __future__ import annotations
