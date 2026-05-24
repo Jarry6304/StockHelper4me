@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import numpy as np
@@ -183,16 +183,24 @@ def make_fundamental_forecast(
         few price bars / vol uncomputable.
     """
     # 1. Fetch revenue rows if not provided
+    # Inline SQL(不走 pit.fundamental.asof_revenue)— 該 helper SELECT 含 detail
+    # column 在某些 env schema drift 下不存在會炸。此處只取本 core 真實需要的
+    # 4 欄,搭配同款 PIT filter `COALESCE(report_date, date + 11d) ≤ asof_t`。
     if revenue_rows is None:
         if conn is None or stock_id is None:
             return None
-        try:
-            from pit.fundamental import asof_revenue
-        except ImportError:
-            return None
-        revenue_rows = asof_revenue(
-            conn, stock_id=stock_id, asof_t=forecast_date, market=market,
-        )
+        earliest = forecast_date - timedelta(days=24 * 31 + 60)
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT date, revenue, revenue_year, revenue_month
+                     FROM monthly_revenue
+                    WHERE market = %s AND stock_id = %s
+                      AND date >= %s
+                      AND COALESCE(report_date, date + INTERVAL '11 days') <= %s
+                    ORDER BY date""",
+                (market, stock_id, earliest, forecast_date),
+            )
+            revenue_rows = list(cur.fetchall())
     if len(revenue_rows) < _MIN_REVENUE_ROWS:
         return None
 

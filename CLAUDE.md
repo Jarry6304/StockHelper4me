@@ -280,7 +280,10 @@ forecast core 全部落地 — 讓 fusion 真正能消費 uncorrelated signal so
 | 2 fundamental | `src/forecast/fundamental_forecast.py` 134 行 + 19 tests + CLI factory dispatch |
 | 3 macro | `src/forecast/macro_forecast.py` 235 行 + 43 tests |
 | 4 chip | `src/forecast/chip_forecast.py` 312 行 + 26 tests |
-| 5 doc(本)| CLAUDE.md v4.24 章節 |
+| 5 doc | CLAUDE.md v4.24 章節 |
+| 6 hotfix | `macro_forecast` + `pit.fundamental` market case 'tw' → 'TW' 對齊 production |
+| 7 hotfix | `fundamental_forecast` 改 inline SQL 避開 `monthly_revenue` 無 `detail` column env drift |
+| 8 doc | 加 production verify 結果(2330 1 stock 5 yr)|
 
 ### 3 cores 訊號設計
 
@@ -328,10 +331,68 @@ mean_pinball 過去 100 期勝過 baseline AND n_samples ≥ 30 → 進 eligible
 → `fusion._intersect_all` 對 baseline + kalman_cqr + log_channel_cqr +
 chip_cqr + macro_cqr + fundamental_cqr 取交集 → 區間真正窄化 + 點預測平均
 
-預期 production 行為(待 user 跑 backtest 後 verify):
-- 3 個新 core 個別 pinball 可能略低於 baseline(noisier signal sources)
-- 但跨 core 誤差相關性 → 下降(price / macro / chip / fundamental 各自獨立)
-- fusion 點預測穩定性 ↑(variance reduction);區間 reliability ≥ baseline
+### Production verify(2026-05-24,2330 1 stock 5 yr backtest)
+
+完整流水線 user 本機跑(alembic upgrade → 3 cores backtest → settle → CQR
+conformalize → settle → fuse → settle → score),終極對比表(c=0.80):
+
+| h | source_core | n_settled | rel_pct | pinball | mean_width |
+|---|---|---|---|---|---|
+| **21** | macro_cqr | 1504 | 82.0 | 10.17 | 152.47 |
+| | chip_cqr | 1504 | 81.3 | 10.20 | 148.69 |
+| | fund_cqr | 1462 | 81.1 | 10.20 | 148.83 |
+| | **fusion** | **774** | **70.5** | **11.99** ✅ | **118.05** 🏆 |
+| | baseline | 1534 | 74.5 | 12.09 | 155.59 |
+| **63** | fund_cqr | 1435 | 79.5 | 18.74 | 281.74 |
+| | macro_cqr | 1477 | 80.4 | 18.80 | 302.15 |
+| | **fusion** | **516** | **69.0** | **18.81** ≈ best | **221.05** 🏆 |
+| | chip_cqr | 1477 | 77.0 | 19.70 | 277.81 |
+| | baseline | 1507 | 69.4 | 20.80 | 253.27 |
+| **126** | **fusion** | **708** | **72.7** | **25.50** 🏆 | **310.17** 🏆 |
+| | fund_cqr | 1398 | 82.0 | 27.07 | 430.91 |
+| | chip_cqr | 1440 | 77.2 | 29.53 | 427.26 |
+| | macro_cqr | 1440 | 78.2 | 29.57 | 462.00 |
+| | baseline | 1470 | 47.9 | 35.08 | 332.14 |
+
+vs v4.23 對比:
+| h | v4.23 fusion(3 price-only cores) | M8 fusion(+ 3 non-price) | 改善 |
+|---|---|---|---|
+| 21 | 輸 baseline 45% pinball | 勝 baseline 0.8% pinball | 🎯 從輸到勝 |
+| 63 | 輸 baseline 116% pinball | 勝 baseline 9.6% pinball | 🎯 -40% pinball |
+| 126 | 輸 baseline 53% pinball | 勝 baseline 27% pinball + 連最佳單 core 都勝 | 🎯 -34% pinball |
+
+關鍵發現:
+- **mean_width 全表最窄**:Bates-Granger intersection 真實生效;h=21 fusion 118
+  vs 個別 cores 148-515(-22%);h=126 fusion 310 vs 332-1740(-7~-82%)
+- **h=126 fusion 連最佳單一 core 都打過**(25.50 vs fund_cqr 27.07)— 純粹的
+  Bates-Granger 1969 變異數縮減:長 horizon 個別 core noise 累積大,combination
+  averaging 降低 variance 最有效
+- **kalman_cqr 沒勝 baseline**(h=21 14.19 vs 12.09)— v4.23 fusion 輸 baseline
+  根本原因揭露:當 eligible_cores 只有 kalman_cqr + log_channel_cqr(寬到 5×)
+  → fusion 退化成 pass-through 但用了不該 pick 的 cores
+
+3 cores raw vs CQR 表(c=0.80):
+
+| Core | h | raw pinball | cqr pinball | raw rel% | cqr rel% |
+|---|---|---|---|---|---|
+| fund | 21 | 10.16 | 10.20 | 84.2 | 81.1 |
+| fund | 63 | 18.70 | 18.74 | 80.2 | 79.5 |
+| fund | 126 | 28.21 | 27.07 | 70.4 | 82.0 |
+| macro | 21 | 10.12 | 10.17 | 83.8 | 82.0 |
+| macro | 63 | 18.84 | 18.80 | 75.7 | 80.4 |
+| macro | 126 | 31.78 | 29.57 | 66.7 | 78.2 |
+| chip | 21 | 10.16 | 10.20 | 84.5 | 81.3 |
+| chip | 63 | 19.77 | 19.70 | 78.4 | 77.0 |
+| chip | 126 | 31.30 | 29.53 | 67.8 | 77.2 |
+
+CQR 修正模式 verified:
+- h=21:raw over-cover 84% → CQR 收回 81%(略縮 mean_width)
+- h=126:raw under-cover 67% → CQR 放寬到 78-82%(略寬 mean_width)
+- pinball 基本維持(raw 已經很好)
+
+### M8 待補(2026-05-24+):
+- 擴 6 stocks 對齊 v4.23 大表 apples-to-apples 對比
+- 觀察新 cores 在熊市 / 高 vol regime 下的穩定性
 
 ### Tests(本 PR)
 
@@ -393,11 +454,13 @@ python src/main.py forecast score --stocks 2330,1101,2317,2330,2454,2618,2603
 - Rollback:每 commit 獨立 `git revert`;alembic downgrade 反向
 
 🟡 中:
-- **3 cores 個別預測力未在 production 驗**(沙箱 synthetic data only);user 跑
-  backtest 後若 pinball 比 baseline 差太多(> 1.5×),fade_factor 需重 calibrate
-- **fade_factor / drift_cap / saturation 全部 best-guess 初版**;預期跑完
-  conformalize → CQR 自動把區間調寬正確覆蓋率;但若校準後 width >> baseline,
-  pinball 仍會輸 → 個別 core 可能不進 fusion eligible 列表
+- **2330 production verify 通過,但其他 5 stocks 未跑**(對齊 v4.23 大表 6 stocks
+  需自行擴跑);2330 是半導體景氣股,fundamental 訊號特別匹配 → 其他股(e.g.
+  傳產 / 金融)可能 pinball 改善幅度收斂
+- **fade_factor / drift_cap / saturation 全部 best-guess 初版**;2330 結果驗證
+  整體方向正確(raw 都勝 baseline),但 per-sector 或 per-regime 細調留 V2
+- **fusion rel_pct 70-72%(對 nominal 80%)略 undercover** — intersection 把
+  區間收窄到該收的地方換來 pinball 大幅改善,屬 sharpness vs coverage trade-off
 - **chip_forecast_core 不消費 loan_collateral_balance_derived**(v3.21 新表)—
   V2 加入後 chip_score 改 3 訊號合成;當前 V1 範圍對齊「先有 working 版本」
 

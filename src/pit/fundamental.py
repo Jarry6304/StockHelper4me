@@ -79,11 +79,15 @@ def asof_business_indicator(
     conn,
     asof_t: date,
     lookback_months: int = 24,
-    market: str = "tw",
+    market: str = "TW",
 ) -> list[dict[str, Any]]:
     """As-of-T view of business indicator(月頻,market-level)。
 
     Filter: COALESCE(report_date, date + 27d) ≤ asof_t
+
+    Note(M8 hotfix):default `market="TW"` 對齊 production business_indicator_tw
+    大寫 market 值;原 v0.3 default 是 "tw" 小寫 → 對 PG `WHERE market='tw'` 過濾
+    回 0 row(此 helper 自 v0.3 以來無 caller,bug 直到 M8 macro_forecast 才暴露)。
     """
     earliest = asof_t - timedelta(days=lookback_months * 31 + 60)
     with conn.cursor() as cur:
