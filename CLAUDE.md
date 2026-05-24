@@ -266,6 +266,84 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.23 — Fusion 實證限制紀錄 + future work(2026-05-24)
+
+v0.3 spec phase 7 fusion 落地後(M7 commit `a3c5ec9`)production verify(6 檔 ×
+1549 trading days × 3 horizons × 3 confidences = 83,646 forecasts)揭露 fusion
+**strictly dominated by kalman_cqr** on pinball / sharpness / reliability 三項
+across all 3 horizons(21/63/126 天)。
+
+| h | metric | baseline | kalman_cqr | fusion |
+|---|---|---|---|---|
+| 21 | pinball | **8.98** | 9.97 | 13.00 |
+| 21 | rel(.95) | 0.90 | **0.93** | 0.91 |
+| 63 | pinball | **14.51** | 21.34 | 31.32 |
+| 63 | rel(.95) | 0.83 | **0.92** | 0.89 |
+| 126 | pinball | **25.14** | 35.06 | 38.40 |
+| 126 | rel(.95) | 0.68 ❌ | **0.93** | 0.88 |
+
+### Root cause
+
+Fusion 設計基礎是 forecast combination puzzle(Bates & Granger 1969 / Stock &
+Watson 2004 / Smith & Wallis 2009):**多 uncorrelated forecaster 等權平均通常勝
+過任一單一 forecaster**。前提是**誤差 uncorrelated**。
+
+目前 3 cores 全部基於同一 daily close price:
+- `baseline` — 21-126 天歷史 return 經驗分位數
+- `kalman_cqr` — LLT 平滑 + CQR
+- `log_channel_cqr` — log(close) trailing OLS + CQR
+
+**全是 price-only signal,同源 → 誤差高度相關 → 違反 Bates-Granger 前提 →
+fusion 無 variance reduction 空間**。
+
+Intersection 主路徑:log_channel_cqr 區間 3× 寬於 kalman_cqr → 交集 ≈
+kalman_cqr 邊界 → fusion ≈ pass-through + selection bias(只在 kalman_cqr 過去
+勝 baseline 才寫 → 子集偏難)。
+
+### 拍版:保留 fusion + 記錄限制(2026-05-23)
+
+**不**移除 fusion:
+- spec compliance(v0.3 phase 7)
+- 理論上正確(Bates-Granger 1969 是經典金融計量結果)
+- 未來性 — cores 多元化後 fusion 真正活起來
+
+**做** documentation:本 v4.23 章節 + `src/forecast/fusion.py` 模組 docstring
+加實證限制段(future-self 提醒)。
+
+### Future work(M8+,獨立 sprint,不在本 branch)
+
+Fusion 真正展現價值需要 **非 price-based forecast cores**,讓多核誤差
+uncorrelated:
+
+| 提案 core | 信號源 | 與既有誤差相關性 |
+|---|---|---|
+| `chip_forecast_core` | institutional flow + margin / loan_collateral | 低 — 法人資訊獨立於 price |
+| `macro_forecast_core` | FX / commodity / business_indicator | 低 — macro signal 跨資產 |
+| `fundamental_forecast_core` | revenue YoY + financial_statement | 低 — 基本面 lag 月/季 |
+
+每個 follow 既有 5 接點 pattern(Rust crate 或 Python module → 寫
+`forecast_log` calibrated=False → conformalize 加 `--raw-core X --target-core
+X_cqr` → 進 fusion eligible_cores 自動 picked up)。
+
+加 2-3 個非 price core 後 fusion 預期:
+- intersection 真正狹窄(獨立投票)
+- divergence 在 regime shift 觸發(uncorrelated cores 分歧)
+- pinball 接近或勝最佳單一 core(Bates-Granger 變異數縮減)
+
+但**不在本 branch**(spine 建設範圍)— 本 branch 完成 verify 合 main 後,M8+ 另
+開 sprint。
+
+### 範圍(documentation-only,1 commit)
+
+| 檔 | 動作 |
+|---|---|
+| `CLAUDE.md` | 加 v4.23 章節(本段)|
+| `src/forecast/fusion.py` | 模組 docstring 加「實證限制 + future work」段 |
+
+🟢 風險極低:純 documentation,0 code 行為改變,0 alembic / 0 Rust / 0 collector.toml。
+
+---
+
 ## v4.22 — Neely quality_caveat 警告文字 spec 對齊(2026-05-22)
 
 User 全砍重建後 MCP `neely_forecast` 對 3030 / 2330 仍報 Fib 投影脫鉤(現價 381 /
