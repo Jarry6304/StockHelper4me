@@ -169,7 +169,7 @@ def _compute_realized_vol(closes: list[float], lookback: int) -> float | None:
 
 
 def _fetch_fx_rows(conn, asof_t: date, currency: str = "USD",
-                   lookback_days: int = 90, market: str = "tw") -> list[dict[str, Any]]:
+                   lookback_days: int = 90, market: str = "TW") -> list[dict[str, Any]]:
     """Fetch FX rate rows for currency through asof_t.
 
     PIT-safety: `date <= asof_t - 1 day`(spot rate published next morning per
@@ -225,8 +225,8 @@ def make_macro_forecast(
         fade_factor / drift_cap / vol_lookback / twd_lookback / twd_saturation:
             calibration knobs(見 module docstring §訊號設計).
         fx_currency: default "USD".
-        market: passed to pit fetcher / SQL; default "TW" for forecast,
-                business indicator uses lowercase "tw" internally.
+        market: passed to pit fetcher / SQL;default "TW"(對齊 production
+                exchange_rate / business_indicator_tw 大寫 market 值)。
 
     Returns:
         Row dict for upsert_forecast, or None if either macro signal unavailable.
@@ -238,7 +238,7 @@ def make_macro_forecast(
         fx_rows = _fetch_fx_rows(
             conn, asof_t=forecast_date, currency=fx_currency,
             lookback_days=max(twd_lookback * 3, 90),
-            market="tw",
+            market=market,
         )
     if business_rows is None:
         if conn is None:
@@ -248,7 +248,7 @@ def make_macro_forecast(
         except ImportError:
             return None
         business_rows = asof_business_indicator(
-            conn, asof_t=forecast_date, market="tw",
+            conn, asof_t=forecast_date, market=market,
         )
 
     twd_score = _compute_twd_momentum_score(
