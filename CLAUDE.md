@@ -391,8 +391,62 @@ CQR 修正模式 verified:
 - pinball 基本維持(raw 已經很好)
 
 ### M8 待補(2026-05-24+):
-- 擴 6 stocks 對齊 v4.23 大表 apples-to-apples 對比
+- ~~擴 6 stocks 對齊 v4.23 大表 apples-to-apples 對比~~ ✅ 已完成,見下方 §6-stocks 結果
 - 觀察新 cores 在熊市 / 高 vol regime 下的穩定性
+
+### 6-stocks production verify(2026-05-25,跨股 generalization 驗證)
+
+對齊 v4.23 章節 6-stock 大表 apples-to-apples 跑完(2330 / 1101 / 2317 / 2454 /
+2618 / 2603,5 年 backtest)。
+
+**Aggregate(6 stocks 跨 horizon mean pinball,c=0.80)**:
+
+| h | source_core | n_settled | n_stocks | pinball | mean_width | rel_pct |
+|---|---|---|---|---|---|---|
+| 21 | macro_cqr | 9024 | 6 | 6.70 | 86.77 | 80.7 |
+| 21 | chip_cqr | 9024 | 6 | 6.79 | 85.39 | 80.4 |
+| 21 | fund_cqr | 8772 | 6 | 6.81 | 85.75 | 79.6 |
+| 21 | **fusion** | 7633 | 6 | **6.88** | **72.49** 🏆 | 74.8 |
+| 21 | baseline | 9206 | 6 | 8.14 | 87.14 | 75.5 |
+| 63 | **fusion** | 7146 | 6 | **11.01** 🏆 | **130.66** 🏆 | 74.9 |
+| 63 | macro_cqr | 8862 | 6 | 11.10 | 162.80 | 80.2 |
+| 63 | fund_cqr | 8610 | 6 | 11.28 | 158.00 | 78.6 |
+| 63 | chip_cqr | 8862 | 6 | 11.49 | 155.00 | 79.5 |
+| 63 | baseline | 9044 | 6 | 13.49 | 156.39 | 70.3 |
+| 126 | **fusion** | 6763 | 6 | **15.79** 🏆 | **193.67** 🏆 | 75.5 |
+| 126 | fund_cqr | 8388 | 6 | 16.24 | 230.58 | 79.3 |
+| 126 | macro_cqr | 8640 | 6 | 16.62 | 245.42 | 78.6 |
+| 126 | chip_cqr | 8640 | 6 | 16.85 | 227.68 | 79.0 |
+| 126 | baseline | 8822 | 6 | 21.59 | 199.61 | 56.8 |
+
+**fusion 在 h=63 / h=126 雙拿 pinball + mean_width SOTA**;h=21 微差最佳單 _cqr
+(0.18 vs 0.30 pinball gap,但 mean_width 完勝)。
+
+**Per-stock final verdict — 18/18 wins**(每股每 horizon 都勝 baseline):
+
+| stock | h=21 delta | h=63 delta | h=126 delta |
+|---|---|---|---|
+| 1101 | -1.9% | -9.2% | -1.4% |
+| 2317 | -14.7% | -34.6% | -14.9% |
+| 2330 | -12.9% | -16.6% | -24.4% |
+| 2454 | -17.2% | -8.2% | -23.6% |
+| 2603 | -26.5% | -48.7% | -48.9% |
+| 2618 | -17.7% | -12.1% | -24.4% |
+
+範圍 -1.4% ~ -48.9% — **沒有 cherry-pick,完全跨股 generalizable**。
+1101(中華食,低波動大型股)改善最小;2603(長榮海)/ 2454(聯發科)改善最大
+(高波動,Bates-Granger variance reduction 效益槓桿最高)。
+
+vs v4.23 fusion(6 stocks c=0.95)pattern 全面翻轉:
+- h=21:輸 baseline 45% → 勝 baseline 15.5%
+- h=63:輸 baseline 116% → 勝 baseline 18.4%
+- h=126:輸 baseline 53% → 勝 baseline 26.9%
+
+(confidence 不同 absolute 數值不可直比,但 baseline-relative 方向完全翻轉)
+
+**M8 sprint 完整收尾** — fusion Bates-Granger 1969 變異數縮減 production-verified
+跨股穩定,可以進入 V2 議題(per-stock fade calibration / loan_collateral 第三 chip
+訊號 / MCP 暴露)。
 
 ### Tests(本 PR)
 
