@@ -4,7 +4,7 @@
 (`/root/.claude/plans/hashed-foraging-pixel.md`)+ v1.0 雙軌共振決策層
 (m3Spec/dual_track_resonance.md)。
 
-**Public toolkit(v4.25:11 + 1 dual_track = 12 tools)**:
+**Public toolkit(v4.25:11 + 1 dual_track + 1 wave_impulse = 13 tools)**:
 - `neely_forecast`:Neely NEoWave 預測(Tool 1)
 - `kalman_trend`:個股 1-D Kalman trend + 5-class regime(Tool 2)
 - `magic_formula_screen`:Greenblatt 2005 跨股篩選(Tool 3,cross-stock)
@@ -19,6 +19,8 @@
 - `dual_track_resonance`:雙軌共振決策(v1.0)— 結構軌(neely)+ 統計軌
   (fusion / kalman_cqr)+ 關係層(A-3 失效閘門 + A-1 三級共振判定 +
   cross_stock 旁路升振 + T1/T2 時間反向標註)
+- `scan_wave_impulse`:Wave Impulse 跨股掃選 — neely_core forest 雙軸驗證
+  W3 主升段候選 + cross_tf_aligned hint(plan wave-impulse-cross-stock-virtual-papert.md)
 
 **Hidden tools(v3.31 從 MCP 隱藏 — 仍可從 Python 直接呼叫供 dashboard 用)**:
 - stock_health / market_context / loan_collateral_snapshot /
@@ -89,6 +91,12 @@ mcp = FastMCP(
         "invalidation 軌道一退場);A-1 三級共振(逐 fib 線:分歧/基礎/強);"
         "cross_stock is_top_30 旁路升振(命中升強、未命中不扣分、不仲裁分歧);"
         "T1 命中 horizon + T2 多 horizon 剖面(21/63/126)。\n\n"
+        "**Wave Impulse Cross-Stock Screen**:\n"
+        "  13. `scan_wave_impulse(date, timeframe='daily', top_n=30)` — neely_core "
+        "forest 跨股掃 W3 主升段:雙軸驗證(wave_tree W(\\d+) + Pass-2 :L5/:F3 "
+        "對照)+ R/R 1.5 + bullish direction gate + cross_tf_aligned 軟對齊。"
+        "Output top_stocks(W2_DONE/W3_ONGOING)+ observe_stocks(W4/W5)+ caveat"
+        "(W3 進場偏晚 / W5 observe only / spec r1 thresholds calibrate)。\n\n"
         "設計約束:\n"
         "- 所有 tool 強制 as_of date(回測 / 即時同介面)\n"
         "- facts 已過 look-ahead bias 防衛\n"
@@ -122,6 +130,9 @@ mcp.tool(_data_tools.indicators)                  # E 視角:技術指標(cores 
 
 # v1.0 雙軌共振決策層(2026-05-25,m3Spec/dual_track_resonance.md)
 mcp.tool(_data_tools.dual_track_resonance)        # 軌道一(結構)× 軌道二(統計)共振判定
+
+# Wave Impulse Cross-Stock Screen(plan wave-impulse-cross-stock-virtual-papert.md)
+mcp.tool(_data_tools.scan_wave_impulse)           # 跨股 W3 主升段掃選(雙軸驗證 + R/R + cross-tf)
 
 # v4.19:以下 10 個 fusion tool function 仍留 mcp_server.tools.data(dashboard /
 # direct python 用),但不再透過 MCP 註冊 — 整併進上方 3 個 consolidated 入口:

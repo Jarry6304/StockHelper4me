@@ -634,6 +634,59 @@ def monthly_trigger_scan(
     )
 
 
+def scan_wave_impulse(
+    date: str,
+    timeframe: str = "daily",
+    top_n: int = 30,
+    include_observe: bool = True,
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Wave Impulse Cross-Stock Screen — 找全市場「正進入第三波(W3)主升段」候選。
+
+    對齊 plan wave-impulse-cross-stock-virtual-papert.md §8 + cross_cores Phase 8
+    第 12 個 builder(wave_impulse_screen):
+
+    - 讀 wave_impulse_screen_derived(builder upstream:structural_snapshots /
+      neely_core forest + 既有 picker)
+    - 雙軸驗證浪位(Axis-A wave_tree W(\\d+) + Axis-B NEoWave Pass-2 label):
+      W2_DONE / W3_ONGOING(candidate)/ W3_MATURE / W4_DONE(observe)/
+      W5_ONGOING / W5_MATURE(observe)
+    - 過 R/R 1.5 + bullish direction 門檻才入 top_stocks
+    - cross_tf_aligned:同股 daily+weekly 同向 W3 → 排名加分
+
+    Args:
+        date:            ISO 字串(例 "2026-05-25")
+        timeframe:       daily / weekly / monthly(預設 daily)
+        top_n:           top_stocks + observe_stocks 各取 N(預設 30)
+        include_observe: 是否回 W5/W4 observe section(預設 True)
+
+    Returns:
+        {
+          as_of, timeframe, top_n, ranking_date,
+          top_stocks: [{stock_id, name, industry, rank, phase, wave_number,
+                        pattern_kind, direction, effective_degree, structure_label,
+                        confidence_level (strict/loose), entry_price, target_price,
+                        invalidation_price, rr_ratio, cross_tf_aligned,
+                        is_candidate}, ...],
+          observe_stocks: [...]  # W5_MATURE / W5_ONGOING / W4_DONE,observe only
+          cross_tf_aligned_count, narrative, caveat
+        }
+
+    Refs:
+      - Prechter & Frost (1978). Elliott Wave Principle, Ch.2 W3 主升段
+      - Glenn Neely (1990). Mastering Elliott Wave, Ch7 §Three Rounds Compaction
+    """
+    from mcp_server._screens import compute_wave_impulse_scan
+
+    return compute_wave_impulse_scan(
+        _parse_date(date),
+        timeframe=timeframe, top_n=top_n,
+        include_observe=include_observe,
+        database_url=database_url,
+    )
+
+
 # ────────────────────────────────────────────────────────────
 # Fusion Layer · Integration 端口 tools(P1.4)
 # ────────────────────────────────────────────────────────────
