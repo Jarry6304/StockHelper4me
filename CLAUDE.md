@@ -426,6 +426,92 @@ print('single_track_mode:', r['single_track_mode'])
 
 ---
 
+## v4.25.x — Production verify 揭露 3 個 hotfix(2026-05-25 同日收尾)
+
+User 拉 PR #102 跑全市場 production verify 揭露 3 個獨立 bug,同日推 3 commits 修完:
+
+### Hotfix 1 `46861ec` — fib_lines cluster + cap(payload 爆 26 KB → 15 KB)
+
+**Root cause**:`primary.expected_fib_zones` 空時 fallback 走 `snapshot.flat_fib_zones`
+(neely_core P1.1 全 forest 去重聯集),production 對 2330 / 3030 / 1101 各回 ~120-200 條
+fib zones。fib_lines 直接 1:1 映射 → MCP payload 爆 26 KB(超出 Claude `MAX_MCP_OUTPUT_TOKENS`
+~25K token budget)+ findings 滿頁雜訊。
+
+**修法**(`track1.py::_cluster_and_cap_fib_lines`):
+- 1% 同層 bucket cluster(同一 fib 線多 timeframe / 多 scenario 重複收斂)
+- 收斂後仍 > 30 條 → 取頭尾 cap(對齊 LLM 看「最近 + 最遠 anchor」價值)
+- notes 加「reduced N → M (1% bucket cluster + cap 30)」透明化
+
+**Verify**:payload 從 26 KB → ~15 KB(2330 / 3030 / 1101 各 ~5-7 KB);findings 從 ~120 →
+~10-30,LLM context 留 buffer。
+
+### Hotfix 2 `587b1f5`(過度擴張)→ `13e052a`(回退)— neutral A-3 + ANY-trigger
+
+**Root cause** part A:**neutral direction 不走 A-3 閘門**。0050(ETF / 無明顯多空偏見)
+picker 抽到 Neutral power_rating 的 scenario,有 PriceBreakBelow 但 `scenario_is_invalidated`
+原本 `direction == "neutral" return False` → invalidated=False(應該 True)。spec §四
+「現價跌破 invalidation 軌道一退場」字面對 neutral 沒明確指示。
+
+**User 拍版**:「neutral 遇 trigger 就判」(對齊 spec §四 字面延伸到 neutral case)。
+
+**修法草案** `587b1f5`(過度激進):新加 `_extract_all_invalidation_thresholds` +
+`_check_any_threshold_breached` generic helpers,**所有 direction 都走 ANY-trigger 檢查**
+(藉口「bullish wave 5 extended too far thesis 破」)。production 反咬:2330 bullish 被
+PriceBreakAbove 誤判 invalidated=True → single_track_mode=True → findings=0,LLM 失去結構軌
+資訊。
+
+**Root cause** part B:user 拍版只說 neutral,我自作主張擴 bullish/bearish。
+
+**修法回退** `13e052a`:helper 保 generic,policy 集中 read_track1:
+- bullish 只看 below trigger(current 跌破 → thesis 破)
+- bearish 只看 above trigger(current 漲破 → thesis 破)
+- neutral 走 ALL kinds(下/上 任一 trigger 中即失效)— user 拍版唯一新增
+
+### Production verify(同日 user 本機)
+
+| stock | findings | 評估 |
+|---|---|---|
+| **1101** | bearish + 1 basic + 9 divergence / band [21.68, 27.41] width 0.24 | ✅ 第一個非 divergence finding,pipeline 跑通 |
+| **2330** | bullish + 3 basic + 27 divergence / invalidation_price=None(只 above trigger,bullish 不看)| ✅ 修法後 invalidated=False / single_track_mode=False / LLM 看完整結構 |
+| **3030** | 全 divergence(track2 缺 band)| ✅ 系統正確 — 3030 不在 M8 verify 8 stocks 內,production fusion 沒跑 |
+| **0050** | bearish + current 95 < threshold 544(picker 抽到 bearish 不是 neutral) | ✅ bearish 不破 above = thesis 仍有效;我之前誤以為 0050 一定是 neutral |
+
+### Tests + Range
+
+| | |
+|---|---|
+| 新 tests | +15 across 3 commits(cluster cap / extract_all / check_any / neutral A-3 ×4 / bullish/bearish ignore ×3)|
+| 既有 tests regression | 0 — 既有 4 invalidation tests + 既有 65 dual_track tests 全綠 |
+| Rust | 0 |
+| alembic | 0 |
+| collector.toml | 0 |
+| 純 Python | `src/fusion/dual_track/track1.py` + `tests/fusion/test_dual_track_track1.py` |
+
+### PR #102 final 7 commits
+
+| Commit | 範圍 |
+|---|---|
+| `1cc9dd0` | m3Spec/dual_track_resonance.md v1.0(225 行)|
+| `f84f5bc` | alembic `f2g3h4i5j6k7` + B-4 機制丙(forecast_log.internal_only)|
+| `58858df` | src/fusion/dual_track/ 三模組(track1 / track2 / resonance)|
+| `f4ddcb1` | MCP `dual_track_resonance` 12th tool + CLAUDE.md v4.25 |
+| `46861ec` | fib_lines cluster + cap(payload 26 KB → 15 KB)|
+| `587b1f5` | neutral A-3 + ANY-trigger 擴張(過度激進)|
+| `13e052a` | 回退 bullish/bearish ANY-trigger,只 neutral 走 ALL |
+
+`pytest tests/forecast/ tests/fusion/ tests/mcp_server/` ✅ **454 passed / 1 pre-existing fail
+/ 1 skipped**(91 dual_track-specific tests 全綠)。Production verify ✅ 4 stocks 行為全部
+spec-defensible。
+
+### 風險
+
+🟢 低:
+- 純 Python + 純 MCP layer(0 alembic / 0 Rust / 0 collector.toml)
+- 既有 forecast / fusion / mcp_server 測試 0 regression
+- Rollback:每 commit 獨立 `git revert`(46861ec / 587b1f5 / 13e052a 三個 hotfix 可獨立回退)
+
+---
+
 ## v4.24 — M8 sprint:3 non-price forecast cores 全套(2026-05-24)
 
 接 v4.23 揭露 fusion 因 3 cores 全 price-only(誤差高度相關)無法收 Bates-Granger
