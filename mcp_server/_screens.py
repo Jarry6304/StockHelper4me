@@ -460,6 +460,184 @@ def _narr(label: str, n: int, top: list[dict[str, Any]]) -> str:
     )
 
 
+# ────────────────────────────────────────────────────────────
+# Wave Impulse Cross-Stock Screen(plan wave-impulse-cross-stock-virtual-papert.md)
+# ────────────────────────────────────────────────────────────
+
+
+_WAVE_OBSERVE_PHASES = ("W5_ONGOING", "W5_MATURE", "W4_DONE")
+
+
+def _fetch_wave_impulse_rows(
+    conn,
+    *,
+    as_of: date,
+    timeframe: str,
+    top_n: int,
+    include_observe: bool,
+) -> tuple[Any | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    """讀 wave_impulse_screen_derived → (ranking_date, top_stocks, observe_stocks)。
+
+    對 wave_impulse_screen_derived 不走 fetch_cross_stock_ranked(它沒 timeframe
+    filter)— 直接 SQL,對齊 _screens fetch pattern。
+    """
+    # 1. latest ranking_date ≤ as_of(用該 timeframe 的 max date)
+    sql_date = """
+        SELECT MAX(date) AS d FROM wave_impulse_screen_derived
+         WHERE market = 'TW' AND timeframe = %s AND date <= %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_date, [timeframe, as_of])
+        row = cur.fetchone()
+    ranking_date = row["d"] if row else None
+    if ranking_date is None:
+        return None, [], []
+
+    # 2. top_stocks(is_top_n=TRUE)
+    sql_top = """
+        SELECT t.*, s.stock_name, s.industry_category
+          FROM wave_impulse_screen_derived t
+          LEFT JOIN stock_info_ref s
+            ON s.market = t.market AND s.stock_id = t.stock_id
+         WHERE t.market = 'TW' AND t.timeframe = %s AND t.date = %s
+           AND t.is_top_n = TRUE
+         ORDER BY t.impulse_rank ASC
+         LIMIT %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_top, [timeframe, ranking_date, top_n])
+        top_rows = cur.fetchall()
+
+    # 3. observe_stocks(W5_* / W4_DONE phase)
+    observe_rows: list[dict[str, Any]] = []
+    if include_observe:
+        sql_observe = """
+            SELECT t.*, s.stock_name, s.industry_category
+              FROM wave_impulse_screen_derived t
+              LEFT JOIN stock_info_ref s
+                ON s.market = t.market AND s.stock_id = t.stock_id
+             WHERE t.market = 'TW' AND t.timeframe = %s AND t.date = %s
+               AND t.phase = ANY(%s)
+             ORDER BY t.stock_id ASC
+             LIMIT %s
+        """
+        with conn.cursor() as cur:
+            cur.execute(sql_observe, [
+                timeframe, ranking_date, list(_WAVE_OBSERVE_PHASES), top_n,
+            ])
+            observe_rows = cur.fetchall()
+
+    return ranking_date, top_rows, observe_rows
+
+
+def _format_wave_impulse_row(r: dict[str, Any]) -> dict[str, Any]:
+    """壓縮 wave_impulse_screen_derived row → LLM-friendly dict。"""
+    return {
+        "stock_id":           r.get("stock_id"),
+        "name":               r.get("stock_name"),
+        "industry":           r.get("industry_category"),
+        "rank":               _to_int(r.get("impulse_rank")),
+        "phase":              r.get("phase"),
+        "wave_number":        _to_int(r.get("wave_number")),
+        "pattern_kind":       r.get("pattern_kind"),
+        "direction":          r.get("direction"),
+        "effective_degree":   r.get("effective_degree"),
+        "structure_label":    r.get("structure_label"),
+        "confidence_level":   r.get("confidence_level"),
+        "entry_price":        _to_float(r.get("entry_price")),
+        "target_price":       _to_float(r.get("target_price")),
+        "invalidation_price": _to_float(r.get("invalidation_price")),
+        "rr_ratio":           _to_float(r.get("rr_ratio")),
+        "cross_tf_aligned":   bool(r.get("cross_tf_aligned")),
+        "is_candidate":       bool(r.get("is_candidate")),
+    }
+
+
+def compute_wave_impulse_scan(
+    as_of: date,
+    *,
+    timeframe: str = "daily",
+    top_n: int = 30,
+    include_observe: bool = True,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Wave Impulse Cross-Stock Screen:LLM 看當下處 W3 主升段的候選股清單。
+
+    對齊 plan wave-impulse-cross-stock-virtual-papert.md §8:
+    - 讀 wave_impulse_screen_derived(builder upstream:structural_snapshots)
+    - 候選股(is_top_n=TRUE):W2_DONE / W3_ONGOING phase 已過 R/R 1.5 門檻
+    - Observe 段:W4_DONE / W5_ONGOING / W5_MATURE(僅供 observe,不直接交易)
+
+    Args:
+        as_of:           date 上界(包含)
+        timeframe:       daily / weekly / monthly(預設 daily)
+        top_n:           候選清單 + observe 各取 top_n
+        include_observe: 是否回傳 W5 observe section
+        database_url:    overrides DATABASE_URL env
+
+    Returns:
+        {
+          as_of, timeframe, top_n, ranking_date,
+          top_stocks: [W2/W3 candidates],
+          observe_stocks: [W5 mature / W4 done / W5 ongoing],
+          cross_tf_aligned_count, narrative, caveat
+        }
+    """
+    conn = get_connection(database_url)
+    try:
+        ranking_date, top_rows, observe_rows = _fetch_wave_impulse_rows(
+            conn, as_of=as_of, timeframe=timeframe, top_n=top_n,
+            include_observe=include_observe,
+        )
+    finally:
+        conn.close()
+
+    top_stocks = [_format_wave_impulse_row(r) for r in top_rows]
+    observe_stocks = [_format_wave_impulse_row(r) for r in observe_rows]
+    cross_tf_aligned_count = sum(
+        1 for r in top_stocks if r.get("cross_tf_aligned")
+    )
+
+    # narrative + caveat(plan §8:三段 caveat)
+    n_top = len(top_stocks)
+    n_observe = len(observe_stocks)
+    if n_top == 0:
+        narrative = (
+            f"Wave Impulse Screen({timeframe}):無 top candidates"
+            f"(尚未跑 builder 或當下 universe 全在修正/observe phase)。"
+        )
+    else:
+        first = top_stocks[0]
+        narrative = (
+            f"Wave Impulse Screen({timeframe}) top {n_top} W3 candidates:"
+            f"首位 {first.get('stock_id')} {first.get('name') or ''} "
+            f"(rank 1,phase={first.get('phase')},rr={first.get('rr_ratio')},"
+            f"confidence={first.get('confidence_level')})"
+            f";cross_tf_aligned {cross_tf_aligned_count}/{n_top}"
+            f";observe {n_observe} 檔(W4/W5 segment)。"
+        )
+
+    caveat = (
+        "1. W3 屬 NEoWave 事後確認結構,掃出多為「W3 已走一段」而非起點 — "
+        "進場時間常偏晚。"
+        "2. W5 / W4_DONE 為 observe 段,僅供觀察 R/R 偏弱不直接交易。"
+        "3. 本 builder 為 spec r1 thresholds(W3_EARLY_PCT=0.5 / RR_MIN=1.5)"
+        "best-guess production calibration after first 30d。"
+    )
+
+    return {
+        "as_of":         as_of.isoformat(),
+        "timeframe":     timeframe,
+        "top_n":         top_n,
+        "ranking_date":  ranking_date.isoformat() if ranking_date else None,
+        "top_stocks":    top_stocks,
+        "observe_stocks": observe_stocks,
+        "cross_tf_aligned_count": cross_tf_aligned_count,
+        "narrative":     narrative,
+        "caveat":        caveat,
+    }
+
+
 def _compose_toolkit_narrative(toolkit: str, *factors: dict) -> str:
     """每 toolkit 主要 1-3 句 overall view。"""
     ok_count = sum(1 for f in factors if isinstance(f, dict) and "error" not in f)
