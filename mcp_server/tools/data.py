@@ -1058,3 +1058,85 @@ def fetch_ohlc(
         return out
     finally:
         conn.close()
+
+
+# ────────────────────────────────────────────────────────────
+# Dual-Track Resonance(v1.0,2026-05-25)
+#
+# 對齊 m3Spec/dual_track_resonance.md §一(三層平面)+ §八(模組對應)。
+# 軌道一(結構)+ 軌道二(統計)+ 關係層(A-3 失效閘門 / A-1 三級共振 /
+# cross_stock 旁路升振 / T1/T2 時間反向標註)。
+# ────────────────────────────────────────────────────────────
+
+
+def dual_track_resonance(
+    stock_id: str,
+    date: str,
+    primary_horizon: int = 63,
+    primary_confidence: float = 0.80,
+    cross_stock_table: str = "magic_formula_ranked_derived",
+    *,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """雙軌共振決策判定 — 個股「會怎麼走」的判斷呈現層。
+
+    對齊 m3Spec/dual_track_resonance.md §一~§五。
+
+    Returns:
+        {
+          "stock_id", "as_of",
+          "track1": {                    # 軌道一(結構,非校準)
+              "has_snapshot", "snapshot_date",
+              "pattern_type", "power_rating", "direction",
+              "effective_degree", "wave_count",
+              "fib_lines": [{price, low, high, label, source_ratio}],
+              "invalidation_price", "invalidated",
+              "fallback_to_flat_union", "notes"
+          },
+          "track2": {                    # 軌道二(統計,校準)
+              "current_price", "primary_horizon", "primary_confidence",
+              "primary_band": {horizon_days, confidence, lower, upper, point,
+                                source_core, width_ratio, is_overly_wide},
+              "horizons": {21: band, 63: band, 126: band},  # 多 horizon T2
+              "notes"
+          },
+          "is_top_30": bool,             # cross_stock 旁路升振狀態
+          "is_top_30_source": str,       # ranked_derived 來源表
+          "is_top_30_date": str,         # 對齊 as_of 取的 ranking_date
+          "findings": [{                 # 逐 fib 線判定
+              "fib_line": {...},
+              "level": "divergence" | "basic" | "strong",
+              "band_covers": bool,       # ② 軌道二涵蓋帶含此線
+              "median_close": bool,      # ③ 中位數貼近(<2% of current)
+              "cross_stock_boost": bool, # is_top_30 升振狀態
+              "t1_horizon": int,         # T1 命中時最緊 horizon
+              "t2_profile": {21, 63, 126: divergence/basic/basic_median_close},
+              "notes"
+          }],
+          "single_track_mode": bool,     # A-3 閘門觸發,軌道一退場
+          "notes"
+        }
+
+    判定規則(§三):
+        - divergence:軌道二帶未涵蓋該 fib 線(或無 band / band 過寬)
+        - basic:軌道二涵蓋帶包含該 fib 線
+        - strong:basic + 中位數貼近 + is_top_30 命中(三條件齊備)
+
+    cross_stock 升振(§四):
+        - 並聯不擋路(全檔照跑)、命中升振、未命中不扣分、不仲裁分歧
+
+    A-3 失效閘門(§四):
+        - 現價跌破 invalidation_price → single_track_mode=True,共振判定跳過
+    """
+    from fusion.dual_track import resonance as _dual_resonance
+
+    as_of = _parse_date(date)
+    result = _dual_resonance(
+        stock_id=stock_id,
+        as_of=as_of,
+        primary_horizon=primary_horizon,
+        primary_confidence=primary_confidence,
+        cross_stock_table=cross_stock_table,
+        database_url=database_url,
+    )
+    return result.to_dict()

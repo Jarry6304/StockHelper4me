@@ -13,16 +13,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
-- **alembic head**:`e1f2g3h4i5j6`(v4.24 M8 fusion eligible partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
-- **開發分支**:`claude/plan-stockhelper-api-kWh9F`(Fusion Layer P0+P1+P2)→ PR #91 合 main
+- **alembic head**:`f2g3h4i5j6k7`(v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
+- **開發分支**:`claude/affectionate-pasteur-lCTbq`(v4.25 雙軌共振決策層 4 commits)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
-- **MCP toolkit**:**11 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated:market_overview / stock_levels / indicators;v4.19 從 18 整併)
+- **MCP toolkit**:**12 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance;v4.25 從 11 加 1)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
 - **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
 - **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏 P1.1-P1.4 全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神
 - **v4.5 → v4.9**(2026-05-19):M3SPEC 闕漏補完 8 sub-PR + Out-of-Scope backlog Items 1+2+3 完整收尾 ☕☕☕ — Group 2(4 sub-PR)+ Group 3(Monowave bar_indices)+ Group 1(3 sub-PR polywave 嵌套依賴鏈)+ v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)+ v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞);全市場 1266 stocks G1 P0 Gate **全綠**(max=196 / p95=28 / overflow=0)
 - **v4.10**(2026-05-20)☕:Out-of-Scope **Item 4 Pre-Constructive 2-pass diagnostics union** 完整收尾 — `pre_constructive::run_pass2` 新函式回傳 `HashMap<classified_idx, Vec<StructureLabelCandidate>>` Pass 1-only diff(label 比對);`MonowaveStructureLabels` 加 `classified_index` + `pass1_only_labels` 兩欄;lib.rs Stage 8.5 refill loop 把 Pass 2 result + diff 寫回 forest 每個 scenario;**Out-of-Scope backlog 全部清空**
+- **v4.25**(2026-05-25)雙軌共振決策層 v1.0 完整落地 — m3Spec/dual_track_resonance.md(225 行)+ alembic `f2g3h4i5j6k7`(forecast_log.internal_only)+ neely_emitter 標 internal_only=True + 5 個 forecast 查詢點過濾 + src/fusion/dual_track/ 新模組(track1 結構讀 / track2 統計讀 / resonance 關係層 = A-3 失效閘門 + A-1 三級共振 + cross_stock 升振 + T1/T2)+ MCP `dual_track_resonance` 12th tool + 70 new tests(B-4 12 / Track1 26 / Track2 10 / Resonance 16 / MCP 6 = 70)
 
 ---
 
@@ -263,6 +264,165 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.25 — 雙軌共振決策層 v1.0 完整落地(2026-05-25)
+
+User 拍版「全套落地(含關係層判定邏輯)」。對齊 user 直送 spec 文件成 m3Spec 落
+地 + 把所有對外路徑套 internal_only=FALSE 過濾 + 新讀法層 + 新關係層 + MCP 暴露。
+
+事實層(三表 + forecast_log)0 改動,只 forecast_log 加 `internal_only` 一欄。視覺
+層(風力表 / 逐線細節層)**暫掛** — spec §九 明文「待 A-1/C-7/C-8 判定輸出定死後
+再細化(視覺為判定結果的呈現)」。
+
+### 4 個 commit / branch `claude/affectionate-pasteur-lCTbq`
+
+| Commit | 範圍 |
+|---|---|
+| 1 `1cc9dd0` | `m3Spec/dual_track_resonance.md` v1.0(225 行) |
+| 2 `f84f5bc` | alembic `f2g3h4i5j6k7` + B-4 機制丙(forecast_log.internal_only + 5 helper 過濾) |
+| 3 `58858df` | src/fusion/dual_track/ 模組(_shared + track1 + track2 + resonance,52 tests) |
+| 4(本)| MCP `dual_track_resonance` 12th tool + CLAUDE.md v4.25 |
+
+### 三層平面(spec §一)
+
+```
+事實層(零改動,僅 forecast_log 加 internal_only)
+├── structural_snapshots — neely 完整 forest + 離散 fib 線 + invalidation
+└── forecast_log         — 軌道二校準區間;neely_fib 行標 internal_only=True
+
+讀法層(新增,不落地)
+├── 軌道一 track1.py — primary scenario / 離散 fib 線 / label / 失效價 / 方向
+└── 軌道二 track2.py — fusion / kalman_cqr / log_channel_cqr 涵蓋帶 + 中位數 + 多 horizon
+
+關係層(全新)
+└── resonance.py
+    ├── A-3 失效閘門(前置)— 現價跌破 invalidation → 軌道一退場 single_track_mode
+    ├── A-1 三級共振(逐 fib 線)— 分歧 / 基礎 / 強
+    ├── cross_stock 旁路升振(is_top_30)— 並聯不擋路、命中升強、未命中不扣分、不仲裁分歧
+    └── T1(命中時最緊 horizon)+ T2(21/63/126 多 horizon 剖面)
+```
+
+### B-4 機制丙(spec §七 唯一事實層改動)
+
+對外查詢路徑(UI / MCP / 共振)預設過濾 `internal_only = FALSE`:
+
+| Helper | 預設行為 |
+|---|---|
+| `_db.upsert_forecast` | 透傳 internal_only(預設 False);neely_emitter 傳 True |
+| `_db.fetch_resolved` | 預設 `include_internal=False`(scorer / display 不 leak) |
+| `_db.fetch_unresolved` | 預設 `include_internal=True`(settlement 仍處理全部) |
+| `fusion._mean_pinball` / `eligible_cores` / `_fetch_eligible_forecasts` | SQL 含 `internal_only = FALSE` |
+| `calibration._fetch_raw_forecast` / `_fetch_calibration_set` | 同上 |
+| `fusion.dual_track.track2.fetch_band` | 同上(本層自有 helper) |
+
+backfill 既有 neely_fib row:alembic upgrade 時 UPDATE 全部 internal_only=TRUE,
+schema invariant 立即生效。新 partial index `idx_forecast_log_external` 加速對外
+查詢路徑(99% 查詢走這條)。
+
+### MVP 預設值(spec §十一)
+
+| 參數 | 預設 | 理由 |
+|---|---|---|
+| 主判定 horizon | 63 | 對齊 neely Minute degree 中位映射 |
+| 主判定 confidence | 0.80 | 對齊 fusion / kalman_cqr 主要校準點 |
+| BAND_WIDTH_THRESHOLD | 0.30(寬/現價) | 寬於 30% 視為過寬,抑制共振 |
+| MEDIAN_CLOSE_TOLERANCE | 0.02 | 2% 內視為貼近 |
+| cross_stock 來源表 | magic_formula_ranked_derived | MVP 首版 |
+
+### A-1 三級共振邏輯(逐 fib 線)
+
+| 級 | 條件 |
+|---|---|
+| divergence | band 不涵蓋 fib 線 / band 過寬(防呆)/ 無 band |
+| basic | band 涵蓋 fib 線 |
+| strong | basic + median 貼近(<2% of current_price)+ is_top_30 命中 |
+
+cross_stock 升振規則(spec §四):
+- 並聯不擋路(全檔照跑雙軌)
+- 命中升振(basic + median_close + is_top_30 → strong)
+- 未命中不扣分(is_top_30=False 時 basic 維持 basic)
+- 不仲裁分歧(divergence 不會因 is_top_30=True 變 basic)
+
+### MCP 暴露:`dual_track_resonance(stock_id, date, primary_horizon=63, primary_confidence=0.80, cross_stock_table='magic_formula_ranked_derived')`
+
+12th MCP tool(從 v4.19 11 → v4.25 12)。回完整 `DualTrackResult.to_dict()`:
+- `track1`(結構摘要 + fib_lines + invalidation 狀態)
+- `track2`(現價 + 多 horizon bands + width_ratio 防呆)
+- `is_top_30` + `is_top_30_source` + `is_top_30_date`(對齊 as_of 取當下最新期)
+- `findings[]`(逐 fib 線判定 + T1 horizon + T2 profile + cross_stock_boost 狀態)
+- `single_track_mode`(A-3 閘門觸發)
+
+JSON-serializable,可直 dump 給 LLM。
+
+### 沙箱驗證
+
+- `pytest tests/forecast/ tests/fusion/ tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py` ✅ **433 passed / 1 pre-existing failed / 1 skipped**(1 pre-existing failure = `test_v3_35_1_quality_caveat_fib_decoupled_from_price` 對 `mcp_server/_forecast.py` 的 v3.35 picker 測試,非本 PR 觸發)
+- 新增 70 tests:B-4 internal_only filter 12 / Track1 26 / Track2 10 / Resonance 16 / MCP wrapper 6
+- 0 Rust / 0 collector.toml(純 Python + alembic + schema)
+
+### 留 future(spec §十)
+
+| 項 | 狀態 |
+|---|---|
+| Phase 8 排程是否逐日回填 ranked_derived | 待實務確認 |
+| A-1 帶寬防呆閾值(MVP=0.30)、③ 貼近容差(MVP=0.02) | 待 backtest 校準 |
+| T3 fib 觸及順序 | 需 neely_core 新增 Rust 輸出,未來 PR |
+| 視覺細化(風力表 + 逐線細節層) | 暫掛至判定邏輯落地(spec §九) |
+
+### Production verify(下個 session,user 本機)
+
+```powershell
+git pull
+alembic upgrade head    # e1f2g3h4i5j6 → f2g3h4i5j6k7
+
+# verify forecast_log.internal_only 欄存在 + neely_fib 全 backfill True
+psql $env:DATABASE_URL -c "
+SELECT source_core, internal_only, COUNT(*)
+  FROM forecast_log
+ WHERE source_core IN ('neely_fib','baseline','kalman_cqr','fusion')
+ GROUP BY source_core, internal_only
+ ORDER BY source_core, internal_only;
+"
+# 預期 neely_fib 全 TRUE,其他 cores 全 FALSE
+
+# MCP smoke test
+python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from mcp_server.tools.data import dual_track_resonance
+import json
+r = dual_track_resonance('2330','2026-05-23')
+print('keys:', list(r.keys()))
+print('track1 has_snapshot:', r['track1']['has_snapshot'])
+print('track1 fib_lines:', len(r['track1']['fib_lines']))
+print('track1 invalidated:', r['track1']['invalidated'])
+print('track2 primary_band exists:', r['track2']['primary_band'] is not None)
+print('is_top_30:', r['is_top_30'])
+print('findings:', len(r['findings']))
+print('levels:', [f['level'] for f in r['findings']])
+print('single_track_mode:', r['single_track_mode'])
+"
+```
+
+### 風險
+
+🟢 低:
+- 0 Rust / 0 collector.toml(純 Python + alembic)
+- 既有 forecast / fusion module 行為向下相容(filter 默認對既有 caller 安全)
+- backfill 一次性 UPDATE neely_fib → internal_only=TRUE(冪等)
+- 既有 forecast/ + fusion/ + mcp_server/ 433 tests 0 regression(1 pre-existing fail 與本 PR 無關)
+- Rollback:單 commit `git revert` 即可;alembic downgrade 對應反向(DROP column + DROP index)
+
+🟡 中:
+- **production data 對 dual_track_resonance 真實 LLM 體驗未驗**:本 PR 邏輯沙箱驗,
+  下個 session user 本機 verify 後可能需校準 BAND_WIDTH_THRESHOLD / MEDIAN_CLOSE_TOLERANCE
+- **multi-source uncorrelated 限制依舊**(spec §二):軌道二目前 fusion eligible 多
+  數情況仍以 kalman_cqr 主導(對齊 v4.23 揭露 + v4.24 收尾);M8 新加 chip/macro/
+  fundamental forecast cores 補足 uncorrelated source,但其 backtest 校準到位前
+  fusion 採樣可能不穩定 — fallback 走 kalman_cqr 不破
+
+🔴 高:**無**
 
 ---
 
