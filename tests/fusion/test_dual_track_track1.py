@@ -27,6 +27,7 @@ from fusion.dual_track.track1 import (  # noqa: E402
     _pick_primary,
     _effective_degree,
     _direction_from_power,
+    _cluster_and_cap_fib_lines,
 )
 
 
@@ -285,3 +286,92 @@ class TestReadTrack1:
                               timeframe="daily")
         assert len(t1.fib_lines) == 1
         assert t1.fib_lines[0].label == "d"
+
+
+# ─── fib_lines cluster + cap(對齊 §六 MCP payload budget 防呆)─────────────
+
+
+class TestClusterAndCapFibLines:
+    def test_empty_returns_empty(self):
+        out, n_raw, was_reduced = _cluster_and_cap_fib_lines([])
+        assert out == [] and n_raw == 0 and was_reduced is False
+
+    def test_under_max_no_change(self):
+        """≤ max_count 不改動(0.5% 距離 < 1% bucket → cluster 會合一)。"""
+        lines = [
+            FibLine(price=p, low=p - 1, high=p + 1, label=f"L{i}", source_ratio=0.5)
+            for i, p in enumerate([100.0, 105.0, 110.0])  # spacing > 1%
+        ]
+        out, n_raw, was_reduced = _cluster_and_cap_fib_lines(lines, max_count=30)
+        assert len(out) == 3
+        assert n_raw == 3
+        assert was_reduced is False
+
+    def test_cluster_within_1pct(self):
+        """price 在 1% 內被合一(2330 case:99.5 / 100 / 100.3 → 1 cluster)。"""
+        lines = [
+            FibLine(price=99.5, low=99, high=100, label="a", source_ratio=0.382),
+            FibLine(price=100.0, low=99.5, high=100.5, label="b", source_ratio=0.5),
+            FibLine(price=100.3, low=99.8, high=100.8, label="c", source_ratio=0.618),
+        ]
+        out, n_raw, was_reduced = _cluster_and_cap_fib_lines(lines, max_count=30)
+        assert len(out) == 1
+        assert n_raw == 3
+        assert was_reduced is True
+        # cluster 後 label 含 "clustered(3)" + 合併標籤 + price 為 median
+        assert "clustered(3)" in out[0].label
+        assert out[0].price == 100.0
+        # 範圍包含所有原 low/high
+        assert out[0].low == 99.0
+        assert out[0].high == 100.8
+
+    def test_cap_after_clustering(self):
+        """100 條全離散 1% 外的 fib_line → cluster 不縮 → cap 到 max_count。"""
+        # 100 條,每條間隔 5% 確保不會被 cluster
+        lines = [
+            FibLine(price=100.0 * (1.05 ** i), low=99 * (1.05 ** i),
+                     high=101 * (1.05 ** i), label=f"L{i}", source_ratio=0.5)
+            for i in range(100)
+        ]
+        out, n_raw, was_reduced = _cluster_and_cap_fib_lines(lines, max_count=30)
+        assert len(out) == 30
+        assert n_raw == 100
+        assert was_reduced is True
+        # 取樣後應保留首尾範圍(等距取樣)
+        assert out[0].price == lines[0].price
+
+    def test_flat_union_production_case(self):
+        """模擬 2330 production case:155 條 flat_union → cluster+cap 後 ≤ 30。"""
+        # 155 條,price 落在 233-3031(對齊用戶實機 output)
+        import random
+        random.seed(42)
+        lines = [
+            FibLine(price=233.0 + i * (3031 - 233) / 154,
+                     low=233.0 + i * (3031 - 233) / 154 - 5,
+                     high=233.0 + i * (3031 - 233) / 154 + 5,
+                     label=f"fib_{i}", source_ratio=0.5)
+            for i in range(155)
+        ]
+        out, n_raw, was_reduced = _cluster_and_cap_fib_lines(lines, max_count=30)
+        assert n_raw == 155
+        assert len(out) <= 30
+        assert was_reduced is True
+
+    def test_read_track1_note_when_reduced(self):
+        """fib_lines reduced 時 notes 應記錄 raw → final count。"""
+        # primary 給 50 條離散 fib zones
+        primary = _make_scenario(
+            span_days=400,
+            fib_zones=[
+                {"label": f"L{i}", "low": 100.0 * (1.05 ** i) - 1,
+                 "high": 100.0 * (1.05 ** i) + 1}
+                for i in range(50)
+            ],
+        )
+        snap = _make_snapshot([primary])
+        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        # cluster + cap 後應 ≤ 30
+        assert len(t1.fib_lines) <= 30
+        # notes 含 reduction message
+        assert any("fib_lines reduced" in n and "50" in n for n in t1.notes)

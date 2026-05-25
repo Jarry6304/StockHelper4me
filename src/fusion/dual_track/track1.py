@@ -20,7 +20,12 @@ from typing import Any
 
 from fusion.raw._db import fetch_structural_latest
 
-from fusion.dual_track._shared import FibLine, Track1View
+from fusion.dual_track._shared import (
+    FIB_LINES_CLUSTER_PCT,
+    FIB_LINES_MAX_COUNT,
+    FibLine,
+    Track1View,
+)
 
 
 __all__ = ["read_track1", "scenario_is_invalidated"]
@@ -233,6 +238,79 @@ def _zone_to_fib_line(zone: dict) -> FibLine | None:
     )
 
 
+def _cluster_and_cap_fib_lines(
+    lines: list[FibLine],
+    *,
+    max_count: int = FIB_LINES_MAX_COUNT,
+    cluster_pct: float = FIB_LINES_CLUSTER_PCT,
+) -> tuple[list[FibLine], int, bool]:
+    """1% bucket cluster + hard cap fib_lines。對齊 fusion._shared.cluster_price_levels。
+
+    Production 案例:flat_fib_zones 可達 100+ 條(2330 fallback union 155 條),
+    直暴露 MCP 會撐爆 context budget(70KB+)。本函式:
+    1. 對 input lines 按 price 升序 greedy 收 1% bucket(同 bucket 取代表)
+    2. cluster 後若仍 > max_count → 等距取樣 cap(保留價格覆蓋範圍)
+    3. label 字串記錄合併狀態(`clustered(N): label_a, label_b ...`)
+
+    Returns:
+        (clustered_lines, n_input_raw, was_reduced)
+    """
+    if not lines:
+        return [], 0, False
+    n_input = len(lines)
+
+    # Step 1:1% bucket cluster
+    sorted_lines = sorted(lines, key=lambda f: f.price)
+    clusters: list[list[FibLine]] = []
+    current: list[FibLine] = [sorted_lines[0]]
+    for f in sorted_lines[1:]:
+        anchor = current[0].price
+        if anchor > 0 and abs(f.price - anchor) / anchor < cluster_pct:
+            current.append(f)
+        else:
+            clusters.append(current)
+            current = [f]
+    clusters.append(current)
+
+    # Step 2:merge each cluster(中位點 + 合併 label)
+    merged: list[FibLine] = []
+    for c in clusters:
+        if len(c) == 1:
+            merged.append(c[0])
+            continue
+        prices = sorted(f.price for f in c)
+        median = prices[len(prices) // 2]
+        labels = sorted({f.label for f in c if f.label})
+        label_str = f"clustered({len(c)})"
+        if labels:
+            preview = ", ".join(labels[:3])
+            if len(labels) > 3:
+                preview += f", +{len(labels) - 3} more"
+            label_str = f"{label_str}: {preview}"
+        # source_ratio:取首個非 None(0.382 / 0.618 / 1.0 等代表值)
+        rep_ratio = next((f.source_ratio for f in c if f.source_ratio is not None), None)
+        merged.append(FibLine(
+            price=round(median, 4),
+            low=round(min(f.low for f in c), 4),
+            high=round(max(f.high for f in c), 4),
+            label=label_str,
+            source_ratio=rep_ratio,
+        ))
+
+    # Step 3:仍超 max_count → 等距取樣(保留價格分布)
+    if len(merged) > max_count:
+        step = len(merged) / max_count
+        sampled: list[FibLine] = []
+        i = 0.0
+        while i < len(merged) and len(sampled) < max_count:
+            sampled.append(merged[int(i)])
+            i += step
+        merged = sampled
+
+    was_reduced = len(merged) < n_input
+    return merged, n_input, was_reduced
+
+
 # ─── Public API ──────────────────────────────────────────────────────────────
 
 
@@ -307,9 +385,9 @@ def read_track1(
             zones = flat
             fallback_used = True
 
-    fib_lines = [fl for fl in (_zone_to_fib_line(z) for z in zones) if fl is not None]
-    # 排序 by price 升序(便於 LLM / dashboard 對應 K 線價軸)
-    fib_lines.sort(key=lambda f: f.price)
+    raw_fib_lines = [fl for fl in (_zone_to_fib_line(z) for z in zones) if fl is not None]
+    # cluster + cap(對齊 §六 失真處理:flat_union 可達 100+ 條 → MCP payload 爆炸)
+    fib_lines, n_raw, was_reduced = _cluster_and_cap_fib_lines(raw_fib_lines)
 
     invalidation_price = _extract_invalidation_price(primary, direction)
     invalidated = scenario_is_invalidated(
@@ -323,6 +401,11 @@ def read_track1(
         notes.append("no fib zones (neither primary.expected_fib_zones nor flat_fib_zones populated)")
     if fallback_used:
         notes.append("fib_lines from flat_fib_zones fallback (primary.expected_fib_zones empty)")
+    if was_reduced:
+        notes.append(
+            f"fib_lines reduced {n_raw} → {len(fib_lines)} "
+            f"(1% bucket cluster + cap {FIB_LINES_MAX_COUNT};對齊 MCP context budget)"
+        )
     if invalidated:
         notes.append(
             f"A-3 invalidation gate triggered: {direction} scenario, "

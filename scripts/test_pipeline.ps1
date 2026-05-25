@@ -245,7 +245,7 @@ Invoke-Phase 2 "Schema health(alembic head / table row counts)" {
     }
 
     Write-Step "alembic head"
-    $expectedHead = "e0f1g2h3i4j5"  # Fusion Layer P0.2 head(facts.severity)
+    $expectedHead = "f2g3h4i5j6k7"  # v4.25 雙軌共振 head(forecast_log.internal_only)
     # alembic current 輸出含 2 行 INFO + 1 行 "<head> (head)";
     # 用 Select-String 對整個輸出 grep,避免 -notmatch 對 string array 的奇怪行為
     $alembicOut = alembic current 2>&1 | Out-String

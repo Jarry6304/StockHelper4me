@@ -212,3 +212,9 @@ MEDIAN_CLOSE_TOLERANCE: float = 0.02
 
 # Cross-stock 默認 ranked_derived 表(MVP)
 DEFAULT_CROSS_STOCK_TABLE: str = "magic_formula_ranked_derived"
+
+# Track 1 fib_lines 上限 + 1% 價位 cluster(對齊 fusion._shared.cluster_price_levels)
+# production 案例:flat_fib_zones 可達 100+ 條,直 MCP 暴露會撐爆 context budget。
+# 取 1% bucket cluster + max 30 cap,~30 條對 LLM 仍有意義且 payload < 30KB。
+FIB_LINES_MAX_COUNT: int = 30
+FIB_LINES_CLUSTER_PCT: float = 0.01
