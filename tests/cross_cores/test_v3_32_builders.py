@@ -156,8 +156,8 @@ class TestBuildersEmptyDB:
 
 class TestOrchestratorRegistration:
 
-    def test_all_11_builders_registered(self):
-        """orchestrator BUILDERS dict 應有 magic_formula + 10 new = 11 個。"""
+    def test_all_builders_registered(self):
+        """orchestrator BUILDERS dict 應有 magic_formula + 10 v3.32 + wave_impulse_screen = 12 個。"""
         from cross_cores.orchestrator import BUILDERS
 
         expected = {
@@ -166,6 +166,7 @@ class TestOrchestratorRegistration:
             "f_score", "low_volatility", "industry_adj_gp",
             "long_term_low_vol", "dividend_yield", "mom_12_1",
             "monthly_trigger",
+            "wave_impulse_screen",   # plan wave-impulse-cross-stock-virtual-papert.md
         }
         assert set(BUILDERS.keys()) == expected
         for name, mod in BUILDERS.items():
