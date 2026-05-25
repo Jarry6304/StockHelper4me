@@ -206,11 +206,10 @@ def _extract_all_invalidation_thresholds(scenario: dict) -> list[tuple[str, floa
         - "below":PriceBreakBelow,當 current < threshold → 觸發
         - "above":PriceBreakAbove,當 current > threshold → 觸發
 
-    對齊 v4.25.x user 拍版:neutral direction 也走 A-3 閘門 — 只要任一 trigger
-    被現價跨越,scenario 視為失效(spec §四「現價跌破 invalidation 軌道一退場」
-    字面意義延伸到 neutral)。bullish / bearish direction 也維持 ALL-trigger
-    檢查;原本只看主方向 trigger 屬保守,本次擴成「任一 trigger 觸發即失效」對齊
-    NEoWave 原作精神(scenario 自己宣告 trigger,任一中即作廢)。
+    本函式只負責解析、不套 direction policy。read_track1 依 direction 決定要
+    feed 哪些 kind 給 _check_any_threshold_breached(對齊 v4.25.x:neutral 走
+    ALL kinds,bullish 只看 below,bearish 只看 above — 對齊 spec §四 字面 +
+    保守不擴張)。
     """
     out: list[tuple[str, float]] = []
     for t in scenario.get("invalidation_triggers") or []:
@@ -455,12 +454,21 @@ def read_track1(
 
     # invalidation_price 顯示用(對齊 LLM context):取主方向 trigger
     invalidation_price = _extract_invalidation_price(primary, direction)
-    # A-3 閘門實際判定:ANY InvalidateScenario trigger 被現價跨越即失效
-    # 對齊 v4.25.x user 拍版「neutral 遇 trigger 就判」 + NEoWave 原作
-    # 「scenario 自己宣告 trigger,任一中即作廢」
+    # A-3 閘門實際判定:依 direction filter thresholds(對齊 v4.25.x user 拍版
+    # 「neutral 遇 trigger 就判」+ spec §四「現價跌破 invalidation 軌道一退場」
+    # 字面;bullish/bearish 維持只看主方向 trigger,不擴成 wave 5 extended)。
     all_thresholds = _extract_all_invalidation_thresholds(primary)
+    if direction == "bullish":
+        # bullish 只看 PriceBreakBelow(current 跌破 → thesis 破)
+        relevant_thresholds = [t for t in all_thresholds if t[0] == "below"]
+    elif direction == "bearish":
+        # bearish 只看 PriceBreakAbove(current 漲破 → thesis 破)
+        relevant_thresholds = [t for t in all_thresholds if t[0] == "above"]
+    else:
+        # neutral 走 ALL(下/上 任一 trigger 中即失效;對齊 0050 等 ETF case)
+        relevant_thresholds = all_thresholds
     invalidated, fired_kind, fired_threshold = _check_any_threshold_breached(
-        all_thresholds, current_price
+        relevant_thresholds, current_price
     )
 
     notes: list[str] = []

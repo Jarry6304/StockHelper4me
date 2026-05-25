@@ -305,9 +305,13 @@ class TestNeutralA3Gate:
                               current_price=100.0)
         assert t1.invalidated is False
 
-    def test_bullish_now_checks_above_too(self):
-        """v4.25.x:bullish scenario 若同時有 PriceBreakAbove,也檢查(對齊 NEoWave
-        wave 5 過度延伸 = thesis 破)。原本只 below;現在 ANY trigger 觸發即失效。"""
+    def test_bullish_ignores_above_trigger(self):
+        """v4.25.x:bullish 只看 below(對齊 spec §四「跌破」字面 + production 不誤判)。
+
+        原本 v4.25.x 草案擴成「bullish ANY-trigger」,但 production 2330 case
+        揭露這會把正常 PriceBreakAbove(如 wave 5 extended)誤判為失效。回退
+        為 direction-filtered:bullish 只看 below trigger。
+        """
         primary = _make_scenario(
             power="StrongBullish",
             invalidation_triggers=[
@@ -321,8 +325,44 @@ class TestNeutralA3Gate:
         with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
             t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
                               current_price=250.0)
-        # bullish but above 200 → 也觸發 invalidation(wave 5 extended too far thesis破)
+        # bullish + above 200 → 應仍 False(bullish 只看 below trigger,
+        # current 250 > below 80 → 不觸發 below)
+        assert t1.invalidated is False
+
+    def test_bullish_with_below_breach_still_invalidates(self):
+        """bullish + PriceBreakBelow + current 跌破 → 仍 invalidated。"""
+        primary = _make_scenario(
+            power="StrongBullish",
+            invalidation_triggers=[
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakBelow": 80.0}},
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakAbove": 200.0}},
+            ],
+        )
+        snap = _make_snapshot([primary])
+        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+            t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
+                              current_price=75.0)
         assert t1.invalidated is True
+
+    def test_bearish_ignores_below_trigger(self):
+        """bearish 只看 above(對齊 v4.25.x 回退 + spec §四 字面)。"""
+        primary = _make_scenario(
+            power="StrongBearish",
+            invalidation_triggers=[
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakBelow": 80.0}},
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakAbove": 200.0}},
+            ],
+        )
+        snap = _make_snapshot([primary])
+        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+            t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
+                              current_price=70.0)
+        # bearish + below 80 + current=70 → 不該 invalidated(bearish 不看 below)
+        assert t1.invalidated is False
 
 
 # ─── read_track1 整合測試 ────────────────────────────────────────────────────
