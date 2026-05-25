@@ -32,6 +32,8 @@ from cross_cores import (
     mom_12_1,
     monthly_trigger,
 )
+# Wave Impulse Cross-Stock Screen(plan wave-impulse-cross-stock-virtual-papert.md)
+from cross_cores import wave_impulse_screen
 
 logger = logging.getLogger("collector.cross_cores.orchestrator")
 
@@ -53,6 +55,8 @@ BUILDERS: dict[str, Any] = {
     "mom_12_1":               mom_12_1,
     # v3.32 Layer 5
     "monthly_trigger":        monthly_trigger,
+    # Wave Impulse Screen(讀 M3 structural_snapshots)
+    "wave_impulse_screen":    wave_impulse_screen,
 }
 
 
