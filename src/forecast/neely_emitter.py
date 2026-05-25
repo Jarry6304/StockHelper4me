@@ -269,6 +269,10 @@ def emit_neely_fib(
     point = sum(midpoints) / len(midpoints) if midpoints else None
 
     source_tag = "flat_union" if fallback_used else "primary"
+    # internal_only=True 對齊 m3Spec/dual_track_resonance.md §六 — neely_fib 行
+    # 為「一行外包絡」壓掉了離散 fib 線資訊,dual_track 軌道一直接讀
+    # structural_snapshots(完整未壓縮);本行降級為 audit / 對齊影子,**禁止
+    # 上畫面與 MCP 輸出**(B-4 機制丙)。
     upsert_forecast(
         conn,
         {
@@ -280,6 +284,7 @@ def emit_neely_fib(
             "point": round(point, 4) if point is not None else None,
             "confidence": confidence,
             "calibrated": False,
+            "internal_only": True,
             "source_core": "neely_fib",
             "regime_tag": regime_tag,
             "params_hash": (

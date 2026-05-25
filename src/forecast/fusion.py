@@ -86,6 +86,7 @@ def _mean_pinball(
                AND resolved_date IS NOT NULL
                AND pinball_loss  IS NOT NULL
                AND forecast_date < %s
+               AND internal_only = FALSE
     """
     params: list[Any] = [source_core, horizon_days, confidence, asof]
     if calibrated_only:
@@ -146,6 +147,7 @@ def eligible_cores(
            AND ABS(confidence - %s) < 1e-6
            AND forecast_date  < %s
            AND source_core    NOT IN (%s, %s)
+           AND internal_only  = FALSE
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -245,6 +247,7 @@ def _fetch_eligible_forecasts(
            AND horizon_days  = %s
            AND ABS(confidence - %s) < 1e-6
            AND calibrated    = TRUE
+           AND internal_only = FALSE
            AND source_core  IN ({placeholders})
     """
     with conn.cursor() as cur:

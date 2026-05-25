@@ -1729,6 +1729,7 @@ CREATE TABLE IF NOT EXISTS forecast_log (
     point           NUMERIC(15, 4),
     confidence      NUMERIC(5, 4) NOT NULL,
     calibrated      BOOLEAN NOT NULL DEFAULT FALSE,
+    internal_only   BOOLEAN NOT NULL DEFAULT FALSE,
     source_core     TEXT NOT NULL,
     regime_tag      TEXT,
     params_hash     TEXT,
@@ -1760,6 +1761,10 @@ CREATE INDEX IF NOT EXISTS idx_forecast_log_scoring
 CREATE INDEX IF NOT EXISTS idx_forecast_log_eligible_v2
     ON forecast_log (horizon_days, source_core, forecast_date)
     WHERE calibrated = TRUE AND resolved_date IS NOT NULL;
+-- dual_track v1.0 (alembic f2g3h4i5j6k7): 對外查詢路徑加速;搭 internal_only=FALSE 過濾
+CREATE INDEX IF NOT EXISTS idx_forecast_log_external
+    ON forecast_log (stock_id, forecast_date, horizon_days, source_core)
+    WHERE internal_only = FALSE;
 
 
 -- =============================================================================
