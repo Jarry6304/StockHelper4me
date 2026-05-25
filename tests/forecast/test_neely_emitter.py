@@ -137,6 +137,9 @@ class TestEmitNeelyFib:
         row = written[0]
         assert row["source_core"] == "neely_fib"
         assert row["calibrated"] is False
+        # v1.0 dual_track (alembic f2g3h4i5j6k7): neely_fib emit 必標 internal_only=True
+        # 對齊 m3Spec/dual_track_resonance.md §六 + §七.2(B-4 機制丙)
+        assert row["internal_only"] is True
         assert row["regime_tag"] == "Impulse"
         assert row["lower"] == 90.0
         assert row["upper"] == 115.0

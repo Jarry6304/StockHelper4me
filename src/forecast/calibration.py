@@ -93,6 +93,7 @@ def _fetch_raw_forecast(
            AND horizon_days = %s
            AND source_core  = %s
            AND ABS(confidence - %s) < 1e-6
+           AND internal_only = FALSE
          LIMIT 1
     """
     with conn.cursor() as cur:
@@ -113,6 +114,8 @@ def _fetch_calibration_set(
     """Pull most-recent `window` settled rows with forecast_date < asof.
 
     Filtered on (stock, horizon, confidence, source_core).
+    對齊 dual_track_resonance §七:預設過濾 internal_only=FALSE(防 neely_fib
+    對齊影子混入 CQR 校準輸入)。
     """
     sql = """
         SELECT lower, upper, realized_price, forecast_date
@@ -124,6 +127,7 @@ def _fetch_calibration_set(
            AND resolved_date IS NOT NULL
            AND realized_price IS NOT NULL
            AND forecast_date < %s
+           AND internal_only = FALSE
          ORDER BY forecast_date DESC
          LIMIT %s
     """

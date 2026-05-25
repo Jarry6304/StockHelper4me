@@ -1,9 +1,10 @@
 """FastMCP server app + tool registration。
 
 對齊 plan Phase D + MCP v3 重構 + v3.22 B-5 + v3.31 consolidation
-(`/root/.claude/plans/hashed-foraging-pixel.md`)。
+(`/root/.claude/plans/hashed-foraging-pixel.md`)+ v1.0 雙軌共振決策層
+(m3Spec/dual_track_resonance.md)。
 
-**Public toolkit(v4.19:4 + 4 cross-stock + 3 fusion consolidated = 11 tools)**:
+**Public toolkit(v4.25:11 + 1 dual_track = 12 tools)**:
 - `neely_forecast`:Neely NEoWave 預測(Tool 1)
 - `kalman_trend`:個股 1-D Kalman trend + 5-class regime(Tool 2)
 - `magic_formula_screen`:Greenblatt 2005 跨股篩選(Tool 3,cross-stock)
@@ -15,6 +16,9 @@
 - `market_overview`:D 視角大盤總覽(dashboard + events,v4.19 整併)
 - `stock_levels`:B 視角個股價位(key_levels + patterns + stop_loss,v4.19 整併)
 - `indicators`:E 視角技術指標(groups / cores / preset,v4.19 整併)
+- `dual_track_resonance`:雙軌共振決策(v1.0)— 結構軌(neely)+ 統計軌
+  (fusion / kalman_cqr)+ 關係層(A-3 失效閘門 + A-1 三級共振判定 +
+  cross_stock 旁路升振 + T1/T2 時間反向標註)
 
 **Hidden tools(v3.31 從 MCP 隱藏 — 仍可從 Python 直接呼叫供 dashboard 用)**:
 - stock_health / market_context / loan_collateral_snapshot /
@@ -79,6 +83,12 @@ mcp = FastMCP(
         " — E 視角:技術指標 series+events;預設 preset='default' 5 cores,"
         "groups 多選會放大輸出。\n"
         "  (`stock_snapshot` 為個股 10-in-1 基本資料快照,與上 3 個技術面工具互補)\n\n"
+        "**雙軌共振決策層(v1.0,m3Spec/dual_track_resonance.md)**:\n"
+        "  12. `dual_track_resonance(stock_id, date)` — 結構軌(neely 離散 fib 線)"
+        "× 統計軌(fusion / kalman_cqr 涵蓋帶)共振判定;A-3 失效閘門(現價跌破 "
+        "invalidation 軌道一退場);A-1 三級共振(逐 fib 線:分歧/基礎/強);"
+        "cross_stock is_top_30 旁路升振(命中升強、未命中不扣分、不仲裁分歧);"
+        "T1 命中 horizon + T2 多 horizon 剖面(21/63/126)。\n\n"
         "設計約束:\n"
         "- 所有 tool 強制 as_of date(回測 / 即時同介面)\n"
         "- facts 已過 look-ahead bias 防衛\n"
@@ -109,6 +119,9 @@ mcp.tool(_data_tools.monthly_trigger_scan)        # Layer 5:Positive/Negative tr
 mcp.tool(_data_tools.market_overview)             # D 視角:大盤總覽(dashboard + events)
 mcp.tool(_data_tools.stock_levels)                # B 視角:個股價位(key_levels + patterns + stop_loss)
 mcp.tool(_data_tools.indicators)                  # E 視角:技術指標(cores / groups / preset 選擇)
+
+# v1.0 雙軌共振決策層(2026-05-25,m3Spec/dual_track_resonance.md)
+mcp.tool(_data_tools.dual_track_resonance)        # 軌道一(結構)× 軌道二(統計)共振判定
 
 # v4.19:以下 10 個 fusion tool function 仍留 mcp_server.tools.data(dashboard /
 # direct python 用),但不再透過 MCP 註冊 — 整併進上方 3 個 consolidated 入口:
