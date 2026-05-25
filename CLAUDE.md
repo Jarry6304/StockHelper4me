@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
-- **alembic head**:`d0e1f2g3h4i5`(v4.24 M8 forecast_log whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
+- **alembic head**:`e1f2g3h4i5j6`(v4.24 M8 fusion eligible partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
 - **開發分支**:`claude/plan-stockhelper-api-kWh9F`(Fusion Layer P0+P1+P2)→ PR #91 合 main
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
@@ -447,6 +447,71 @@ vs v4.23 fusion(6 stocks c=0.95)pattern 全面翻轉:
 **M8 sprint 完整收尾** — fusion Bates-Granger 1969 變異數縮減 production-verified
 跨股穩定,可以進入 V2 議題(per-stock fade calibration / loan_collateral 第三 chip
 訊號 / MCP 暴露)。
+
+### 8-stocks production verify(2026-05-25 收尾,跨產業 generalization 確認)
+
+接 6-stocks 後再加 2882(國泰金,金融)+ 3034(聯詠,IC 設計)擴成 8 stocks 跑
+完整 grid(8 × 7 cores × 3 horizons × 3 conf)。同時對 `forecast_log` 加
+`idx_forecast_log_eligible_v2`(partial index on `(horizon_days, source_core,
+forecast_date) WHERE calibrated AND resolved_date IS NOT NULL`)讓 fusion
+`eligible_cores()` 查詢從 seq-scan 改 index-scan,fuse 從 4.5 小時降到 <30 分。
+
+**Aggregate(8 stocks 跨 horizon mean pinball,c=0.80)**:
+
+| h | source_core | n_settled | n_stocks | pinball | mean_width | rel_pct |
+|---|---|---|---|---|---|---|
+| 21 | macro_cqr | 12034 | 8 | 5.97 | 79.01 | 80.8 |
+| 21 | chip_cqr | 12034 | 8 | 6.01 | 77.33 | 80.5 |
+| 21 | fund_cqr | 11698 | 8 | 6.04 | 77.87 | 79.7 |
+| 21 | **fusion** | 10476 | 8 | **6.17** | **65.50** 🏆 | 74.1 |
+| 21 | baseline | 12274 | 8 | 7.28 | 81.09 | 76.0 |
+| 63 | **fusion** | 9492 | 8 | **9.89** 🏆 | **121.64** 🏆 | 74.5 |
+| 63 | macro_cqr | 11818 | 8 | 10.10 | 151.42 | 80.2 |
+| 63 | fund_cqr | 11482 | 8 | 10.14 | 146.73 | 79.1 |
+| 63 | chip_cqr | 11818 | 8 | 10.29 | 144.10 | 80.1 |
+| 63 | baseline | 12058 | 8 | 12.28 | 148.24 | 70.3 |
+| 126 | **fusion** | 9113 | 8 | **14.49** 🏆 | **186.98** 🏆 | 74.3 |
+| 126 | fund_cqr | 11186 | 8 | 14.91 | 217.51 | 79.5 |
+| 126 | chip_cqr | 11522 | 8 | 15.28 | 213.21 | 79.3 |
+| 126 | macro_cqr | 11522 | 8 | 15.48 | 233.02 | 78.8 |
+| 126 | baseline | 11762 | 8 | 20.59 | 191.94 | 57.1 |
+
+fusion 在 h=63 / h=126 雙拿 pinball + mean_width SOTA,h=21 mean_width 大勝
++ pinball 微差最佳單 _cqr(0.20)。8-stock 確認:**Bates-Granger variance
+reduction 對更大 stock universe 持續生效**,效益隨 horizon 增大。
+
+**Per-stock final verdict — 24/24 wins**(每股每 horizon 都勝 baseline):
+
+| stock | 產業 | h=21 delta | h=63 delta | h=126 delta |
+|---|---|---|---|---|
+| 1101 | 食品 | -2.4% | -9.6% | -1.9% |
+| 2317 | 電子代工 | -15.4% | -33.8% | -12.5% |
+| 2330 | 晶圓代工 | -13.9% | -16.7% | -23.9% |
+| 2454 | IC 設計 | -18.0% | -8.3% | -23.6% |
+| 2603 | 海運 | -11.5% | -48.9% | -48.0% |
+| 2618 | 航空 | -13.9% | -11.4% | -24.6% |
+| **2882** | **金融**(新)| -20.4% | -23.1% | -33.3% |
+| **3034** | **IC 設計**(新)| -17.9% | -25.4% | -38.6% |
+
+範圍 -1.9% ~ -48.9% — 跨 7 個不同產業(食品 / 電子代工 / 晶圓代工 / IC 設計 ×2 /
+海運 / 航空 / 金融)全勝 baseline,fusion 跨產業 generalizable 完整確認。
+
+**vs v4.23 fusion(6 stocks c=0.95 全 horizon 輸 baseline 45-116%)**:
+M8 fusion(8 stocks c=0.80)勝 baseline 15-30%,跨 24 cells 全勝 — 完全翻轉。
+
+### M8 sprint 最終收尾
+
+| 階段 | 範圍 |
+|---|---|
+| Spine 程式 | 681 行 3 cores + 60 行 CLI factory + 1400 行 tests(161 passed)|
+| Schema | alembic `d0e1f2g3h4i5` whitelist 擴 + production hotfix(macro market case / fundamental inline SQL)|
+| Index | `idx_forecast_log_eligible_v2` partial index(fuse 速度從 4.5h → 30 min)|
+| Production verify | 1 stock(2330)→ 6 stocks → **8 stocks 24/24 wins** |
+| Doc | CLAUDE.md v4.24 + PR #99 |
+
+完整 11 commits / branch `claude/fusion-forecast-cores-nh6MQ`。下個 sprint:
+V2 議題(per-stock fade calibration / loan_collateral 第三 chip 訊號 / MCP 暴露 /
+擴 stocks 範圍到 100+ 進 production rolling forecast)。
 
 ### Tests(本 PR)
 

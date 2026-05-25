@@ -1757,6 +1757,9 @@ CREATE INDEX IF NOT EXISTS idx_forecast_log_pending
 CREATE INDEX IF NOT EXISTS idx_forecast_log_scoring
     ON forecast_log (source_core, forecast_date)
     WHERE resolved_date IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_forecast_log_eligible_v2
+    ON forecast_log (horizon_days, source_core, forecast_date)
+    WHERE calibrated = TRUE AND resolved_date IS NOT NULL;
 
 
 -- =============================================================================
