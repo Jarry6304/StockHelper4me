@@ -23,6 +23,8 @@ from fusion.dual_track.track1 import (  # noqa: E402
     read_track1,
     scenario_is_invalidated,
     _extract_invalidation_price,
+    _extract_all_invalidation_thresholds,
+    _check_any_threshold_breached,
     _zone_to_fib_line,
     _pick_primary,
     _effective_degree,
@@ -191,6 +193,136 @@ class TestInvalidation:
         assert scenario_is_invalidated(
             direction="bullish", invalidation_price=80.0, current_price=None
         ) is False
+
+
+# ─── v4.25.x:neutral A-3 + 全 trigger 檢查 ───────────────────────────────────
+
+
+class TestExtractAllThresholds:
+    def test_extracts_both_kinds(self):
+        s = _make_scenario(invalidation_triggers=[
+            {"on_trigger": "InvalidateScenario", "trigger_type": {"PriceBreakBelow": 80.0}},
+            {"on_trigger": "InvalidateScenario", "trigger_type": {"PriceBreakAbove": 120.0}},
+        ])
+        ts = _extract_all_invalidation_thresholds(s)
+        assert ("below", 80.0) in ts
+        assert ("above", 120.0) in ts
+        assert len(ts) == 2
+
+    def test_weaken_action_excluded(self):
+        s = _make_scenario(invalidation_triggers=[
+            {"on_trigger": "InvalidateScenario", "trigger_type": {"PriceBreakBelow": 80.0}},
+            {"on_trigger": "WeakenScenario", "trigger_type": {"PriceBreakAbove": 120.0}},
+        ])
+        ts = _extract_all_invalidation_thresholds(s)
+        assert ts == [("below", 80.0)]
+
+    def test_empty_scenario(self):
+        assert _extract_all_invalidation_thresholds(_make_scenario()) == []
+
+
+class TestCheckAnyThresholdBreached:
+    def test_no_thresholds_no_breach(self):
+        breached, kind, th = _check_any_threshold_breached([], 100.0)
+        assert breached is False and kind is None and th is None
+
+    def test_below_breached(self):
+        breached, kind, th = _check_any_threshold_breached([("below", 80.0)], 75.0)
+        assert breached is True and kind == "below" and th == 80.0
+
+    def test_below_not_breached(self):
+        breached, kind, th = _check_any_threshold_breached([("below", 80.0)], 85.0)
+        assert breached is False
+
+    def test_above_breached(self):
+        breached, kind, th = _check_any_threshold_breached([("above", 120.0)], 125.0)
+        assert breached is True and kind == "above" and th == 120.0
+
+    def test_first_match_wins(self):
+        # current=75 → below 80 first, even if there's also above 120
+        breached, kind, th = _check_any_threshold_breached(
+            [("below", 80.0), ("above", 120.0)], 75.0
+        )
+        assert breached is True and kind == "below"
+
+    def test_no_current_returns_false(self):
+        breached, kind, th = _check_any_threshold_breached([("below", 80.0)], None)
+        assert breached is False
+
+
+class TestNeutralA3Gate:
+    """v4.25.x:neutral direction 也走 A-3(user 拍版「neutral 遇 trigger 就判」)。
+
+    對齊 ETF / index proxy(如 0050)等無明顯多空偏見的 scenario:scenario 自己
+    宣告 trigger,任一中即作廢,direction 不擋路。
+    """
+
+    def test_neutral_with_below_trigger_invalidated(self):
+        # 模擬 0050 case:Neutral power_rating + PriceBreakBelow + current 已跌破
+        primary = _make_scenario(
+            power="Neutral",
+            invalidation_triggers=[{
+                "on_trigger": "InvalidateScenario",
+                "trigger_type": {"PriceBreakBelow": 544.45},
+            }],
+        )
+        snap = _make_snapshot([primary])
+        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+            t1 = read_track1(None, stock_id="0050", as_of=date(2024, 6, 1),
+                              current_price=95.85)
+        assert t1.direction == "neutral"
+        # v4.25.x:neutral + below trigger + current << threshold → invalidated=True
+        assert t1.invalidated is True
+        assert any("跌破" in n for n in t1.notes)
+
+    def test_neutral_with_above_trigger_invalidated(self):
+        primary = _make_scenario(
+            power="Neutral",
+            invalidation_triggers=[{
+                "on_trigger": "InvalidateScenario",
+                "trigger_type": {"PriceBreakAbove": 200.0},
+            }],
+        )
+        snap = _make_snapshot([primary])
+        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+            t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
+                              current_price=250.0)
+        assert t1.direction == "neutral"
+        assert t1.invalidated is True
+        assert any("漲破" in n for n in t1.notes)
+
+    def test_neutral_no_breach(self):
+        primary = _make_scenario(
+            power="Neutral",
+            invalidation_triggers=[{
+                "on_trigger": "InvalidateScenario",
+                "trigger_type": {"PriceBreakBelow": 80.0},
+            }],
+        )
+        snap = _make_snapshot([primary])
+        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+            t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
+                              current_price=100.0)
+        assert t1.invalidated is False
+
+    def test_bullish_now_checks_above_too(self):
+        """v4.25.x:bullish scenario 若同時有 PriceBreakAbove,也檢查(對齊 NEoWave
+        wave 5 過度延伸 = thesis 破)。原本只 below;現在 ANY trigger 觸發即失效。"""
+        primary = _make_scenario(
+            power="StrongBullish",
+            invalidation_triggers=[
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakBelow": 80.0}},
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakAbove": 200.0}},
+            ],
+        )
+        snap = _make_snapshot([primary])
+        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+            t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
+                              current_price=250.0)
+        # bullish but above 200 → 也觸發 invalidation(wave 5 extended too far thesis破)
+        assert t1.invalidated is True
 
 
 # ─── read_track1 整合測試 ────────────────────────────────────────────────────

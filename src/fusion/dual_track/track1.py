@@ -159,6 +159,10 @@ def _extract_invalidation_price(scenario: dict, direction: str) -> float | None:
     對齊 mcp_server/_forecast.py:_scenario_is_invalidated 的解析:
     - bullish scenario → PriceBreakBelow(price);direction bearish → PriceBreakAbove
     - on_trigger 必 InvalidateScenario(WeakenScenario / PromoteAlternative 不算)
+
+    本函式 returns 顯示用的 invalidation_price(對齊 LLM 看 UI),只挑「主方向」trigger。
+    A-3 閘門實際判定走 `_extract_all_invalidation_thresholds` + 全 trigger 檢查
+    (v4.25.x:對齊 user 拍版 neutral 也走 A-3,只要有 trigger 就判)。
     """
     triggers = scenario.get("invalidation_triggers") or []
     for t in triggers:
@@ -195,17 +199,77 @@ def _extract_invalidation_price(scenario: dict, direction: str) -> float | None:
     return None
 
 
+def _extract_all_invalidation_thresholds(scenario: dict) -> list[tuple[str, float]]:
+    """抽所有 InvalidateScenario triggers,回 [(kind, threshold), ...]。
+
+    kind:
+        - "below":PriceBreakBelow,當 current < threshold → 觸發
+        - "above":PriceBreakAbove,當 current > threshold → 觸發
+
+    對齊 v4.25.x user 拍版:neutral direction 也走 A-3 閘門 — 只要任一 trigger
+    被現價跨越,scenario 視為失效(spec §四「現價跌破 invalidation 軌道一退場」
+    字面意義延伸到 neutral)。bullish / bearish direction 也維持 ALL-trigger
+    檢查;原本只看主方向 trigger 屬保守,本次擴成「任一 trigger 觸發即失效」對齊
+    NEoWave 原作精神(scenario 自己宣告 trigger,任一中即作廢)。
+    """
+    out: list[tuple[str, float]] = []
+    for t in scenario.get("invalidation_triggers") or []:
+        action = t.get("on_trigger")
+        if isinstance(action, dict):
+            action = next(iter(action.keys()), None)
+        if action != "InvalidateScenario":
+            continue
+        trigger_type = t.get("trigger_type")
+        if not isinstance(trigger_type, dict):
+            continue
+        if "PriceBreakBelow" in trigger_type:
+            try:
+                out.append(("below", float(trigger_type["PriceBreakBelow"])))
+            except (TypeError, ValueError):
+                pass
+        if "PriceBreakAbove" in trigger_type:
+            try:
+                out.append(("above", float(trigger_type["PriceBreakAbove"])))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def _check_any_threshold_breached(
+    thresholds: list[tuple[str, float]],
+    current_price: float | None,
+) -> tuple[bool, str | None, float | None]:
+    """任一 trigger 觸發即回 True。
+
+    Returns:
+        (breached, fired_kind, fired_threshold)
+    """
+    if current_price is None or not thresholds:
+        return False, None, None
+    cp = float(current_price)
+    for kind, threshold in thresholds:
+        if kind == "below" and cp < threshold:
+            return True, kind, threshold
+        if kind == "above" and cp > threshold:
+            return True, kind, threshold
+    return False, None, None
+
+
 def scenario_is_invalidated(
     *,
     direction: str,
     invalidation_price: float | None,
     current_price: float | None,
 ) -> bool:
-    """A-3 失效閘門判定。
+    """A-3 失效閘門判定(backward-compat 簽章)。
 
     bullish + current < invalidation → True
     bearish + current > invalidation → True
-    其餘(neutral / None / 缺資料)→ False
+    neutral / None / 缺資料 → False
+
+    Note: v4.25.x 新加 `_check_any_threshold_breached` 才是 read_track1 實際走的
+    路徑(對齊 neutral A-3 user 拍版)。本函式保留給既有 caller / 既有 tests
+    backward compat。
     """
     if current_price is None or invalidation_price is None:
         return False
@@ -389,11 +453,14 @@ def read_track1(
     # cluster + cap(對齊 §六 失真處理:flat_union 可達 100+ 條 → MCP payload 爆炸)
     fib_lines, n_raw, was_reduced = _cluster_and_cap_fib_lines(raw_fib_lines)
 
+    # invalidation_price 顯示用(對齊 LLM context):取主方向 trigger
     invalidation_price = _extract_invalidation_price(primary, direction)
-    invalidated = scenario_is_invalidated(
-        direction=direction,
-        invalidation_price=invalidation_price,
-        current_price=current_price,
+    # A-3 閘門實際判定:ANY InvalidateScenario trigger 被現價跨越即失效
+    # 對齊 v4.25.x user 拍版「neutral 遇 trigger 就判」 + NEoWave 原作
+    # 「scenario 自己宣告 trigger,任一中即作廢」
+    all_thresholds = _extract_all_invalidation_thresholds(primary)
+    invalidated, fired_kind, fired_threshold = _check_any_threshold_breached(
+        all_thresholds, current_price
     )
 
     notes: list[str] = []
@@ -407,9 +474,11 @@ def read_track1(
             f"(1% bucket cluster + cap {FIB_LINES_MAX_COUNT};對齊 MCP context budget)"
         )
     if invalidated:
+        op_word = "跌破" if fired_kind == "below" else "漲破"
         notes.append(
             f"A-3 invalidation gate triggered: {direction} scenario, "
-            f"current={current_price} vs invalidation={invalidation_price}"
+            f"current={current_price} {op_word} threshold={fired_threshold} "
+            f"(trigger_kind={fired_kind})"
         )
 
     return Track1View(
