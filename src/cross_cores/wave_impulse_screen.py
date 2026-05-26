@@ -424,10 +424,27 @@ def _extract_target_price(scenario: dict) -> float | None:
 
 
 def _extract_below_invalidation(scenario: dict) -> float | None:
-    """bullish scenario 取「below」kind 最高 threshold(最緊密的 stop)。"""
+    """r1/r2 W3 entry path:取 MAX of below triggers(最緊 stop)。
+
+    r3 corrective entry 不該用此函式 — 走 _extract_correction_stop(MIN)。
+    """
     thresholds = _extract_all_invalidation_thresholds(scenario)
     below = [v for k, v in thresholds if k == "below"]
     return max(below) if below else None
+
+
+def _extract_correction_stop(scenario: dict) -> float | None:
+    """r3 CORRECTION_DONE_DOWN entry path:取 MIN of below triggers
+    (對 corrective bottom 抽 stop loss,= 修正實際低點)。
+
+    Rationale:NEoWave 對 Zigzag/Flat scenario emit 多筆 PriceBreakBelow
+    triggers 對應不同 sub-hypothesis(e.g. W1 low / W3 low / extended target)。
+    對 corrective 完成後 buy entry,正確 stop 是「最低點」(MIN)— 不是最緊。
+    取 MAX 會抓到 corrective 開始的高點,落在現價之上 → invalid_rr_geometry。
+    """
+    thresholds = _extract_all_invalidation_thresholds(scenario)
+    below = [v for k, v in thresholds if k == "below"]
+    return min(below) if below else None
 
 
 # ────────────────────────────────────────────────────────────
@@ -565,24 +582,33 @@ def _build_row(
     excluded: str | None = pos["excluded_reason"]
 
     # R/R 計算(only candidate = CORRECTION_DONE_DOWN — 預期 UP 反轉)
+    # r4 用 _extract_correction_stop(MIN of below triggers)取 corrective bottom,
+    # 配合幾何 sanity check(target > current > invalidation)
     if is_candidate and current_price is not None:
-        invalidation = _extract_below_invalidation(primary)
+        invalidation = _extract_correction_stop(primary)
         target = _extract_target_price(primary)
         extras["entry_price"] = float(current_price)
         extras["invalidation_price"] = invalidation
         extras["target_price"] = target
-        if target is not None and invalidation is not None and current_price > invalidation:
+
+        if target is None:
+            is_candidate = False
+            excluded = "no_target"
+        elif invalidation is None:
+            is_candidate = False
+            excluded = "no_invalidation"
+        elif target <= current_price:
+            is_candidate = False
+            excluded = "target_below_current"
+        elif invalidation >= current_price:
+            is_candidate = False
+            excluded = "stop_above_current"
+        else:
             rr = (target - current_price) / (current_price - invalidation)
             extras["rr_ratio"] = round(rr, 4) if rr > 0 else None
             if extras["rr_ratio"] is None or extras["rr_ratio"] < RR_MIN:
                 is_candidate = False
                 excluded = "rr_below_threshold"
-        elif target is None:
-            is_candidate = False
-            excluded = "no_target"
-        else:
-            is_candidate = False
-            excluded = "invalid_rr_geometry"
     elif is_candidate:  # current_price None
         is_candidate = False
         excluded = "no_current_price"

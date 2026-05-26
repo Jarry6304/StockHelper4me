@@ -361,8 +361,9 @@ class TestBuildRowR3:
         from cross_cores.wave_impulse_screen import _build_row
 
         # target = midpoint (102.5) of [100,105]; entry=100; invalidation=90 → rr=2.5/10=0.25
+        # r4:target must be > current(102.5 > 100 ✓);invalidation must be < current(90 < 100 ✓)
         s = _zigzag(end_date="2026-05-22", direction="down",
-                    fib_zones=[{"source_ratio": 1.618, "low": 100, "high": 105}])
+                    fib_zones=[{"source_ratio": 1.618, "low": 100.01, "high": 105}])
         row = _build_row(
             stock_id="X", target_date=SNAPSHOT_DATE, timeframe="daily",
             snapshot={"scenario_forest": [s]}, current_price=100.0,
@@ -370,6 +371,72 @@ class TestBuildRowR3:
         )
         assert row["is_candidate"] is False
         assert row["excluded_reason"] == "rr_below_threshold"
+
+    def test_target_below_current_excluded(self):
+        """r4 geometry sanity:target ≤ current → 不入 candidate。"""
+        from cross_cores.wave_impulse_screen import _build_row
+
+        # target midpoint = 80(< current 100)
+        s = _zigzag(end_date="2026-05-22", direction="down",
+                    fib_zones=[{"source_ratio": 1.618, "low": 75, "high": 85}])
+        row = _build_row(
+            stock_id="X", target_date=SNAPSHOT_DATE, timeframe="daily",
+            snapshot={"scenario_forest": [s]}, current_price=100.0,
+            excluded_reason=None, snapshot_date=SNAPSHOT_DATE,
+        )
+        assert row["is_candidate"] is False
+        assert row["excluded_reason"] == "target_below_current"
+
+    def test_stop_above_current_excluded(self):
+        """r4 geometry sanity:invalidation ≥ current → 不入 candidate
+        (對應 r3 揭露的 237 個 invalid_rr_geometry root cause)。"""
+        from cross_cores.wave_impulse_screen import _build_row
+
+        # invalidation 110 > current 100(MAX 取錯方向會踩這個)
+        s = _zigzag(
+            end_date="2026-05-22", direction="down",
+            fib_zones=[{"source_ratio": 1.618, "low": 110, "high": 120}],
+            triggers=[{"on_trigger": "InvalidateScenario",
+                       "trigger_type": {"PriceBreakBelow": 110.0}}],
+        )
+        row = _build_row(
+            stock_id="X", target_date=SNAPSHOT_DATE, timeframe="daily",
+            snapshot={"scenario_forest": [s]}, current_price=100.0,
+            excluded_reason=None, snapshot_date=SNAPSHOT_DATE,
+        )
+        assert row["is_candidate"] is False
+        assert row["excluded_reason"] == "stop_above_current"
+
+    def test_multiple_below_triggers_takes_min(self):
+        """r4:對 corrective bottom 取 MIN of below triggers(loosest stop)。
+        對應 r3 揭露的 NEoWave 對 Zigzag/Flat emit 多筆 triggers,MAX 抓錯方向。"""
+        from cross_cores.wave_impulse_screen import _extract_correction_stop
+
+        s = {
+            "invalidation_triggers": [
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakBelow": 110.0}},   # 較高(MAX 會抓)
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakBelow": 90.0}},    # 較低(MIN 抓,= corrective bottom)
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakBelow": 95.0}},
+            ],
+        }
+        assert _extract_correction_stop(s) == 90.0   # MIN
+
+    def test_no_invalidation_excluded(self):
+        """r4 invalidation trigger 不存在 → no_invalidation。"""
+        from cross_cores.wave_impulse_screen import _build_row
+
+        s = _zigzag(end_date="2026-05-22", direction="down",
+                    triggers=[])   # 無 invalidation trigger
+        row = _build_row(
+            stock_id="X", target_date=SNAPSHOT_DATE, timeframe="daily",
+            snapshot={"scenario_forest": [s]}, current_price=100.0,
+            excluded_reason=None, snapshot_date=SNAPSHOT_DATE,
+        )
+        assert row["is_candidate"] is False
+        assert row["excluded_reason"] == "no_invalidation"
 
     def test_no_target_demoted(self):
         from cross_cores.wave_impulse_screen import _build_row
