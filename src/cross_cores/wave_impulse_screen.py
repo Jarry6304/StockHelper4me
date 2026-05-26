@@ -56,18 +56,23 @@ from silver._common import upsert_silver
 
 from cross_cores._shared import empty_row, fetch_universe_filter
 
-# Inline import — picker 對齊 v4.25.x canonical(track1.py)
-# Out of scope:抽 src/fusion/_picker.py 共用(本 PR follow-up issue)
+# v4.26 follow-up:picker common helpers 抽 src/fusion/_picker.py 共用
+from fusion._picker import (
+    direction_from_power as _direction_from_power,
+    pattern_type_label as _pattern_type_label,
+    power_rating_label as _power_rating_label,
+    power_rating_strength as _power_rating_strength,
+    wave_count_from_label as _wave_count_from_label,
+)
+# 仍從 track1.py import 尚未共用化的(_DEGREE_RANK / _effective_degree /
+# _pick_primary 邏輯與 _forecast.py 有 semantic drift 待 audit;
+# _extract_all_invalidation_thresholds 屬 dual_track A-3 閘門邏輯,wave_screen
+# fallback 用)
 from fusion.dual_track.track1 import (  # noqa: F401
     _DEGREE_RANK,
-    _direction_from_power,
     _effective_degree,
     _extract_all_invalidation_thresholds,
-    _pattern_type_label,
     _pick_primary,
-    _power_rating_label,
-    _power_rating_strength,
-    _wave_count_from_label,
 )
 
 logger = logging.getLogger("collector.cross_cores.wave_impulse_screen")

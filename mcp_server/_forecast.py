@@ -31,6 +31,15 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+# v4.26 follow-up:picker helpers 抽 src/fusion/_picker.py 共用
+# (_parse_iso_date 保留 local — _forecast 既有版本 raise ValueError,picker
+# `coerce_date` 回 None,簽章不同;留 future PR 統一處理 error handling 路徑)
+from fusion._picker import (
+    power_rating_label as _power_rating_label,
+    power_rating_sign as _power_rating_sign,
+    power_rating_strength as _power_rating_strength,
+)
+
 # ────────────────────────────────────────────────────────────
 # 4 時間框架 Fibonacci ratio scaling(plan §Tool 1 第 2 點)
 # ────────────────────────────────────────────────────────────
@@ -421,44 +430,8 @@ def _scenario_is_invalidated(scenario: dict, current_price: float) -> bool:
     return False
 
 
-def _power_rating_strength(rating: Any) -> int:
-    """PowerRating → 強度級別(0-3)。"""
-    if not rating:
-        return 0
-    if isinstance(rating, dict):
-        # serde tagged enum,取唯一 key
-        rating = next(iter(rating.keys()), None)
-    if not isinstance(rating, str):
-        return 0
-    mapping = {
-        "StrongBullish": 3, "StrongBearish": 3,
-        "Bullish":       2, "Bearish":       2,
-        "SlightBullish": 1, "SlightBearish": 1,
-        "Neutral":       0,
-    }
-    return mapping.get(rating, 0)
-
-
-def _power_rating_sign(rating: Any) -> int:
-    """+1 bull / -1 bear / 0 neutral。"""
-    if isinstance(rating, dict):
-        rating = next(iter(rating.keys()), None)
-    if not isinstance(rating, str):
-        return 0
-    if rating.endswith("Bullish"):
-        return +1
-    if rating.endswith("Bearish"):
-        return -1
-    return 0
-
-
-def _power_rating_label(rating: Any) -> str:
-    """正規化 PowerRating 字串。"""
-    if isinstance(rating, dict):
-        return next(iter(rating.keys()), "Neutral")
-    if isinstance(rating, str):
-        return rating
-    return "Neutral"
+# v4.26 follow-up:_power_rating_strength / _power_rating_sign /
+# _power_rating_label 已抽 fusion/_picker.py(本檔頂部 import)。
 
 
 def _format_primary_scenario(scenario: dict | None) -> dict[str, Any]:
