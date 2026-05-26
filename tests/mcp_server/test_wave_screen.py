@@ -1,11 +1,14 @@
-"""Tests for scan_wave_impulse MCP tool (commit 7/7)。
+"""Tests for scan_wave_impulse MCP tool。
 
-對齊 plan §9 MCP tests + test_screens.py monkeypatch 風格(不打 PG,
-mock get_connection + cursor):
+r3 phase enum(post-correction entry pivot):
+  - CORRECTION_DONE_DOWN:candidate(多頭反轉買點)
+  - CORRECTION_DONE_UP / IMPULSE_COMPLETE / CORRECTION_ONGOING:observe
+
+對齊 test_screens.py monkeypatch 風格(不打 PG,mock get_connection + cursor):
   1. top_stocks_present (payload schema)
-  2. observe_section_separate (W5 mature 進 observe_stocks)
+  2. observe_section_separate (IMPULSE_COMPLETE / CORRECTION_DONE_UP 進 observe)
   3. timeframe_passthrough ("weekly" 正確 forward to SQL)
-  4. narrative_caveat_present (narrative + 3 段 caveat)
+  4. narrative_caveat_present (r3 caveat 三段)
 """
 
 from __future__ import annotations
@@ -60,9 +63,10 @@ def _make_mock_conn(*, ranking_date=date(2026, 5, 25),
     return conn, cursor
 
 
-def _row(stock_id="2330", *, phase="W2_DONE", is_candidate=True, is_top_n=True,
-         rank=1, rr=2.5, cross_tf=False, direction="bullish"):
-    """Build production-shaped wave_impulse_screen_derived row。"""
+def _row(stock_id="2330", *, phase="CORRECTION_DONE_DOWN", is_candidate=True,
+         is_top_n=True, rank=1, rr=2.5, cross_tf=False, direction="down",
+         pattern_kind="Zigzag"):
+    """Build production-shaped wave_impulse_screen_derived row(r3 schema)。"""
     return {
         "market": "TW",
         "stock_id": stock_id,
@@ -71,11 +75,11 @@ def _row(stock_id="2330", *, phase="W2_DONE", is_candidate=True, is_top_n=True,
         "date": date(2026, 5, 25),
         "timeframe": "daily",
         "phase": phase,
-        "wave_number": 2 if phase == "W2_DONE" else 3 if phase == "W3_ONGOING" else 5,
-        "pattern_kind": "Impulse",
+        "wave_number": None,
+        "pattern_kind": pattern_kind,
         "direction": direction,
         "effective_degree": "Minor",
-        "structure_label": "F3" if phase == "W2_DONE" else "L5",
+        "structure_label": "L5",
         "confidence_level": "strict",
         "entry_price": 100.0,
         "target_price": 135.0,
@@ -119,22 +123,24 @@ class TestScanWaveImpulse:
             assert key in first
         assert first["stock_id"] == "2330"
         assert first["rank"] == 1
-        assert first["phase"] == "W2_DONE"
+        assert first["phase"] == "CORRECTION_DONE_DOWN"
         assert first["cross_tf_aligned"] is False
         # cross_tf_aligned_count 計算正確(2317 是 True)
         assert r["cross_tf_aligned_count"] == 1
 
     def test_observe_section_separate(self):
-        """plan §9 case 2:W5_MATURE rows 進 observe_stocks 不入 top_stocks。"""
+        """r3:IMPULSE_COMPLETE / CORRECTION_DONE_UP rows 進 observe_stocks。"""
         from mcp_server.tools import data as data_tools
 
         conn, _cur = _make_mock_conn(
             top_rows=[_row("2330", rank=1)],
             observe_rows=[
-                _row("3030", phase="W5_MATURE", is_candidate=False,
-                     is_top_n=False, rank=None, rr=None),
-                _row("2454", phase="W4_DONE", is_candidate=False,
-                     is_top_n=False, rank=None, rr=None),
+                _row("3030", phase="IMPULSE_COMPLETE", is_candidate=False,
+                     is_top_n=False, rank=None, rr=None,
+                     pattern_kind="Impulse", direction="up"),
+                _row("2454", phase="CORRECTION_DONE_UP", is_candidate=False,
+                     is_top_n=False, rank=None, rr=None,
+                     pattern_kind="Flat", direction="up"),
             ],
         )
         with patch("mcp_server._screens.get_connection", return_value=conn):
@@ -142,8 +148,8 @@ class TestScanWaveImpulse:
         assert len(r["top_stocks"]) == 1
         assert len(r["observe_stocks"]) == 2
         observe_phases = {s["phase"] for s in r["observe_stocks"]}
-        assert "W5_MATURE" in observe_phases
-        assert "W4_DONE" in observe_phases
+        assert "IMPULSE_COMPLETE" in observe_phases
+        assert "CORRECTION_DONE_UP" in observe_phases
         for s in r["observe_stocks"]:
             assert s["is_candidate"] is False
 
@@ -162,7 +168,7 @@ class TestScanWaveImpulse:
             assert params[0] == "weekly"
 
     def test_narrative_and_caveat_present(self):
-        """plan §9 case 4:narrative + 三段 caveat 都在。"""
+        """r3:narrative + 三段 caveat 都在。"""
         from mcp_server.tools import data as data_tools
 
         conn, _cur = _make_mock_conn(top_rows=[_row("2330", rank=1)],
@@ -172,11 +178,11 @@ class TestScanWaveImpulse:
         assert "narrative" in r
         assert "Wave Impulse Screen" in r["narrative"]
         assert "2330" in r["narrative"]
-        # caveat 三段都在
+        # r3 caveat 三段都在
         caveat = r.get("caveat", "")
-        assert "W3" in caveat
-        assert "W5" in caveat
-        assert "calibrat" in caveat   # production calibration after first 30d
+        assert "Zigzag" in caveat or "Flat" in caveat   # r3 訊號源
+        assert "IMPULSE_COMPLETE" in caveat or "observe" in caveat
+        assert "calibrate" in caveat   # production calibration after first 30d
 
     def test_no_data_graceful(self):
         """ranking_date=None 時不爆,narrative 標示「無 candidates」。"""

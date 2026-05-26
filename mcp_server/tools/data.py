@@ -642,24 +642,32 @@ def scan_wave_impulse(
     *,
     database_url: str | None = None,
 ) -> dict[str, Any]:
-    """Wave Impulse Cross-Stock Screen — 找全市場「正進入第三波(W3)主升段」候選。
+    """Wave Impulse Cross-Stock Screen — r3 post-correction entry pivot。
 
-    對齊 plan wave-impulse-cross-stock-virtual-papert.md §8 + cross_cores Phase 8
-    第 12 個 builder(wave_impulse_screen):
+    r3 重新定位(production verify 2026-05-27 揭露 neely_core forest 不 emit
+    incomplete Impulse,r1/r2「找 W3 早段」設計不可行):
+    - 改抓「3-wave Zigzag/Flat 向下修正剛完成」訊號 → 預期新 impulse 啟動,
+      多頭反轉買點(對齊 NEoWave「A-B-C 結束後啟動新 impulse」)
+    - 完整 5 波 Impulse → 反轉警示 observe
+    - 上漲修正剛完成 → 空頭 setup observe(TW 多單略過)
 
-    - 讀 wave_impulse_screen_derived(builder upstream:structural_snapshots /
-      neely_core forest + 既有 picker)
-    - 雙軸驗證浪位(Axis-A wave_tree W(\\d+) + Axis-B NEoWave Pass-2 label):
-      W2_DONE / W3_ONGOING(candidate)/ W3_MATURE / W4_DONE(observe)/
-      W5_ONGOING / W5_MATURE(observe)
-    - 過 R/R 1.5 + bullish direction 門檻才入 top_stocks
-    - cross_tf_aligned:同股 daily+weekly 同向 W3 → 排名加分
+    讀 wave_impulse_screen_derived(cross_cores Phase 8 第 12 個 builder):
+    - Picker:`_pick_recent_correction` 找最近 RECENT_DAYS=14 內完成的
+      Zigzag/Flat scenario
+    - 過 R/R 1.5 + direction=down(向下修正)門檻才入 top_stocks
+    - cross_tf_aligned:同股 daily+weekly 同向 CORRECTION_DONE_DOWN → 排名加分
+
+    Phase enum(r3):
+    - CORRECTION_DONE_DOWN:向下 3-wave 修正剛完成 → candidate(多頭反轉買點)
+    - CORRECTION_DONE_UP:向上 3-wave 修正剛完成 → observe(空頭 setup)
+    - CORRECTION_ONGOING:修正中 > RECENT_DAYS → observe
+    - IMPULSE_COMPLETE:完整 5 波 → observe(反轉警示,該獲利了結)
 
     Args:
-        date:            ISO 字串(例 "2026-05-25")
+        date:            ISO 字串(例 "2026-05-27")
         timeframe:       daily / weekly / monthly(預設 daily)
         top_n:           top_stocks + observe_stocks 各取 N(預設 30)
-        include_observe: 是否回 W5/W4 observe section(預設 True)
+        include_observe: 是否回 observe section(預設 True)
 
     Returns:
         {
@@ -668,14 +676,14 @@ def scan_wave_impulse(
                         pattern_kind, direction, effective_degree, structure_label,
                         confidence_level (strict/loose), entry_price, target_price,
                         invalidation_price, rr_ratio, cross_tf_aligned,
-                        is_candidate}, ...],
-          observe_stocks: [...]  # W5_MATURE / W5_ONGOING / W4_DONE,observe only
+                        is_candidate}, ...],   # CORRECTION_DONE_DOWN candidates
+          observe_stocks: [...]                # IMPULSE_COMPLETE / DONE_UP / ONGOING
           cross_tf_aligned_count, narrative, caveat
         }
 
     Refs:
-      - Prechter & Frost (1978). Elliott Wave Principle, Ch.2 W3 主升段
-      - Glenn Neely (1990). Mastering Elliott Wave, Ch7 §Three Rounds Compaction
+      - Glenn Neely (1990). Mastering Elliott Wave, Ch6/7 corrective pattern 收尾
+      - r3 pivot rationale 見 src/cross_cores/wave_impulse_screen.py docstring
     """
     from mcp_server._screens import compute_wave_impulse_scan
 

@@ -1,34 +1,54 @@
 """
 cross_cores/wave_impulse_screen.py
 ==================================
-Wave Impulse Cross-Stock Screen — 全市場掃 neely_core forest 找「正進入 W3」候選。
+Wave Impulse Cross-Stock Screen — r3 post-correction entry pivot。
 
-對齊 plan `/root/.claude/plans/wave-impulse-cross-stock-virtual-papert.md`:
-- 讀 structural_snapshots(neely_core)→ 套既有 picker 收斂 primary scenario
-- 雙軸驗證浪位:Axis-A regex `W(\\d+)` 抽 wave_tree rightmost child 浪數;
-  Axis-B 對 monowave_structure_labels[last_n-1].labels[0].label 對 NEoWave
-  structure label(`L5/F3/C3/UnknownFive/...`)交叉驗
-- 對 W2_DONE / W3_ONGOING 算 R/R(target = expected_fib_zones [1.382, 2.618]
-  midpoint;invalidation = `below` kind 最高 threshold)
+## r3 pivot rationale
+
+r1/r2 設計「掃 incomplete Impulse 找 W3 主升段早段」在 production verify
+(2026-05-27 全市場 1152 stocks)揭露 **neely_core forest 對 Impulse/Diagonal
+emit wave_count=5 100%** — 完全不留半完成假設。結果 candidates 永遠 = 0。
+
+r3 改為對齊 NEoWave 真正可掃選的訊號:**3-wave Zigzag/Flat 修正剛完成 + 方向
+DOWN** → 預期新 impulse 啟動(對齊 NEoWave「A-B-C 結束後啟動新 impulse」)。
+
+## 處理流程
+
+- 讀 structural_snapshots(neely_core)→ `_pick_recent_correction` 找最近
+  RECENT_DAYS=14 內完成的 Zigzag/Flat scenario(fallback Impulse / canonical)
+- `current_wave_position`:
+  - Zigzag/Flat + rightmost end 在 RECENT_DAYS 內 + direction=down →
+    `CORRECTION_DONE_DOWN` candidate
+  - Zigzag/Flat + direction=up → `CORRECTION_DONE_UP` observe(空頭 setup)
+  - Zigzag/Flat + 過 RECENT_DAYS → `CORRECTION_ONGOING` observe
+  - Impulse/Diagonal → `IMPULSE_COMPLETE` observe(反轉警示)
+  - 其他 → `OTHER`
+- R/R 計算(only candidate):target = expected_fib_zones [1.382, 2.618] zone
+  midpoint;invalidation = `below` kind 最高 threshold
 - per-tf 獨立 row(PK 含 timeframe);第二輪 pass 算 cross_tf_aligned 軟對齊
 
-設計約束(對齊 cores_overview §四 + §十四):
+## 設計約束(對齊 cores_overview §四 + §十四)
+
 - 零耦合:只讀 structural_snapshots JSONB + price_daily_fwd,不 reach into Rust
 - 不抽象:per-stock 邏輯 inline 寫,picker 函式從 fusion/dual_track/track1.py
   inline import(underscore-private 同 repo 內 OK,picker 抽 _picker.py 留下個 PR)
-- best-guess thresholds(W3_EARLY_PCT=0.5 / RR_MIN=1.5)走 module 常數,
+- best-guess thresholds(RECENT_DAYS=14 / RR_MIN=1.5)走 module 常數,
   production verify 後 calibrate(對齊 v3.32 F-Score 7→6 hotfix pattern)
 
-Refs:
-  - NEoWave Ch5(Essential Rules)/ Ch7(Compaction)/ Ch11(Wave-by-Wave)
-  - Prechter & Frost (1978). "Elliott Wave Principle". Ch.2 W3 主升段定義
-  - Glenn Neely (1990). "Mastering Elliott Wave". Ch7 §Three Rounds Compaction
+## Refs
+
+- NEoWave Ch6/7:corrective pattern 收尾後啟動新 impulse(Glenn Neely 1990
+  "Mastering Elliott Wave")
+- Prechter & Frost (1978) "Elliott Wave Principle" Ch.2 主升段定義
+- r3 pivot 完整討論 + production data 見 commit message + plan
+  /root/.claude/plans/wave-impulse-cross-stock-virtual-papert.md
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from datetime import date
 from itertools import groupby
 from typing import Any
 
@@ -62,31 +82,38 @@ NAME            = "wave_impulse_screen"
 OUTPUT_TABLE    = "wave_impulse_screen_derived"
 UPSTREAM_TABLES = ["structural_snapshots", "price_daily_fwd", "stock_info_ref"]
 
-# Best-guess thresholds(production verify 後 calibrate;對齊 v3.32 F-Score 7→6 pattern)
-W3_EARLY_PCT = 0.5      # Axis-B 缺時 W3 一律歸 ONGOING(寬鬆);實際 elapsed 比 r2 才動
+# r3 pivot(production verify 揭露 neely_core forest 不 emit incomplete Impulse,
+# wave_count=5 100%)— 改抓「3-wave Zigzag/Flat 修正剛完成」訊號:
+#   - DOWN 修正剛完成 → 反彈/新 impulse 啟動 → 多方 candidate
+#   - UP 修正剛完成 → 已漲完 ABC,可能轉跌 → observe
+#   - Impulse complete → observe(對齊 W5 mature 反轉警示)
+#
+# 對齊 NEoWave Ch6/7 corrective pattern terminate → 新 impulse 啟動的判讀。
+
+# Best-guess thresholds(production verify 後 calibrate)
+RECENT_DAYS  = 14       # rightmost 在過去 N 天內視為「剛完成」
 RR_MIN       = 1.5      # R/R 最小門檻
 TOP_N        = 30
 TIMEFRAMES   = ("daily", "weekly", "monthly")
 
-# Axis-B 對照表(NEoWave StructureLabel ⇔ Wave Position),對齊 output.rs:1310-1346
-_LABELS_THREE = {"F3", "C3", "L3", "UnknownThree", "XC3", "BC3", "BF3", "SL3"}
-_LABELS_FIVE_MATURE = {"L5", "S5", "SL5"}           # Last / Special — wave 結束訊號
-_LABELS_FIVE_ONGOING = {"Five", "F5", "UnknownFive"}  # First / Unknown — wave 仍進行
+# Axis-B label sets(對齊 output.rs:1310-1346 StructureLabel enum)
+_LABELS_FIVE_MATURE = {"L5", "S5", "SL5"}    # Last impulse 訊號(C-wave 收尾)
 
-# Phase enum(字串常數)
-PHASE_W1_ONGOING = "W1_ONGOING"
-PHASE_W2_DONE    = "W2_DONE"
-PHASE_W3_ONGOING = "W3_ONGOING"
-PHASE_W3_MATURE  = "W3_MATURE"
-PHASE_W4_DONE    = "W4_DONE"
-PHASE_W5_ONGOING = "W5_ONGOING"
-PHASE_W5_MATURE  = "W5_MATURE"
-PHASE_OTHER      = "OTHER"
+# Phase enum(r3,字串常數)
+PHASE_CORRECTION_DONE_DOWN = "CORRECTION_DONE_DOWN"  # 向下 ABC 剛完成 → 多頭反轉 candidate
+PHASE_CORRECTION_DONE_UP   = "CORRECTION_DONE_UP"    # 向上 ABC 剛完成 → 空頭反轉 observe
+PHASE_CORRECTION_ONGOING   = "CORRECTION_ONGOING"    # 修正中(rightmost 未到 RECENT_DAYS)
+PHASE_IMPULSE_COMPLETE     = "IMPULSE_COMPLETE"      # 完整 5 波 Impulse,observe(對齊 W5 reverse)
+PHASE_OTHER                = "OTHER"
 
-# is_candidate=True 的 phase 集合(W3 主升段)
-_CANDIDATE_PHASES = {PHASE_W2_DONE, PHASE_W3_ONGOING}
-# emit row 但 is_candidate=False 的 phase 集合(W5 observe 等)
-_OBSERVE_PHASES   = {PHASE_W4_DONE, PHASE_W5_ONGOING, PHASE_W5_MATURE, PHASE_W3_MATURE}
+# is_candidate=True 的 phase 集合(r3 預設多頭單向)
+_CANDIDATE_PHASES = {PHASE_CORRECTION_DONE_DOWN}
+# emit row 但 is_candidate=False 的 phase 集合
+_OBSERVE_PHASES   = {
+    PHASE_CORRECTION_DONE_UP,
+    PHASE_CORRECTION_ONGOING,
+    PHASE_IMPULSE_COMPLETE,
+}
 
 
 # ────────────────────────────────────────────────────────────
@@ -141,132 +168,232 @@ def _axis_b_label(scenario: dict, last_n: int) -> str | None:
 # ────────────────────────────────────────────────────────────
 
 
-def current_wave_position(scenario: dict) -> dict[str, Any]:
-    """雙軸驗證浪位(對齊 plan §3 演算法)。
+def current_wave_position(scenario: dict, snapshot_date: date) -> dict[str, Any]:
+    """r3 浪位判定:把 Zigzag/Flat 修正完成度 + 方向當主訊號。
+
+    對齊 r3 pivot — neely_core 不 emit incomplete Impulse,實際 actionable 訊號
+    是「3-wave Zigzag/Flat 修正剛完成」→ 反轉 / 新 impulse 啟動。
 
     Returns:
         {
             "phase":            PHASE_* 常數
-            "wave_number":      int | None — last_n(從 wave_tree 抽)
-            "axis_b_label":     str | None — Pass-2 NEoWave label
+            "direction":        "up" / "down" / None(從 rightmost label 解析)
+            "rightmost_end":    date | None
+            "days_since":       int | None(snapshot - rightmost_end)
+            "axis_b_label":     str | None
             "confidence_level": "strict" / "loose"
-            "is_candidate":     bool — W3 主升段才 True
-            "emit_row":         bool — 是否寫 row(預設 True,只 None / 完全 broken 不 emit)
-            "excluded_reason":  str | None — 不 candidate 時記原因
+            "is_candidate":     bool
+            "excluded_reason":  str | None
         }
     """
-    base = {
-        "phase": PHASE_OTHER, "wave_number": None, "axis_b_label": None,
-        "confidence_level": "loose", "is_candidate": False, "emit_row": True,
-        "excluded_reason": None,
+    base: dict[str, Any] = {
+        "phase": PHASE_OTHER, "direction": None,
+        "rightmost_end": None, "days_since": None,
+        "axis_b_label": None, "confidence_level": "loose",
+        "is_candidate": False, "excluded_reason": None,
     }
 
-    # Step 1 Axis-A:wave_tree.children rightmost 取 W(\d+)
-    wave_tree = scenario.get("wave_tree") or {}
-    children = wave_tree.get("children") or []
-    if not children:
-        base["excluded_reason"] = "no_children"
-        return base
-    last_child = children[-1] if isinstance(children[-1], dict) else None
-    if last_child is None:
-        base["excluded_reason"] = "no_children"
-        return base
-    last_label = last_child.get("label") or ""
-    import re
-    m = re.match(r"W(\d+)", last_label)
-    if not m:
-        base["excluded_reason"] = "no_W_regex"
-        return base
-    last_n = int(m.group(1))
-    base["wave_number"] = last_n
+    is_correction, pat_label = _pattern_kind_ok(scenario)
 
-    # Step 2 Axis-B:monowave_structure_labels lookup
-    axis_b = _axis_b_label(scenario, last_n)
-    base["axis_b_label"] = axis_b
-    base["confidence_level"] = "strict" if axis_b else "loose"
+    # ─ Branch A:correction 系(Zigzag / Flat)— primary candidate path
+    if is_correction:
+        end_date = _rightmost_end_date(scenario)
+        base["rightmost_end"] = end_date
+        if end_date is not None:
+            base["days_since"] = max(0, (snapshot_date - end_date).days)
 
-    # Step 3 對照表(r2:last_n 為 source of truth;Axis-B 只當 mature upgrade signal)
-    # r1 把 label-table mismatch 當 excluded(224 row 在 production 變 label_mismatch),
-    # r2 改為:同股不同 sub-pattern 的 wave 結構在 Impulse vs Diagonal 不同(Diagonal
-    # W1/W3/W5 是 :3 不是 :5),強制單一 label table 反而漏掉合法 scenario。
-    # 改用 last_n 直接判定 phase;Axis-B L5/S5 出現時升級為 mature。
-    if last_n == 1:
-        base["phase"] = PHASE_W1_ONGOING
-        base["excluded_reason"] = "too_early"
-    elif last_n == 2:
-        base["phase"] = PHASE_W2_DONE
-        base["is_candidate"] = True
-    elif last_n == 3:
-        if axis_b in _LABELS_FIVE_MATURE:
-            base["phase"] = PHASE_W3_MATURE
-            base["excluded_reason"] = "w3_mature"
-        else:
-            base["phase"] = PHASE_W3_ONGOING
+        direction = _correction_direction(scenario)
+        base["direction"] = direction
+
+        # Axis-B label(rightmost C-wave 的 Pass-2 label)— 純 informative
+        # corrective rightmost = C-wave,index = len(children) - 1
+        wt = scenario.get("wave_tree") or {}
+        children = wt.get("children") or []
+        if children:
+            axis_b = _axis_b_label(scenario, len(children))
+            base["axis_b_label"] = axis_b
+            base["confidence_level"] = "strict" if axis_b else "loose"
+
+        # 收斂狀態
+        if base["days_since"] is None:
+            base["phase"] = PHASE_OTHER
+            base["excluded_reason"] = "no_end_date"
+            return base
+
+        if base["days_since"] > RECENT_DAYS:
+            base["phase"] = PHASE_CORRECTION_ONGOING
+            base["excluded_reason"] = "correction_stale"
+            return base
+
+        # 在 RECENT_DAYS 內完成 — 看方向
+        if direction == "down":
+            base["phase"] = PHASE_CORRECTION_DONE_DOWN
             base["is_candidate"] = True
-    elif last_n == 4:
-        base["phase"] = PHASE_W4_DONE
-        base["excluded_reason"] = "w5_observe_only"
-    elif last_n == 5:
-        if axis_b in _LABELS_FIVE_MATURE:
-            base["phase"] = PHASE_W5_MATURE
+        elif direction == "up":
+            base["phase"] = PHASE_CORRECTION_DONE_UP
+            base["excluded_reason"] = "bearish_setup_observe_only"
         else:
-            base["phase"] = PHASE_W5_ONGOING
-        base["excluded_reason"] = "w5_observe_only"
-    else:
-        base["phase"] = PHASE_OTHER
-        base["excluded_reason"] = "wave_number_out_of_range"
+            base["phase"] = PHASE_OTHER
+            base["excluded_reason"] = "no_direction"
+        return base
+
+    # ─ Branch B:impulse 系(Impulse / Diagonal)— observe path(完整 5 波)
+    if _pattern_is_impulse(scenario):
+        end_date = _rightmost_end_date(scenario)
+        base["rightmost_end"] = end_date
+        if end_date is not None:
+            base["days_since"] = max(0, (snapshot_date - end_date).days)
+        base["direction"] = _correction_direction(scenario)  # 同 parser
+        # Axis-B rightmost label(C-wave / W5)
+        wt = scenario.get("wave_tree") or {}
+        children = wt.get("children") or []
+        if children:
+            axis_b = _axis_b_label(scenario, len(children))
+            base["axis_b_label"] = axis_b
+            base["confidence_level"] = "strict" if axis_b else "loose"
+        base["phase"] = PHASE_IMPULSE_COMPLETE
+        base["excluded_reason"] = "impulse_complete_observe"
+        return base
+
+    # ─ Branch C:Triangle / Combination / RunningCorrection / 未知 — OTHER
+    base["phase"] = PHASE_OTHER
+    base["excluded_reason"] = f"non_corrective_pattern_{pat_label or 'unknown'}"
     return base
 
 
-def _pick_actionable(forest: list[dict]) -> dict | None:
-    """wave_screen 專屬 picker — 對齊 production r2 揭露的 picker bias 修正。
+def _pick_recent_correction(
+    forest: list[dict], snapshot_date: date,
+) -> dict | None:
+    """r3 wave_screen 專屬 picker — 找最近完成的 3-wave Zigzag/Flat correction。
 
-    r1 的 _pick_primary(track1.py canonical)按 (degree↓, power↓, rules↓) 排,
-    偏好「高 degree + rules 多 + 完整結構」的 scenario,結果 picker 永遠選到
-    children=[W1..W5] 完整 5 波 → rightmost=W5 → 0 actionable W3 candidate。
+    r2 production verify(2026-05-27,全市場 1152 stocks)揭露 neely_core forest
+    **完全不 emit incomplete Impulse**(wave_count=5 100%)。要找 actionable
+    訊號必須改抓 corrective pattern 收尾 → 反轉/新 impulse 啟動。
 
-    r2 改為 wave_screen 用 actionable picker:
-    1. Scan forest 找 Impulse / Diagonal scenarios(對齊 pattern_kind gate)
-    2. 優先 incomplete(children 長度 2-4)— 對應正在跑的 impulse,未到 W5
-    3. 不完整 scenarios 內按 (degree↓, power↓, rules↓) 排
-    4. 若無 incomplete → fallback _pick_primary(會挑到完整 W5,row 仍 emit
-       為 observe)
+    r3 picker 策略:
+    1. Filter Zigzag/Flat scenarios(correction 系)
+    2. Filter rightmost end ∈ [snapshot - RECENT_DAYS, snapshot](剛完成)
+    3. 排序 (end_date DESC, degree↓, power↓, rules↓);取最近最強
+    4. 若無 recent correction → fallback 最近的 Impulse complete scenario
+       (emit IMPULSE_COMPLETE observe row)
+    5. 若連 Impulse 都沒 → fallback canonical _pick_primary
 
-    這對齊 NEoWave forest「展示式並列多假設」精神:wave_screen 想找的不是
-    「最像現實」的假設,而是「最 actionable」的假設。
+    這對齊 NEoWave「A-B-C 結束後啟動新 impulse」設計精神。
     """
     if not forest:
         return None
-    impulse_scenarios = [s for s in forest if _pattern_kind_ok(s)[0]]
 
-    incomplete: list[dict] = []
-    for s in impulse_scenarios:
-        children = (s.get("wave_tree") or {}).get("children") or []
-        if 2 <= len(children) <= 4:
-            incomplete.append(s)
+    # Step 1-3:recent corrections
+    recent_corrections: list[tuple[date, dict]] = []
+    for s in forest:
+        is_corr, _ = _pattern_kind_ok(s)
+        if not is_corr:
+            continue
+        end = _rightmost_end_date(s)
+        if end is None:
+            continue
+        days_since = (snapshot_date - end).days
+        if 0 <= days_since <= RECENT_DAYS:
+            recent_corrections.append((end, s))
 
-    if incomplete:
-        incomplete.sort(key=lambda s: (
-            _DEGREE_RANK.get(_effective_degree(s) or "", 0),
-            _power_rating_strength(s.get("power_rating")),
-            int(s.get("rules_passed_count") or 0),
+    if recent_corrections:
+        recent_corrections.sort(key=lambda t: (
+            t[0],   # end_date DESC(取最近完成)
+            _DEGREE_RANK.get(_effective_degree(t[1]) or "", 0),
+            _power_rating_strength(t[1].get("power_rating")),
+            int(t[1].get("rules_passed_count") or 0),
         ), reverse=True)
-        return incomplete[0]
+        return recent_corrections[0][1]
 
-    # Fallback:無 incomplete → 用 canonical picker(會挑 complete W5,emit observe)
+    # Step 4:fallback 找最近完成的 Impulse(emit observe IMPULSE_COMPLETE)
+    impulses: list[tuple[date, dict]] = []
+    for s in forest:
+        if not _pattern_is_impulse(s):
+            continue
+        end = _rightmost_end_date(s)
+        if end is None:
+            continue
+        impulses.append((end, s))
+    if impulses:
+        impulses.sort(key=lambda t: (
+            t[0],
+            _DEGREE_RANK.get(_effective_degree(t[1]) or "", 0),
+            _power_rating_strength(t[1].get("power_rating")),
+        ), reverse=True)
+        return impulses[0][1]
+
+    # Step 5:final fallback — canonical picker
     return _pick_primary(forest)
 
 
 def _pattern_kind_ok(scenario: dict) -> tuple[bool, str | None]:
-    """pattern_type gate:Impulse 系(Impulse / Diagonal)通過。
+    """r3 pattern_type gate:Zigzag / Flat 視為 correction 系(primary candidate);
+    Impulse / Diagonal 視為 impulse 完成系(observe);其他歸 OTHER。
 
-    對齊 plan §3 Step 5:Diagonal Leading/Ending 同屬 NEoWave impulse 系
-    (compacted_base_label==Five 為證據)。
+    回 (is_correction, pattern_label)。
+    - (True, "Zigzag"/"Flat"):corrective scenario,主要判斷對象
+    - (False, "Impulse"/"Diagonal"):完整 5 波,emit observe row
+    - (False, 其他):OTHER
     """
     label = _pattern_type_label(scenario.get("pattern_type"))
-    if label in ("Impulse", "Diagonal"):
+    if label in ("Zigzag", "Flat"):
         return True, label
     return False, label
+
+
+def _pattern_is_impulse(scenario: dict) -> bool:
+    """檢查是否為完整 Impulse / Diagonal(供 IMPULSE_COMPLETE fallback)。"""
+    label = _pattern_type_label(scenario.get("pattern_type"))
+    return label in ("Impulse", "Diagonal")
+
+
+def _rightmost_end_date(scenario: dict) -> date | None:
+    """從 wave_tree.children rightmost 抽 end date(NaiveDate ISO 字串)。"""
+    wt = scenario.get("wave_tree") or {}
+    children = wt.get("children") or []
+    if not children:
+        end = wt.get("end")
+    else:
+        last = children[-1] if isinstance(children[-1], dict) else None
+        if last is None:
+            return None
+        end = last.get("end") or wt.get("end")
+    if isinstance(end, date):
+        return end
+    if isinstance(end, str):
+        try:
+            return date.fromisoformat(end[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _correction_direction(scenario: dict) -> str | None:
+    """從 rightmost child label 解析 correction 方向(對齊 wave_tree.children label
+    格式:`W{n}:{Hint}{Dir}` 例 `W3:L5↓` / `W3:Five↑`,或 `3-wave Up/Down`)。
+
+    Returns: "up" / "down" / None
+    """
+    wt = scenario.get("wave_tree") or {}
+    children = wt.get("children") or []
+    if not children:
+        wt_label = wt.get("label") or ""
+        return _parse_direction(wt_label)
+    last = children[-1] if isinstance(children[-1], dict) else None
+    if last is None:
+        return None
+    return _parse_direction(last.get("label") or "")
+
+
+def _parse_direction(label: str) -> str | None:
+    """Parse direction arrow / 'Up'/'Down' from label string。"""
+    if not label:
+        return None
+    if "↑" in label or "Up" in label:
+        return "up"
+    if "↓" in label or "Down" in label:
+        return "down"
+    return None
 
 
 def _extract_target_price(scenario: dict) -> float | None:
@@ -369,8 +496,10 @@ def _build_row(
     snapshot: dict | None,
     current_price: float | None,
     excluded_reason: str | None,
+    snapshot_date: date | None = None,
 ) -> dict[str, Any]:
-    """組裝 single row。若 snapshot=None / forest 空 / excluded → emit 空 row。"""
+    """組裝 single row。r3 pivot:r3 picker 找 recent correction,phase 反映
+    correction 完成度 + 方向。"""
     extras: dict[str, Any] = {
         "timeframe": timeframe,
         "phase": None, "wave_number": None, "pattern_kind": None,
@@ -386,31 +515,38 @@ def _build_row(
                          extras=extras)
 
     forest = snapshot.get("scenario_forest") or []
-    # r2:wave_screen 專屬 actionable picker — 優先 incomplete Impulse/Diagonal
-    primary = _pick_actionable(forest)
+
+    # snapshot_date(for recency 計算);若 None 用 target_date fallback
+    eff_snapshot_date: date | None = snapshot_date
+    if eff_snapshot_date is None:
+        if isinstance(target_date, date):
+            eff_snapshot_date = target_date
+        elif isinstance(target_date, str):
+            try:
+                eff_snapshot_date = date.fromisoformat(target_date[:10])
+            except ValueError:
+                eff_snapshot_date = None
+    if eff_snapshot_date is None:
+        return empty_row(stock_id, target_date,
+                         excluded_reason="no_snapshot_date", extras=extras)
+
+    # r3 picker:找最近完成的 Zigzag/Flat → fallback Impulse → fallback _pick_primary
+    primary = _pick_recent_correction(forest, eff_snapshot_date)
     if primary is None:
         extras["confidence_level"] = "loose"
         return empty_row(stock_id, target_date,
                          excluded_reason="empty_forest", extras=extras)
 
-    # pattern_type gate(Impulse / Diagonal)
-    pt_ok, pt_label = _pattern_kind_ok(primary)
-    extras["pattern_kind"] = pt_label
-    if not pt_ok:
-        extras["confidence_level"] = "loose"
-        return empty_row(stock_id, target_date,
-                         excluded_reason="non_impulse", extras=extras)
+    # pattern_kind label
+    _is_corr, pt_label = _pattern_kind_ok(primary)
+    extras["pattern_kind"] = pt_label or _pattern_type_label(primary.get("pattern_type"))
 
-    # 浪位判定(雙軸驗證)
-    pos = current_wave_position(primary)
+    # 浪位判定(r3 logic — Zigzag/Flat correction-aware)
+    pos = current_wave_position(primary, eff_snapshot_date)
     extras["phase"]            = pos["phase"]
-    extras["wave_number"]      = pos["wave_number"]
     extras["confidence_level"] = pos["confidence_level"]
     extras["structure_label"]  = pos["axis_b_label"]
-
-    # direction + degree
-    direction = _direction_from_power(primary.get("power_rating"))
-    extras["direction"] = direction
+    extras["direction"]        = pos["direction"]    # r3:from rightmost label
     extras["effective_degree"] = _effective_degree(primary)
 
     # detail JSONB
@@ -420,17 +556,15 @@ def _build_row(
         "power_strength": _power_rating_strength(primary.get("power_rating")),
         "scenario_count": len(forest),
         "snapshot_date": str(snapshot.get("date") or ""),
+        "rightmost_end": pos["rightmost_end"].isoformat()
+                          if pos.get("rightmost_end") else None,
+        "days_since_completion": pos.get("days_since"),
     }
 
     is_candidate = bool(pos["is_candidate"])
     excluded: str | None = pos["excluded_reason"]
 
-    # Direction gate:只 bullish 入 candidate(避免方向混亂)
-    if is_candidate and direction != "bullish":
-        is_candidate = False
-        excluded = "non_bullish_direction"
-
-    # R/R 計算(only candidate phases)
+    # R/R 計算(only candidate = CORRECTION_DONE_DOWN — 預期 UP 反轉)
     if is_candidate and current_price is not None:
         invalidation = _extract_below_invalidation(primary)
         target = _extract_target_price(primary)
@@ -538,11 +672,13 @@ def run(
         for tf in TIMEFRAMES:
             snap_entry = snap_by_key.get((sid, tf))
             snap = snap_entry["snapshot"] if snap_entry else None
+            tf_snap_date = snap_entry["snapshot_date"] if snap_entry else target_date
             row_excluded = excluded if excluded is not None else None
             row = _build_row(
                 stock_id=sid, target_date=target_date, timeframe=tf,
                 snapshot=snap, current_price=current_price,
                 excluded_reason=row_excluded,
+                snapshot_date=tf_snap_date,
             )
             rows.append(row)
 

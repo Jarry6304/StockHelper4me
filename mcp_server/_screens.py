@@ -465,7 +465,13 @@ def _narr(label: str, n: int, top: list[dict[str, Any]]) -> str:
 # ────────────────────────────────────────────────────────────
 
 
-_WAVE_OBSERVE_PHASES = ("W5_ONGOING", "W5_MATURE", "W4_DONE")
+_WAVE_OBSERVE_PHASES = (
+    # r3 phase enum(post-correction entry pivot 後)
+    "IMPULSE_COMPLETE",     # 完整 5 波 → 反轉警示(該避免/獲利了結)
+    "CORRECTION_DONE_UP",   # 上漲修正剛完成 → 空頭 setup observe
+    "CORRECTION_ONGOING",   # 修正中,未完成
+    "OTHER",                # Triangle / Combination / 未知
+)
 
 
 def _fetch_wave_impulse_rows(
@@ -561,25 +567,31 @@ def compute_wave_impulse_scan(
     include_observe: bool = True,
     database_url: str | None = None,
 ) -> dict[str, Any]:
-    """Wave Impulse Cross-Stock Screen:LLM 看當下處 W3 主升段的候選股清單。
+    """Wave Impulse Cross-Stock Screen(r3 post-correction entry pivot)。
 
-    對齊 plan wave-impulse-cross-stock-virtual-papert.md §8:
-    - 讀 wave_impulse_screen_derived(builder upstream:structural_snapshots)
-    - 候選股(is_top_n=TRUE):W2_DONE / W3_ONGOING phase 已過 R/R 1.5 門檻
-    - Observe 段:W4_DONE / W5_ONGOING / W5_MATURE(僅供 observe,不直接交易)
+    r3 重新定位(production verify 2026-05-27 揭露 neely_core forest 不 emit
+    incomplete Impulse,r1/r2「找 W3 早段」設計不可行):
+    - **改抓 3-wave Zigzag/Flat 修正剛完成 + 方向 DOWN** 訊號(NEoWave「A-B-C
+      結束後啟動新 impulse」),候選 = 反轉/新 impulse 啟動買點
+    - 完整 5 波 Impulse → 反轉警示 observe(該獲利了結)
+    - 上漲修正剛完成 → 空頭 setup observe(TW 多單市場略過)
+
+    讀 wave_impulse_screen_derived(builder upstream:structural_snapshots):
+    - 候選股(is_candidate=TRUE):CORRECTION_DONE_DOWN + 過 R/R 1.5
+    - Observe:IMPULSE_COMPLETE / CORRECTION_DONE_UP / CORRECTION_ONGOING
 
     Args:
         as_of:           date 上界(包含)
         timeframe:       daily / weekly / monthly(預設 daily)
         top_n:           候選清單 + observe 各取 top_n
-        include_observe: 是否回傳 W5 observe section
+        include_observe: 是否回傳 observe section
         database_url:    overrides DATABASE_URL env
 
     Returns:
         {
           as_of, timeframe, top_n, ranking_date,
-          top_stocks: [W2/W3 candidates],
-          observe_stocks: [W5 mature / W4 done / W5 ongoing],
+          top_stocks: [CORRECTION_DONE_DOWN candidates,可進場做多],
+          observe_stocks: [IMPULSE_COMPLETE / CORRECTION_DONE_UP / ONGOING],
           cross_tf_aligned_count, narrative, caveat
         }
     """
@@ -598,31 +610,35 @@ def compute_wave_impulse_scan(
         1 for r in top_stocks if r.get("cross_tf_aligned")
     )
 
-    # narrative + caveat(plan §8:三段 caveat)
+    # narrative + caveat(r3 pivot:post-correction entry)
     n_top = len(top_stocks)
     n_observe = len(observe_stocks)
     if n_top == 0:
         narrative = (
             f"Wave Impulse Screen({timeframe}):無 top candidates"
-            f"(尚未跑 builder 或當下 universe 全在修正/observe phase)。"
+            f"(當下 universe 無「向下 ABC 修正剛完成」訊號;市場可能在 impulse 中"
+            f"或修正進行中)。observe {n_observe} 檔可參考反向訊號。"
         )
     else:
         first = top_stocks[0]
         narrative = (
-            f"Wave Impulse Screen({timeframe}) top {n_top} W3 candidates:"
-            f"首位 {first.get('stock_id')} {first.get('name') or ''} "
+            f"Wave Impulse Screen({timeframe}) top {n_top} post-correction "
+            f"entry candidates:首位 {first.get('stock_id')} "
+            f"{first.get('name') or ''} "
             f"(rank 1,phase={first.get('phase')},rr={first.get('rr_ratio')},"
             f"confidence={first.get('confidence_level')})"
             f";cross_tf_aligned {cross_tf_aligned_count}/{n_top}"
-            f";observe {n_observe} 檔(W4/W5 segment)。"
+            f";observe {n_observe} 檔(IMPULSE_COMPLETE / CORRECTION_DONE_UP / "
+            f"CORRECTION_ONGOING)。"
         )
 
     caveat = (
-        "1. W3 屬 NEoWave 事後確認結構,掃出多為「W3 已走一段」而非起點 — "
-        "進場時間常偏晚。"
-        "2. W5 / W4_DONE 為 observe 段,僅供觀察 R/R 偏弱不直接交易。"
-        "3. 本 builder 為 spec r1 thresholds(W3_EARLY_PCT=0.5 / RR_MIN=1.5)"
-        "best-guess production calibration after first 30d。"
+        "1. r3 pivot 訊號 = 3-wave Zigzag/Flat 向下修正剛完成(RECENT_DAYS=14)→ "
+        "預期新 impulse 啟動的「反轉買點」,**不是「正在 W3 主升段」**。"
+        "2. IMPULSE_COMPLETE / CORRECTION_DONE_UP 段為 observe,前者為反轉警示 "
+        "(該避免/獲利了結)、後者為空頭 setup(TW 多單略過)。"
+        "3. RECENT_DAYS=14 / RR_MIN=1.5 為 r3 best-guess,production verify 後"
+        "calibrate(對齊 v3.32 F-Score 7→6 hotfix pattern)。"
     )
 
     return {
