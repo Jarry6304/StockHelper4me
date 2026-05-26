@@ -26,6 +26,15 @@ from fusion.dual_track._shared import (
     FibLine,
     Track1View,
 )
+# v4.26 follow-up:picker helpers 抽 src/fusion/_picker.py 共用
+from fusion._picker import (
+    coerce_date as _coerce_date,
+    direction_from_power as _direction_from_power,
+    pattern_type_label as _pattern_type_label,
+    power_rating_label as _power_rating_label,
+    power_rating_strength as _power_rating_strength,
+    wave_count_from_label as _wave_count_from_label,
+)
 
 
 __all__ = ["read_track1", "scenario_is_invalidated"]
@@ -40,17 +49,6 @@ _DEGREE_RANK: dict[str, int] = {
     "Minor": 4, "Intermediate": 4,
     "Primary": 5, "Cycle": 6, "Supercycle": 7, "GrandSupercycle": 8,
 }
-
-
-def _coerce_date(s: Any) -> date | None:
-    if isinstance(s, date):
-        return s
-    if isinstance(s, str):
-        try:
-            return date.fromisoformat(s[:10])
-        except ValueError:
-            return None
-    return None
 
 
 def _scenario_span_days(scenario: dict) -> int | None:
@@ -82,55 +80,6 @@ def _effective_degree(scenario: dict) -> str | None:
     if years < 100.0:
         return "Cycle"
     return "Supercycle"
-
-
-def _power_rating_label(rating: Any) -> str:
-    if isinstance(rating, dict):
-        return next(iter(rating.keys()), "Neutral")
-    if isinstance(rating, str):
-        return rating
-    return "Neutral"
-
-
-def _power_rating_strength(rating: Any) -> int:
-    """0..3,對齊 mcp_server/_forecast.py:_power_rating_strength。"""
-    if not rating:
-        return 0
-    if isinstance(rating, dict):
-        rating = next(iter(rating.keys()), None)
-    if not isinstance(rating, str):
-        return 0
-    return {
-        "StrongBullish": 3, "StrongBearish": 3,
-        "Bullish": 2, "Bearish": 2,
-        "SlightBullish": 1, "SlightBearish": 1,
-        "Neutral": 0,
-    }.get(rating, 0)
-
-
-def _direction_from_power(rating: Any) -> str:
-    """+1 bull / -1 bear / 0 neutral → 'bullish' / 'bearish' / 'neutral'。"""
-    label = _power_rating_label(rating)
-    if label.endswith("Bullish"):
-        return "bullish"
-    if label.endswith("Bearish"):
-        return "bearish"
-    return "neutral"
-
-
-def _pattern_type_label(pattern_type: Any) -> str | None:
-    if isinstance(pattern_type, dict):
-        return next(iter(pattern_type.keys()), None)
-    if isinstance(pattern_type, str):
-        return pattern_type
-    return None
-
-
-def _wave_count_from_label(label: str | None) -> int:
-    if not label:
-        return 0
-    m = re.search(r"(\d+)-wave", label)
-    return int(m.group(1)) if m else 0
 
 
 def _pick_primary(forest: list[dict]) -> dict | None:
