@@ -587,6 +587,181 @@ class TestRunSmoke:
 # ════════════════════════════════════════════════════════════
 
 
+# ════════════════════════════════════════════════════════════
+# r2:_pick_actionable + simplified label table
+# ════════════════════════════════════════════════════════════
+
+
+class TestPickActionable:
+    """r2 揭露 production picker bias → _pick_actionable 修正(對齊 wave-impulse
+    r2 production verify:r1 完整 5 波 picker 永遠選到 W5_MATURE,無 candidate)。"""
+
+    def _scen(self, *, children_n, pattern_type="Impulse", power="Bullish",
+              rules=5, start="2023-01-01", end="2026-05-15"):
+        return {
+            "wave_tree": {
+                "children": [{"label": f"W{i+1}"} for i in range(children_n)],
+                "start": start, "end": end,
+            },
+            "pattern_type": ({pattern_type: None}
+                             if isinstance(pattern_type, str) else pattern_type),
+            "power_rating": power,
+            "rules_passed_count": rules,
+            "monowave_structure_labels": [],
+        }
+
+    def test_picks_incomplete_over_complete(self):
+        """forest 同時有 complete W5 + incomplete W2 → 挑 incomplete。"""
+        from cross_cores.wave_impulse_screen import _pick_actionable
+
+        complete = self._scen(children_n=5, power="StrongBullish", rules=7)
+        incomplete = self._scen(children_n=2, power="Bullish", rules=5)
+        picked = _pick_actionable([complete, incomplete])
+        assert picked is incomplete
+
+    def test_picks_highest_power_among_incomplete(self):
+        """多個 incomplete:按 (degree↓, power↓, rules↓) 排。"""
+        from cross_cores.wave_impulse_screen import _pick_actionable
+
+        weak = self._scen(children_n=2, power="SlightBullish", rules=4,
+                          start="2025-12-01")   # 短 span → Subminuette
+        strong = self._scen(children_n=2, power="StrongBullish", rules=6,
+                            start="2024-01-01") # 長 span → Minor
+        picked = _pick_actionable([weak, strong])
+        assert picked is strong   # higher degree + stronger power
+
+    def test_fallback_to_pick_primary_when_all_complete(self):
+        """無 incomplete → 走 _pick_primary canonical(返回 complete W5)。"""
+        from cross_cores.wave_impulse_screen import _pick_actionable
+
+        complete_a = self._scen(children_n=5, power="StrongBullish", rules=7,
+                                start="2020-01-01")  # 高 degree
+        complete_b = self._scen(children_n=5, power="Bullish", rules=5,
+                                start="2024-01-01")  # 低 degree
+        picked = _pick_actionable([complete_a, complete_b])
+        # _pick_primary 按 (degree↓, power↓, rules↓) → complete_a wins
+        assert picked is complete_a
+
+    def test_non_impulse_excluded_from_incomplete_pool(self):
+        """Zigzag/Flat/Combination 不算 impulse 系 → 略過。"""
+        from cross_cores.wave_impulse_screen import _pick_actionable
+
+        zigzag_inc = self._scen(children_n=2, pattern_type={"Zigzag": {"sub_kind": "Single"}})
+        impulse_inc = self._scen(children_n=2, pattern_type="Impulse")
+        picked = _pick_actionable([zigzag_inc, impulse_inc])
+        assert picked is impulse_inc
+
+    def test_diagonal_included_in_incomplete_pool(self):
+        """Diagonal (Leading/Ending Diagonal) 屬 impulse 系 — 可被 actionable picker 挑。"""
+        from cross_cores.wave_impulse_screen import _pick_actionable
+
+        diagonal_inc = self._scen(children_n=3,
+                                  pattern_type={"Diagonal": {"Ending": None}})
+        picked = _pick_actionable([diagonal_inc])
+        assert picked is diagonal_inc
+
+    def test_children_5_not_incomplete(self):
+        """children=5 是完整,不算 incomplete。"""
+        from cross_cores.wave_impulse_screen import _pick_actionable
+
+        c5 = self._scen(children_n=5)
+        c2 = self._scen(children_n=2)
+        picked = _pick_actionable([c5, c2])
+        assert picked is c2
+
+    def test_children_4_counts_as_incomplete_W4_done(self):
+        """children=4 算 incomplete(W4_DONE 進 observe 但仍 emit row)。"""
+        from cross_cores.wave_impulse_screen import _pick_actionable
+
+        c4 = self._scen(children_n=4)
+        c5 = self._scen(children_n=5)
+        picked = _pick_actionable([c4, c5])
+        assert picked is c4
+
+    def test_empty_forest_returns_none(self):
+        from cross_cores.wave_impulse_screen import _pick_actionable
+
+        assert _pick_actionable([]) is None
+
+
+class TestSimplifiedLabelTable:
+    """r2 對照表簡化:last_n 為 source of truth;Axis-B L5/S5 只升級為 mature。
+    原 r1 的 `label_mismatch` 條件移除(production verify 揭露 224 row 被誤排除)。"""
+
+    def test_W2_with_L5_is_W2_DONE(self):
+        """r1 中 W2+L5 → label_mismatch;r2 → W2_DONE(以 last_n 為主)。"""
+        from cross_cores.wave_impulse_screen import current_wave_position
+
+        s = {
+            "wave_tree": {"children": [{"label": "W1"}, {"label": "W2"}]},
+            "monowave_structure_labels": [
+                {"monowave_index": 1, "labels": [{"label": "L5"}]},
+            ],
+        }
+        res = current_wave_position(s)
+        assert res["phase"] == "W2_DONE"
+        assert res["is_candidate"] is True
+        assert res["excluded_reason"] is None
+
+    def test_W3_with_F3_is_W3_ONGOING(self):
+        """r1 中 W3+F3 → label_mismatch;r2 → W3_ONGOING(Diagonal W3 可為 :3)。"""
+        from cross_cores.wave_impulse_screen import current_wave_position
+
+        s = {
+            "wave_tree": {"children": [{"label": "W1"}, {"label": "W2"}, {"label": "W3"}]},
+            "monowave_structure_labels": [
+                {"monowave_index": 2, "labels": [{"label": "F3"}]},
+            ],
+        }
+        res = current_wave_position(s)
+        assert res["phase"] == "W3_ONGOING"
+        assert res["is_candidate"] is True
+
+    def test_W4_with_Five_is_W4_DONE(self):
+        """r1 中 W4+Five → label_mismatch;r2 → W4_DONE。"""
+        from cross_cores.wave_impulse_screen import current_wave_position
+
+        s = {
+            "wave_tree": {"children": [{"label": "W1"}, {"label": "W2"},
+                                        {"label": "W3"}, {"label": "W4"}]},
+            "monowave_structure_labels": [
+                {"monowave_index": 3, "labels": [{"label": "Five"}]},
+            ],
+        }
+        res = current_wave_position(s)
+        assert res["phase"] == "W4_DONE"
+        assert res["excluded_reason"] == "w5_observe_only"
+
+    def test_W3_L5_still_mature(self):
+        """L5/S5 仍升級 W3_MATURE(NEoWave :L5 = last impulse 訊號)。"""
+        from cross_cores.wave_impulse_screen import current_wave_position
+
+        s = {
+            "wave_tree": {"children": [{"label": "W1"}, {"label": "W2"}, {"label": "W3"}]},
+            "monowave_structure_labels": [
+                {"monowave_index": 2, "labels": [{"label": "L5"}]},
+            ],
+        }
+        res = current_wave_position(s)
+        assert res["phase"] == "W3_MATURE"
+        assert res["is_candidate"] is False
+        assert res["excluded_reason"] == "w3_mature"
+
+    def test_W5_S5_mature(self):
+        """W5+S5 → W5_MATURE(Special Five 同 L5 等級)。"""
+        from cross_cores.wave_impulse_screen import current_wave_position
+
+        s = {
+            "wave_tree": {"children": [{"label": "W1"}, {"label": "W2"},
+                                        {"label": "W3"}, {"label": "W4"}, {"label": "W5"}]},
+            "monowave_structure_labels": [
+                {"monowave_index": 4, "labels": [{"label": "S5"}]},
+            ],
+        }
+        res = current_wave_position(s)
+        assert res["phase"] == "W5_MATURE"
+
+
 def test_builder_contract():
     """對齊 cross_cores._base.CrossStockBuilder protocol。"""
     from cross_cores import wave_impulse_screen as m

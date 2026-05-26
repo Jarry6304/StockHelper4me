@@ -39,6 +39,7 @@ from cross_cores._shared import empty_row, fetch_universe_filter
 # Inline import — picker 對齊 v4.25.x canonical(track1.py)
 # Out of scope:抽 src/fusion/_picker.py 共用(本 PR follow-up issue)
 from fusion.dual_track.track1 import (  # noqa: F401
+    _DEGREE_RANK,
     _direction_from_power,
     _effective_degree,
     _extract_all_invalidation_thresholds,
@@ -184,35 +185,11 @@ def current_wave_position(scenario: dict) -> dict[str, Any]:
     base["axis_b_label"] = axis_b
     base["confidence_level"] = "strict" if axis_b else "loose"
 
-    # Step 3 對照表(strict)
-    if axis_b:
-        if last_n == 1:
-            base["phase"] = PHASE_W1_ONGOING
-            base["excluded_reason"] = "too_early"
-        elif last_n == 2 and axis_b in _LABELS_THREE:
-            base["phase"] = PHASE_W2_DONE
-            base["is_candidate"] = True
-        elif last_n == 3 and axis_b in _LABELS_FIVE_ONGOING:
-            base["phase"] = PHASE_W3_ONGOING
-            base["is_candidate"] = True
-        elif last_n == 3 and axis_b in _LABELS_FIVE_MATURE:
-            base["phase"] = PHASE_W3_MATURE
-            base["excluded_reason"] = "w3_mature"
-        elif last_n == 4 and axis_b in _LABELS_THREE:
-            base["phase"] = PHASE_W4_DONE
-            base["excluded_reason"] = "w5_observe_only"
-        elif last_n == 5 and axis_b in _LABELS_FIVE_ONGOING:
-            base["phase"] = PHASE_W5_ONGOING
-            base["excluded_reason"] = "w5_observe_only"
-        elif last_n == 5 and axis_b in _LABELS_FIVE_MATURE:
-            base["phase"] = PHASE_W5_MATURE
-            base["excluded_reason"] = "w5_observe_only"
-        else:
-            base["phase"] = PHASE_OTHER
-            base["excluded_reason"] = "label_mismatch"
-        return base
-
-    # Step 4 loose fallback(Axis-B 缺,純看 last_n)
+    # Step 3 對照表(r2:last_n 為 source of truth;Axis-B 只當 mature upgrade signal)
+    # r1 把 label-table mismatch 當 excluded(224 row 在 production 變 label_mismatch),
+    # r2 改為:同股不同 sub-pattern 的 wave 結構在 Impulse vs Diagonal 不同(Diagonal
+    # W1/W3/W5 是 :3 不是 :5),強制單一 label table 反而漏掉合法 scenario。
+    # 改用 last_n 直接判定 phase;Axis-B L5/S5 出現時升級為 mature。
     if last_n == 1:
         base["phase"] = PHASE_W1_ONGOING
         base["excluded_reason"] = "too_early"
@@ -220,18 +197,64 @@ def current_wave_position(scenario: dict) -> dict[str, Any]:
         base["phase"] = PHASE_W2_DONE
         base["is_candidate"] = True
     elif last_n == 3:
-        base["phase"] = PHASE_W3_ONGOING
-        base["is_candidate"] = True
+        if axis_b in _LABELS_FIVE_MATURE:
+            base["phase"] = PHASE_W3_MATURE
+            base["excluded_reason"] = "w3_mature"
+        else:
+            base["phase"] = PHASE_W3_ONGOING
+            base["is_candidate"] = True
     elif last_n == 4:
         base["phase"] = PHASE_W4_DONE
         base["excluded_reason"] = "w5_observe_only"
     elif last_n == 5:
-        base["phase"] = PHASE_W5_ONGOING
+        if axis_b in _LABELS_FIVE_MATURE:
+            base["phase"] = PHASE_W5_MATURE
+        else:
+            base["phase"] = PHASE_W5_ONGOING
         base["excluded_reason"] = "w5_observe_only"
     else:
         base["phase"] = PHASE_OTHER
         base["excluded_reason"] = "wave_number_out_of_range"
     return base
+
+
+def _pick_actionable(forest: list[dict]) -> dict | None:
+    """wave_screen 專屬 picker — 對齊 production r2 揭露的 picker bias 修正。
+
+    r1 的 _pick_primary(track1.py canonical)按 (degree↓, power↓, rules↓) 排,
+    偏好「高 degree + rules 多 + 完整結構」的 scenario,結果 picker 永遠選到
+    children=[W1..W5] 完整 5 波 → rightmost=W5 → 0 actionable W3 candidate。
+
+    r2 改為 wave_screen 用 actionable picker:
+    1. Scan forest 找 Impulse / Diagonal scenarios(對齊 pattern_kind gate)
+    2. 優先 incomplete(children 長度 2-4)— 對應正在跑的 impulse,未到 W5
+    3. 不完整 scenarios 內按 (degree↓, power↓, rules↓) 排
+    4. 若無 incomplete → fallback _pick_primary(會挑到完整 W5,row 仍 emit
+       為 observe)
+
+    這對齊 NEoWave forest「展示式並列多假設」精神:wave_screen 想找的不是
+    「最像現實」的假設,而是「最 actionable」的假設。
+    """
+    if not forest:
+        return None
+    impulse_scenarios = [s for s in forest if _pattern_kind_ok(s)[0]]
+
+    incomplete: list[dict] = []
+    for s in impulse_scenarios:
+        children = (s.get("wave_tree") or {}).get("children") or []
+        if 2 <= len(children) <= 4:
+            incomplete.append(s)
+
+    if incomplete:
+        incomplete.sort(key=lambda s: (
+            _DEGREE_RANK.get(_effective_degree(s) or "", 0),
+            _power_rating_strength(s.get("power_rating")),
+            int(s.get("rules_passed_count") or 0),
+        ), reverse=True)
+        return incomplete[0]
+
+    # Fallback:無 incomplete → 用 canonical picker(會挑 complete W5,emit observe)
+    return _pick_primary(forest)
 
 
 def _pattern_kind_ok(scenario: dict) -> tuple[bool, str | None]:
@@ -363,7 +386,8 @@ def _build_row(
                          extras=extras)
 
     forest = snapshot.get("scenario_forest") or []
-    primary = _pick_primary(forest)
+    # r2:wave_screen 專屬 actionable picker — 優先 incomplete Impulse/Diagonal
+    primary = _pick_actionable(forest)
     if primary is None:
         extras["confidence_level"] = "loose"
         return empty_row(stock_id, target_date,
