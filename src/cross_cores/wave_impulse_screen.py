@@ -466,6 +466,50 @@ def _fetch_all_latest_prices(db: Any, *, market: str = "TW") -> dict[str, float]
     return {r["stock_id"]: r["close"] for r in rows if r.get("close") is not None}
 
 
+def _fetch_corrective_bottoms(
+    db: Any, lookups: list[tuple[str, date]], *, market: str = "TW",
+) -> dict[tuple[str, date], float]:
+    """r5 batch lookup:對 (stock_id, rightmost_end_date) 取該日 close
+    (= corrective C-wave 終點實際收盤,= 多單 stop loss 正確 anchor)。
+
+    對應 r4 揭露的 root cause:NEoWave 對「已完成」Zigzag/Flat 多 emit
+    PriceBreakAbove(invalidation = 價格漲回起點)而非 PriceBreakBelow。
+    corrective bottom 必須從 price_daily_fwd 查實際價,不能依賴 triggers。
+
+    Args:
+        lookups: [(stock_id, target_date), ...]
+
+    Returns: {(stock_id, date): close} dict
+    """
+    if not lookups:
+        return {}
+    # Build VALUES list 對齊 PostgreSQL batch lookup pattern
+    # 對 date 加 cast(VALUES 內若全是 NULL/text PG 推不出 DATE 型別 → JOIN 比較炸)
+    placeholders = ",".join(["(%s, %s::date)"] * len(lookups))
+    params: list[Any] = []
+    for sid, d in lookups:
+        params.extend([sid, d])
+    params.append(market)   # for the LATERAL subquery 的 market filter
+    sql = f"""
+        SELECT t.stock_id, t.date, p.close::float8 AS close
+          FROM (VALUES {placeholders}) AS t(stock_id, date)
+          LEFT JOIN LATERAL (
+              SELECT close FROM price_daily_fwd
+               WHERE market = %s AND stock_id = t.stock_id AND date <= t.date
+               ORDER BY date DESC LIMIT 1
+          ) AS p ON TRUE
+    """
+    rows = db.query(sql, params)
+    out: dict[tuple[str, date], float] = {}
+    for r in rows:
+        sid = r.get("stock_id")
+        d = r.get("date")
+        c = r.get("close")
+        if sid is not None and d is not None and c is not None:
+            out[(sid, d)] = float(c)
+    return out
+
+
 def _fetch_structural_snapshots(
     db: Any, *, market: str = "TW",
 ) -> list[dict[str, Any]]:
@@ -664,6 +708,78 @@ def _assign_impulse_ranks(rows: list[dict[str, Any]]) -> None:
             r["is_top_n"] = True
 
 
+def _populate_corrective_bottoms_and_rescore(
+    db: Any, rows: list[dict[str, Any]],
+) -> None:
+    """r5 pass:對 phase=CORRECTION_DONE_DOWN + excluded=no_invalidation 的 row,
+    從 price_daily_fwd 查 rightmost_end date 的 close 當 invalidation。
+
+    對應 r4 揭露 — NEoWave 對「已完成」Zigzag/Flat 多不 emit PriceBreakBelow
+    trigger。corrective bottom 必須查實際價,不能依賴 invalidation_triggers。
+
+    In-place 更新 rows:重設 invalidation_price / rr_ratio / is_candidate /
+    excluded_reason / detail.invalidation_source。
+    """
+    # 收集需要 lookup 的 (stock_id, rightmost_end) pairs
+    needs_lookup: list[tuple[int, str, date]] = []  # (row_idx, stock_id, end_date)
+    for idx, r in enumerate(rows):
+        if r.get("phase") != PHASE_CORRECTION_DONE_DOWN:
+            continue
+        if r.get("excluded_reason") != "no_invalidation":
+            continue
+        sid = r.get("stock_id")
+        end_iso = (r.get("detail") or {}).get("rightmost_end")
+        if not sid or not end_iso:
+            continue
+        try:
+            end_date = date.fromisoformat(end_iso[:10])
+        except ValueError:
+            continue
+        needs_lookup.append((idx, sid, end_date))
+
+    if not needs_lookup:
+        return
+
+    # Batch fetch close at rightmost_end
+    lookup_keys = [(sid, d) for _, sid, d in needs_lookup]
+    bottoms = _fetch_corrective_bottoms(db, lookup_keys)
+
+    # Re-score 那些拿到 bottom 的 row
+    for idx, sid, end_date in needs_lookup:
+        bottom = bottoms.get((sid, end_date))
+        if bottom is None:
+            rows[idx]["excluded_reason"] = "no_price_at_correction_end"
+            continue
+        r = rows[idx]
+        current = r.get("entry_price")
+        target = r.get("target_price")
+        if current is None or target is None:
+            r["excluded_reason"] = "missing_entry_or_target"
+            continue
+        # 加 1% buffer:invalidation 設 corrective bottom × 0.99 對齊 NEoWave
+        # 「不可剛好觸碰」實務 + 防 intraday wick
+        invalidation = bottom * 0.99
+        r["invalidation_price"] = round(invalidation, 4)
+        detail = r.get("detail") or {}
+        detail["invalidation_source"] = "price_daily_fwd_at_rightmost_end"
+        detail["corrective_bottom_close"] = round(bottom, 4)
+        r["detail"] = detail
+        # 重評 geometry + rr
+        if target <= current:
+            r["excluded_reason"] = "target_below_current"
+            continue
+        if invalidation >= current:
+            r["excluded_reason"] = "stop_above_current"
+            continue
+        rr = (target - current) / (current - invalidation)
+        r["rr_ratio"] = round(rr, 4) if rr > 0 else None
+        if r["rr_ratio"] is None or r["rr_ratio"] < RR_MIN:
+            r["excluded_reason"] = "rr_below_threshold"
+            continue
+        r["is_candidate"] = True
+        r["excluded_reason"] = None
+
+
 def run(
     db: Any,
     stock_ids: list[str] | None = None,
@@ -707,6 +823,10 @@ def run(
                 snapshot_date=tf_snap_date,
             )
             rows.append(row)
+
+    # r5:對 CORRECTION_DONE_DOWN 但 no_invalidation 的 row,batch lookup 真實
+    # corrective bottom(close at rightmost_end date),然後重新評 R/R
+    _populate_corrective_bottoms_and_rescore(db, rows)
 
     # 第二輪:cross-tf 軟對齊
     _apply_cross_tf_alignment(rows)

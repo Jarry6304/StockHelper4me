@@ -425,7 +425,7 @@ class TestBuildRowR3:
         assert _extract_correction_stop(s) == 90.0   # MIN
 
     def test_no_invalidation_excluded(self):
-        """r4 invalidation trigger 不存在 → no_invalidation。"""
+        """r4 invalidation trigger 不存在 → no_invalidation(r5 之後會 rescore)。"""
         from cross_cores.wave_impulse_screen import _build_row
 
         s = _zigzag(end_date="2026-05-22", direction="down",
@@ -437,6 +437,119 @@ class TestBuildRowR3:
         )
         assert row["is_candidate"] is False
         assert row["excluded_reason"] == "no_invalidation"
+
+
+# ════════════════════════════════════════════════════════════
+# r5 corrective bottom lookup + rescore
+# ════════════════════════════════════════════════════════════
+
+
+class TestR5CorrectiveBottomRescore:
+
+    def test_rescore_lifts_no_invalidation_to_candidate(self):
+        """r5:no_invalidation row + price_daily_fwd close lookup → 升 candidate。"""
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        rows = [
+            {"stock_id": "A", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 100.0, "target_price": 130.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        db.query = MagicMock(return_value=[
+            {"stock_id": "A", "date": date(2026, 5, 22), "close": 90.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        # invalidation = 90 × 0.99 = 89.1;current=100;target=130
+        # rr = (130-100)/(100-89.1) = 30/10.9 ≈ 2.75
+        assert rows[0]["is_candidate"] is True
+        assert rows[0]["invalidation_price"] == 89.1
+        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 2.0
+        assert rows[0]["excluded_reason"] is None
+        assert rows[0]["detail"]["invalidation_source"] == "price_daily_fwd_at_rightmost_end"
+
+    def test_rescore_skips_non_correction_done_down(self):
+        """r5:其他 phase 的 row 不動。"""
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        rows = [
+            {"stock_id": "X", "phase": "IMPULSE_COMPLETE",
+             "excluded_reason": "impulse_complete_observe", "detail": {}},
+            {"stock_id": "Y", "phase": "CORRECTION_DONE_UP",
+             "excluded_reason": "bearish_setup_observe_only", "detail": {}},
+        ]
+        db = MagicMock()
+        db.query = MagicMock(return_value=[])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        # 沒任何改動
+        assert rows[0]["excluded_reason"] == "impulse_complete_observe"
+        assert rows[1]["excluded_reason"] == "bearish_setup_observe_only"
+        db.query.assert_not_called()   # 沒 lookup 需求 → 不打 DB
+
+    def test_rescore_no_price_data_marked(self):
+        """r5:price_daily_fwd 查不到 close → no_price_at_correction_end。"""
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        rows = [
+            {"stock_id": "Z", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 100.0, "target_price": 130.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        # 模擬 LATERAL JOIN 找不到 → close=None
+        db.query = MagicMock(return_value=[
+            {"stock_id": "Z", "date": date(2026, 5, 22), "close": None},
+        ])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        assert rows[0]["excluded_reason"] == "no_price_at_correction_end"
+        assert rows[0]["is_candidate"] is False
+
+    def test_rescore_stop_above_current_demoted(self):
+        """r5:corrective bottom × 0.99 仍 ≥ current → stop_above_current。"""
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        rows = [
+            {"stock_id": "Q", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 100.0, "target_price": 130.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        # bottom=150 → invalidation=150*0.99=148.5 > current=100
+        db.query = MagicMock(return_value=[
+            {"stock_id": "Q", "date": date(2026, 5, 22), "close": 150.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        assert rows[0]["excluded_reason"] == "stop_above_current"
+        assert rows[0]["is_candidate"] is False
+
+    def test_rescore_rr_below_threshold_demoted(self):
+        """r5:rr 後 < RR_MIN(1.5) → rr_below_threshold。"""
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        rows = [
+            {"stock_id": "R", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 100.0, "target_price": 105.0,    # small target
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        # bottom=99 → invalidation=99*0.99=98.01;current=100
+        # rr = (105-100)/(100-98.01) = 5/1.99 ≈ 2.51 (passes,不示範 fail)
+        # 用 bottom=95:invalidation=94.05;rr=(105-100)/(100-94.05)=5/5.95=0.84
+        db.query = MagicMock(return_value=[
+            {"stock_id": "R", "date": date(2026, 5, 22), "close": 95.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        assert rows[0]["excluded_reason"] == "rr_below_threshold"
+        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] < 1.5
+        assert rows[0]["is_candidate"] is False
 
     def test_no_target_demoted(self):
         from cross_cores.wave_impulse_screen import _build_row
