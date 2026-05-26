@@ -13,17 +13,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
-- **alembic head**:`f2g3h4i5j6k7`(v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
-- **開發分支**:`claude/affectionate-pasteur-lCTbq`(v4.25 雙軌共振決策層 4 commits)
+- **alembic head**:`g3h4i5j6k7l8`(v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
+- **開發分支**:`claude/affectionate-pasteur-lCTbq`(v4.26 wave_impulse_screen 7 round iteration)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
-- **MCP toolkit**:**12 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance;v4.25 從 11 加 1)
+- **MCP toolkit**:**13 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen;v4.26 加 1)
+- **cross_cores Phase 8 builders**:**12**(magic_formula + v3.32 10 + v4.26 wave_impulse_screen)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
 - **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
 - **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏 P1.1-P1.4 全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神
 - **v4.5 → v4.9**(2026-05-19):M3SPEC 闕漏補完 8 sub-PR + Out-of-Scope backlog Items 1+2+3 完整收尾 ☕☕☕ — Group 2(4 sub-PR)+ Group 3(Monowave bar_indices)+ Group 1(3 sub-PR polywave 嵌套依賴鏈)+ v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)+ v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞);全市場 1266 stocks G1 P0 Gate **全綠**(max=196 / p95=28 / overflow=0)
 - **v4.10**(2026-05-20)☕:Out-of-Scope **Item 4 Pre-Constructive 2-pass diagnostics union** 完整收尾 — `pre_constructive::run_pass2` 新函式回傳 `HashMap<classified_idx, Vec<StructureLabelCandidate>>` Pass 1-only diff(label 比對);`MonowaveStructureLabels` 加 `classified_index` + `pass1_only_labels` 兩欄;lib.rs Stage 8.5 refill loop 把 Pass 2 result + diff 寫回 forest 每個 scenario;**Out-of-Scope backlog 全部清空**
 - **v4.25**(2026-05-25)雙軌共振決策層 v1.0 完整落地 — m3Spec/dual_track_resonance.md(225 行)+ alembic `f2g3h4i5j6k7`(forecast_log.internal_only)+ neely_emitter 標 internal_only=True + 5 個 forecast 查詢點過濾 + src/fusion/dual_track/ 新模組(track1 結構讀 / track2 統計讀 / resonance 關係層 = A-3 失效閘門 + A-1 三級共振 + cross_stock 升振 + T1/T2)+ MCP `dual_track_resonance` 12th tool + 70 new tests(B-4 12 / Track1 26 / Track2 10 / Resonance 16 / MCP 6 = 70)
+- **v4.26**(2026-05-26~27)wave_impulse_screen — cross_cores Phase 8 第 12 個 builder,**r1→r7 七輪 production verify iteration**:從 spec 原意「找 W3 早段」(neely_core forest 不 emit incomplete impulse → 0 candidates)pivot 到「3-wave Zigzag/Flat 修正剛完成 + 反彈進場」(206 → 156 candidates after calibration);新 MCP `scan_wave_impulse` 13th tool;63 tests passed;production wall time ~21s
 
 ---
 
@@ -264,6 +266,149 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.26 — wave_impulse_screen cross_cores builder + 7 round production iteration(2026-05-26~27)
+
+接 v4.25.x 後 user 直送 wave impulse cross-stock screen 規格(r1 draft),走完整
+plan-mode 設計 + production verify iteration 7 輪,最終定位為「post-correction
+entry pivot」交易訊號 screen。
+
+### Spec → r1 設計(user 4 個 wedge 拍版)
+
+User r1 draft 設定主目標「掃 neely_core forest 找正進入 W3 主升段的標的」。
+Plan mode 派 3 Explore agent 確認既有 picker / cross_cores 慣例 / NEoWave
+output schema 後,4 個 wedge 拍版:
+
+| Wedge | 拍版 |
+|---|---|
+| 層級放置 | cross_cores Phase 8(成本最低 ~200 LOC)|
+| 浪位 heuristic | 雙軸驗證(wave_tree `W(\d+)` regex + Pass-2 `:L5/:c3` label)|
+| W3_EARLY_PCT / RR_MIN 預設 | spec r1 預設 0.5 / 1.5 |
+| Cross-TF 一致性 | 軟對齊 — per-tf 獨立 row + `cross_tf_aligned` hint 欄 |
+
+### r1 → r7 七輪 production verify iteration
+
+| Round | 核心改動 | Candidates |
+|---|---|---|
+| r1 commits `118da0c` ~ `011e2a5` | spec 原意「找 W3 早段」+ alembic `g3h4i5j6k7l8` | 0 |
+| r2 `533a954` | `_pick_actionable` 找 incomplete impulse | 0(forest 無 incomplete)|
+| r3 `47da192` | **pivot**:改抓 Zigzag/Flat 修正剛完成 + 反彈進場 | 0(invalid_rr_geometry × 237)|
+| r4 `0130fb4` | invalidation MIN of below triggers + 4 種 geometry sanity check | 0(no_invalidation × 237)|
+| r5 `8ba3402` | batch lookup `price_daily_fwd` 取 rightmost C-wave end 真實收盤 | **5** |
+| r6 `fdf1ade` | target 改「nearest upside fib zone + 2× cap」 | **206** |
+| **r7** `c81252a` | **calibration**:CORRECTION_BOTTOM_BUFFER 1%→3% + MIN_UPSIDE_PCT 3% 過濾 | **156** |
+
+### 關鍵設計揭露(對齊 NEoWave 實務)
+
+每輪揭露的事實層假設驗證(都是 r1 spec 預設錯,production data 才教會我們):
+
+1. **forest 對 Impulse/Diagonal scenarios wave_count=5 100%**(r2 揭露)— neely_core
+   不 emit incomplete impulse 假設,只 emit 完整收斂結構;
+   `_pick_actionable` 找「children 長度 2-4 的 incomplete impulse」設計無效
+2. **NEoWave Zigzag/Flat 對「已完成」scenario 不 emit `PriceBreakBelow`
+   invalidation triggers**(r4 揭露)— C-wave 已結束、不需 below threshold;
+   corrective bottom 必須查 `price_daily_fwd` 實際收盤,不能依賴 triggers
+3. **`expected_fib_zones` 多筆 source_ratio ∈ [1.382, 2.618] 投影向下**(r5 揭露)—
+   對 Zigzag/Flat 修正完成後反彈 target 完全錯方向(233/237 case
+   target_below_current);改為「nearest midpoint > current_price + 2× cap」
+4. **razor-thin stops 創造 RR > 20 outlier**(r7 揭露)— invalidation 1% buffer
+   實戰 intraday wick 易破;改 3% buffer + min_upside 3% 過濾「小確幸」< 3% 案例
+
+### Production state(2026-05-27 user 本機 verify)
+
+- candidates: **156**(daily 51 / weekly+monthly 105)
+- RR distribution: 1.5-2 (32) / 2-3 (33) / 3-5 (36) / 5-10 (32) / 10+ (23)
+- Top picks 品質:
+  - 2466 冠西電(RR 7.3, upside 18%, stop 2.5%, cross_tf_aligned)
+  - 2424 隴華(RR 7.2, upside 22%, stop 3.0%, cross_tf_aligned)
+  - 3040 遠見(RR 3.7, upside 15%, stop 4.0%, cross_tf_aligned)
+- excluded_reason 分布(daily 3059 rows):
+  - `no_snapshot` 1656(53%)/ `impulse_complete_observe` 697(23%)
+  - `bearish_setup_observe_only` 188 / `upside_too_small` 106(r7 新)
+  - `rr_below_threshold` 65 / `no_target` 15 / `stop_above_current` 2 等
+
+### 範圍(11 commits / branch `claude/affectionate-pasteur-lCTbq`)
+
+| 檔 | 動作 |
+|---|---|
+| `alembic/versions/2026_05_26_g3h4i5j6k7l8_wave_impulse_screen.py` | New — `wave_impulse_screen_derived` PK (market, stock_id, date, timeframe) |
+| `src/cross_cores/wave_impulse_screen.py` | New — builder ~600 行(_pick_recent_correction / current_wave_position / _build_row / _populate_corrective_bottoms_and_rescore / _apply_cross_tf_alignment / _assign_impulse_ranks / run)|
+| `src/cross_cores/orchestrator.py` | BUILDERS dict +1 entry(11 → 12)|
+| `mcp_server/_screens.py` | New `compute_wave_impulse_scan` + helpers(~165 行)|
+| `mcp_server/tools/data.py` | New `scan_wave_impulse` wrapper(~60 行)|
+| `mcp_server/server.py` | MCP tool 註冊(12 → 13)+ instructions §13 wave_impulse 描述 |
+| `tests/cross_cores/test_wave_screen.py` | 55 cases(picker / pattern_kind / direction / build_row / cross_tf / ranking / run smoke / r5 rescore / r6 reversal target / r7 buffer + min_upside)|
+| `tests/mcp_server/test_wave_screen.py` | 8 cases(MCP top_stocks / observe / timeframe passthrough / caveat)|
+| `tests/cross_cores/test_v3_32_builders.py` | 1 行 expected set 加 `wave_impulse_screen`(11 → 12 builders)|
+
+### MCP tool `scan_wave_impulse(date, timeframe='daily', top_n=30, include_observe=True)`
+
+13 公開 tool 之一(從 12 加)。Phase enum:
+- `CORRECTION_DONE_DOWN`(candidate):向下 3-wave 修正剛完成 → 多頭反轉買點
+- `CORRECTION_DONE_UP`(observe):向上修正完成 → 空頭 setup
+- `CORRECTION_ONGOING`(observe):修正中 > RECENT_DAYS
+- `IMPULSE_COMPLETE`(observe):完整 5 波 → 反轉警示(該獲利了結)
+
+Output payload:`top_stocks` + `observe_stocks` + `cross_tf_aligned_count` +
+`narrative` + 三段 `caveat`(Zigzag/Flat 訊號定義 / IMPULSE_COMPLETE 警示 /
+production calibration after first 30d)。
+
+### 已知 calibration 議題(v2 backlog)
+
+- RR > 10 的 23 個 outlier 對應 legit 大型 turnaround(1589: 63% upside,
+  7818: 46%, 7822: 28%)— production 1-2 週實戰驗證後決定是否 cap 顯示
+- daily 51 + weekly/monthly 105 = total 156 — weekly/monthly 多 fib zone 通過
+  range,需 production verify 是否有用
+- `confidence_level` 多數 loose(monowave_structure_labels 對 Zigzag/Flat
+  rightmost C-wave 的 Pass-2 label 多空)— 不影響 r7 邏輯(simplified table
+  不依賴 Axis-B),但 detail 透明化保留 strict/loose hint
+
+### 設計約束遵循(對齊 cores_overview §四 + §十四)
+
+- **零耦合**:只讀 `structural_snapshots` JSONB + `price_daily_fwd`,不 reach
+  into Rust 內部
+- **不抽象**:per-stock 邏輯 inline 寫;picker 函式從 `fusion/dual_track/
+  track1.py` underscore-private inline import(picker 抽 `src/fusion/_picker.py`
+  共用留下個 PR)
+- **best-guess 不上 Rust**:`RECENT_DAYS=14` / `RR_MIN=1.5` /
+  `MAX_UPSIDE_MULTIPLE=2.0` / `CORRECTION_BOTTOM_BUFFER=0.03` /
+  `MIN_UPSIDE_PCT=0.03` 全部 module 常數,production verify 後 calibrate
+
+### Tests + Regression
+
+| | |
+|---|---|
+| 新 tests(本 PR)| **+63**(55 builder + 8 MCP)|
+| 既有 tests regression | 0 — 既有 ~480 tests + 18 r1→r7 demoted/updated 全綠 |
+| Rust | 0 |
+| collector.toml | 0 |
+| alembic | 1 migration `g3h4i5j6k7l8` |
+| 純 Python | `src/cross_cores/wave_impulse_screen.py` + 2 MCP file + 2 test file |
+
+`pytest tests/cross_cores/ tests/mcp_server/ tests/forecast/ tests/fusion/` ✅
+**548 passed / 1 pre-existing fail(v3.35 picker quality_caveat,與本 PR 無關)/
+1 skipped**。
+
+### 風險
+
+🟢 低:
+- 純 Python + 純 cross_cores Phase 8 加 builder(0 Rust / 0 collector.toml)
+- builder 失敗 graceful(orchestrator try/except,不影響其他 11 個 builder)
+- MCP 走 `fetch_cross_stock_ranked` 通用 helper,既有 12 tools 0 影響
+- Rollback:本 PR commits 可分輪 revert(r1-r7 各自獨立)+ alembic downgrade
+  反向(DROP table)
+
+🟡 中:
+- r1-r7 揭露 5 個 NEoWave 假設與 spec r1 描述不符 — 表示對 neely_core forest
+  schema 真實行為的理解 production-only,後續類似 cross_cores builder 設計
+  需先 verify 假設再寫 spec
+- best-guess thresholds(RECENT_DAYS / RR_MIN / MAX_UPSIDE_MULTIPLE /
+  CORRECTION_BOTTOM_BUFFER / MIN_UPSIDE_PCT)5 個常數需 production 1-2 週
+  實戰回測校準
+
+🔴 高:**無**
 
 ---
 

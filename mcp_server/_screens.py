@@ -460,6 +460,200 @@ def _narr(label: str, n: int, top: list[dict[str, Any]]) -> str:
     )
 
 
+# ────────────────────────────────────────────────────────────
+# Wave Impulse Cross-Stock Screen(plan wave-impulse-cross-stock-virtual-papert.md)
+# ────────────────────────────────────────────────────────────
+
+
+_WAVE_OBSERVE_PHASES = (
+    # r3 phase enum(post-correction entry pivot 後)
+    "IMPULSE_COMPLETE",     # 完整 5 波 → 反轉警示(該避免/獲利了結)
+    "CORRECTION_DONE_UP",   # 上漲修正剛完成 → 空頭 setup observe
+    "CORRECTION_ONGOING",   # 修正中,未完成
+    "OTHER",                # Triangle / Combination / 未知
+)
+
+
+def _fetch_wave_impulse_rows(
+    conn,
+    *,
+    as_of: date,
+    timeframe: str,
+    top_n: int,
+    include_observe: bool,
+) -> tuple[Any | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    """讀 wave_impulse_screen_derived → (ranking_date, top_stocks, observe_stocks)。
+
+    對 wave_impulse_screen_derived 不走 fetch_cross_stock_ranked(它沒 timeframe
+    filter)— 直接 SQL,對齊 _screens fetch pattern。
+    """
+    # 1. latest ranking_date ≤ as_of(用該 timeframe 的 max date)
+    sql_date = """
+        SELECT MAX(date) AS d FROM wave_impulse_screen_derived
+         WHERE market = 'TW' AND timeframe = %s AND date <= %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_date, [timeframe, as_of])
+        row = cur.fetchone()
+    ranking_date = row["d"] if row else None
+    if ranking_date is None:
+        return None, [], []
+
+    # 2. top_stocks(is_top_n=TRUE)
+    sql_top = """
+        SELECT t.*, s.stock_name, s.industry_category
+          FROM wave_impulse_screen_derived t
+          LEFT JOIN stock_info_ref s
+            ON s.market = t.market AND s.stock_id = t.stock_id
+         WHERE t.market = 'TW' AND t.timeframe = %s AND t.date = %s
+           AND t.is_top_n = TRUE
+         ORDER BY t.impulse_rank ASC
+         LIMIT %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_top, [timeframe, ranking_date, top_n])
+        top_rows = cur.fetchall()
+
+    # 3. observe_stocks(W5_* / W4_DONE phase)
+    observe_rows: list[dict[str, Any]] = []
+    if include_observe:
+        sql_observe = """
+            SELECT t.*, s.stock_name, s.industry_category
+              FROM wave_impulse_screen_derived t
+              LEFT JOIN stock_info_ref s
+                ON s.market = t.market AND s.stock_id = t.stock_id
+             WHERE t.market = 'TW' AND t.timeframe = %s AND t.date = %s
+               AND t.phase = ANY(%s)
+             ORDER BY t.stock_id ASC
+             LIMIT %s
+        """
+        with conn.cursor() as cur:
+            cur.execute(sql_observe, [
+                timeframe, ranking_date, list(_WAVE_OBSERVE_PHASES), top_n,
+            ])
+            observe_rows = cur.fetchall()
+
+    return ranking_date, top_rows, observe_rows
+
+
+def _format_wave_impulse_row(r: dict[str, Any]) -> dict[str, Any]:
+    """壓縮 wave_impulse_screen_derived row → LLM-friendly dict。"""
+    return {
+        "stock_id":           r.get("stock_id"),
+        "name":               r.get("stock_name"),
+        "industry":           r.get("industry_category"),
+        "rank":               _to_int(r.get("impulse_rank")),
+        "phase":              r.get("phase"),
+        "wave_number":        _to_int(r.get("wave_number")),
+        "pattern_kind":       r.get("pattern_kind"),
+        "direction":          r.get("direction"),
+        "effective_degree":   r.get("effective_degree"),
+        "structure_label":    r.get("structure_label"),
+        "confidence_level":   r.get("confidence_level"),
+        "entry_price":        _to_float(r.get("entry_price")),
+        "target_price":       _to_float(r.get("target_price")),
+        "invalidation_price": _to_float(r.get("invalidation_price")),
+        "rr_ratio":           _to_float(r.get("rr_ratio")),
+        "cross_tf_aligned":   bool(r.get("cross_tf_aligned")),
+        "is_candidate":       bool(r.get("is_candidate")),
+    }
+
+
+def compute_wave_impulse_scan(
+    as_of: date,
+    *,
+    timeframe: str = "daily",
+    top_n: int = 30,
+    include_observe: bool = True,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    """Wave Impulse Cross-Stock Screen(r3 post-correction entry pivot)。
+
+    r3 重新定位(production verify 2026-05-27 揭露 neely_core forest 不 emit
+    incomplete Impulse,r1/r2「找 W3 早段」設計不可行):
+    - **改抓 3-wave Zigzag/Flat 修正剛完成 + 方向 DOWN** 訊號(NEoWave「A-B-C
+      結束後啟動新 impulse」),候選 = 反轉/新 impulse 啟動買點
+    - 完整 5 波 Impulse → 反轉警示 observe(該獲利了結)
+    - 上漲修正剛完成 → 空頭 setup observe(TW 多單市場略過)
+
+    讀 wave_impulse_screen_derived(builder upstream:structural_snapshots):
+    - 候選股(is_candidate=TRUE):CORRECTION_DONE_DOWN + 過 R/R 1.5
+    - Observe:IMPULSE_COMPLETE / CORRECTION_DONE_UP / CORRECTION_ONGOING
+
+    Args:
+        as_of:           date 上界(包含)
+        timeframe:       daily / weekly / monthly(預設 daily)
+        top_n:           候選清單 + observe 各取 top_n
+        include_observe: 是否回傳 observe section
+        database_url:    overrides DATABASE_URL env
+
+    Returns:
+        {
+          as_of, timeframe, top_n, ranking_date,
+          top_stocks: [CORRECTION_DONE_DOWN candidates,可進場做多],
+          observe_stocks: [IMPULSE_COMPLETE / CORRECTION_DONE_UP / ONGOING],
+          cross_tf_aligned_count, narrative, caveat
+        }
+    """
+    conn = get_connection(database_url)
+    try:
+        ranking_date, top_rows, observe_rows = _fetch_wave_impulse_rows(
+            conn, as_of=as_of, timeframe=timeframe, top_n=top_n,
+            include_observe=include_observe,
+        )
+    finally:
+        conn.close()
+
+    top_stocks = [_format_wave_impulse_row(r) for r in top_rows]
+    observe_stocks = [_format_wave_impulse_row(r) for r in observe_rows]
+    cross_tf_aligned_count = sum(
+        1 for r in top_stocks if r.get("cross_tf_aligned")
+    )
+
+    # narrative + caveat(r3 pivot:post-correction entry)
+    n_top = len(top_stocks)
+    n_observe = len(observe_stocks)
+    if n_top == 0:
+        narrative = (
+            f"Wave Impulse Screen({timeframe}):無 top candidates"
+            f"(當下 universe 無「向下 ABC 修正剛完成」訊號;市場可能在 impulse 中"
+            f"或修正進行中)。observe {n_observe} 檔可參考反向訊號。"
+        )
+    else:
+        first = top_stocks[0]
+        narrative = (
+            f"Wave Impulse Screen({timeframe}) top {n_top} post-correction "
+            f"entry candidates:首位 {first.get('stock_id')} "
+            f"{first.get('name') or ''} "
+            f"(rank 1,phase={first.get('phase')},rr={first.get('rr_ratio')},"
+            f"confidence={first.get('confidence_level')})"
+            f";cross_tf_aligned {cross_tf_aligned_count}/{n_top}"
+            f";observe {n_observe} 檔(IMPULSE_COMPLETE / CORRECTION_DONE_UP / "
+            f"CORRECTION_ONGOING)。"
+        )
+
+    caveat = (
+        "1. r3 pivot 訊號 = 3-wave Zigzag/Flat 向下修正剛完成(RECENT_DAYS=14)→ "
+        "預期新 impulse 啟動的「反轉買點」,**不是「正在 W3 主升段」**。"
+        "2. IMPULSE_COMPLETE / CORRECTION_DONE_UP 段為 observe,前者為反轉警示 "
+        "(該避免/獲利了結)、後者為空頭 setup(TW 多單略過)。"
+        "3. RECENT_DAYS=14 / RR_MIN=1.5 為 r3 best-guess,production verify 後"
+        "calibrate(對齊 v3.32 F-Score 7→6 hotfix pattern)。"
+    )
+
+    return {
+        "as_of":         as_of.isoformat(),
+        "timeframe":     timeframe,
+        "top_n":         top_n,
+        "ranking_date":  ranking_date.isoformat() if ranking_date else None,
+        "top_stocks":    top_stocks,
+        "observe_stocks": observe_stocks,
+        "cross_tf_aligned_count": cross_tf_aligned_count,
+        "narrative":     narrative,
+        "caveat":        caveat,
+    }
+
+
 def _compose_toolkit_narrative(toolkit: str, *factors: dict) -> str:
     """每 toolkit 主要 1-3 句 overall view。"""
     ok_count = sum(1 for f in factors if isinstance(f, dict) and "error" not in f)
