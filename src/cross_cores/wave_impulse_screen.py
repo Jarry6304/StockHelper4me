@@ -91,11 +91,14 @@ UPSTREAM_TABLES = ["structural_snapshots", "price_daily_fwd", "stock_info_ref"]
 # 對齊 NEoWave Ch6/7 corrective pattern terminate → 新 impulse 啟動的判讀。
 
 # Best-guess thresholds(production verify 後 calibrate)
-RECENT_DAYS          = 14    # rightmost 在過去 N 天內視為「剛完成」
-RR_MIN               = 1.5   # R/R 最小門檻
-TOP_N                = 30
-MAX_UPSIDE_MULTIPLE  = 2.0   # r6:target / current 上限(過濾異常 fib 投影,e.g. IPO 高點)
-TIMEFRAMES           = ("daily", "weekly", "monthly")
+RECENT_DAYS               = 14    # rightmost 在過去 N 天內視為「剛完成」
+RR_MIN                    = 1.5   # R/R 最小門檻
+TOP_N                     = 30
+MAX_UPSIDE_MULTIPLE       = 2.0   # target / current 上限(過濾異常 fib 投影)
+# r7 calibration(production verify 揭露 razor-thin stops 創造異常 RR > 20):
+CORRECTION_BOTTOM_BUFFER  = 0.03  # invalidation = bottom × (1 - 0.03);3% 防 intraday wick
+MIN_UPSIDE_PCT            = 0.03  # target 必須 ≥ current × 1.03(< 3% upside 不值得進場 — 執行成本吃掉)
+TIMEFRAMES                = ("daily", "weekly", "monthly")
 
 # Axis-B label sets(對齊 output.rs:1310-1346 StructureLabel enum)
 _LABELS_FIVE_MATURE = {"L5", "S5", "SL5"}    # Last impulse 訊號(C-wave 收尾)
@@ -687,6 +690,10 @@ def _build_row(
         elif invalidation >= current_price:
             is_candidate = False
             excluded = "stop_above_current"
+        elif (target - current_price) / current_price < MIN_UPSIDE_PCT:
+            # r7:upside < 3% 不值得進場(執行成本吃掉)
+            is_candidate = False
+            excluded = "upside_too_small"
         else:
             rr = (target - current_price) / (current_price - invalidation)
             extras["rr_ratio"] = round(rr, 4) if rr > 0 else None
@@ -796,9 +803,10 @@ def _populate_corrective_bottoms_and_rescore(
         if current is None or target is None:
             r["excluded_reason"] = "missing_entry_or_target"
             continue
-        # 加 1% buffer:invalidation 設 corrective bottom × 0.99 對齊 NEoWave
-        # 「不可剛好觸碰」實務 + 防 intraday wick
-        invalidation = bottom * 0.99
+        # r7:invalidation = bottom × (1 - CORRECTION_BOTTOM_BUFFER 3%)
+        # 3% buffer 對齊 NEoWave「不可剛好觸碰」+ 防 intraday wick(r5 用 1%
+        # 太緊,production 揭露 RR > 20 razor-thin stops 不實用)
+        invalidation = bottom * (1.0 - CORRECTION_BOTTOM_BUFFER)
         r["invalidation_price"] = round(invalidation, 4)
         detail = r.get("detail") or {}
         detail["invalidation_source"] = "price_daily_fwd_at_rightmost_end"
@@ -810,6 +818,10 @@ def _populate_corrective_bottoms_and_rescore(
             continue
         if invalidation >= current:
             r["excluded_reason"] = "stop_above_current"
+            continue
+        # r7:upside < 3% 不值得進場
+        if (target - current) / current < MIN_UPSIDE_PCT:
+            r["excluded_reason"] = "upside_too_small"
             continue
         rr = (target - current) / (current - invalidation)
         r["rr_ratio"] = round(rr, 4) if rr > 0 else None

@@ -360,8 +360,28 @@ class TestBuildRowR3:
     def test_rr_below_threshold_demoted(self):
         from cross_cores.wave_impulse_screen import _build_row
 
-        # target = midpoint (102.5) of [100,105]; entry=100; invalidation=90 → rr=2.5/10=0.25
-        # r4:target must be > current(102.5 > 100 ✓);invalidation must be < current(90 < 100 ✓)
+        # r7:upside 必須 ≥ 3% 才考慮 R/R;
+        # 用 target=104.5(4.5% upside > 3% MIN_UPSIDE)+ inv 92(stop too loose)
+        # → rr=(104.5-100)/(100-92)=4.5/8=0.56 < 1.5
+        s = _zigzag(
+            end_date="2026-05-22", direction="down",
+            fib_zones=[{"source_ratio": 1.618, "low": 103, "high": 106}],
+            triggers=[{"on_trigger": "InvalidateScenario",
+                       "trigger_type": {"PriceBreakBelow": 92.0}}],
+        )
+        row = _build_row(
+            stock_id="X", target_date=SNAPSHOT_DATE, timeframe="daily",
+            snapshot={"scenario_forest": [s]}, current_price=100.0,
+            excluded_reason=None, snapshot_date=SNAPSHOT_DATE,
+        )
+        assert row["is_candidate"] is False
+        assert row["excluded_reason"] == "rr_below_threshold"
+
+    def test_upside_too_small_demoted(self):
+        """r7:upside < 3% → upside_too_small。"""
+        from cross_cores.wave_impulse_screen import _build_row
+
+        # midpoint = 102.5,upside = 2.5% < 3%
         s = _zigzag(end_date="2026-05-22", direction="down",
                     fib_zones=[{"source_ratio": 1.618, "low": 100.01, "high": 105}])
         row = _build_row(
@@ -370,7 +390,7 @@ class TestBuildRowR3:
             excluded_reason=None, snapshot_date=SNAPSHOT_DATE,
         )
         assert row["is_candidate"] is False
-        assert row["excluded_reason"] == "rr_below_threshold"
+        assert row["excluded_reason"] == "upside_too_small"
 
     def test_target_below_current_filtered_to_no_target(self):
         """r6 後 _extract_reversal_target_upside 預先 filter mid <= current,
@@ -463,10 +483,10 @@ class TestR5CorrectiveBottomRescore:
             {"stock_id": "A", "date": date(2026, 5, 22), "close": 90.0},
         ])
         _populate_corrective_bottoms_and_rescore(db, rows)
-        # invalidation = 90 × 0.99 = 89.1;current=100;target=130
-        # rr = (130-100)/(100-89.1) = 30/10.9 ≈ 2.75
+        # r7:invalidation = 90 × (1 - 0.03) = 87.3;current=100;target=130
+        # rr = (130-100)/(100-87.3) = 30/12.7 ≈ 2.36;upside = 30% ✓
         assert rows[0]["is_candidate"] is True
-        assert rows[0]["invalidation_price"] == 89.1
+        assert rows[0]["invalidation_price"] == 87.3
         assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 2.0
         assert rows[0]["excluded_reason"] is None
         assert rows[0]["detail"]["invalidation_source"] == "price_daily_fwd_at_rightmost_end"
