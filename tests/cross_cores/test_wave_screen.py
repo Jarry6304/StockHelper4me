@@ -372,11 +372,12 @@ class TestBuildRowR3:
         assert row["is_candidate"] is False
         assert row["excluded_reason"] == "rr_below_threshold"
 
-    def test_target_below_current_excluded(self):
-        """r4 geometry sanity:target ≤ current → 不入 candidate。"""
+    def test_target_below_current_filtered_to_no_target(self):
+        """r6 後 _extract_reversal_target_upside 預先 filter mid <= current,
+        所以 target=None → excluded='no_target'(r4 的 target_below_current 分支
+        在 _build_row 仍保留但實務不會走到)。"""
         from cross_cores.wave_impulse_screen import _build_row
 
-        # target midpoint = 80(< current 100)
         s = _zigzag(end_date="2026-05-22", direction="down",
                     fib_zones=[{"source_ratio": 1.618, "low": 75, "high": 85}])
         row = _build_row(
@@ -385,7 +386,7 @@ class TestBuildRowR3:
             excluded_reason=None, snapshot_date=SNAPSHOT_DATE,
         )
         assert row["is_candidate"] is False
-        assert row["excluded_reason"] == "target_below_current"
+        assert row["excluded_reason"] == "no_target"
 
     def test_stop_above_current_excluded(self):
         """r4 geometry sanity:invalidation ≥ current → 不入 candidate
@@ -540,9 +541,7 @@ class TestR5CorrectiveBottomRescore:
              "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
         ]
         db = MagicMock()
-        # bottom=99 → invalidation=99*0.99=98.01;current=100
-        # rr = (105-100)/(100-98.01) = 5/1.99 ≈ 2.51 (passes,不示範 fail)
-        # 用 bottom=95:invalidation=94.05;rr=(105-100)/(100-94.05)=5/5.95=0.84
+        # bottom=95:invalidation=94.05;rr=(105-100)/(100-94.05)=5/5.95=0.84
         db.query = MagicMock(return_value=[
             {"stock_id": "R", "date": date(2026, 5, 22), "close": 95.0},
         ])
@@ -550,6 +549,73 @@ class TestR5CorrectiveBottomRescore:
         assert rows[0]["excluded_reason"] == "rr_below_threshold"
         assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] < 1.5
         assert rows[0]["is_candidate"] is False
+
+
+# ════════════════════════════════════════════════════════════
+# r6 reversal target upside(nearest fib zone above current,with max_multiple cap)
+# ════════════════════════════════════════════════════════════
+
+
+class TestR6ReversalTargetUpside:
+
+    def test_nearest_upside_picked(self):
+        from cross_cores.wave_impulse_screen import _extract_reversal_target_upside
+
+        s = {"expected_fib_zones": [
+            {"low": 5, "high": 7},      # mid=6,below current 10,skip
+            {"low": 11, "high": 13},    # mid=12,upside candidate
+            {"low": 15, "high": 17},    # mid=16,upside further
+            {"low": 30, "high": 40},    # mid=35 > 10×2 cap,skip
+        ]}
+        assert _extract_reversal_target_upside(s, 10.0) == 12.0
+
+    def test_no_upside_returns_none(self):
+        """Production 233 個 target_below_current 對應「fib zones 都 < current」。"""
+        from cross_cores.wave_impulse_screen import _extract_reversal_target_upside
+
+        s = {"expected_fib_zones": [{"low": 3, "high": 5}, {"low": 6, "high": 8}]}
+        assert _extract_reversal_target_upside(s, 10.0) is None
+
+    def test_outlier_blocked_by_max_multiple(self):
+        """Production 7780 case:fib midpoint 880 vs current 18 → 47x outlier。"""
+        from cross_cores.wave_impulse_screen import _extract_reversal_target_upside
+
+        s = {"expected_fib_zones": [
+            {"low": 20, "high": 22},      # mid=21,within 18×2=36
+            {"low": 800, "high": 960},    # mid=880,>>36 → skip
+        ]}
+        assert _extract_reversal_target_upside(s, 18.0) == 21.0
+
+    def test_current_price_none_returns_none(self):
+        from cross_cores.wave_impulse_screen import _extract_reversal_target_upside
+
+        assert _extract_reversal_target_upside({"expected_fib_zones": []}, None) is None
+
+    def test_empty_zones_returns_none(self):
+        from cross_cores.wave_impulse_screen import _extract_reversal_target_upside
+
+        assert _extract_reversal_target_upside({}, 10.0) is None
+
+    def test_boundary_inclusive_upper(self):
+        """target = current × max_multiple 邊界 inclusive。"""
+        from cross_cores.wave_impulse_screen import _extract_reversal_target_upside
+
+        s = {"expected_fib_zones": [{"low": 19, "high": 21}]}   # mid=20 = 10×2
+        assert _extract_reversal_target_upside(s, 10.0) == 20.0
+
+    def test_strictly_above_current(self):
+        """mid == current → 不算 upside(strict >)。"""
+        from cross_cores.wave_impulse_screen import _extract_reversal_target_upside
+
+        s = {"expected_fib_zones": [{"low": 9, "high": 11}]}   # mid=10 = current
+        assert _extract_reversal_target_upside(s, 10.0) is None
+
+    def test_custom_max_multiple(self):
+        from cross_cores.wave_impulse_screen import _extract_reversal_target_upside
+
+        s = {"expected_fib_zones": [{"low": 49, "high": 51}]}   # mid=50 = 5x
+        assert _extract_reversal_target_upside(s, 10.0) is None  # 2x default
+        assert _extract_reversal_target_upside(s, 10.0, max_multiple=5.0) == 50.0
 
     def test_no_target_demoted(self):
         from cross_cores.wave_impulse_screen import _build_row

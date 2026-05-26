@@ -91,10 +91,11 @@ UPSTREAM_TABLES = ["structural_snapshots", "price_daily_fwd", "stock_info_ref"]
 # 對齊 NEoWave Ch6/7 corrective pattern terminate → 新 impulse 啟動的判讀。
 
 # Best-guess thresholds(production verify 後 calibrate)
-RECENT_DAYS  = 14       # rightmost 在過去 N 天內視為「剛完成」
-RR_MIN       = 1.5      # R/R 最小門檻
-TOP_N        = 30
-TIMEFRAMES   = ("daily", "weekly", "monthly")
+RECENT_DAYS          = 14    # rightmost 在過去 N 天內視為「剛完成」
+RR_MIN               = 1.5   # R/R 最小門檻
+TOP_N                = 30
+MAX_UPSIDE_MULTIPLE  = 2.0   # r6:target / current 上限(過濾異常 fib 投影,e.g. IPO 高點)
+TIMEFRAMES           = ("daily", "weekly", "monthly")
 
 # Axis-B label sets(對齊 output.rs:1310-1346 StructureLabel enum)
 _LABELS_FIVE_MATURE = {"L5", "S5", "SL5"}    # Last impulse 訊號(C-wave 收尾)
@@ -397,9 +398,10 @@ def _parse_direction(label: str) -> str | None:
 
 
 def _extract_target_price(scenario: dict) -> float | None:
-    """從 expected_fib_zones 抽 W3/W5 target zone midpoint。
+    """r1/r2 W3 entry path:從 expected_fib_zones 抽 [1.382, 2.618] expansion midpoint。
 
-    對齊 plan §4:`source_ratio ∈ [1.382, 2.618]` heuristic;無 → None。
+    r3 corrective entry 不該用此函式 — 走 _extract_reversal_target_upside
+    (對齊 NEoWave「修正完成 → 反彈到 fib zone」)。
     """
     zones = scenario.get("expected_fib_zones") or []
     candidates: list[float] = []
@@ -419,7 +421,44 @@ def _extract_target_price(scenario: dict) -> float | None:
         candidates.append((float(lo) + float(hi)) / 2.0)
     if not candidates:
         return None
-    # 取最近(最小)的 target zone midpoint(對齊 NEoWave「最近的 fib 投影最可能命中」)
+    return min(candidates)
+
+
+def _extract_reversal_target_upside(
+    scenario: dict, current_price: float | None,
+    *, max_multiple: float = MAX_UPSIDE_MULTIPLE,
+) -> float | None:
+    """r3 CORRECTION_DONE_DOWN entry path:取 expected_fib_zones 內 midpoint
+    在 (current_price, current × max_multiple] 區間最近的 zone。
+
+    Rationale:
+    - r5 揭露 r1/r2 用 `source_ratio ∈ [1.382, 2.618]` 篩 fib zones(= Impulse
+      W3/W5 expansion 投影),對 Zigzag/Flat 修正完成後反彈 target 完全錯方向
+      (production 233/237 case target_below_current)。
+    - r6 改為「方向 + 量級 sanity」filter:fib midpoint 必須在現價之上,且
+      不超過現價 × max_multiple(預設 2.0 = 100% upside 上限),過濾 7780 type
+      outlier(target 879 vs entry 18 → RR=1105 異常)。
+    - 取 MIN of qualifying = 最近的 upside target(對齊 NEoWave「最近 fib 投影
+      最可能命中」)。
+    """
+    if current_price is None:
+        return None
+    cp = float(current_price)
+    cap = cp * max_multiple
+    candidates: list[float] = []
+    for z in scenario.get("expected_fib_zones") or []:
+        if not isinstance(z, dict):
+            continue
+        lo, hi = z.get("low"), z.get("high")
+        if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)):
+            continue
+        if isinstance(lo, bool) or isinstance(hi, bool):
+            continue
+        mid = (float(lo) + float(hi)) / 2.0
+        if cp < mid <= cap:
+            candidates.append(mid)
+    if not candidates:
+        return None
     return min(candidates)
 
 
@@ -630,7 +669,8 @@ def _build_row(
     # 配合幾何 sanity check(target > current > invalidation)
     if is_candidate and current_price is not None:
         invalidation = _extract_correction_stop(primary)
-        target = _extract_target_price(primary)
+        # r6:target 走「nearest upside fib zone within max_multiple」
+        target = _extract_reversal_target_upside(primary, current_price)
         extras["entry_price"] = float(current_price)
         extras["invalidation_price"] = invalidation
         extras["target_price"] = target
