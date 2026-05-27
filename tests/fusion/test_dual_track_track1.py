@@ -95,8 +95,10 @@ class TestDirectionFromPower:
 
 class TestEffectiveDegree:
     def test_short_span(self):
+        # B1:< 1 yr → "SubMinuette"(canonical 對齊 Rust output.rs::Degree
+        # enum 大小寫;舊版「Subminuette」小寫 'm' 為 producer-side label drift)
         s = _make_scenario(span_days=30)
-        assert _effective_degree(s) == "Subminuette"
+        assert _effective_degree(s) == "SubMinuette"
 
     def test_year_span(self):
         s = _make_scenario(span_days=400)

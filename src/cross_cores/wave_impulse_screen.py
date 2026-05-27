@@ -58,19 +58,18 @@ from cross_cores._shared import empty_row, fetch_universe_filter
 
 # v4.26 follow-up:picker common helpers 抽 src/fusion/_picker.py 共用
 from fusion._picker import (
+    DEGREE_RANK as _DEGREE_RANK,
     direction_from_power as _direction_from_power,
+    effective_degree as _effective_degree,
     pattern_type_label as _pattern_type_label,
     power_rating_label as _power_rating_label,
     power_rating_strength as _power_rating_strength,
     wave_count_from_label as _wave_count_from_label,
 )
-# 仍從 track1.py import 尚未共用化的(_DEGREE_RANK / _effective_degree /
-# _pick_primary 邏輯與 _forecast.py 有 semantic drift 待 audit;
-# _extract_all_invalidation_thresholds 屬 dual_track A-3 閘門邏輯,wave_screen
-# fallback 用)
+# B1:_DEGREE_RANK / _effective_degree 已收斂到 _picker(對齊 Rust canonical)。
+# track1.py 留兩支讀取面工具:_extract_all_invalidation_thresholds(A-3 閘門全 trigger 解析)
+# + _pick_primary(讀取面 picker 對齊 v3.35;寫入面 picker 走 neely_emitter._pick_primary)。
 from fusion.dual_track.track1 import (  # noqa: F401
-    _DEGREE_RANK,
-    _effective_degree,
     _extract_all_invalidation_thresholds,
     _pick_primary,
 )

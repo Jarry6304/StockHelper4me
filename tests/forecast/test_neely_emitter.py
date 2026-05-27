@@ -45,8 +45,10 @@ def _make_scenario(
 
 class TestEffectiveDegree:
     def test_short_span_is_subminuette(self):
+        # B1 後:< 1 yr → "SubMinuette"(canonical 對齊 Rust output.rs::Degree
+        # enum 大小寫;舊版「Subminuette」小寫 'm' 為 producer-side label drift)
         s = _make_scenario(span_days=30)  # ~0.08 year
-        assert _effective_degree(s) == "Subminuette"
+        assert _effective_degree(s) == "SubMinuette"
 
     def test_year_span_is_minute(self):
         s = _make_scenario(span_days=400)  # ~1.1 year

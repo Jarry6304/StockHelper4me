@@ -1015,18 +1015,28 @@ def _run_forecast(args) -> None:
     elif sub == "emit-neely":
         from forecast.neely_emitter import emit_neely_fib
         from forecast._db import get_connection
+        # B1:寫入面 picker 需 current_price 做 canonical_is_invalidated filter
+        from fusion.raw._db import fetch_latest_close
 
         stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
         asof = _parse_date(args.asof) or _date.today()
         with get_connection() as conn:
             for sid in stocks:
+                price_row = fetch_latest_close(conn, stock_id=sid, as_of=asof)
+                current_price = None
+                if price_row and price_row.get("close") is not None:
+                    try:
+                        current_price = float(price_row["close"])
+                    except (TypeError, ValueError):
+                        current_price = None
                 res = emit_neely_fib(
                     conn, sid, asof,
                     timeframe=args.timeframe,
                     confidence=args.confidence,
                     overwrite_horizon=args.horizon,
+                    current_price=current_price,
                 )
-                print(f"{sid} @ {asof}: {res}")
+                print(f"{sid} @ {asof} (price={current_price}): {res}")
 
     elif sub == "manual":
         from forecast.manual import write_manual_forecast
