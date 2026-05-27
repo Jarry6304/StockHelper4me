@@ -89,9 +89,15 @@ def assemble_indicators(
                 continue
             row = iv[0] if iv else {}
             vdate = row.get("value_date")
+            value_blob = row.get("value")
+            if isinstance(value_blob, dict) and lookback_days > 0:
+                series = value_blob.get("series")
+                if isinstance(series, list) and len(series) > lookback_days:
+                    value_blob = dict(value_blob)
+                    value_blob["series"] = series[-lookback_days:]
             out[core] = {
                 "value_date": vdate.isoformat() if hasattr(vdate, "isoformat") else vdate,
-                "series": row.get("value"),
+                "series": value_blob,
                 "events": [fact_to_event(f) for f in facts],
             }
     finally:
