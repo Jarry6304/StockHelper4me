@@ -56,11 +56,12 @@ logger = logging.getLogger("collector.cross_cores.wave_impulse_calibrate")
 RR_OUTLIER_THRESHOLD: float = 20.0
 
 
-# 5 個 threshold 的「常用 sweep 集合」— CLI default(若 user 沒 explicit sweep)
-# 對應 backlog plan §2A 5 待 calibrate 門檻
+# 6 個 threshold 的「常用 sweep 集合」— CLI default(若 user 沒 explicit sweep)
+# 對應 backlog plan §2A + v4.28 RR_MAX_CAP
 DEFAULT_SWEEP_RANGES: dict[str, list[float]] = {
     "recent_days": [7, 14, 21],
     "rr_min": [1.0, 1.5, 2.0, 2.5],
+    "rr_max_cap": [10.0, 15.0, 20.0, 30.0],
     "max_upside_multiple": [1.5, 2.0, 3.0],
     "correction_bottom_buffer": [0.02, 0.03, 0.05],
     "min_upside_pct": [0.02, 0.03, 0.05],
@@ -96,7 +97,7 @@ def build_threshold_combos(
         return [DEFAULT_THRESHOLDS]
 
     # Per-axis 用 override(若提供) or DEFAULT single value
-    axes = ("recent_days", "rr_min", "max_upside_multiple",
+    axes = ("recent_days", "rr_min", "rr_max_cap", "max_upside_multiple",
             "correction_bottom_buffer", "min_upside_pct")
     axis_values: list[list[Any]] = []
     for axis in axes:
@@ -107,10 +108,11 @@ def build_threshold_combos(
 
     combos: list[ScreenThresholds] = []
     for combo in product(*axis_values):
-        rd, rrm, mum, cbb, mup = combo
+        rd, rrm, rmc, mum, cbb, mup = combo
         combos.append(ScreenThresholds(
             recent_days=int(rd),
             rr_min=float(rrm),
+            rr_max_cap=float(rmc),
             max_upside_multiple=float(mum),
             correction_bottom_buffer=float(cbb),
             min_upside_pct=float(mup),

@@ -98,8 +98,8 @@ class TestBuildThresholdCombos:
     def test_default_sweep_ranges_well_formed(self):
         # 對 DEFAULT_SWEEP_RANGES 全 axis 跑一遍應該成功
         combos = build_threshold_combos(DEFAULT_SWEEP_RANGES)
-        # 3 × 4 × 3 × 3 × 3 = 324
-        assert len(combos) == 3 * 4 * 3 * 3 * 3
+        # v4.28:加 rr_max_cap axis → 3 × 4 × 4 × 3 × 3 × 3 = 1296
+        assert len(combos) == 3 * 4 * 4 * 3 * 3 * 3
         # 都是 ScreenThresholds instance
         assert all(isinstance(c, ScreenThresholds) for c in combos)
 

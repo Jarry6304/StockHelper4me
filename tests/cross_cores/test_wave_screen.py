@@ -523,6 +523,59 @@ class TestR5CorrectiveBottomRescore:
         assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 1.5
         assert rows[0]["excluded_reason"] is None
 
+    def test_rescore_rr_above_cap_demoted(self):
+        """v4.28:razor-thin stop 造成 RR > 20 → excluded `rr_above_cap`。
+
+        對齊 production verify 揭露的 monthly outliers(1337 / 6235 / 1340 等
+        case stop_pct 0-0.6% → RR 38-465)。daily/weekly max ~13 不受影響。
+        """
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        # 構造 razor-thin scenario:bottom 99(剛好略低於 current),buffer 5% →
+        # invalidation = 99 × 0.95 = 94.05;current=95;target=200(100% upside)
+        # rr = (200-95) / (95-94.05) = 105 / 0.95 ≈ 110.5 > 20 → rr_above_cap
+        rows = [
+            {"stock_id": "MONTHLY_RAZOR", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 95.0, "target_price": 200.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        db.query = MagicMock(return_value=[
+            {"stock_id": "MONTHLY_RAZOR", "date": date(2026, 5, 22), "close": 99.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        assert rows[0]["excluded_reason"] == "rr_above_cap"
+        assert rows[0]["is_candidate"] is False
+        # rr_ratio 仍寫入(供 inspection / hygiene calibration 看分布)
+        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 20
+
+    def test_rescore_rr_just_below_cap_passes(self):
+        """v4.28:RR < 20(包含正常 big-swing)→ 不被 cap,仍是 candidate。
+
+        case 9958-like:96% upside / 6.8% stop / RR ≈ 14 — 真實 big-swing 應保留。
+        """
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        # bottom 100,buffer 5% → invalidation = 95;current=102;target=200
+        # rr = (200-102) / (102-95) = 98 / 7 = 14 → 在 cap 內
+        rows = [
+            {"stock_id": "BIG_SWING", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 102.0, "target_price": 200.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        db.query = MagicMock(return_value=[
+            {"stock_id": "BIG_SWING", "date": date(2026, 5, 22), "close": 100.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        assert rows[0]["is_candidate"] is True
+        assert rows[0]["excluded_reason"] is None
+        assert 13 < rows[0]["rr_ratio"] < 15  # ≈ 14
+
     def test_rescore_skips_non_correction_done_down(self):
         """r5:其他 phase 的 row 不動。"""
         from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore

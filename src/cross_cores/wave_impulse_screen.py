@@ -98,6 +98,8 @@ UPSTREAM_TABLES = ["structural_snapshots", "price_daily_fwd", "stock_info_ref"]
 # Best-guess thresholds(production verify 後 calibrate)
 RECENT_DAYS               = 14    # rightmost 在過去 N 天內視為「剛完成」
 RR_MIN                    = 1.5   # R/R 最小門檻
+RR_MAX_CAP                = 20.0  # R/R 上限(v4.28:打 razor-thin stop outlier;
+                                  # daily/weekly max ~13 不受影響,monthly cap top razor cases)
 TOP_N                     = 30
 MAX_UPSIDE_MULTIPLE       = 2.0   # target / current 上限(過濾異常 fib 投影)
 # Calibration history:
@@ -115,16 +117,22 @@ TIMEFRAMES                = ("daily", "weekly", "monthly")
 # (sweep 多 combo 不用拆 5 kwarg)。預設值 = module 常數,既有 caller 0 改動。
 @dataclass(frozen=True)
 class ScreenThresholds:
-    """Wave impulse screen 5 threshold values。
+    """Wave impulse screen 6 threshold values。
 
     對齊 b1 + 2A calibration sprint(CLAUDE.md 「下班後 verify 流水線」§2A):
     沒給的欄位 fallback module 常數 — production run() 永遠走 module defaults,
     calibration harness 給 sweep combo。
+
+    v4.28 加 `rr_max_cap`(20.0):2A production verify 揭露 monthly degree
+    razor-thin stops(stop_pct < 1%)創造 RR > 20 outliers(top 6:RR 38-465)。
+    daily/weekly max ~13 不受影響;monthly 砍 top razor cases 保留真實 big-swing
+    (e.g. 9958 RR=14 / upside=96% / stop=6.8% — 不被 cap)。
     """
     recent_days: int = RECENT_DAYS                          # 14
     rr_min: float = RR_MIN                                  # 1.5
+    rr_max_cap: float = RR_MAX_CAP                          # 20.0
     max_upside_multiple: float = MAX_UPSIDE_MULTIPLE        # 2.0
-    correction_bottom_buffer: float = CORRECTION_BOTTOM_BUFFER  # 0.03
+    correction_bottom_buffer: float = CORRECTION_BOTTOM_BUFFER  # 0.05
     min_upside_pct: float = MIN_UPSIDE_PCT                  # 0.03
 
 
@@ -787,6 +795,10 @@ def _build_row(
             if extras["rr_ratio"] is None or extras["rr_ratio"] < thresholds.rr_min:
                 is_candidate = False
                 excluded = "rr_below_threshold"
+            elif extras["rr_ratio"] > thresholds.rr_max_cap:
+                # v4.28:razor-thin stop outlier(monthly degree 主要案例)
+                is_candidate = False
+                excluded = "rr_above_cap"
     elif is_candidate:  # current_price None
         is_candidate = False
         excluded = "no_current_price"
@@ -918,6 +930,10 @@ def _populate_corrective_bottoms_and_rescore(
         r["rr_ratio"] = round(rr, 4) if rr > 0 else None
         if r["rr_ratio"] is None or r["rr_ratio"] < thresholds.rr_min:
             r["excluded_reason"] = "rr_below_threshold"
+            continue
+        if r["rr_ratio"] > thresholds.rr_max_cap:
+            # v4.28:razor-thin stop outlier(同 _build_row 的 rr_above_cap)
+            r["excluded_reason"] = "rr_above_cap"
             continue
         r["is_candidate"] = True
         r["excluded_reason"] = None

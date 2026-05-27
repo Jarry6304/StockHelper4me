@@ -1328,7 +1328,8 @@ def _run_wave_impulse_calibrate(args) -> None:
                 sys.exit(2)
             axis, vals_str = sweep_spec.split("=", 1)
             axis = axis.strip()
-            if axis not in ("recent_days", "rr_min", "max_upside_multiple",
+            if axis not in ("recent_days", "rr_min", "rr_max_cap",
+                            "max_upside_multiple",
                             "correction_bottom_buffer", "min_upside_pct"):
                 print(f"[ERROR] unknown sweep axis: {axis}", file=sys.stderr)
                 sys.exit(2)
