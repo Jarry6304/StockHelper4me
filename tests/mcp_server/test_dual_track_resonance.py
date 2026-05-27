@@ -61,18 +61,26 @@ def _make_track2():
     )
 
 
+def _patch_get_connection():
+    """Patch get_connection at both sites:resonance.py(原 caller)+ fusion.raw._db
+    (v4.28+ MCP wrapper 自己開 conn 設 statement_timeout)。"""
+    from unittest.mock import MagicMock
+    # MagicMock 自動支援 cur.execute("SET LOCAL ...")等 chain calls
+    return patch("fusion.raw._db.get_connection", return_value=MagicMock())
+
+
 class TestDualTrackResonanceMCP:
     def test_returns_full_dict_schema(self):
         """MCP 工具呼叫回完整 dict schema(對齊 docstring + to_dict())。"""
         t1 = _make_track1()
         t2 = _make_track2()
-        with patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
+        with _patch_get_connection(), \
+             patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
              patch("fusion.dual_track.resonance.read_track2", return_value=t2), \
              patch("fusion.dual_track.resonance.fetch_is_top_30",
                    return_value=(True, date(2024, 5, 31))), \
              patch("fusion.dual_track.resonance.fetch_latest_close",
-                   return_value={"close": 100.0}), \
-             patch("fusion.dual_track.resonance.get_connection"):
+                   return_value={"close": 100.0}):
             out = dual_track_resonance("2330", "2024-06-01")
 
         # 頂層 keys
@@ -97,13 +105,13 @@ class TestDualTrackResonanceMCP:
             invalidated=True,  # 模擬現價 < 80
         )
         t2 = _make_track2()
-        with patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
+        with _patch_get_connection(), \
+             patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
              patch("fusion.dual_track.resonance.read_track2", return_value=t2), \
              patch("fusion.dual_track.resonance.fetch_is_top_30",
                    return_value=(False, None)), \
              patch("fusion.dual_track.resonance.fetch_latest_close",
-                   return_value={"close": 75.0}), \
-             patch("fusion.dual_track.resonance.get_connection"):
+                   return_value={"close": 75.0}):
             out = dual_track_resonance("2330", "2024-06-01")
 
         assert out["single_track_mode"] is True
@@ -129,13 +137,13 @@ class TestDualTrackResonanceMCP:
             cross_stock_calls.append(kwargs)
             return False, None
 
-        with patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
+        with _patch_get_connection(), \
+             patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
              patch("fusion.dual_track.resonance.read_track2", side_effect=_spy_track2), \
              patch("fusion.dual_track.resonance.fetch_is_top_30",
                    side_effect=_spy_cross_stock), \
              patch("fusion.dual_track.resonance.fetch_latest_close",
-                   return_value={"close": 100.0}), \
-             patch("fusion.dual_track.resonance.get_connection"):
+                   return_value={"close": 100.0}):
             dual_track_resonance(
                 "2330", "2024-06-01",
                 primary_horizon=21, primary_confidence=0.95,
@@ -156,16 +164,87 @@ class TestDualTrackResonanceMCP:
         import json
         t1 = _make_track1()
         t2 = _make_track2()
-        with patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
+        with _patch_get_connection(), \
+             patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
              patch("fusion.dual_track.resonance.read_track2", return_value=t2), \
              patch("fusion.dual_track.resonance.fetch_is_top_30",
                    return_value=(False, None)), \
              patch("fusion.dual_track.resonance.fetch_latest_close",
-                   return_value={"close": 100.0}), \
-             patch("fusion.dual_track.resonance.get_connection"):
+                   return_value={"close": 100.0}):
             out = dual_track_resonance("2330", "2024-06-01")
         # 不 raise = OK
         json.dumps(out)
+
+    def test_timeout_returns_graceful_error(self):
+        """v4.28+ 安全網:QueryCanceled → graceful error dict,不 raise。"""
+        from unittest.mock import MagicMock
+
+        class _FakeQueryCanceled(Exception):
+            """Mimic psycopg.errors.QueryCanceled 名稱對齊 type(e).__name__ 比對。"""
+            pass
+
+        # rename class for type(exc).__name__ string match
+        _FakeQueryCanceled.__name__ = "QueryCanceled"
+
+        # Mock conn that raises QueryCanceled when resonance() runs
+        mock_conn = MagicMock()
+        # 第一次 execute("SET LOCAL ...") OK;第二次以後 resonance() 內讀 facts raise
+        # 直接讓 resonance.read_track1 噴 timeout(對齊 production 真實樣態)
+        def _raise_timeout(*a, **kw):
+            raise _FakeQueryCanceled("statement timeout")
+
+        with patch("fusion.raw._db.get_connection", return_value=mock_conn), \
+             patch("fusion.dual_track.resonance.read_track1", side_effect=_raise_timeout), \
+             patch("fusion.dual_track.resonance.fetch_latest_close",
+                   return_value={"close": 100.0}):
+            out = dual_track_resonance("2330", "2024-06-01")
+
+        assert "error" in out
+        assert "30s timeout" in out["error"]
+        assert out["exception_type"] == "QueryCanceled"
+        assert out["stock_id"] == "2330"
+        assert out["as_of"] == "2024-06-01"
+        assert "diagnostics" in out
+
+    def test_non_timeout_exception_propagates(self):
+        """非 QueryCanceled 的 exception 正常 propagate(避免靜默誤判)。"""
+        from unittest.mock import MagicMock
+
+        mock_conn = MagicMock()
+        with patch("fusion.raw._db.get_connection", return_value=mock_conn), \
+             patch("fusion.dual_track.resonance.read_track1",
+                   side_effect=ValueError("bad data")), \
+             patch("fusion.dual_track.resonance.fetch_latest_close",
+                   return_value={"close": 100.0}):
+            with pytest.raises(ValueError, match="bad data"):
+                dual_track_resonance("2330", "2024-06-01")
+
+    def test_sets_statement_timeout_on_connection(self):
+        """v4.28+:wrapper 必須在 acquire conn 後立刻 SET LOCAL statement_timeout。"""
+        from unittest.mock import MagicMock, call
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+        t1 = _make_track1()
+        t2 = _make_track2()
+        with patch("fusion.raw._db.get_connection", return_value=mock_conn), \
+             patch("fusion.dual_track.resonance.read_track1", return_value=t1), \
+             patch("fusion.dual_track.resonance.read_track2", return_value=t2), \
+             patch("fusion.dual_track.resonance.fetch_is_top_30",
+                   return_value=(False, None)), \
+             patch("fusion.dual_track.resonance.fetch_latest_close",
+                   return_value={"close": 100.0}):
+            dual_track_resonance("2330", "2024-06-01")
+
+        # cur.execute("SET LOCAL statement_timeout = '30s'") 必被呼叫
+        execute_calls = [c for c in mock_cursor.execute.call_args_list
+                         if "statement_timeout" in str(c)]
+        assert execute_calls, (
+            f"SET LOCAL statement_timeout not called; calls were: "
+            f"{mock_cursor.execute.call_args_list}"
+        )
 
 
 class TestPublicSurface:

@@ -1190,14 +1190,44 @@ def dual_track_resonance(
         - 現價跌破 invalidation_price → single_track_mode=True,共振判定跳過
     """
     from fusion.dual_track import resonance as _dual_resonance
+    from fusion.raw._db import get_connection
 
     as_of = _parse_date(date)
-    result = _dual_resonance(
-        stock_id=stock_id,
-        as_of=as_of,
-        primary_horizon=primary_horizon,
-        primary_confidence=primary_confidence,
-        cross_stock_table=cross_stock_table,
-        database_url=database_url,
-    )
-    return result.to_dict()
+    # v4.28+ 安全網:30s statement timeout — v4.28 batch query 後既有 path 應 < 1s;
+    # 若未來其他未知瓶頸(forecast_log 表規模 / index plan regression / scenario forest
+    # 突增等)再次拖垮,LLM 拿明確 timeout error 而非 hang 4 分鐘。SET LOCAL 限本
+    # transaction,conn close 後不影響其他 query;只在 MCP tool wrapper 設,不動
+    # library code(dashboard / direct Python caller / test 不受影響)。
+    conn = get_connection(database_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '30s'")
+        result = _dual_resonance(
+            stock_id=stock_id,
+            as_of=as_of,
+            primary_horizon=primary_horizon,
+            primary_confidence=primary_confidence,
+            cross_stock_table=cross_stock_table,
+            conn=conn,
+        )
+        return result.to_dict()
+    except Exception as exc:
+        # 只攔 statement_timeout 觸發的 QueryCanceled(graceful error response 給 LLM)
+        # 其他 exception(connection lost / SQL error)正常 propagate 讓 caller 知道
+        # 真實問題,避免靜默誤判 timeout。Lazy class-name match 不 hard-import psycopg
+        # (對齊 _db.py:30 既有 lazy import pattern)。
+        if type(exc).__name__ == "QueryCanceled":
+            return {
+                "stock_id": stock_id,
+                "as_of": as_of.isoformat(),
+                "error": "dual_track_resonance computation exceeded 30s timeout",
+                "diagnostics": (
+                    "Possible causes: forecast_log table size grew / index plan "
+                    "regression / unexpected scenario forest size. Try EXPLAIN ANALYZE "
+                    "on the batch query in fusion/dual_track/track2.py::fetch_bands_batch."
+                ),
+                "exception_type": "QueryCanceled",
+            }
+        raise
+    finally:
+        conn.close()
