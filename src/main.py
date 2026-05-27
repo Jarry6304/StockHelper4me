@@ -1302,9 +1302,6 @@ def _run_wave_impulse_calibrate(args) -> None:
         calibrate_hygiene,
         samples_to_csv_rows,
     )
-    # db.py 在這個 codebase 是 psycopg 同步 connection;走相同 helper 對齊 forecast / cross_cores
-    from db import DBWriter
-    from config_loader import load_collector_config as _load_cfg
 
     def _parse_date(s: str) -> _date:
         return _dt.strptime(s, "%Y-%m-%d").date()
@@ -1363,9 +1360,9 @@ def _run_wave_impulse_calibrate(args) -> None:
             f"compute_screen_at_date (~seconds). Consider tighter sweep or larger step-days."
         )
 
-    # ── Open DB conn(walks same path as forecast / cross_cores)
-    cfg = _load_cfg(args.config)
-    db = DBWriter(cfg.global_cfg.database_url)
+    # ── Open DB conn(對齊 cross_cores 既有 pattern:create_writer 走 DBWriter,
+    #    wave_impulse_screen 用 db.query() 拿資料)
+    db = create_writer()
     try:
         samples = calibrate_hygiene(
             db, asof_dates=asof_dates,
