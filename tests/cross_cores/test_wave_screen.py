@@ -467,8 +467,40 @@ class TestBuildRowR3:
 
 class TestR5CorrectiveBottomRescore:
 
-    def test_rescore_lifts_no_invalidation_to_candidate(self):
-        """r5:no_invalidation row + price_daily_fwd close lookup → 升 candidate。"""
+    def test_rescore_lifts_no_invalidation_to_candidate_r7_buffer(self):
+        """Historical r7(buffer=3%):invalidation = 90 × 0.97 = 87.3。
+        Explicit ScreenThresholds 保留歷史 calibration 校驗(對 default 變動 immune)。
+        """
+        from cross_cores.wave_impulse_screen import (
+            ScreenThresholds, _populate_corrective_bottoms_and_rescore,
+        )
+
+        rows = [
+            {"stock_id": "A", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 100.0, "target_price": 130.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        db.query = MagicMock(return_value=[
+            {"stock_id": "A", "date": date(2026, 5, 22), "close": 90.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(
+            db, rows, thresholds=ScreenThresholds(correction_bottom_buffer=0.03),
+        )
+        # invalidation = 90 × (1 - 0.03) = 87.3;current=100;target=130
+        # rr = (130-100)/(100-87.3) = 30/12.7 ≈ 2.36;upside = 30% ✓
+        assert rows[0]["is_candidate"] is True
+        assert rows[0]["invalidation_price"] == 87.3
+        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 2.0
+        assert rows[0]["excluded_reason"] is None
+        assert rows[0]["detail"]["invalidation_source"] == "price_daily_fwd_at_rightmost_end"
+
+    def test_rescore_uses_v4_28_default_buffer(self):
+        """v4.28 default(buffer=5%):invalidation = 90 × 0.95 = 85.5。
+        對齊 2A hygiene calibration(5/20 sweep);**不傳 thresholds → 走 DEFAULT_THRESHOLDS**。
+        """
         from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
 
         rows = [
@@ -483,13 +515,66 @@ class TestR5CorrectiveBottomRescore:
             {"stock_id": "A", "date": date(2026, 5, 22), "close": 90.0},
         ])
         _populate_corrective_bottoms_and_rescore(db, rows)
-        # r7:invalidation = 90 × (1 - 0.03) = 87.3;current=100;target=130
-        # rr = (130-100)/(100-87.3) = 30/12.7 ≈ 2.36;upside = 30% ✓
+        # v4.28:invalidation = 90 × (1 - 0.05) = 85.5
+        # rr = (130-100)/(100-85.5) = 30/14.5 ≈ 2.07;upside = 30% ✓
         assert rows[0]["is_candidate"] is True
-        assert rows[0]["invalidation_price"] == 87.3
-        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 2.0
+        assert rows[0]["invalidation_price"] == 85.5
+        # v4.28 RR 比 r7(~2.36)略低,但仍 > RR_MIN=1.5
+        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 1.5
         assert rows[0]["excluded_reason"] is None
-        assert rows[0]["detail"]["invalidation_source"] == "price_daily_fwd_at_rightmost_end"
+
+    def test_rescore_rr_above_cap_demoted(self):
+        """v4.28:razor-thin stop 造成 RR > 20 → excluded `rr_above_cap`。
+
+        對齊 production verify 揭露的 monthly outliers(1337 / 6235 / 1340 等
+        case stop_pct 0-0.6% → RR 38-465)。daily/weekly max ~13 不受影響。
+        """
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        # 構造 razor-thin scenario:bottom 99(剛好略低於 current),buffer 5% →
+        # invalidation = 99 × 0.95 = 94.05;current=95;target=200(100% upside)
+        # rr = (200-95) / (95-94.05) = 105 / 0.95 ≈ 110.5 > 20 → rr_above_cap
+        rows = [
+            {"stock_id": "MONTHLY_RAZOR", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 95.0, "target_price": 200.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        db.query = MagicMock(return_value=[
+            {"stock_id": "MONTHLY_RAZOR", "date": date(2026, 5, 22), "close": 99.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        assert rows[0]["excluded_reason"] == "rr_above_cap"
+        assert rows[0]["is_candidate"] is False
+        # rr_ratio 仍寫入(供 inspection / hygiene calibration 看分布)
+        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 20
+
+    def test_rescore_rr_just_below_cap_passes(self):
+        """v4.28:RR < 20(包含正常 big-swing)→ 不被 cap,仍是 candidate。
+
+        case 9958-like:96% upside / 6.8% stop / RR ≈ 14 — 真實 big-swing 應保留。
+        """
+        from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
+
+        # bottom 100,buffer 5% → invalidation = 95;current=102;target=200
+        # rr = (200-102) / (102-95) = 98 / 7 = 14 → 在 cap 內
+        rows = [
+            {"stock_id": "BIG_SWING", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 102.0, "target_price": 200.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        db.query = MagicMock(return_value=[
+            {"stock_id": "BIG_SWING", "date": date(2026, 5, 22), "close": 100.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(db, rows)
+        assert rows[0]["is_candidate"] is True
+        assert rows[0]["excluded_reason"] is None
+        assert 13 < rows[0]["rr_ratio"] < 15  # ≈ 14
 
     def test_rescore_skips_non_correction_done_down(self):
         """r5:其他 phase 的 row 不動。"""

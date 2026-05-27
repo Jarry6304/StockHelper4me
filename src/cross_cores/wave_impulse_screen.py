@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from datetime import date
 from itertools import groupby
 from typing import Any
@@ -97,12 +98,45 @@ UPSTREAM_TABLES = ["structural_snapshots", "price_daily_fwd", "stock_info_ref"]
 # Best-guess thresholds(production verify 後 calibrate)
 RECENT_DAYS               = 14    # rightmost 在過去 N 天內視為「剛完成」
 RR_MIN                    = 1.5   # R/R 最小門檻
+RR_MAX_CAP                = 20.0  # R/R 上限(v4.28:打 razor-thin stop outlier;
+                                  # daily/weekly max ~13 不受影響,monthly cap top razor cases)
 TOP_N                     = 30
 MAX_UPSIDE_MULTIPLE       = 2.0   # target / current 上限(過濾異常 fib 投影)
-# r7 calibration(production verify 揭露 razor-thin stops 創造異常 RR > 20):
-CORRECTION_BOTTOM_BUFFER  = 0.03  # invalidation = bottom × (1 - 0.03);3% 防 intraday wick
+# Calibration history:
+#   r5 (v4.26.5): 1% (razor-thin)
+#   r7 (v4.26.7): 3% (production verify 揭露 RR > 20 outlier ~30%)
+#   v4.28      : 5% (2A hygiene calibration on 5/20 sweep — outliers 10 → 7,
+#                    rr_p50 12.3 → 8.0,p95 62 → 46;對齊 5% vs 7% vs 10% 4-cell
+#                    + buffer × min_upside 6-cell sweep,5% 為 metric-stability 最佳)
+CORRECTION_BOTTOM_BUFFER  = 0.05  # invalidation = bottom × (1 - 0.05);v4.28 從 r7 0.03 提升
 MIN_UPSIDE_PCT            = 0.03  # target 必須 ≥ current × 1.03(< 3% upside 不值得進場 — 執行成本吃掉)
 TIMEFRAMES                = ("daily", "weekly", "monthly")
+
+
+# 2A calibration:5 threshold 收進 dataclass 供 hygiene calibration 用
+# (sweep 多 combo 不用拆 5 kwarg)。預設值 = module 常數,既有 caller 0 改動。
+@dataclass(frozen=True)
+class ScreenThresholds:
+    """Wave impulse screen 6 threshold values。
+
+    對齊 b1 + 2A calibration sprint(CLAUDE.md 「下班後 verify 流水線」§2A):
+    沒給的欄位 fallback module 常數 — production run() 永遠走 module defaults,
+    calibration harness 給 sweep combo。
+
+    v4.28 加 `rr_max_cap`(20.0):2A production verify 揭露 monthly degree
+    razor-thin stops(stop_pct < 1%)創造 RR > 20 outliers(top 6:RR 38-465)。
+    daily/weekly max ~13 不受影響;monthly 砍 top razor cases 保留真實 big-swing
+    (e.g. 9958 RR=14 / upside=96% / stop=6.8% — 不被 cap)。
+    """
+    recent_days: int = RECENT_DAYS                          # 14
+    rr_min: float = RR_MIN                                  # 1.5
+    rr_max_cap: float = RR_MAX_CAP                          # 20.0
+    max_upside_multiple: float = MAX_UPSIDE_MULTIPLE        # 2.0
+    correction_bottom_buffer: float = CORRECTION_BOTTOM_BUFFER  # 0.05
+    min_upside_pct: float = MIN_UPSIDE_PCT                  # 0.03
+
+
+DEFAULT_THRESHOLDS = ScreenThresholds()
 
 # Axis-B label sets(對齊 output.rs:1310-1346 StructureLabel enum)
 _LABELS_FIVE_MATURE = {"L5", "S5", "SL5"}    # Last impulse 訊號(C-wave 收尾)
@@ -176,11 +210,20 @@ def _axis_b_label(scenario: dict, last_n: int) -> str | None:
 # ────────────────────────────────────────────────────────────
 
 
-def current_wave_position(scenario: dict, snapshot_date: date) -> dict[str, Any]:
+def current_wave_position(
+    scenario: dict, snapshot_date: date,
+    *, recent_days: int = RECENT_DAYS,
+) -> dict[str, Any]:
     """r3 浪位判定:把 Zigzag/Flat 修正完成度 + 方向當主訊號。
 
     對齊 r3 pivot — neely_core 不 emit incomplete Impulse,實際 actionable 訊號
     是「3-wave Zigzag/Flat 修正剛完成」→ 反轉 / 新 impulse 啟動。
+
+    Args:
+        scenario: forest scenario dict
+        snapshot_date: 對齊 production snapshot date(計算 days_since 用)
+        recent_days: 2A calibration kwarg — rightmost 在過去 N 天內視為「剛完成」。
+                     預設 module 常數 RECENT_DAYS(14);calibration harness 可掃。
 
     Returns:
         {
@@ -228,7 +271,7 @@ def current_wave_position(scenario: dict, snapshot_date: date) -> dict[str, Any]
             base["excluded_reason"] = "no_end_date"
             return base
 
-        if base["days_since"] > RECENT_DAYS:
+        if base["days_since"] > recent_days:
             base["phase"] = PHASE_CORRECTION_ONGOING
             base["excluded_reason"] = "correction_stale"
             return base
@@ -271,6 +314,7 @@ def current_wave_position(scenario: dict, snapshot_date: date) -> dict[str, Any]
 
 def _pick_recent_correction(
     forest: list[dict], snapshot_date: date,
+    *, recent_days: int = RECENT_DAYS,
 ) -> dict | None:
     """r3 wave_screen 專屬 picker — 找最近完成的 3-wave Zigzag/Flat correction。
 
@@ -280,13 +324,16 @@ def _pick_recent_correction(
 
     r3 picker 策略:
     1. Filter Zigzag/Flat scenarios(correction 系)
-    2. Filter rightmost end ∈ [snapshot - RECENT_DAYS, snapshot](剛完成)
+    2. Filter rightmost end ∈ [snapshot - recent_days, snapshot](剛完成)
     3. 排序 (end_date DESC, degree↓, power↓, rules↓);取最近最強
     4. 若無 recent correction → fallback 最近的 Impulse complete scenario
        (emit IMPULSE_COMPLETE observe row)
     5. 若連 Impulse 都沒 → fallback canonical _pick_primary
 
     這對齊 NEoWave「A-B-C 結束後啟動新 impulse」設計精神。
+
+    Args:
+        recent_days: 2A calibration kwarg(預設 module 常數 RECENT_DAYS=14)
     """
     if not forest:
         return None
@@ -301,7 +348,7 @@ def _pick_recent_correction(
         if end is None:
             continue
         days_since = (snapshot_date - end).days
-        if 0 <= days_since <= RECENT_DAYS:
+        if 0 <= days_since <= recent_days:
             recent_corrections.append((end, s))
 
     if recent_corrections:
@@ -498,17 +545,32 @@ def _extract_correction_stop(scenario: dict) -> float | None:
 # ────────────────────────────────────────────────────────────
 
 
-def _fetch_all_latest_prices(db: Any, *, market: str = "TW") -> dict[str, float]:
-    """全市場各股最新 close ≤ today(對齊 fetch_close_series 但 batch)。"""
-    rows = db.query(
+def _fetch_all_latest_prices(
+    db: Any, *, market: str = "TW", as_of: date | None = None,
+) -> dict[str, float]:
+    """全市場各股最新 close ≤ as_of(無給 → 全表最新,= 既有 production 行為)。
+
+    Args:
+        as_of: 2A calibration:取 ≤ 此日的最新 close(歷史 replay 用)。
+               None → 不加 date filter(對齊 production run() 行為)。
+    """
+    if as_of is None:
+        sql = """
+            SELECT DISTINCT ON (stock_id) stock_id, close::float8 AS close
+              FROM price_daily_fwd
+             WHERE market = %s
+             ORDER BY stock_id, date DESC
         """
-        SELECT DISTINCT ON (stock_id) stock_id, close::float8 AS close
-          FROM price_daily_fwd
-         WHERE market = %s
-         ORDER BY stock_id, date DESC
-        """,
-        [market],
-    )
+        params: list[Any] = [market]
+    else:
+        sql = """
+            SELECT DISTINCT ON (stock_id) stock_id, close::float8 AS close
+              FROM price_daily_fwd
+             WHERE market = %s AND date <= %s
+             ORDER BY stock_id, date DESC
+        """
+        params = [market, as_of]
+    rows = db.query(sql, params)
     return {r["stock_id"]: r["close"] for r in rows if r.get("close") is not None}
 
 
@@ -557,23 +619,39 @@ def _fetch_corrective_bottoms(
 
 
 def _fetch_structural_snapshots(
-    db: Any, *, market: str = "TW",
+    db: Any, *, market: str = "TW", as_of: date | None = None,
 ) -> list[dict[str, Any]]:
     """全市場各 (stock_id, timeframe) 取最新 neely_core snapshot。
+
+    Args:
+        as_of: 2A calibration Path A:取 ≤ 此日的最新 snapshot(歷史 replay 用,
+               對齊 m3Spec append-only 設計)。None → 不加 filter(對齊 production
+               行為,取全表最新)。
+        market: 目前 wave_impulse_screen 仍走 'TW' 寫死(對齊 cross_cores _shared);
+                schema 也沒 market 欄位,留 future 擴 multi-market 時用。
 
     Returns:
         [{stock_id, snapshot_date, timeframe, snapshot}, ...]
     """
-    rows = db.query(
+    if as_of is None:
+        sql = """
+            SELECT DISTINCT ON (stock_id, timeframe)
+                   stock_id, snapshot_date, timeframe, snapshot
+              FROM structural_snapshots
+             WHERE core_name = 'neely_core'
+             ORDER BY stock_id, timeframe, snapshot_date DESC
         """
-        SELECT DISTINCT ON (stock_id, timeframe)
-               stock_id, snapshot_date, timeframe, snapshot
-          FROM structural_snapshots
-         WHERE core_name = 'neely_core'
-         ORDER BY stock_id, timeframe, snapshot_date DESC
-        """,
-        [],
-    )
+        params: list[Any] = []
+    else:
+        sql = """
+            SELECT DISTINCT ON (stock_id, timeframe)
+                   stock_id, snapshot_date, timeframe, snapshot
+              FROM structural_snapshots
+             WHERE core_name = 'neely_core' AND snapshot_date <= %s
+             ORDER BY stock_id, timeframe, snapshot_date DESC
+        """
+        params = [as_of]
+    rows = db.query(sql, params)
     # psycopg3 JSONB 自動 parse 成 dict;若是 str(舊 driver / fixture)走 json.loads
     out: list[dict[str, Any]] = []
     for r in rows:
@@ -604,9 +682,15 @@ def _build_row(
     current_price: float | None,
     excluded_reason: str | None,
     snapshot_date: date | None = None,
+    thresholds: ScreenThresholds = DEFAULT_THRESHOLDS,
 ) -> dict[str, Any]:
     """組裝 single row。r3 pivot:r3 picker 找 recent correction,phase 反映
-    correction 完成度 + 方向。"""
+    correction 完成度 + 方向。
+
+    Args:
+        thresholds: 2A calibration ScreenThresholds — 預設 module 常數
+                    (DEFAULT_THRESHOLDS)。calibration harness 傳 sweep combo。
+    """
     extras: dict[str, Any] = {
         "timeframe": timeframe,
         "phase": None, "wave_number": None, "pattern_kind": None,
@@ -638,7 +722,9 @@ def _build_row(
                          excluded_reason="no_snapshot_date", extras=extras)
 
     # r3 picker:找最近完成的 Zigzag/Flat → fallback Impulse → fallback _pick_primary
-    primary = _pick_recent_correction(forest, eff_snapshot_date)
+    primary = _pick_recent_correction(
+        forest, eff_snapshot_date, recent_days=thresholds.recent_days,
+    )
     if primary is None:
         extras["confidence_level"] = "loose"
         return empty_row(stock_id, target_date,
@@ -649,7 +735,9 @@ def _build_row(
     extras["pattern_kind"] = pt_label or _pattern_type_label(primary.get("pattern_type"))
 
     # 浪位判定(r3 logic — Zigzag/Flat correction-aware)
-    pos = current_wave_position(primary, eff_snapshot_date)
+    pos = current_wave_position(
+        primary, eff_snapshot_date, recent_days=thresholds.recent_days,
+    )
     extras["phase"]            = pos["phase"]
     extras["confidence_level"] = pos["confidence_level"]
     extras["structure_label"]  = pos["axis_b_label"]
@@ -677,7 +765,10 @@ def _build_row(
     if is_candidate and current_price is not None:
         invalidation = _extract_correction_stop(primary)
         # r6:target 走「nearest upside fib zone within max_multiple」
-        target = _extract_reversal_target_upside(primary, current_price)
+        target = _extract_reversal_target_upside(
+            primary, current_price,
+            max_multiple=thresholds.max_upside_multiple,
+        )
         extras["entry_price"] = float(current_price)
         extras["invalidation_price"] = invalidation
         extras["target_price"] = target
@@ -694,16 +785,20 @@ def _build_row(
         elif invalidation >= current_price:
             is_candidate = False
             excluded = "stop_above_current"
-        elif (target - current_price) / current_price < MIN_UPSIDE_PCT:
+        elif (target - current_price) / current_price < thresholds.min_upside_pct:
             # r7:upside < 3% 不值得進場(執行成本吃掉)
             is_candidate = False
             excluded = "upside_too_small"
         else:
             rr = (target - current_price) / (current_price - invalidation)
             extras["rr_ratio"] = round(rr, 4) if rr > 0 else None
-            if extras["rr_ratio"] is None or extras["rr_ratio"] < RR_MIN:
+            if extras["rr_ratio"] is None or extras["rr_ratio"] < thresholds.rr_min:
                 is_candidate = False
                 excluded = "rr_below_threshold"
+            elif extras["rr_ratio"] > thresholds.rr_max_cap:
+                # v4.28:razor-thin stop outlier(monthly degree 主要案例)
+                is_candidate = False
+                excluded = "rr_above_cap"
     elif is_candidate:  # current_price None
         is_candidate = False
         excluded = "no_current_price"
@@ -761,6 +856,7 @@ def _assign_impulse_ranks(rows: list[dict[str, Any]]) -> None:
 
 def _populate_corrective_bottoms_and_rescore(
     db: Any, rows: list[dict[str, Any]],
+    *, thresholds: ScreenThresholds = DEFAULT_THRESHOLDS,
 ) -> None:
     """r5 pass:對 phase=CORRECTION_DONE_DOWN + excluded=no_invalidation 的 row,
     從 price_daily_fwd 查 rightmost_end date 的 close 當 invalidation。
@@ -770,6 +866,9 @@ def _populate_corrective_bottoms_and_rescore(
 
     In-place 更新 rows:重設 invalidation_price / rr_ratio / is_candidate /
     excluded_reason / detail.invalidation_source。
+
+    Args:
+        thresholds: 2A calibration — 預設 module 常數。calibration sweep 用。
     """
     # 收集需要 lookup 的 (stock_id, rightmost_end) pairs
     needs_lookup: list[tuple[int, str, date]] = []  # (row_idx, stock_id, end_date)
@@ -807,10 +906,10 @@ def _populate_corrective_bottoms_and_rescore(
         if current is None or target is None:
             r["excluded_reason"] = "missing_entry_or_target"
             continue
-        # r7:invalidation = bottom × (1 - CORRECTION_BOTTOM_BUFFER 3%)
-        # 3% buffer 對齊 NEoWave「不可剛好觸碰」+ 防 intraday wick(r5 用 1%
-        # 太緊,production 揭露 RR > 20 razor-thin stops 不實用)
-        invalidation = bottom * (1.0 - CORRECTION_BOTTOM_BUFFER)
+        # r7:invalidation = bottom × (1 - correction_bottom_buffer)
+        # 3% buffer(預設)對齊 NEoWave「不可剛好觸碰」+ 防 intraday wick
+        # (r5 用 1% 太緊,production 揭露 RR > 20 razor-thin stops 不實用)
+        invalidation = bottom * (1.0 - thresholds.correction_bottom_buffer)
         r["invalidation_price"] = round(invalidation, 4)
         detail = r.get("detail") or {}
         detail["invalidation_source"] = "price_daily_fwd_at_rightmost_end"
@@ -823,44 +922,62 @@ def _populate_corrective_bottoms_and_rescore(
         if invalidation >= current:
             r["excluded_reason"] = "stop_above_current"
             continue
-        # r7:upside < 3% 不值得進場
-        if (target - current) / current < MIN_UPSIDE_PCT:
+        # upside < min_upside_pct(預設 3%)不值得進場
+        if (target - current) / current < thresholds.min_upside_pct:
             r["excluded_reason"] = "upside_too_small"
             continue
         rr = (target - current) / (current - invalidation)
         r["rr_ratio"] = round(rr, 4) if rr > 0 else None
-        if r["rr_ratio"] is None or r["rr_ratio"] < RR_MIN:
+        if r["rr_ratio"] is None or r["rr_ratio"] < thresholds.rr_min:
             r["excluded_reason"] = "rr_below_threshold"
+            continue
+        if r["rr_ratio"] > thresholds.rr_max_cap:
+            # v4.28:razor-thin stop outlier(同 _build_row 的 rr_above_cap)
+            r["excluded_reason"] = "rr_above_cap"
             continue
         r["is_candidate"] = True
         r["excluded_reason"] = None
 
 
-def run(
+def compute_screen_at_date(
     db: Any,
+    *,
+    target_date: date | None = None,
     stock_ids: list[str] | None = None,
-    full_rebuild: bool = False,
-    lookback_days: int | None = None,
-) -> dict[str, Any]:
-    start = time.monotonic()
+    thresholds: ScreenThresholds = DEFAULT_THRESHOLDS,
+    market: str = "TW",
+) -> tuple[list[dict[str, Any]], date | None]:
+    """Read-only 算 (stock × timeframe) rows for 指定 as-of target_date,**不寫 DB**。
 
-    # 全市場 universe + 最新 close
+    2A calibration core:給定 (target_date, thresholds) → 回 rows。calibration
+    harness 對歷史日期 × threshold 組合呼叫此函式取得 hygiene metric 樣本。
+
+    Args:
+        target_date: as-of T。
+                     - None → 取「全表最新 snapshot_date」(對齊 production run() 行為)
+                     - given → Path A:取 ≤ T 的 latest snapshot per (stock, tf)
+                       + ≤ T 的 latest close per stock
+        stock_ids: 限縮股票集(None → 全 universe)
+        thresholds: 5 個 screen threshold(預設 module 常數)
+        market: TW only(對齊 cross_cores _shared.fetch_universe_filter)
+
+    Returns:
+        (rows, target_date_used)
+        - rows: 已跑完 _build_row + _populate_corrective_bottoms_and_rescore +
+          _apply_cross_tf_alignment + _assign_impulse_ranks 的完整 row list
+        - target_date_used: 實際使用的 target_date(None case 推導出來)
+    """
     universe = fetch_universe_filter(db)
-    prices = _fetch_all_latest_prices(db)
+    prices = _fetch_all_latest_prices(db, market=market, as_of=target_date)
+    snapshots_raw = _fetch_structural_snapshots(db, market=market, as_of=target_date)
 
-    # 全部 (stock, tf) latest snapshot
-    snapshots_raw = _fetch_structural_snapshots(db)
+    if not snapshots_raw:
+        return [], target_date
+
     snap_by_key: dict[tuple[str, str], dict[str, Any]] = {
         (s["stock_id"], s["timeframe"]): s for s in snapshots_raw
     }
-
-    # 用最新 snapshot_date 作為 target_date(若沒任何 snapshot → empty)
-    if not snapshots_raw:
-        elapsed_ms = int((time.monotonic() - start) * 1000)
-        logger.info(f"[{NAME}] no structural_snapshots, skip ({elapsed_ms}ms)")
-        return {"name": NAME, "rows_read": 0, "rows_written": 0,
-                "elapsed_ms": elapsed_ms}
-    target_date = max(s["snapshot_date"] for s in snapshots_raw)
+    effective_target = target_date or max(s["snapshot_date"] for s in snapshots_raw)
 
     rows: list[dict[str, Any]] = []
     for sid, excluded in universe.items():
@@ -870,25 +987,42 @@ def run(
         for tf in TIMEFRAMES:
             snap_entry = snap_by_key.get((sid, tf))
             snap = snap_entry["snapshot"] if snap_entry else None
-            tf_snap_date = snap_entry["snapshot_date"] if snap_entry else target_date
+            tf_snap_date = snap_entry["snapshot_date"] if snap_entry else effective_target
             row_excluded = excluded if excluded is not None else None
             row = _build_row(
-                stock_id=sid, target_date=target_date, timeframe=tf,
+                stock_id=sid, target_date=effective_target, timeframe=tf,
                 snapshot=snap, current_price=current_price,
                 excluded_reason=row_excluded,
                 snapshot_date=tf_snap_date,
+                thresholds=thresholds,
             )
             rows.append(row)
 
-    # r5:對 CORRECTION_DONE_DOWN 但 no_invalidation 的 row,batch lookup 真實
-    # corrective bottom(close at rightmost_end date),然後重新評 R/R
-    _populate_corrective_bottoms_and_rescore(db, rows)
-
-    # 第二輪:cross-tf 軟對齊
+    _populate_corrective_bottoms_and_rescore(db, rows, thresholds=thresholds)
     _apply_cross_tf_alignment(rows)
-
-    # 排名 + is_top_n
     _assign_impulse_ranks(rows)
+    return rows, effective_target
+
+
+def run(
+    db: Any,
+    stock_ids: list[str] | None = None,
+    full_rebuild: bool = False,
+    lookback_days: int | None = None,
+) -> dict[str, Any]:
+    """Production entry — 取 latest snapshots + 寫 wave_impulse_screen_derived。
+
+    對齊 cross_cores orchestrator 介面;thresholds 永遠走 module DEFAULT
+    (production 行為 0 改動)。
+    """
+    start = time.monotonic()
+    rows, target_date = compute_screen_at_date(db, stock_ids=stock_ids)
+
+    if not rows:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        logger.info(f"[{NAME}] no structural_snapshots, skip ({elapsed_ms}ms)")
+        return {"name": NAME, "rows_read": 0, "rows_written": 0,
+                "elapsed_ms": elapsed_ms}
 
     written = upsert_silver(db, OUTPUT_TABLE, rows,
                             pk_cols=["market", "stock_id", "date", "timeframe"])

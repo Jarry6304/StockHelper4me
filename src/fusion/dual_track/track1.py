@@ -371,9 +371,11 @@ def read_track1(
 
     # invalidation_price 顯示用(對齊 LLM context):取主方向 trigger
     invalidation_price = _extract_invalidation_price(primary, direction)
-    # A-3 閘門實際判定:依 direction filter thresholds(對齊 v4.25.x user 拍版
-    # 「neutral 遇 trigger 就判」+ spec §四「現價跌破 invalidation 軌道一退場」
-    # 字面;bullish/bearish 維持只看主方向 trigger,不擴成 wave 5 extended)。
+    # A-3 閘門實際判定:依 direction filter thresholds(B3:對齊 b1 canonical 統一
+    # 讀寫面 — bullish 只看 PriceBreakBelow / bearish 只看 PriceBreakAbove /
+    # neutral 不濾)。v4.25.x 「neutral 走 ALL kinds」自此退役 — 對齊 b1 skill
+    # 「禁 direction-blind fallback」原則 + final output reliability(LLM 看到
+    # neutral mode 時不會被 direction-blind 誤判 invalidated)。
     all_thresholds = _extract_all_invalidation_thresholds(primary)
     if direction == "bullish":
         # bullish 只看 PriceBreakBelow(current 跌破 → thesis 破)
@@ -382,8 +384,10 @@ def read_track1(
         # bearish 只看 PriceBreakAbove(current 漲破 → thesis 破)
         relevant_thresholds = [t for t in all_thresholds if t[0] == "above"]
     else:
-        # neutral 走 ALL(下/上 任一 trigger 中即失效;對齊 0050 等 ETF case)
-        relevant_thresholds = all_thresholds
+        # B3:neutral 不濾(canonical b1 spec)— neutral 無方向性 thesis,
+        # 不可能被 invalidation trigger 「破」。MCP / LLM 應顯示 mode: neutral
+        # (no directional thesis)而非錯誤的 invalidation 警示。
+        relevant_thresholds = []
     invalidated, fired_kind, fired_threshold = _check_any_threshold_breached(
         relevant_thresholds, current_price
     )

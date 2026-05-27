@@ -253,14 +253,16 @@ class TestCheckAnyThresholdBreached:
 
 
 class TestNeutralA3Gate:
-    """v4.25.x:neutral direction 也走 A-3(user 拍版「neutral 遇 trigger 就判」)。
+    """B3:**neutral 不濾**(對齊 b1 canonical;v4.25.x 「neutral 走 ALL kinds」自此退役)。
 
-    對齊 ETF / index proxy(如 0050)等無明顯多空偏見的 scenario:scenario 自己
-    宣告 trigger,任一中即作廢,direction 不擋路。
+    對齊 ETF / index proxy(如 0050)等無明顯多空偏見的 scenario:neutral 無方向性
+    thesis,不可能被 invalidation trigger「破」。MCP / LLM 看到 mode: neutral
+    (no directional thesis)即可,不應誤判 invalidated。
     """
 
-    def test_neutral_with_below_trigger_invalidated(self):
-        # 模擬 0050 case:Neutral power_rating + PriceBreakBelow + current 已跌破
+    def test_neutral_with_below_trigger_not_invalidated(self):
+        # B3:0050-like case → neutral + PriceBreakBelow 觸發 → 仍 not invalidated
+        # 對齊 b1 「無方向性 thesis 不可能 invalidated」原則
         primary = _make_scenario(
             power="Neutral",
             invalidation_triggers=[{
@@ -273,11 +275,12 @@ class TestNeutralA3Gate:
             t1 = read_track1(None, stock_id="0050", as_of=date(2024, 6, 1),
                               current_price=95.85)
         assert t1.direction == "neutral"
-        # v4.25.x:neutral + below trigger + current << threshold → invalidated=True
-        assert t1.invalidated is True
-        assert any("跌破" in n for n in t1.notes)
+        # B3:neutral + trigger 仍 not invalidated
+        assert t1.invalidated is False
+        # narrative 不應出現「跌破」(neutral 不該 surface direction-aware warning)
+        assert not any("跌破" in n for n in t1.notes)
 
-    def test_neutral_with_above_trigger_invalidated(self):
+    def test_neutral_with_above_trigger_not_invalidated(self):
         primary = _make_scenario(
             power="Neutral",
             invalidation_triggers=[{
@@ -290,10 +293,12 @@ class TestNeutralA3Gate:
             t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
                               current_price=250.0)
         assert t1.direction == "neutral"
-        assert t1.invalidated is True
-        assert any("漲破" in n for n in t1.notes)
+        # B3:同上,neutral + above trigger 仍 not invalidated
+        assert t1.invalidated is False
+        assert not any("漲破" in n for n in t1.notes)
 
     def test_neutral_no_breach(self):
+        # neutral + 無 trigger 觸發 → not invalidated(行為不變,仍 False)
         primary = _make_scenario(
             power="Neutral",
             invalidation_triggers=[{
@@ -549,3 +554,63 @@ class TestClusterAndCapFibLines:
         assert len(t1.fib_lines) <= 30
         # notes 含 reduction message
         assert any("fib_lines reduced" in n and "50" in n for n in t1.notes)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# B3 cross-tool consistency:track1.invalidated 與 canonical_is_invalidated
+# 對相同 (scenario, current_price) 必同結論(single source of truth)。
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class TestB3CrossToolConsistency:
+    """B3 統一保證:read_track1 的 `invalidated` 對任何 (direction, triggers,
+    current_price) 必與 _picker.canonical_is_invalidated 同結論。
+    """
+
+    @pytest.mark.parametrize("power,trigger_kind,trigger_value,current_price,expected", [
+        # bullish
+        ("Bullish",      "PriceBreakBelow", 100.0,  95.0, True),
+        ("Bullish",      "PriceBreakBelow", 100.0, 105.0, False),
+        ("Bullish",      "PriceBreakAbove", 100.0, 105.0, False),   # bullish ignores above
+        ("StrongBullish","PriceBreakBelow", 100.0,  95.0, True),
+        # bearish
+        ("Bearish",      "PriceBreakAbove", 100.0, 105.0, True),
+        ("Bearish",      "PriceBreakAbove", 100.0,  95.0, False),
+        ("Bearish",      "PriceBreakBelow", 100.0,  95.0, False),   # bearish ignores below
+        # neutral(B3 重點:不濾,永遠 False)
+        ("Neutral",      "PriceBreakBelow", 100.0,  95.0, False),
+        ("Neutral",      "PriceBreakAbove", 100.0, 105.0, False),
+    ])
+    def test_track1_matches_canonical(
+        self, power, trigger_kind, trigger_value, current_price, expected,
+    ):
+        from fusion._picker import canonical_is_invalidated
+
+        primary = _make_scenario(
+            power=power,
+            invalidation_triggers=[{
+                "on_trigger": "InvalidateScenario",
+                "trigger_type": {trigger_kind: trigger_value},
+            }],
+        )
+        snap = _make_snapshot([primary])
+
+        # canonical(write-side / b1)
+        canon_result = canonical_is_invalidated(primary, current_price)
+
+        # track1 (read-side / B3)
+        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+            t1 = read_track1(None, stock_id="TEST", as_of=date(2024, 6, 1),
+                              current_price=current_price)
+
+        # 兩端結論必相同 + 都等於 expected
+        assert canon_result == expected, (
+            f"canonical_is_invalidated({power}, {trigger_kind}={trigger_value}, "
+            f"current={current_price}) = {canon_result}, expected {expected}"
+        )
+        assert t1.invalidated == expected, (
+            f"track1.read({power}, {trigger_kind}={trigger_value}, "
+            f"current={current_price}).invalidated = {t1.invalidated}, expected {expected}"
+        )
+        # cross-tool 一致(冗余 assertion 但 highlights 設計意圖)
+        assert canon_result == t1.invalidated

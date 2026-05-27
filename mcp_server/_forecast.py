@@ -374,42 +374,19 @@ def _parse_iso_date(s: str | Any) -> date:
 
 
 def _scenario_is_invalidated(scenario: dict, current_price: float) -> bool:
-    """v3.35:檢查 scenario 是否已被 current_price 觸發 InvalidateScenario trigger。
+    """B3:delegate to fusion/_picker.canonical_is_invalidated(統一 b1 canonical)。
 
-    對齊 Rust triggers/mod.rs:
-      - PriceBreakBelow(price): bullish scenario 跌破 price → invalidated
-      - PriceBreakAbove(price): bearish scenario 漲破 price → invalidated
+    對齊 b1 + B3 read/write 雙端統一:
+      - bullish:只看 PriceBreakBelow(current < threshold → invalidated)
+      - bearish:只看 PriceBreakAbove(current > threshold → invalidated)
+      - **neutral:不濾**(永遠 False;對齊 LLM 「無方向性 thesis 不可能 invalidated」)
+      - current_price None → False(不靜默放行)
 
-    只看 OnTriggerAction == "InvalidateScenario"(WeakenScenario / PromoteAlternative 不算)。
+    v3.35 原版 direction-blind ANY-kind logic 自此退役(對齊 v4.25.1 揭露的
+    「production 反咬」+ b1 skill「禁 direction-blind fallback」)。
     """
-    triggers = scenario.get("invalidation_triggers") or []
-    for t in triggers:
-        action = t.get("on_trigger")
-        # serde tagged enum 可能是 dict 或 str
-        if isinstance(action, dict):
-            action = next(iter(action.keys()), None)
-        if action != "InvalidateScenario":
-            continue
-
-        trigger_type = t.get("trigger_type")
-        if not isinstance(trigger_type, dict):
-            continue
-
-        if "PriceBreakBelow" in trigger_type:
-            try:
-                threshold = float(trigger_type["PriceBreakBelow"])
-                if current_price < threshold:
-                    return True
-            except (TypeError, ValueError):
-                continue
-        elif "PriceBreakAbove" in trigger_type:
-            try:
-                threshold = float(trigger_type["PriceBreakAbove"])
-                if current_price > threshold:
-                    return True
-            except (TypeError, ValueError):
-                continue
-    return False
+    from fusion._picker import canonical_is_invalidated
+    return canonical_is_invalidated(scenario, current_price)
 
 
 # v4.26 follow-up:_power_rating_strength / _power_rating_sign /
