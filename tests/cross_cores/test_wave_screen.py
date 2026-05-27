@@ -467,8 +467,40 @@ class TestBuildRowR3:
 
 class TestR5CorrectiveBottomRescore:
 
-    def test_rescore_lifts_no_invalidation_to_candidate(self):
-        """r5:no_invalidation row + price_daily_fwd close lookup → 升 candidate。"""
+    def test_rescore_lifts_no_invalidation_to_candidate_r7_buffer(self):
+        """Historical r7(buffer=3%):invalidation = 90 × 0.97 = 87.3。
+        Explicit ScreenThresholds 保留歷史 calibration 校驗(對 default 變動 immune)。
+        """
+        from cross_cores.wave_impulse_screen import (
+            ScreenThresholds, _populate_corrective_bottoms_and_rescore,
+        )
+
+        rows = [
+            {"stock_id": "A", "phase": "CORRECTION_DONE_DOWN",
+             "excluded_reason": "no_invalidation",
+             "entry_price": 100.0, "target_price": 130.0,
+             "detail": {"rightmost_end": "2026-05-22"},
+             "invalidation_price": None, "rr_ratio": None, "is_candidate": False},
+        ]
+        db = MagicMock()
+        db.query = MagicMock(return_value=[
+            {"stock_id": "A", "date": date(2026, 5, 22), "close": 90.0},
+        ])
+        _populate_corrective_bottoms_and_rescore(
+            db, rows, thresholds=ScreenThresholds(correction_bottom_buffer=0.03),
+        )
+        # invalidation = 90 × (1 - 0.03) = 87.3;current=100;target=130
+        # rr = (130-100)/(100-87.3) = 30/12.7 ≈ 2.36;upside = 30% ✓
+        assert rows[0]["is_candidate"] is True
+        assert rows[0]["invalidation_price"] == 87.3
+        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 2.0
+        assert rows[0]["excluded_reason"] is None
+        assert rows[0]["detail"]["invalidation_source"] == "price_daily_fwd_at_rightmost_end"
+
+    def test_rescore_uses_v4_28_default_buffer(self):
+        """v4.28 default(buffer=5%):invalidation = 90 × 0.95 = 85.5。
+        對齊 2A hygiene calibration(5/20 sweep);**不傳 thresholds → 走 DEFAULT_THRESHOLDS**。
+        """
         from cross_cores.wave_impulse_screen import _populate_corrective_bottoms_and_rescore
 
         rows = [
@@ -483,13 +515,13 @@ class TestR5CorrectiveBottomRescore:
             {"stock_id": "A", "date": date(2026, 5, 22), "close": 90.0},
         ])
         _populate_corrective_bottoms_and_rescore(db, rows)
-        # r7:invalidation = 90 × (1 - 0.03) = 87.3;current=100;target=130
-        # rr = (130-100)/(100-87.3) = 30/12.7 ≈ 2.36;upside = 30% ✓
+        # v4.28:invalidation = 90 × (1 - 0.05) = 85.5
+        # rr = (130-100)/(100-85.5) = 30/14.5 ≈ 2.07;upside = 30% ✓
         assert rows[0]["is_candidate"] is True
-        assert rows[0]["invalidation_price"] == 87.3
-        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 2.0
+        assert rows[0]["invalidation_price"] == 85.5
+        # v4.28 RR 比 r7(~2.36)略低,但仍 > RR_MIN=1.5
+        assert rows[0]["rr_ratio"] is not None and rows[0]["rr_ratio"] > 1.5
         assert rows[0]["excluded_reason"] is None
-        assert rows[0]["detail"]["invalidation_source"] == "price_daily_fwd_at_rightmost_end"
 
     def test_rescore_skips_non_correction_done_down(self):
         """r5:其他 phase 的 row 不動。"""
