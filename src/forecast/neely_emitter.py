@@ -11,125 +11,110 @@
   - regime_tag = scenario.pattern_type → 啟動 regime-conditional scorer 分組
   - 不進 fusion gate(只作 decision support)
 
-Picker(對齊 mcp_server/_forecast.py v3.35 degree-aware,但保留簡化版避免
-forecast → mcp_server 反向 dep):
-  - 排序 by (effective_degree DESC, power_rating_strength DESC, rules_passed DESC)
-  - effective_degree 從 wave_tree.start/end span_years 推算(Stage 11 §13.3)
+Picker(B1 後 — degree / strength / rules 排序 + canonical_is_invalidated filter):
+  - 排序 by (degree_rank DESC, power_rating_strength DESC, rules_passed_count DESC)
+  - effective_degree / degree_rank / canonical_is_invalidated 全部 import from
+    src/fusion/_picker.py(single source,對齊 Rust output.rs::Degree)
+  - current_price 提供時:先 canonical_is_invalidated filter 再 sort
+  - current_price=None 時:跳過 filter 但 log warning(不靜默放行失效)
+  - 寫入面 stale snapshot gate:snapshot_date 距 asof > 7 calendar days → skip
+    write + log warning(對齊 user 拍版 b1 spec)
 
 Horizon mapping(對齊 plan phase 6 NeoWave degree → 21/63/126):
-  - SubMinuette → 21
-  - Minute → 63
-  - Minor / Intermediate / Primary / Cycle / Supercycle → 126(cap)
+  - SubMinuette → 21(canonical bracket <1y)
+  - Minute → 63(1-3y)
+  - Minor / Intermediate / Primary / Cycle / Supercycle / GrandSupercycle → 126(cap)
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 from typing import Any
 
 from forecast._db import upsert_forecast
+# B1:degree / picker / invalidation 共用 helpers single source。
+from fusion._picker import (
+    canonical_is_invalidated,
+    degree_rank as _degree_rank,
+    effective_degree as _effective_degree,
+    power_rating_strength as _power_rating_strength,
+)
 
 
 __all__ = ["emit_neely_fib"]
 
+logger = logging.getLogger("forecast.neely_emitter")
+
 
 # ─── Degree → horizon mapping ────────────────────────────────────────────────
-# 參考 NeoWave §13.3 Degree Ceiling 表
+# 對齊 plan phase 6 + Rust degree/mod.rs::classify_degree producer 死碼:
+# classify 永不回 Minuette / Micro / SubMicro,但 map 仍寫死防禦(若 future
+# Degree Ceiling override 或外部 caller 傳 raw enum 名稱)。
 _DEGREE_TO_HORIZON: dict[str, int] = {
-    "Subminuette": 21,
-    "SubMinuette": 21,
-    "Minuette":    21,
-    "Minute":      63,
-    "Minor":       126,
-    "Intermediate": 126,
-    "Primary":     126,
-    "Cycle":       126,
-    "Supercycle":  126,
-    "GrandSupercycle": 126,
+    "SubMicro":         21,
+    "Micro":            21,
+    "SubMinuette":      21,
+    "Minuette":         21,
+    "Minute":           63,
+    "Minor":            126,
+    "Intermediate":     126,
+    "Primary":          126,
+    "Cycle":            126,
+    "Supercycle":       126,
+    "GrandSupercycle":  126,
 }
 
 _DEFAULT_HORIZON = 63  # if degree unknown / NULL
 
-
-def _coerce_date(s: Any) -> date | None:
-    if isinstance(s, date):
-        return s
-    if isinstance(s, str):
-        try:
-            return date.fromisoformat(s[:10])
-        except ValueError:
-            return None
-    return None
+# B1:user 拍版 stale 門檻 7 calendar days(對齊 v3.28 MCP staleness 警告)
+_DEFAULT_STALE_THRESHOLD_DAYS = 7
 
 
-def _scenario_span_days(scenario: dict) -> int | None:
-    wt = scenario.get("wave_tree") or {}
-    start = _coerce_date(wt.get("start"))
-    end = _coerce_date(wt.get("end"))
-    if start is None or end is None:
-        return None
-    delta = (end - start).days
-    return delta if delta > 0 else None
+def _pick_primary(
+    forest: list[dict],
+    current_price: float | None = None,
+) -> dict | None:
+    """寫入面 picker — degree-aware sort + 可選 invalidation filter。
 
+    Args:
+        forest: scenario list from structural_snapshots
+        current_price: 當下 close。提供時:先 canonical_is_invalidated filter
+            再 sort;None 時跳過 filter 但 log warning(loud bypass,不靜默)
 
-def _effective_degree(scenario: dict) -> str | None:
-    """Derive NeoWave degree from wave_tree span(對齊 §13.3 Degree Ceiling 表)。"""
-    span = _scenario_span_days(scenario)
-    if span is None:
-        return None
-    years = span / 365.0
-    if years < 0.3:
-        return "Subminuette"
-    if years < 1.0:
-        return "Minuette"
-    if years < 3.0:
-        return "Minute"
-    if years < 10.0:
-        return "Minor"
-    if years < 30.0:
-        return "Primary"
-    if years < 100.0:
-        return "Cycle"
-    return "Supercycle"
-
-
-_DEGREE_RANK: dict[str, int] = {
-    "Subminuette":     1,  "SubMinuette": 1,  "Minuette": 2,
-    "Minute":          3,
-    "Minor":           4,  "Intermediate": 4,
-    "Primary":         5,  "Cycle": 6,  "Supercycle": 7,  "GrandSupercycle": 8,
-}
-
-
-def _power_rating_strength(p: dict | str | None) -> int:
-    """Crude rank — Strong > Moderate > Weak > Unknown."""
-    if isinstance(p, dict):
-        kind = p.get("kind") or p.get("rating") or ""
-    else:
-        kind = str(p or "")
-    k = kind.lower()
-    if "strong" in k:
-        return 3
-    if "moderate" in k:
-        return 2
-    if "weak" in k:
-        return 1
-    return 0
-
-
-def _pick_primary(forest: list[dict]) -> dict | None:
-    """Return the highest-priority scenario per v3.35 picker rules."""
+    Returns:
+        primary scenario or None(forest 空 / 全部失效)
+    """
     if not forest:
         return None
+
+    # B1 step 1:invalidation filter(若 current_price 可用)
+    if current_price is not None:
+        candidates = [s for s in forest if not canonical_is_invalidated(s, current_price)]
+        if not candidates:
+            logger.warning(
+                "neely_emitter._pick_primary: all %d scenarios filtered as invalidated "
+                "at current_price=%s — returning None(caller should narrate)",
+                len(forest), current_price,
+            )
+            return None
+    else:
+        logger.warning(
+            "neely_emitter._pick_primary: current_price is None — skipping invalidation "
+            "filter step(may pick already-invalidated scenario as primary)"
+        )
+        candidates = forest
+
+    # B1 step 2:degree-aware sort(對齊 v3.35 規則)
     scored = [
         (
-            _DEGREE_RANK.get(_effective_degree(s) or "", 0),
+            _degree_rank(_effective_degree(s)),
             _power_rating_strength(s.get("power_rating")),
             int(s.get("rules_passed_count") or 0),
             s,
         )
-        for s in forest
+        for s in candidates
     ]
     scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
     return scored[0][3]
@@ -188,6 +173,8 @@ def emit_neely_fib(
     timeframe: str = "daily",
     confidence: float = 0.60,
     overwrite_horizon: int | None = None,
+    current_price: float | None = None,
+    stale_threshold_days: int = _DEFAULT_STALE_THRESHOLD_DAYS,
 ) -> dict[str, Any]:
     """Read latest neely_core snapshot ≤ asof and emit forecast_log rows.
 
@@ -200,9 +187,17 @@ def emit_neely_fib(
                     confidence(default 0.60 ≈ moderate)。calibrated stays False.
         overwrite_horizon: if set, write all zones at this horizon instead of
                            degree-derived(useful for one-off probes)。
+        current_price: B1 — 當下 close,用於 _pick_primary 的 canonical
+                       invalidation filter。None → 跳過 filter + log warning。
+        stale_threshold_days: B1 — snapshot_date 距 asof 超過此天數視為過期 →
+                             skip write + log warning。預設 7(對齊 v3.28 MCP
+                             staleness)。0 / 負數 → disable gate(intra-day 用)。
 
     Returns:
-        {status, primary_pattern, horizon, zones_emitted, snapshot_date}
+        - {status: "no_snapshot" | "stale_snapshot" | "empty_forest" |
+                   "no_fib_zones" | "malformed_zones" | "written", ...}
+        - "stale_snapshot" 多 fields:snapshot_date / asof / age_days
+        - "written" 多 fields:envelope / primary_pattern / horizon_days
     """
     snap_row = _fetch_latest_neely_snapshot(conn, stock_id, asof, timeframe)
     if snap_row is None:
@@ -211,10 +206,31 @@ def emit_neely_fib(
     snapshot = snap_row["snapshot"]
     snapshot_date = snap_row["snapshot_date"]
 
+    # B1:stale snapshot gate(user 拍版「跳過寫入 + log 警告」)
+    if stale_threshold_days > 0 and isinstance(snapshot_date, date):
+        age_days = (asof - snapshot_date).days
+        if age_days > stale_threshold_days:
+            logger.warning(
+                "neely_emitter.emit_neely_fib: stale snapshot for %s — "
+                "snapshot_date=%s asof=%s age_days=%d > threshold=%d → skip write",
+                stock_id, snapshot_date, asof, age_days, stale_threshold_days,
+            )
+            return {
+                "status": "stale_snapshot",
+                "skipped": True,
+                "snapshot_date": str(snapshot_date),
+                "asof": str(asof),
+                "age_days": age_days,
+                "stale_threshold_days": stale_threshold_days,
+                "zones_emitted": 0,
+            }
+
     forest = snapshot.get("scenario_forest") or []
-    primary = _pick_primary(forest)
+    primary = _pick_primary(forest, current_price=current_price)
     if primary is None:
-        return {"status": "empty_forest", "zones_emitted": 0,
+        # 區分「forest 空」與「全部 filtered as invalidated」
+        status = "all_invalidated" if (forest and current_price is not None) else "empty_forest"
+        return {"status": status, "zones_emitted": 0,
                 "snapshot_date": str(snapshot_date)}
 
     zones = primary.get("expected_fib_zones") or []

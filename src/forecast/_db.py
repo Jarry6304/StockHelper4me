@@ -27,7 +27,9 @@ def upsert_forecast(conn, row: dict[str, Any]) -> None:
         lower, upper, point, calibrated (default False),
         internal_only (default False — 對齊 dual_track_resonance §七 B-4 機制丙;
             neely_fib emitter 傳 True,其他 emitter 維持 False),
-        regime_tag, params_hash
+        regime_tag, params_hash,
+        logic_version (B1 default 'b1' — backtest segmentation;**不進** ON CONFLICT
+            唯一鍵;已 settle row(resolved_date IS NOT NULL)永不被覆寫)
 
     Settlement columns (resolved_date, realized_price, hit, pinball_loss) are
     not touched by this function — see `settlement.resolve_pending`.
@@ -36,12 +38,13 @@ def upsert_forecast(conn, row: dict[str, Any]) -> None:
         INSERT INTO forecast_log (
             stock_id, forecast_date, horizon_days, lower, upper, point,
             confidence, calibrated, internal_only, source_core, regime_tag,
-            params_hash
+            params_hash, logic_version
         ) VALUES (
             %(stock_id)s, %(forecast_date)s, %(horizon_days)s,
             %(lower)s, %(upper)s, %(point)s,
             %(confidence)s, %(calibrated)s, %(internal_only)s,
-            %(source_core)s, %(regime_tag)s, %(params_hash)s
+            %(source_core)s, %(regime_tag)s, %(params_hash)s,
+            %(logic_version)s
         )
         ON CONFLICT (stock_id, forecast_date, horizon_days, source_core, confidence)
         DO UPDATE SET
@@ -51,7 +54,13 @@ def upsert_forecast(conn, row: dict[str, Any]) -> None:
             calibrated    = EXCLUDED.calibrated,
             internal_only = EXCLUDED.internal_only,
             regime_tag    = EXCLUDED.regime_tag,
-            params_hash   = EXCLUDED.params_hash
+            params_hash   = EXCLUDED.params_hash,
+            -- B1 idempotent guard:已 settle row(resolved_date IS NOT NULL)永不被
+            -- 覆寫 logic_version,確保 backtest 證據隨 settlement 凍結。
+            logic_version = CASE
+                WHEN forecast_log.resolved_date IS NULL THEN EXCLUDED.logic_version
+                ELSE forecast_log.logic_version
+            END
     """
     payload = {
         "stock_id": row["stock_id"],
@@ -66,6 +75,8 @@ def upsert_forecast(conn, row: dict[str, Any]) -> None:
         "source_core": row["source_core"],
         "regime_tag": row.get("regime_tag"),
         "params_hash": row.get("params_hash"),
+        # B1:新寫入預設 'b1';caller 可覆寫(歷史 backfill / replay 等)
+        "logic_version": row.get("logic_version", "b1"),
     }
     with conn.cursor() as cur:
         cur.execute(sql, payload)

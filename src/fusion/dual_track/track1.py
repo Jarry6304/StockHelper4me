@@ -26,69 +26,37 @@ from fusion.dual_track._shared import (
     FibLine,
     Track1View,
 )
-# v4.26 follow-up:picker helpers 抽 src/fusion/_picker.py 共用
+# v4.26 follow-up + B1 consolidation:picker / degree helpers 都從 src/fusion/_picker.py
+# 取(single source of truth,對齊 Rust output.rs::Degree + degree/mod.rs::classify_degree)。
 from fusion._picker import (
+    DEGREE_RANK,
     coerce_date as _coerce_date,
+    degree_rank as _degree_rank,
     direction_from_power as _direction_from_power,
+    effective_degree as _effective_degree,
     pattern_type_label as _pattern_type_label,
     power_rating_label as _power_rating_label,
     power_rating_strength as _power_rating_strength,
     wave_count_from_label as _wave_count_from_label,
 )
 
-
-__all__ = ["read_track1", "scenario_is_invalidated"]
-
-
-# ─── Picker / direction / degree helpers(對齊 mcp_server/_forecast.py)──────
-
-
-_DEGREE_RANK: dict[str, int] = {
-    "Subminuette": 1, "SubMinuette": 1, "Minuette": 2,
-    "Minute": 3,
-    "Minor": 4, "Intermediate": 4,
-    "Primary": 5, "Cycle": 6, "Supercycle": 7, "GrandSupercycle": 8,
-}
-
-
-def _scenario_span_days(scenario: dict) -> int | None:
-    wt = scenario.get("wave_tree") or {}
-    start = _coerce_date(wt.get("start"))
-    end = _coerce_date(wt.get("end"))
-    if start is None or end is None:
-        return None
-    delta = (end - start).days
-    return delta if delta > 0 else None
-
-
-def _effective_degree(scenario: dict) -> str | None:
-    """Stage 11 §13.3 Degree Ceiling 表(對齊 mcp_server picker)。"""
-    span = _scenario_span_days(scenario)
-    if span is None:
-        return None
-    years = span / 365.0
-    if years < 0.3:
-        return "Subminuette"
-    if years < 1.0:
-        return "Minuette"
-    if years < 3.0:
-        return "Minute"
-    if years < 10.0:
-        return "Minor"
-    if years < 30.0:
-        return "Primary"
-    if years < 100.0:
-        return "Cycle"
-    return "Supercycle"
+# B1:track1 既有 _DEGREE_RANK 名稱保留為 alias(wave_impulse_screen 等 caller
+# 仍 import _DEGREE_RANK from track1,並等同取 canonical;對齊 wave_impulse_screen
+# 的 import 已同 PR 重新指向 _picker,但保留 alias 不破其他 unknown caller)。
+_DEGREE_RANK = DEGREE_RANK
 
 
 def _pick_primary(forest: list[dict]) -> dict | None:
-    """對齊 v3.35:(degree DESC, power DESC, rules DESC)。"""
+    """讀取面 picker:對齊 v3.35(degree DESC, power DESC, rules DESC)。
+
+    本函式只用於讀取面(track1.read_track1 + wave_impulse_screen fallback)。
+    寫入面(neely_emitter)走自家 _pick_primary 帶 current_price filter。
+    """
     if not forest:
         return None
     scored = [
         (
-            _DEGREE_RANK.get(_effective_degree(s) or "", 0),
+            _degree_rank(_effective_degree(s)),
             _power_rating_strength(s.get("power_rating")),
             int(s.get("rules_passed_count") or 0),
             s,

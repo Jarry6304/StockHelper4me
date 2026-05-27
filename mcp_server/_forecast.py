@@ -34,7 +34,12 @@ from typing import Any
 # v4.26 follow-up:picker helpers 抽 src/fusion/_picker.py 共用
 # (_parse_iso_date 保留 local — _forecast 既有版本 raise ValueError,picker
 # `coerce_date` 回 None,簽章不同;留 future PR 統一處理 error handling 路徑)
+# B1:_DEGREE_RANK + classify 也收斂到 _picker(此檔之前已是 11-level canonical,
+# 改為 delegate;_degree_rank / _compute_scenario_effective_degree 變 thin wrapper)。
 from fusion._picker import (
+    DEGREE_RANK as _DEGREE_RANK_CANONICAL,
+    classify_degree_by_years as _classify_degree_by_years_canonical,
+    degree_rank as _degree_rank_canonical,
     power_rating_label as _power_rating_label,
     power_rating_sign as _power_rating_sign,
     power_rating_strength as _power_rating_strength,
@@ -314,27 +319,16 @@ def _extract_primary_and_top_scenarios(
 # ────────────────────────────────────────────────────────────
 
 # Degree label → rank(Stage 11 §13.3 表 + spec output.rs::Degree enum 順序)。
-# 較大 degree → 較高 rank → 排序時優先。
-_DEGREE_RANK: dict[str, int] = {
-    "GrandSupercycle": 11,
-    "Supercycle":      10,
-    "Cycle":            9,
-    "Primary":          8,
-    "Intermediate":     7,
-    "Minor":            6,
-    "Minute":           5,
-    "Minuette":         4,
-    "SubMinuette":      3,
-    "Micro":            2,
-    "SubMicro":         1,
-}
+# B1:收斂到 src/fusion/_picker.py;本檔保留 _DEGREE_RANK 名稱 alias 供既有 caller。
+_DEGREE_RANK: dict[str, int] = _DEGREE_RANK_CANONICAL
 
 
 def _degree_rank(degree_label: str | None) -> int:
-    """Degree string → 整數 rank。None / 未知 → 0(fallback 不影響其他 sort key)。"""
-    if not degree_label:
-        return 0
-    return _DEGREE_RANK.get(degree_label, 0)
+    """Degree string → 整數 rank。None / 未知 → 0(fallback 不影響其他 sort key)。
+
+    B1:delegate to fusion/_picker.degree_rank(canonical 11-level rank,對齊 Rust enum)。
+    """
+    return _degree_rank_canonical(degree_label)
 
 
 def _compute_scenario_effective_degree(
@@ -342,15 +336,14 @@ def _compute_scenario_effective_degree(
 ) -> str | None:
     """對齊 Stage 11 §13.3 Degree Ceiling 表,從 scenario.wave_tree.start/end 推算 degree。
 
-    Daily 閾值(spec rust degree/mod.rs::classify_degree):
-      - < 1 年   → SubMinuette
-      - 1-3 年   → Minute
-      - 3-10 年  → Minor
-      - 10-30 年 → Primary
-      - 30-100 年→ Cycle
-      - > 100 年 → Supercycle
+    B1:bracket 邏輯收斂到 fusion/_picker.classify_degree_by_years。本函式仍
+    用 local `_parse_iso_date`(既有 caller test fixture 對 ValueError 路徑有依賴),
+    但 bracket 走 canonical。
 
-    Weekly / Monthly / Quarterly 走相同年數區間(spec timeframe 已轉成年級判定)。
+    對齊 rust_compute/cores/wave/neely_core/src/degree/mod.rs::classify_degree:
+      - < 1 年   → SubMinuette / 1-3 → Minute / 3-10 → Minor /
+        10-30 → Primary / 30-100 → Cycle / ≥ 100 → Supercycle
+      - **永不回** Minuette / Micro / SubMicro(producer 死碼)
 
     Returns:
         Degree string(對齊 Rust output.rs::Degree enum)or None(wave_tree.start/end 缺失)
@@ -370,18 +363,7 @@ def _compute_scenario_effective_degree(
     if end < start:
         return None
     span_years = (end - start).days / 365.25
-
-    if span_years < 1.0:
-        return "SubMinuette"
-    if span_years < 3.0:
-        return "Minute"
-    if span_years < 10.0:
-        return "Minor"
-    if span_years < 30.0:
-        return "Primary"
-    if span_years < 100.0:
-        return "Cycle"
-    return "Supercycle"
+    return _classify_degree_by_years_canonical(span_years)
 
 
 def _parse_iso_date(s: str | Any) -> date:
