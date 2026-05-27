@@ -270,6 +270,61 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## Backlog triage — gov_bank / FastAPI 砍除 + 2A/2B 依賴更正(2026-05-27,planning only)
+
+接 v4.27 PR #104 收尾後 user 對四項 backlog 候選逐一決議。**本段純 planning,無 commit / 無 code**。
+
+### 四項 backlog 決議
+
+| Item | 決議 | 理由 |
+|---|---|---|
+| **1a gov_bank_net Core 消費** | ❌ 砍 | 訊號品質先天低:公開即時(國安基金進場是頭版)、集中稀疏(僅少數權值股非零)、lagging contrarian floor 非領先 alpha。成本最重(新 crate + 2 EventKind + market gate + intervention lumpy calibration),CP 值最差。chip_loader load 了好幾版 0 core 消費本身即訊號 |
+| **1c FastAPI thin wrap** | ❌ 砍 | 無 remote consumer;Streamlit in-process 直呼 agg、MCP 已服務 Claude Desktop。speculative plumbing |
+| **2a wave_impulse calibrate** | ✅ 唯一可馬上動 | 不碰 forecast_log,只讀 structural_snapshots + price_daily_fwd。唯一 gate = structural_snapshots 歷史深度 |
+| **2b dual_track_resonance 視覺層** | 🔁 重新歸類 | 非 calibration backlog,卡在 M8 fusion 全市場化 sprint 後面(見下) |
+
+### 2A 程式確認(可動工,不必等 production)
+
+- **PIT 價格重建穩**:`pit.ohlcv.asof_close_series(asof_t)`(Bronze raw + adjustment events 篩 ≤ asof_t,Rust S1 mirror)
+- **structural_snapshots append-only** 逐日保留(PK 含 `snapshot_date` + idx `(stock_id, snapshot_date DESC)`)→ 歷史 forest 理論上都在
+- **`_fetch_structural_snapshots` 現抓 latest**(`DISTINCT ON ... ORDER BY snapshot_date DESC`);改 as-of-T 只需加 `WHERE snapshot_date <= asof`,trivial
+- **`backtest.py` 的 `forecast_fn(series, T, h, c)` 餵價格序列非 forest** → 兩條路:
+  - **Path A**:用保留 snapshot 加 `WHERE`,replay screen 跑歷史 — 前提是 snapshot 已有足夠歷史深度
+  - **Path B**:每歷史 T 跑 neely_core(rust subprocess) on asof series → forest → screen,今天就能跑、不必等,但需專用 harness 且重(~15ms × 股 × 日)
+
+**下一步:跑 count query 定生死**
+```sql
+SELECT count(DISTINCT snapshot_date), min(snapshot_date), max(snapshot_date)
+  FROM structural_snapshots WHERE core_name='neely_core';
+```
+有深度 → Path A;沒深度 → Path B
+
+**待 calibrate 5 門檻**:
+- `RECENT_DAYS=14`
+- `RR_MIN=1.5`
+- `MAX_UPSIDE_MULTIPLE=2.0`
+- `CORRECTION_BOTTOM_BUFFER=0.03`
+- `MIN_UPSIDE_PCT=0.03`
+
+**注意**:1-2 週 production 只夠 **hygiene calibration**(count / RR 分布 / 無 RR>20 異常),**predictive calibration**(門檻是否真篩出到 target)需 forward outcome 數週~數月 或 PIT backtest。
+
+### 2B 依賴更正(M8 衝突)
+
+- M8 sprint 做的是 **Track 2 上游**(chip/macro/fundamental forecast cores + Bates-Granger fusion → forecast_log bands),但 production fusion 只跑 ~8 verify 檔(後擴 6 檔 apples-to-apples)。證據:CLAUDE.md 既載「3030 全 divergence,track2 缺 band,不在 M8 verify 8 stocks 內」
+- 故 resonance 對全市場跑必然大量 divergence — **不是事件稀疏,是 fusion 沒對全市場跑**
+- **logic 層其實已完成**:`resonance.py` / `_shared.py` / `track1` / `track2`,MCP tool #12 已註冊,fusion + mcp_server 測試齊備。缺的只有視覺層
+- 2B 真正 blocker = **M8 fusion 全市場化**(獨立 sprint,需每檔 backtest 建 Bates-Granger 權重),再 structural_snapshots 深度
+
+### ⚠ 更正前一輪錯誤判斷
+
+前述「2A 與 2B 共用同一 data clock」錯誤。實際:
+- **2A 僅依賴 structural_snapshots 深度**
+- **2B 多一層 M8 fusion 全市場化 gate**
+
+兩者**不同步**。
+
+---
+
 ## v4.27 — 1D picker 抽 `_picker.py` 共用 + 1B probe audit(2026-05-27)
 
 接 v4.26 收尾 user 拍版「1B + 1D」,並行動工:
