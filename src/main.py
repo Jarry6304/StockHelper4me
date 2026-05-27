@@ -436,6 +436,49 @@ def build_parser() -> argparse.ArgumentParser:
     # ── validate 子命令（不需要執行選項）
     subparsers.add_parser("validate", help="驗證 config 格式")
 
+    # ── wave-impulse-calibrate(2A hygiene calibration harness)
+    cal_parser = subparsers.add_parser(
+        "wave-impulse-calibrate",
+        help=(
+            "Hygiene calibration for cross_cores.wave_impulse_screen 5 thresholds. "
+            "Replays screen at historical asof dates × threshold combos → aggregate "
+            "metric samples to CSV / JSON."
+        ),
+    )
+    cal_parser.add_argument(
+        "--start-date", required=True,
+        help="計算 sample 的起始 asof(YYYY-MM-DD,含)",
+    )
+    cal_parser.add_argument(
+        "--end-date", required=True,
+        help="結束 asof(含)",
+    )
+    cal_parser.add_argument(
+        "--step-days", type=int, default=7,
+        help="asof 取樣步距(預設 7,= 週度)",
+    )
+    cal_parser.add_argument(
+        "--stocks",
+        help="限縮股票集(逗號分隔);未給則跑全 universe",
+    )
+    cal_parser.add_argument(
+        "--sweep", action="append", default=[],
+        help=(
+            "Threshold sweep,格式 `axis=v1,v2,...`(可多次)。"
+            "axis: recent_days / rr_min / max_upside_multiple / "
+            "correction_bottom_buffer / min_upside_pct。"
+            "未掃 axis 走 DEFAULT_THRESHOLDS 單值。"
+        ),
+    )
+    cal_parser.add_argument(
+        "--use-default-sweep", action="store_true",
+        help="忽略 --sweep,跑 DEFAULT_SWEEP_RANGES(全 5 axis 預設掃描,324 combos)",
+    )
+    cal_parser.add_argument(
+        "--output", required=True,
+        help="輸出檔路徑(.csv 走 csv;.json 走 json)",
+    )
+
     return parser
 
 
@@ -492,6 +535,11 @@ def main() -> None:
     # forecast 指令(區間預測 spine,v0.3 spec)
     if args.command == "forecast":
         _run_forecast(args)
+        return
+
+    # wave-impulse-calibrate(2A hygiene calibration harness)
+    if args.command == "wave-impulse-calibrate":
+        _run_wave_impulse_calibrate(args)
         return
 
     # 其他指令（backfill / incremental / phase）需要執行引擎
@@ -1228,6 +1276,134 @@ def cmd_status(config) -> None:
 
     finally:
         db.close()
+
+
+# =============================================================================
+# wave-impulse-calibrate(2A hygiene calibration handler)
+# =============================================================================
+
+
+def _run_wave_impulse_calibrate(args) -> None:
+    """`wave-impulse-calibrate` 子命令 dispatcher。
+
+    對齊 CLAUDE.md backlog §2A:對 wave_impulse_screen 5 個 best-guess
+    threshold 跑 hygiene calibration(count / RR 分布 / phase 比例 /
+    excluded_reason histogram)。
+    """
+    import csv as _csv
+    import json as _json
+    from datetime import date as _date, datetime as _dt
+    from pathlib import Path as _Path
+
+    from cross_cores.wave_impulse_calibrate import (
+        DEFAULT_SWEEP_RANGES,
+        build_date_series,
+        build_threshold_combos,
+        calibrate_hygiene,
+        samples_to_csv_rows,
+    )
+    # db.py 在這個 codebase 是 psycopg 同步 connection;走相同 helper 對齊 forecast / cross_cores
+    from db import DBWriter
+    from config_loader import load_collector_config as _load_cfg
+
+    def _parse_date(s: str) -> _date:
+        return _dt.strptime(s, "%Y-%m-%d").date()
+
+    # ── Parse args
+    start = _parse_date(args.start_date)
+    end = _parse_date(args.end_date)
+    step_days = int(args.step_days)
+    stock_ids = (
+        [s.strip() for s in args.stocks.split(",") if s.strip()]
+        if args.stocks else None
+    )
+    output_path = _Path(args.output)
+
+    # Sweep parsing
+    if args.use_default_sweep:
+        overrides = dict(DEFAULT_SWEEP_RANGES)
+    else:
+        overrides: dict[str, list[float]] = {}
+        for sweep_spec in args.sweep or []:
+            if "=" not in sweep_spec:
+                print(f"[ERROR] --sweep format `axis=v1,v2,...`, got: {sweep_spec}",
+                      file=sys.stderr)
+                sys.exit(2)
+            axis, vals_str = sweep_spec.split("=", 1)
+            axis = axis.strip()
+            if axis not in ("recent_days", "rr_min", "max_upside_multiple",
+                            "correction_bottom_buffer", "min_upside_pct"):
+                print(f"[ERROR] unknown sweep axis: {axis}", file=sys.stderr)
+                sys.exit(2)
+            try:
+                vals = [float(v.strip()) for v in vals_str.split(",") if v.strip()]
+            except ValueError as e:
+                print(f"[ERROR] invalid sweep values for {axis}: {e}", file=sys.stderr)
+                sys.exit(2)
+            if not vals:
+                print(f"[ERROR] empty sweep for {axis}", file=sys.stderr)
+                sys.exit(2)
+            overrides[axis] = vals
+
+    # ── Build date / combo sequences
+    asof_dates = build_date_series(start, end, step_days=step_days)
+    if not asof_dates:
+        print("[ERROR] empty date series(start > end?)", file=sys.stderr)
+        sys.exit(2)
+    combos = build_threshold_combos(overrides)
+
+    n_cells = len(asof_dates) * len(combos)
+    print(
+        f"[wave-impulse-calibrate] {len(asof_dates)} asof dates × "
+        f"{len(combos)} threshold combos = {n_cells} cells"
+    )
+    if n_cells > 1000:
+        print(
+            f"[WARN] {n_cells} cells will be evaluated. Each cell does one full-universe "
+            f"compute_screen_at_date (~seconds). Consider tighter sweep or larger step-days."
+        )
+
+    # ── Open DB conn(walks same path as forecast / cross_cores)
+    cfg = _load_cfg(args.config)
+    db = DBWriter(cfg.global_cfg.database_url)
+    try:
+        samples = calibrate_hygiene(
+            db, asof_dates=asof_dates,
+            threshold_combos=combos, stock_ids=stock_ids,
+        )
+    finally:
+        db.close()
+
+    # ── Write output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.suffix.lower() == ".csv":
+        flat = samples_to_csv_rows(samples)
+        if flat:
+            fieldnames = list(flat[0].keys())
+            with output_path.open("w", encoding="utf-8", newline="") as f:
+                w = _csv.DictWriter(f, fieldnames=fieldnames)
+                w.writeheader()
+                w.writerows(flat)
+        else:
+            output_path.write_text("", encoding="utf-8")
+    elif output_path.suffix.lower() == ".json":
+        output_path.write_text(
+            _json.dumps(samples, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+    else:
+        print(
+            f"[ERROR] unknown output suffix {output_path.suffix} — use .csv or .json",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    n_with_data = sum(1 for s in samples if s.get("total_rows", 0) > 0)
+    n_candidates_total = sum(s.get("candidates", 0) for s in samples)
+    print(
+        f"[wave-impulse-calibrate] wrote {len(samples)} samples to {output_path} "
+        f"(non-empty samples: {n_with_data}, total candidates across all: {n_candidates_total})"
+    )
 
 
 # =============================================================================
