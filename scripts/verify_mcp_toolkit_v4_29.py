@@ -124,7 +124,13 @@ def _summary_note(name: str, out: dict[str, Any]) -> str:
                   if isinstance(out.get(s), dict) and out[s].get("error")]
         return f"sections_ok={len(sections)-len(errors)}/{len(sections)} errors={errors}"
     if name == "stock_levels":
-        return (f"levels={len(out.get('levels') or [])} "
+        # v4.30 fix:stock_levels 真實 levels 在 out["key_levels"]["levels"](v4.19
+        # B 視角整併三段 dict),不在頂層 out["levels"]。原 v4.29 harness summary
+        # 讀錯 key → 永遠回 levels=0(2026-05-29 user 揭露);實際 production OK,
+        # 2330 有 122 levels / 214 source points,只是 summary 顯示假象。
+        kl = out.get("key_levels") or {}
+        return (f"levels={len(kl.get('levels') or [])} "
+                f"src_points={kl.get('source_point_count', 0)} "
                 f"patterns={len(out.get('patterns') or [])} "
                 f"stop_loss={'set' if out.get('stop_loss') else 'none'}")
     if name == "magic_formula_screen":
