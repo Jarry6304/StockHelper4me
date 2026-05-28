@@ -170,6 +170,35 @@ def test_revenue_yoy_never_stores_calendar_year_value():
             )
 
 
+def test_yoy_capped_to_numeric_10_4_schema_max():
+    """v4.29 hotfix:Schema NUMERIC(10,4) 最大 ±999999.9999 — 極端 YoY% 必 cap。
+
+    Bronze: 2025-04 revenue=1, 2026-04 revenue=10_000_000 → 真 YoY = 999_999_900%
+    若不 cap → psycopg numeric field overflow,整批 upsert 失敗 → bug。
+    """
+    rows = [
+        _bronze_row(y=2025, m=4, rev=1),                  # 極小 base
+        _bronze_row(y=2026, m=4, rev=10_000_000),         # 暴增
+    ]
+    index = _build_period_index(rows)
+    yoy, _ = _compute_yoy_mom(_bronze_row(y=2026, m=4, rev=10_000_000), index)
+    # 真實計算 (10M - 1) / 1 * 100 = 999_999_900%,cap 後應 = 999999.9999
+    assert yoy == 999999.9999, (
+        f"極端 YoY 必 cap 到 schema max 999999.9999;得到 {yoy}"
+    )
+
+
+def test_yoy_capped_to_negative_schema_min():
+    """負向極端值(理論上不可能 < -100% 但保險檢查)同樣 cap。"""
+    # 不可能用真實 revenue 製造,直接驗 _clip_pct helper
+    from silver.builders.monthly_revenue import _clip_pct
+    assert _clip_pct(-9_999_999.99) == -999999.9999
+    assert _clip_pct(9_999_999.99) == 999999.9999
+    assert _clip_pct(50.0) == 50.0
+    assert _clip_pct(-50.0) == -50.0
+    assert _clip_pct(None) is None
+
+
 def test_invalid_revenue_skipped_in_index():
     """Bronze rev=None / 非數值 → index 不收(避免下游 base lookup 對到 garbage)。"""
     rows = [
