@@ -342,17 +342,37 @@ pub async fn run_stock_cores(
     // backtest mode 走 run-backtest subcommand + load_asof_daily ----
     if filter.is_enabled("kalman_forecast_core") {
         match ohlcv_loader::load_daily(pool, stock_id, STOCK_LOOKBACK_DAYS).await {
-            Ok(series) => summary.push(
-                dispatch_forecast(
-                    pool,
-                    &kalman_forecast_core::KalmanForecastCore::new(),
-                    &series,
-                    kalman_forecast_core::KalmanForecastParams::default(),
-                    write,
-                    "kalman_forecast_core",
-                    false, // raw Kalman intervals;phase 4 CQR 才 calibrated=true
-                ).await,
-            ),
+            Ok(series) => {
+                if series.bars.is_empty() {
+                    // v4.31 對齊 vwap_core pattern(line 178-190):empty series
+                    // → status=skipped 不報 err。原 callee `compute()` bail
+                    // (lib.rs:338)走 dispatch_forecast Err arm → stock_id=""
+                    // (dispatcher.rs:305)→ verify 看到 `stock=-`。caller-side
+                    // guard 同時解決分類錯誤 + stock_id 遺失 2 個問題。
+                    summary.push(CoreRunSummary {
+                        core: "kalman_forecast_core".to_string(),
+                        stock_id: stock_id.to_string(),
+                        status: "skipped".to_string(),
+                        events: 0,
+                        iv_written: 0,
+                        fact_written: 0,
+                        elapsed_ms: 0,
+                        error: Some("empty_series:no Silver data for stock".to_string()),
+                    });
+                } else {
+                    summary.push(
+                        dispatch_forecast(
+                            pool,
+                            &kalman_forecast_core::KalmanForecastCore::new(),
+                            &series,
+                            kalman_forecast_core::KalmanForecastParams::default(),
+                            write,
+                            "kalman_forecast_core",
+                            false, // raw Kalman intervals;phase 4 CQR 才 calibrated=true
+                        ).await,
+                    );
+                }
+            }
             Err(e) => summary.push(loader_err_summary(
                 "kalman_forecast_core", stock_id, "load_daily", &e,
             )),
