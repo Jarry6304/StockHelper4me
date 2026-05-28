@@ -1,10 +1,10 @@
 # StockHelper4me — tw-stock-collector
 
-> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace(Silver S1 後復權 + M3 Cores 39 crates + Aggregation Layer + Cross-Stock Cores 11 builders + MCP toolkit 8 tools)。
+> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **13 tools**)。
 
-**版本**:**v4.9**(alembic head `d9e0f1g2h3i4` 不變 / 2026-05-19,v4.8 backlog 1+2 + **v4.9 Item 3 — Classifier 深層 nested label enrichment**)
-**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)5 phase 流水線:Environment check / Sandbox unit tests / Schema health / Production verify / MCP smoke test。完整 verify chain 見 [CLAUDE.md §下班後 verify 流水線](CLAUDE.md)
-**狀態**:**M3SPEC 闕漏補完 + Out-of-Scope backlog Items 1+2+3 完整收尾** ☕☕☕ — v4.7 G1(P0 Gate verified)+ v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)+ v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞)。**v4.0 P1.1-P1.4 + v4.5 G2 + v4.6 G3 + v4.7 G1 + v4.8 + v4.9** 共 **19 commits / ~8,100 LoC**。M3 Cores **39 crates** production-ready;Cross-Stock Cores **11 builders**;Aggregation Layer 4 Phase 全套;**Rust workspace 582 tests passed / 0 failed**(v4.4 baseline 528 → +54);**Python tests 165+ passed**;1266 stocks × 36 cores / wall time ~11 min / facts ~5.2M(VACUUM 後);僅留 Item 4(Pre-Constructive Pass 1/2 diagnostics union)真正 V4.x
+**版本**:**v4.29**(alembic head `h4i5j6k7l8m9`(v4.28 B1)/ 2026-05-28,**13-tool MCP toolkit 3-bug fix + silver `--builder` flag**,branch `claude/nice-feynman-wpW8l` PR #110)
+**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)5 phase + 新 `scripts/verify_mcp_toolkit_v4_29.py`(v4.29)13-tool MCP 全覆蓋健康度。完整 verify chain 見 [CLAUDE.md §v4.29](CLAUDE.md)
+**狀態**:v4.29 三類 bug 修法 ☕(`indicators` lookback_days slice / `dual_track_resonance` batch query + 30s timeout 安全網 / `monthly_revenue` Silver builder 改從 raw revenue 算 YoY/MoM)+ silver phase 7a/7b 加 `--builder` flag(對齊 cross_cores)。**v4.25 dual-track 共振決策 + v4.26 wave_impulse_screen + v4.27 _picker.py 共用 + v4.28 B1+2A+B3 三 sprint + v4.29** 累積。M3 Cores **39 crates** production-ready;Cross-Stock Cores **12 builders**;Aggregation Layer 4 Phase 全套;MCP toolkit **13 public tools**;**Rust workspace 607 tests passed / 0 failed**(v4.11 baseline → +severity/flat_fib/env-core);**Python tests +36(v4.29)** = 全套 ~800+ passed;1266 stocks × 36 cores / wall time ~12.3 min / facts ~5.1M(VACUUM 後)
 
 ---
 
