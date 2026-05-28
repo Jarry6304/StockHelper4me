@@ -111,6 +111,7 @@ class SilverOrchestrator:
         phases: list[str],
         stock_ids: list[str] | None = None,
         full_rebuild: bool = False,
+        builders: list[str] | None = None,
     ) -> dict[str, Any]:
         """跑指定 Phase 7 子階段。
 
@@ -119,6 +120,10 @@ class SilverOrchestrator:
             stock_ids:    None = 全市場;否則只跑指定股(市場級 builder 一律忽略)
             full_rebuild: True = 全量重算所有 Silver row。False(預設)時 7a 走
                           incremental 窗口(只重算最近 N 天;v4.15),7b/7c 不受影響。
+            builders:     None = 跑該 phase 全部 builder;否則只跑指定 names。
+                          unknown name → ValueError(對齊 cross_cores orchestrator
+                          pattern)。7c 不受影響(rust_bridge 走 stock filter,非
+                          builder filter)。
 
         Returns:
             {
@@ -139,18 +144,24 @@ class SilverOrchestrator:
         for phase in phases:
             logger.info(f"[Phase {phase}] start")
             if phase == "7c":
+                # 7c 是 rust_bridge 派 stock_ids,沒有「builder」概念可選;
+                # 若 user 傳了 --builder 給 7c 則 noop 跳過(不 raise,避免 7a+7b+7c 混跑時擋路)
                 results[phase] = await self._run_7c(
                     stock_ids=stock_ids, full_rebuild=full_rebuild,
                 )
-            elif phase == "7a" and not full_rebuild:
-                # v4.15:7a 非 full_rebuild 走 incremental 窗口(不再全量重算)
-                results[phase] = self._run_7a_incremental(stock_ids=stock_ids)
             else:
-                results[phase] = self._run_builders(
-                    PHASE_GROUPS[phase],
-                    stock_ids=stock_ids,
-                    full_rebuild=full_rebuild,
-                )
+                phase_builders = self._filter_builders(phase, builders)
+                if phase == "7a" and not full_rebuild:
+                    # v4.15:7a 非 full_rebuild 走 incremental 窗口(不再全量重算)
+                    results[phase] = self._run_7a_incremental(
+                        stock_ids=stock_ids, builders=phase_builders,
+                    )
+                else:
+                    results[phase] = self._run_builders(
+                        phase_builders,
+                        stock_ids=stock_ids,
+                        full_rebuild=full_rebuild,
+                    )
             logger.info(f"[Phase {phase}] done")
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -159,6 +170,29 @@ class SilverOrchestrator:
             "results":    results,
             "elapsed_ms": elapsed_ms,
         }
+
+    # ------------------------------------------------------- builder filter
+    @staticmethod
+    def _filter_builders(
+        phase: str, builders: list[str] | None,
+    ) -> list[str]:
+        """套用 --builder filter 到指定 phase 的 builder 清單。
+
+        builders=None → 回該 phase 全部 builder(預設行為)。
+        若 builders 含不屬於該 phase 的 name → ValueError(對齊 cross_cores
+        orchestrator early-fail pattern,user typo 早報)。
+        """
+        phase_all = PHASE_GROUPS[phase]
+        if not builders:
+            return phase_all
+        unknown = [b for b in builders if b not in phase_all]
+        if unknown:
+            raise ValueError(
+                f"未知 silver builder(phase {phase}): {unknown}。"
+                f"可用:{sorted(phase_all)}"
+            )
+        # 保留 PHASE_GROUPS 內定義的順序(對齊執行 ordering)
+        return [b for b in phase_all if b in builders]
 
     # ------------------------------------------------------------ classmethod
     @classmethod
@@ -177,12 +211,16 @@ class SilverOrchestrator:
 
     def _run_7a_incremental(
         self, *, stock_ids: list[str] | None,
+        builders: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """7a 非 full_rebuild:set incremental 窗口 → 跑 builder → clear。
 
         Silver 表已含完整歷史(過去 full rebuild 留下),incremental 只維護最近
         WRITE 窗;窗外舊 row 不動、保持正確。要全量重算用 `--full-rebuild`。
         若 incremental 間隔超過 WRITE 窗(預設 30 天)→ 跑一次 --full-rebuild 補。
+
+        builders:None = PHASE_GROUPS["7a"] 全跑;否則跑指定子集(已由
+        `_filter_builders` 校驗過 + 重排序)。
         """
         today = date.today()
         read_since  = today - timedelta(days=self._INCR_READ_LOOKBACK_DAYS)
@@ -193,7 +231,8 @@ class SilverOrchestrator:
         set_incremental_window(read_since, write_since)
         try:
             return self._run_builders(
-                PHASE_GROUPS["7a"], stock_ids=stock_ids, full_rebuild=False,
+                builders or PHASE_GROUPS["7a"],
+                stock_ids=stock_ids, full_rebuild=False,
             )
         finally:
             clear_incremental_window()

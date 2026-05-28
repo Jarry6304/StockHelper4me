@@ -182,6 +182,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="覆蓋股票清單,逗號分隔(market-level builder 一律忽略)",
     )
     silver_phase_parser.add_argument(
+        "--builder",
+        help="只跑指定 silver builder(對齊 cross_cores phase 8 同款 flag,逗號分隔;"
+             "預設跑該 phase 全部 builder)",
+    )
+    silver_phase_parser.add_argument(
         "--full-rebuild",
         action="store_true",
         help="忽略 dirty queue,全表重算(目前唯一支援的模式)",
@@ -662,6 +667,9 @@ async def _run_silver(args, config) -> None:
     stock_ids  = (
         [s.strip() for s in args.stocks.split(",")] if args.stocks else None
     )
+    builders = (
+        [b.strip() for b in args.builder.split(",")] if args.builder else None
+    )
 
     db = create_writer()
     db.init_schema()
@@ -675,12 +683,14 @@ async def _run_silver(args, config) -> None:
         orch = SilverOrchestrator(db=db, rust_bridge=rust_bridge)
         logger.info(
             f"Silver started. phase={phase_name}, "
-            f"stocks={stock_ids or 'all'}, full_rebuild={args.full_rebuild}"
+            f"stocks={stock_ids or 'all'}, builders={builders or 'all'}, "
+            f"full_rebuild={args.full_rebuild}"
         )
         result = await orch.run(
             phases       = [phase_name],
             stock_ids    = stock_ids,
             full_rebuild = args.full_rebuild,
+            builders     = builders,
         )
 
         # 印 status table
