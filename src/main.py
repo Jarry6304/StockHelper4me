@@ -924,12 +924,21 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
         _record("cross_cores_phase8", "failed", t0)
 
     # Step 6: M3 Cores(可選)
+    #
+    # ⚠️ v4.30(2026-05-29)structural_snapshots stale 8 天揭露:
+    # `tw_cores run-all --dirty` 對「fwd 沒新 dirty mark」的 stocks 不重算
+    # → key_levels / pattern_scan / neely_fib_zones / SR / trendline 通通
+    # 停在上次 full-rebuild 日期(對齊 Silver 7c 同款 dirty queue 問題)。
+    #
+    # Option B 一致性:**M3 cores 也走全市場**(不加 --dirty),對齊 v4.30
+    # Silver 7c 強制 full-rebuild pattern。Trade-off:daily wall time +12 min
+    # (~12 min M3 cores 全市場),但 structural_snapshots / facts 每日永遠 fresh。
     if not args.skip_cores:
         cur += 1
         binary_dir = Path(config.global_cfg.rust_binary_path).parent
         tw_cores_name = "tw_cores.exe" if os.name == "nt" else "tw_cores"
         tw_cores_path = binary_dir / tw_cores_name
-        _log_step(cur, total_steps, f"M3 Cores ({tw_cores_path.name} run-all --write --dirty)")
+        _log_step(cur, total_steps, f"M3 Cores ({tw_cores_path.name} run-all --write)")
         t0 = time.monotonic()
         if not tw_cores_path.exists():
             logger.warning(
@@ -938,7 +947,8 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
             )
             _record("m3_cores", "skipped(binary missing)", t0)
         else:
-            cmd = [str(tw_cores_path), "run-all", "--write", "--dirty"]
+            # v4.30 對齊 Option B:不加 --dirty,全市場重算 structural_snapshots
+            cmd = [str(tw_cores_path), "run-all", "--write"]
             if stocks:
                 cmd.extend(["--stocks", stocks])
             logger.info(f"[Refresh] 執行:{' '.join(cmd)}")
