@@ -480,13 +480,46 @@ SELECT date, revenue, revenue_yoy, revenue_mom FROM monthly_revenue_derived
 
 | | |
 |---|---|
-| Commits | 4(B/C/A/--builder)|
-| 新 tests | +36(B 4 / C 11 / A 10 / --builder 11) |
+| Commits | 5(B/C/A/--builder + A hotfix cap)|
+| 新 tests | +38(B 4 / C 11 / A 12 含 2 cap test / --builder 11) |
 | 既有 tests regression | 0(2 pre-existing fail 不變:test_v3_35_1_quality_caveat_fib_decoupled_from_price + test_default_market_is_lowercase_tw 兩個與本 PR 無關)|
 | Rust | 0 改動 |
 | alembic | 0 改動 |
 | collector.toml | 0 改動 |
-| Rollback | 4 commit 各自獨立 `git revert` |
+| Rollback | 5 commit 各自獨立 `git revert` |
+
+### Production verify(2026-05-28 user 本機,主測 2330 / 3030 / 1101)
+
+完整重跑 refresh_full.ps1(Bronze incremental → Silver 7c/7a/7b --full-rebuild
+→ Cross 8 --full-rebuild → M3 Cores run-all)後揭露:
+- `silver phase 7a --full-rebuild` 看似 OK 但 monthly_revenue **silent fail**
+  (psycopg `numeric field overflow` 對 NUMERIC(10,4)),整批 upsert rollback
+  → Silver `revenue_yoy` 殘留舊 calendar year 值
+- Root cause:極端 outlier(新上市 / 剛復牌,prior_year 基期極小)YoY% 爆百萬以上,
+  schema max = 999999.9999 不夠
+- 修法(本 PR commit 5 `91e1bc0`):加 `_clip_pct(v)` cap 到 ±999999.9999 +
+  2 regression tests
+
+修法後個股單獨重跑 `silver phase 7a --builder monthly_revenue --full-rebuild`
+(~12s,新 v4.29 --builder flag 受惠者):
+
+| 驗證項 | 結果 |
+|---|---|
+| Silver 寫入 | read=180521 → wrote=180521 ✅(不再 silent fail) |
+| 2330 五月 YoY | **+17.50%**(對齊 TSMC AI 期真實 YoY) |
+| 2330 四月 YoY | +45.19%(AI 高峰)|
+| Silver `revenue_yoy` distribution(2314 stocks on 2026-05-01)| `REAL_0_to_30 = 860` + `REAL_negative = 766` + `REAL_PCT_>30 = 488` + `NULL = 180` + `extreme_>1900 = 20`(剛復牌極端,如 9906 = +995635% / 3629 = +261400%);**0 calendar year 殘留** |
+| `monthly_trigger.positive_total` | 387(broken)→ **430 + 18 negative**(真實 trigger 量,~19% 台股 universe with YoY > 30%) |
+| `dual_track_resonance(2330)` | timeout > 240s(broken)→ **1.94s** ✅(batch query 修法生效) |
+| `indicators` payload(5-core preset)| ~910KB(爆 1MB limit)→ **109KB / 106KB / 105KB**(WARN > 50KB 但 < 1MB,可接受) |
+| `scripts/verify_mcp_toolkit_v4_29.py`(13 tool × 3 stock + 7 market-level)| **22 OK + 3 WARN(indicators payload)+ 0 FAIL + 0 ERROR / 25** |
+
+**全 3 個 code bug + --builder feature production-verified ☕**
+
+剩 indicators payload >50KB(WARN)— 5 cores × 60 點/core × ~360 bytes/point ≈
+108KB,是 default `lookback_days=60` 對 MACD 等 series 的合理大小,**不爆 MCP
+1MB 限制即可**。caller 想更小可傳 `lookback_days=20` 或 `cores=['macd_core']`
+單核。
 
 🟢 低:
 - 0 alembic / 0 Rust / 0 collector.toml
