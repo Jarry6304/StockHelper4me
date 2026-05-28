@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
 - **alembic head**:`h4i5j6k7l8m9`(v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
-- **開發分支**:`claude/nice-feynman-wpW8l`(v4.29 13-tool MCP fix B/C/A + silver `--builder` flag,PR #110;v4.28 B1+2A+B3 經 PR #108 已 merge claude/beautiful-cori-GZbbe)
+- **開發分支**:`claude/nice-feynman-wpW8l`(v4.30 Option B refresh Silver 7c full-rebuild + v4.29 13-tool MCP fix B/C/A + silver `--builder` flag,PR #110;v4.28 B1+2A+B3 經 PR #108 已 merge claude/beautiful-cori-GZbbe)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
 - **MCP toolkit**:**13 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen;v4.26 加 1)
@@ -291,6 +291,99 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.30 — dirty queue 設計修法:refresh Silver 7c 強制 full-rebuild(Option B,2026-05-29)
+
+接 v4.29 PR #110 收尾 + production verify 揭露的深層問題動工。User 2026-05-29
+跑 verify harness 時 `magic_formula_screen.top_n=9`(預期 30)— 揭露 dirty queue
+設計問題,**比 v4.29 commit `0d95f8a` refresh_full.ps1 修法觸發更廣的 root cause**。
+
+### Root cause(Explore agent audit 確認)
+
+對齊 `m2Spec/oldm2Spec/collector_rust_restructure_blueprint_v3_2.md §5.7` 設計:
+
+- PR #20 trigger 對 `price_adjustment_events` INSERT 觸發 `price_daily_fwd.is_dirty=TRUE`
+  (對應位置 `alembic/versions/2026_05_04_n3o4p5q6r7s8_pr20_silver_dirty_triggers.py:178-196`)
+- **不對 `price_daily` INSERT 觸發** — spec 設計如此,理由是 multiplier 倒推
+  「新除權息事件要全段歷史重算,但新增普通 daily close 不需重算歷史」
+- 但 daily price_daily incremental 寫入新一天的 close 後,**latest fwd row 也沒寫進去** —
+  Rust binary 沒有「latest-only 模式」,要嘛全段重算每股、要嘛走 dirty queue(現 path)
+- → daily refresh 跑 dirty queue Silver 7c 只重算「有新 event」的 12 stocks,
+  其他 1209 stocks 的 fwd 表停在上次 full-rebuild 日期 → magic_formula / kalman
+  / 任何讀 latest price_daily_fwd 的下游全 stale
+
+### Production data 揭露(v4.29 verify session 2026-05-28)
+
+- Bronze `price_daily` 5/22-5/28:**1221 stocks/day** ✓
+- Silver `price_daily_fwd` 5/25-5/28:**12 stocks/day** ❌ / 5/22 完全 0 row ❌ /
+  5/21:1220 stocks(對齊上次 full-rebuild)
+- `magic_formula._fetch_target_dates` 撈 latest=5/28 → 只 12 stocks 有 close →
+  `_fetch_market_caps_for_date` 對其他 ~2800 stocks 全 `no_market_cap` →
+  eligible 9 → top_n=9
+
+### 4 個 Option 拍版(2026-05-29)
+
+| Option | 範圍 | wall time | trade-off |
+|---|---|---|---|
+| **B(拍版)** | refresh_daily.ps1 / refresh subcommand 加 --full-rebuild | +60s daily | 0 schema / 1 行改 / 0 風險 |
+| A(reject)| PG trigger 對 price_daily 加 mark dirty | +60s | 違反 spec §5.7 設計初衷 |
+| C(reject)| Rust 加 incremental mode(latest-only) | 0 | 工程量 150 LoC + 3-4 天,違反「不抽象」原則 |
+| D(reject)| dirty queue UNION fallback | +60s | 對齊 v1.7 circular bootstrap pattern,但同款 wall time |
+
+User 拍版 Option B(最簡單路徑,對齊 v4.29 commit `0d95f8a` refresh_full.ps1 pattern)。
+
+### 動工範圍(1 commit / branch `claude/nice-feynman-wpW8l`)
+
+| 檔 | 動作 |
+|---|---|
+| `src/main.py::_run_refresh` | Silver phases for loop 改 `SILVER_PHASES_REFRESH` tuple list(7c → full_rebuild=True / 7a/7b → False);docstring + inline comment 對齊 spec §5.7 reference |
+| `src/main.py::_run_refresh` silver_args | **順帶修 v4.29 PR #110 latent bug**:加 `builder=None` 對齊 commit `26e6d27` 的 `--builder` flag 需求(原本 namespace 沒 `builder` field,跑 main branch refresh 會 `AttributeError`)|
+
+### 修法效應
+
+| 項目 | Before | After |
+|---|---|---|
+| `python src/main.py refresh` Silver 7c | dirty queue(~4s,12 stocks)| **full-rebuild(~60-90s,1254 stocks)** ✅ |
+| `refresh_daily.ps1`(內走 refresh)| 同上 stale risk | 同上修正 |
+| `python src/main.py refresh` 對 main branch | AttributeError(missing builder)| ✅ 正常 |
+| daily wall time | ~13 分 incremental + ~4s Silver | ~13 分 + ~60s Silver(+60s) |
+| fwd 表每日 freshness | stale 7+ 天(累積)| 永遠 fresh ✅ |
+
+### Sandbox 驗證
+
+- `python -c "ast parse + verify silver_args fields"` ✅ silver_args 完整覆蓋
+  `_run_silver` expected fields(`builder` / `full_rebuild` / `phase_name` / `stocks`)
+- 0 既有 test regression(只有 docstring + namespace + for loop reshape)
+- 0 alembic / 0 Rust / 0 collector.toml
+
+### 風險
+
+🟢 低:
+- 純 Python `_run_refresh` 內部 reshape;`_run_silver` / Silver Orchestrator
+  / Rust binary 0 改動
+- v4.29 PR #110 既有 `silver phase 7c --full-rebuild` CLI(commit `0d95f8a`)
+  已 production-verified(commit 後 user 跑 ~47s 全市場處理 1254 stocks ✅)
+- Rollback:單 commit `git revert` 即可
+
+🟡 中:
+- **daily wall time +60s**(從 ~13 分 → ~14 分),user 接受
+- **未來若 stock 數成長至 ~3000**(目前 1254),Silver 7c full-rebuild wall time
+  自然線性增長(估 ~150s);仍 < 「accepted daily refresh」範圍
+
+🔴 高:**無**
+
+### Out of Scope(留 future)
+
+- **Option C Rust latest-only mode**:真正對齊 spec §5.7 設計初衷,但 ~150 LoC
+  Rust 改 + 違反「不抽象」原則,留 V3 議題
+- **Option A PG trigger for price_daily**:同款 wall time 但違反 spec 設計,
+  不採用
+- **per-builder trigger granularity**:目前 dirty queue 對 magic_formula /
+  wave_impulse_screen 等 cross_cores 都走「latest date only」+ full universe
+  re-rank;若未來想加 incremental cross-rank(對「只受影響部分 stocks」重算),
+  屬 V3 議題
 
 ---
 
