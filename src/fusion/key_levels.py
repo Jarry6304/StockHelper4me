@@ -24,6 +24,7 @@ def key_levels(
     as_of: date,
     *,
     lookback_days: int = 120,
+    top_n: int = 20,
     database_url: str | None = None,
     conn: Any = None,
 ) -> dict[str, Any]:
@@ -33,11 +34,13 @@ def key_levels(
         stock_id: 股票代號。
         as_of: 查詢日(look-ahead 上界)。
         lookback_days: SR facts 回看天數(預設 120)。
+        top_n: cap 到前 N 個 levels(預設 20;對齊 LLM context 預算)。0 = 不 cap。
         database_url / conn: 連線。
 
     Returns:
-        {stock_id, as_of, source_point_count, level_count, levels}
-        levels 依 price 升序,每筆:{price, low, high, sources, strength, member_count}
+        {stock_id, as_of, source_point_count, level_count_total, level_count, levels}
+        levels 依 price 升序;每筆:{price, low, high, sources, strength, member_count}。
+        v4.30 後加 top_n cap:`level_count` = 取的 top N,`level_count_total` = cluster 後總數。
     """
     own_conn = conn is None
     if own_conn:
@@ -64,13 +67,26 @@ def key_levels(
         if row.get("core_name") == "trendline_core":
             points.extend(_trendline_points(snap))
         elif row.get("core_name") == "neely_core":
-            points.extend(_neely_fib_points(snap))
+            tf = row.get("timeframe")
+            points.extend(_neely_fib_points(snap, timeframe=str(tf) if tf else ""))
 
-    levels = cluster_price_levels(points)
+    levels_all = cluster_price_levels(points)
+    # v4.30 Finding 4:按 strength * member_count 排序取 top N(LLM context cap)。
+    # 排序前先選 top N,再按 price 升序回傳(對齊原 v4.19 API 慣例)。
+    if top_n and len(levels_all) > top_n:
+        levels_top = sorted(
+            levels_all,
+            key=lambda lv: (lv.get("strength", 0), lv.get("member_count", 0)),
+            reverse=True,
+        )[:top_n]
+        levels = sorted(levels_top, key=lambda lv: lv["price"])
+    else:
+        levels = levels_all
     return {
         "stock_id": stock_id,
         "as_of": as_of.isoformat(),
         "source_point_count": len(points),
+        "level_count_total": len(levels_all),
         "level_count": len(levels),
         "levels": levels,
     }
@@ -97,30 +113,43 @@ def _sr_points(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _trendline_points(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    """trendline_core snapshot → 有效趨勢線價位(取最後 anchor pivot 價)。"""
+    """trendline_core snapshot → 趨勢線價位點(Valid + Broken 都進)。
+
+    v4.30 Finding 2 後加 Broken trendlines:破前壓力 = 將來支撐(經典 SR roleflip),
+    對長期上漲股(如 2330)Valid 趨勢線常 0 個但 Broken 50+ 個都是歷史 SR。
+    Broken 用獨立 source `trendline_historical`,跟 Valid `trendline` 區分,讓 1%
+    bucket cluster 內形成 strength=2(Valid + Broken 同價位 = 雙重歷史 SR 訊號)。
+    """
     out: list[dict[str, Any]] = []
     for tl in snapshot.get("trendlines") or []:
-        if str(tl.get("status")) != "Valid":
+        status = str(tl.get("status"))
+        if status not in ("Valid", "Broken"):
             continue
         anchors = tl.get("anchor_pivots") or []
         if anchors and _is_num(anchors[-1].get("price")):
             out.append({
                 "price": float(anchors[-1]["price"]),
-                "source": "trendline",
+                "source": "trendline" if status == "Valid" else "trendline_historical",
                 "direction": tl.get("direction"),
             })
     return out
 
 
-def _neely_fib_points(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    """neely_core snapshot.flat_fib_zones → 取區間中點為價位點。"""
+def _neely_fib_points(snapshot: dict[str, Any], *, timeframe: str = "daily") -> list[dict[str, Any]]:
+    """neely_core snapshot.flat_fib_zones → 取區間中點為價位點。
+
+    v4.30 Finding 4 後 source 加 timeframe 後綴(`neely_fib_daily` / `_weekly` /
+    `_monthly`),讓多 timeframe 共振於同 1% bucket 時 cluster strength 真實升高
+    (原本 source 都標 `neely_fib` → distinct=1)。
+    """
+    src = f"neely_fib_{timeframe}" if timeframe else "neely_fib"
     out: list[dict[str, Any]] = []
     for z in snapshot.get("flat_fib_zones") or []:
         lo, hi = z.get("low"), z.get("high")
         if _is_num(lo) and _is_num(hi):
             out.append({
                 "price": (float(lo) + float(hi)) / 2.0,
-                "source": "neely_fib",
+                "source": src,
                 "ratio": z.get("source_ratio"),
             })
     return out
