@@ -385,6 +385,45 @@ User 拍版 Option B(最簡單路徑,對齊 v4.29 commit `0d95f8a` refresh_full.
   re-rank;若未來想加 incremental cross-rank(對「只受影響部分 stocks」重算),
   屬 V3 議題
 
+### v4.30 stock_levels audit(2026-05-29,4 findings 3 commits)
+
+接 v4.30 Option B 後 user 拍版「下個 backlog stock_levels = 0 audit」(v4.29
+verify harness 揭露 2330 / 3030 / 1101 都 levels=0,實際 production 看似 broken)。
+
+**Finding 1**(commit `8087703`):**verify harness summary bug,不是 production bug**。
+`scripts/verify_mcp_toolkit_v4_29.py:_summary_note` 對 stock_levels 讀
+`out["levels"]` 但實際 levels 在 `out["key_levels"]["levels"]`(v4.19 B 視角整併
+三段 dict)→ 永遠 0。實際 2330 有 122 levels / 214 source points。修讀正確 key
++ 加 `src_points` 欄。
+
+**Finding 3**(commit `24d270c`):**M3 cores 也走 dirty queue → structural_snapshots
+stale 8 天**。對齊 v4.30 commit `ee31e55` Silver 7c full-rebuild pattern,但
+`tw_cores run-all --write --dirty` 對「fwd 沒新 dirty mark」的 stocks 不重算 →
+key_levels / pattern_scan / neely_fib_zones / SR / trendline 全 stale。修法:
+`refresh` subcommand M3 cores 不加 --dirty(全市場重算)。Daily wall time +12 min
+(~21 min M3 cores 全市場),trade-off LLM 看到的 structural 永遠 fresh。
+
+**Finding 2**(commit `7eaa6fc`):trendline_core Broken 全 filter 掉(2330 50 條
+全 Broken)。但「破前壓力 = 將來支撐」是經典 SR roleflip 訊號。修法:Broken 也進
+levels 但用獨立 source `trendline_historical`(strength=2 = Valid + 歷史 SR 雙重)。
+
+**Finding 4**(commit `7eaa6fc`):
+- 4-a:`neely_fib` source 沒區分 timeframe → daily/weekly/monthly 全標 `neely_fib`,
+  cluster strength 永遠 1。修法:source 加 timeframe 後綴(`neely_fib_daily` /
+  `_weekly` / `_monthly`)。
+- 4-b:2330 production 122 levels 障 LLM context budget。修法:`key_levels()` 加
+  `top_n=20` 預設 cap(按 strength × member_count 排序)。回傳前再 sort by price asc。
+  `top_n=0` 解禁 cap(dashboard / 其他不限 N 場景)。新加 `level_count_total` +
+  `level_count` 兩欄分開揭露。
+
+範圍:
+- 0 alembic / 0 Rust / 0 collector.toml
+- 3 commits(verify harness / refresh M3 cores / key_levels 增強)
+- 既有 4 + 4 new tests / 全 8 綠 / 0 既有 fusion + mcp_server tests regression
+  (445 passed,1 pre-existing fail 不變)
+- backward compat:`_neely_fib_points` timeframe 空時 fallback `neely_fib`
+- Rollback:每 commit 獨立 git revert
+
 ---
 
 ## v4.29 — 13-tool MCP toolkit 3-bug fix + silver --builder filter(2026-05-28)
