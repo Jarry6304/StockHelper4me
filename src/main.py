@@ -798,17 +798,18 @@ async def _run_cross_cores(args, config) -> None:
 # =============================================================================
 
 async def _run_refresh(args, config, stock_list_cfg) -> None:
-    """一鍵更新最新:Bronze incremental → Silver 7c/7a/7b → M3 cores run-all --dirty。
+    """一鍵更新最新:Bronze incremental → Silver 7c/7a/7b → Cross 8 → M3 cores --dirty。
 
     內建串完整 chain,以防沒 scheduler 排程。每段獨立 exception handling,前段失敗
     不阻擋後段(對齊 cores_overview §7.5 dirty 契約)。
 
     Steps:
         1. Bronze incremental(FinMind → Bronze 表)
-        2. Silver 7c(Rust 後復權 price_*_fwd + price_limit_merge_events)
-        3. Silver 7a(12 個獨立 builder)
-        4. Silver 7b(financial_statement 跨表)
-        5. M3 Cores `tw_cores run-all --write --dirty`(只跑 dirty stock)
+        2. Silver 7c **--full-rebuild**(對齊 v4.30 Option B,price_*_fwd 永遠 fresh)
+        3. Silver 7a(15 builder,v4.15 incremental window 30d WRITE / 180d READ)
+        4. Silver 7b(financial_statement 跨表,同 7a 走 incremental window)
+        5. Cross-Stock Cores Phase 8(magic_formula 等 11 builder,latest date only)
+        6. M3 Cores `tw_cores run-all --write --dirty`(只跑 dirty stock)
     """
     import argparse as _argparse
     import os
@@ -857,9 +858,29 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
         logger.info("[Refresh] 跳過 Bronze incremental(--skip-bronze)")
 
     # Step 2-4: Silver phases(7c 必須先跑,因為 7a/7b 讀 fwd 表)
-    for phase_name in ("7c", "7a", "7b"):
+    #
+    # ⚠️ v4.30(2026-05-29)dirty queue 設計揭露:Silver 7c 走 dirty queue
+    # 時,只重算「有新 price_adjustment_events」的少數 stocks(對齊
+    # `m2Spec/oldm2Spec/collector_rust_restructure_blueprint_v3_2.md §5.7`
+    # multiplier 倒推設計)。但 daily price_daily incremental 寫入新一天的 close
+    # *沒* 觸發 dirty → fwd 表停留在上次 full-rebuild 日期 → magic_formula /
+    # kalman / 任何讀 latest price_daily_fwd 的下游全 stale。
+    #
+    # Option B(2026-05-29 拍版):**7c 強制 full_rebuild=True**(對齊
+    # refresh_full.ps1 commit 0d95f8a pattern)。Trade-off:daily wall time
+    # +60s (4s → ~60-90s),但 fwd 表每日永遠最新。
+    #
+    # 7a / 7b 維持 full_rebuild=False(v4.15 incremental window 30 天 WRITE +
+    # 180 天 READ,日常 incremental cycle OK)。
+    SILVER_PHASES_REFRESH = [
+        ("7c", True),   # 對齊 Option B:fwd 永遠 fresh
+        ("7a", False),  # v4.15 incremental window
+        ("7b", False),
+    ]
+    for phase_name, fr in SILVER_PHASES_REFRESH:
         cur += 1
-        _log_step(cur, total_steps, f"Silver phase {phase_name}")
+        label = f"Silver phase {phase_name}" + (" --full-rebuild" if fr else "")
+        _log_step(cur, total_steps, label)
         t0 = time.monotonic()
         try:
             silver_args = _argparse.Namespace(
@@ -867,7 +888,8 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
                 silver_command="phase",
                 phase_name=phase_name,
                 stocks=stocks,
-                full_rebuild=False,
+                builder=None,
+                full_rebuild=fr,
                 verbose=args.verbose,
                 config=args.config,
                 stock_list=args.stock_list,
