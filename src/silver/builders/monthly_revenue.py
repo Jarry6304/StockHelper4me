@@ -57,6 +57,24 @@ BRONZE_TABLES = ["monthly_revenue"]
 
 DETAIL_KEYS = ("country", "create_time")
 
+# Silver schema `revenue_yoy NUMERIC(10, 4)` / `revenue_mom NUMERIC(10, 4)` 最大絕對值
+# 999999.9999(約 100 萬 %)。某些股(新上市 / 剛復牌 / M&A → prior year 基期極小)
+# YoY% 計算會爆百萬以上,整批 upsert fail。Cap 到 schema 範圍解;真實 YoY > 1000%
+# 已是 outlier 屬性,cap 不損失下游 LLM screening 判讀能力。
+_PCT_MAX = 999999.9999
+_PCT_MIN = -999999.9999
+
+
+def _clip_pct(v: float | None) -> float | None:
+    """Cap percentage to NUMERIC(10, 4) schema range。None 直接 passthrough。"""
+    if v is None:
+        return None
+    if v > _PCT_MAX:
+        return _PCT_MAX
+    if v < _PCT_MIN:
+        return _PCT_MIN
+    return v
+
 
 def _fetch_all_bronze_rows(
     db: Any, stock_ids: list[str] | None = None,
@@ -140,7 +158,7 @@ def _compute_yoy_mom(
     base_yoy = period_index.get((market, stock_id, y_i - 1, m_i))
     yoy: float | None = None
     if base_yoy is not None and base_yoy > 0:
-        yoy = round((rev_f - base_yoy) / base_yoy * 100, 4)
+        yoy = _clip_pct(round((rev_f - base_yoy) / base_yoy * 100, 4))
 
     # MoM: prior month(wrap-around: Jan-N → Dec-(N-1))
     if m_i > 1:
@@ -150,7 +168,7 @@ def _compute_yoy_mom(
     base_mom = period_index.get((market, stock_id, prev_y, prev_m))
     mom: float | None = None
     if base_mom is not None and base_mom > 0:
-        mom = round((rev_f - base_mom) / base_mom * 100, 4)
+        mom = _clip_pct(round((rev_f - base_mom) / base_mom * 100, 4))
 
     return yoy, mom
 
