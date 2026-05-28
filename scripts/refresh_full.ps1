@@ -4,12 +4,13 @@
 # 「類別 1:完整補完到最新日期」;每日排程請用 refresh_daily.ps1(類別 2)。
 #
 # 6 步:
-#   1. Bronze incremental                  (FinMind → Bronze)
-#   2. Silver 7c                           (Rust 後復權 price_*_fwd)
-#   3. Silver 7a --full-rebuild            (13 builder 全表重算)
-#   4. Silver 7b --full-rebuild            (financial_statement 跨表)
-#   5. Cross-Stock Cores 8 --full-rebuild  (lookback 全部 dates)
-#   6. M3 Cores tw_cores run-all --write   (全市場全核)
+#   1. Bronze incremental                       (FinMind → Bronze)
+#   2. Silver 7c --full-rebuild                 (Rust 後復權 price_*_fwd 全市場 — 對齊「完整補完」語意,
+#                                                繞 dirty queue;見下方 step 2 inline comment)
+#   3. Silver 7a --full-rebuild                 (13 builder 全表重算)
+#   4. Silver 7b --full-rebuild                 (financial_statement 跨表)
+#   5. Cross-Stock Cores 8 --full-rebuild       (lookback 全部 dates)
+#   6. M3 Cores tw_cores run-all --write        (全市場全核)
 #
 # 何時用:隔很久沒跑 / 遷移後 / 距上次 incremental > 30 天(Silver 7a WRITE 窗,
 #         窗外舊 row 不會被 incremental 更新)/ 想確保端到端全部重算。
@@ -102,8 +103,13 @@ $runStart = [System.Diagnostics.Stopwatch]::StartNew()
 Invoke-Step 1 'Bronze incremental' {
     python src/main.py incremental @StockArgs
 }
-Invoke-Step 2 'Silver 7c' {
-    python src/main.py silver phase 7c @StockArgs
+Invoke-Step 2 'Silver 7c --full-rebuild' {
+    # 對齊「完整補完 wrapper」語意 — 不走 dirty queue。
+    # v4.29 揭露 bug:dirty queue 只對「有新 price_adjustment_events」的 stocks 走 fwd 重算,
+    # 但 daily price_daily incremental 寫入(no event)不會 mark fwd dirty → fwd 表停在
+    # 上次 full-rebuild 日期。對 magic_formula / kalman / 任何讀 price_daily_fwd latest
+    # 的 builder / cores 都會 stale。--full-rebuild 強制 Rust 全市場重跑。
+    python src/main.py silver phase 7c --full-rebuild @StockArgs
 }
 Invoke-Step 3 'Silver 7a --full-rebuild' {
     python src/main.py silver phase 7a --full-rebuild @StockArgs
