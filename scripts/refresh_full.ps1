@@ -77,7 +77,7 @@ $TotalSteps = if ($SkipCores) { 5 } else { 6 }
 
 function Invoke-Step {
     param([int]$Idx, [string]$Label, [scriptblock]$Action)
-    $banner = "[refresh_full] Step $Idx/$TotalSteps: $Label  ($(Get-Date -Format 'HH:mm:ss'))"
+    $banner = "[refresh_full] Step $Idx/${TotalSteps}: $Label  ($(Get-Date -Format 'HH:mm:ss'))"
     Write-Host ('=' * 70)
     Write-Host $banner
     Write-Host ('=' * 70)
