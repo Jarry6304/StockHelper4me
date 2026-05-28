@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
 - **alembic head**:`h4i5j6k7l8m9`(v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
-- **開發分支**:`claude/nice-feynman-wpW8l`(v4.30 Option B refresh Silver 7c full-rebuild + v4.29 13-tool MCP fix B/C/A + silver `--builder` flag,PR #110;v4.28 B1+2A+B3 經 PR #108 已 merge claude/beautiful-cori-GZbbe)
+- **開發分支**:`claude/nice-feynman-wpW8l`(v4.31 kalman_forecast graceful skip + mcp_server/README rewrite;v4.30 stock_levels audit 4 findings + Option B refresh full-rebuild;v4.29 13-tool MCP fix B/C/A + silver `--builder` flag,PR #110;v4.28 B1+2A+B3 經 PR #108 已 merge)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
 - **MCP toolkit**:**13 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen;v4.26 加 1)
@@ -291,6 +291,70 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.31 — kalman_forecast empty graceful skip + mcp_server/README 全面 rewrite(2026-05-29)
+
+接 v4.30 stock_levels audit 完整收尾後 user 拍版 backlog 候選「kalman_forecast empty
+graceful skip」+ MCP server README 更新。**2 commits,0 schema / 0 collector.toml**。
+
+### Commit 1:`91fe364` — kalman_forecast_core empty input graceful skip
+
+v4.30 production verify 揭露的 14 個 ETF kalman_forecast_core 走 `[err]`(配對 vwap_core
+14 個 `[skipped]` 不一致),且 `stock_id` 因 dispatcher Err arm 變成 `""` → verify
+看到 `stock=-` 而非真實 stock_id。
+
+**Root cause**:
+- `vwap_core` 走 **caller-side empty guard**(`run_stock_cores.rs:170-190` 在 dispatch
+  前 pre-check empty,記 status=skipped 帶正確 stock_id)
+- `kalman_forecast_core` 走 **callee-side bail**(`lib.rs:338` `compute()` 對 empty
+  input `anyhow::bail!`)→ `dispatch_forecast` Err arm(`dispatcher.rs:305`)把 stock_id
+  寫成 `""` → verify 看到 `stock=-` + 分類成 err
+
+**修法**(`rust_compute/cores/system/tw_cores/src/run_stock_cores.rs:343-360`):
+- 在 `dispatch_forecast` 前加 `if series.bars.is_empty()` guard(對齊 vwap_core
+  pattern)
+- empty → 構造 `CoreRunSummary { status: "skipped", error: Some("empty_series:no
+  Silver data for stock"), stock_id: <真實 sid> }` push
+- non-empty → 走原 `dispatch_forecast` path 不變
+- callee `compute()` empty bail 行為 0 改動(既有 unit test `empty_input_errors` 仍
+  pass,direct caller 行為向下相容)
+
+**Affected 14 ETF**(2026-05-28 / 2026-05-29 verify):0058 / 0059 / 00649 / 00767 /
+1262 / 1704 / 1902 / 2475 / 2499 / 3519 等。共通特性:無 Silver `price_daily_fwd`
+data(下市 / 暫停交易 / IPO 前)。
+
+**Verify**:
+- `cargo build --release -p tw_cores` ✅ 0 warnings / 2m 22s
+- `cargo test --release -p kalman_forecast_core` ✅ 10/10 passed
+- `cargo test --release -p tw_cores` ✅ 13/13 passed
+
+**Production impact**:14 ETF M3 cores summary 從 `err 14` → `err 0`(配上 vwap_core
+14 個 `skipped` 一致)。0 production data 影響(本來 empty 也算不出 forecast,只是
+分類錯)。
+
+### Commit 2:`3ef1974` — mcp_server/README.md 全面 rewrite
+
+原 README 寫在 v2 時代(3 public + 6 render = 9 tools),已 outdated 多版。本 commit
+完整 rewrite 對齊當前 v4.31 state。
+
+**主要更新**:
+- **13 個 active tools** 分 4 cohort 清楚列(個股/跨股 4 + 跨股 factor 4 + Fusion 整合
+  3 + Wave/Resonance 2)
+- 移除 render tools 主表(v3.30 暫關說明放 Hidden tools 段)
+- 各 tool 加學術引用(Greenblatt 2005 / Piotroski 2000 / Ang 2009 / Chen-Chou-Hsieh
+  2023 等)+ payload 大小 + v4.x bug fix 對應註記
+- 對話範例改用真實 v4.31 tool 名(stock_snapshot / stock_levels / market_overview /
+  dual_track_resonance)+ 真實 production 數字(2330 revenue_yoy +17.5% / 122 levels
+  / 30 fib lines 等)
+- 加 Verify harness 段(`scripts/verify_mcp_toolkit_v4_29.py` 用法)
+- 加排錯段對 dual_track timeout / indicators payload 給對應 v4.29 修法
+- 對齊參考段更新:m3Spec/dual_track_resonance + fusion_layer + CLAUDE.md v3.31~v4.30
+  歷程
+- 安裝段移除 kaleido / chromium 步驟(v3.30 後不需要)
+
+無 code 改動(0 .py / 0 .toml / 0 schema)。
 
 ---
 
