@@ -385,9 +385,17 @@ resonance 仍 single_track**(golden 階段 stale 警告會提示)。Phase 3b 為
 
 ### user 本機 production verify(下個 session)
 
+> ⚠️ 前置:先跑過 `refresh` / `refresh_full`(structural_snapshots 要有 neely/trendline/SR/env cores),
+> golden fusion 才讀得到上游。一鍵流水線:`.\scripts\verify_golden_l3_v4_32.ps1`(步驟即下方手動展開)。
+
 ```powershell
 git pull
 pip install -e ".[web]" pydantic-to-typescript   # Web API + codegen 依賴
+
+# 一鍵(物化 + SQL + MCP smoke + 印 API/codegen 指令;預設小股集 2330,3030,1101)
+.\scripts\verify_golden_l3_v4_32.ps1
+
+# ── 或手動分步 ──
 # 1. 物化(latest)
 python src/main.py golden fusion                  # levels + resonance + climate → structural_snapshots
 psql $env:DATABASE_URL -c "SELECT core_name,timeframe,COUNT(*) FROM structural_snapshots WHERE core_name LIKE '%_fusion' GROUP BY 1,2;"
@@ -7597,6 +7605,7 @@ cd ..
 | `scripts/test_pipeline.ps1` 🆕 v4.4 | **完整測試流水線**(Windows)— 5 phase:Environment check / Sandbox unit tests(Rust 528 + Python 165+)/ Schema health(alembic+row counts)/ Production verify(facts stats + per-EventKind + **Neely forest_size P0 Gate**)/ MCP smoke test;支援 `-OnlyPhase` / `-SkipPhase` / `-DryRun` | `.\scripts\test_pipeline.ps1` |
 | `scripts/test_pipeline.sh` 🆕 v4.4 | 完整測試流水線(Unix Bash 版,對齊 .ps1);環境變數 `SKIP_PHASES` / `ONLY_PHASES` / `DRY_RUN=1` 控制 | `./scripts/test_pipeline.sh` |
 | `scripts/verify_mcp_toolkit_v4_29.py` 🆕 v4.29 | **全覆蓋 13 個 public MCP tool 健康度檢查**。Per-stock(6 tool)+ market-level(7 tool)各跑一次,report status / elapsed / payload_kb / per-tool summary。Payload soft `> 50KB` WARN / hard `> 1MB` FAIL。退碼 0/1 | `python scripts/verify_mcp_toolkit_v4_29.py --stocks 2330,3030 --verbose` |
+| `scripts/verify_golden_l3_v4_32.ps1` 🆕 v4.32 | **Golden L3 production verify 流水線**(PowerShell)— 5 步:(opt)裝 `.[web]`+codegen 依賴 / `golden fusion` 物化(預設小股集 2330,3030,1101)/ SQL spot-check(*_fusion row count + levels/climate 取樣)/ MCP serving-from-materialized smoke(stock_levels/dual_track_resonance/market_context)/(印)Web API uvicorn+curl + codegen tsc 手動指令。前置:已跑過 refresh(上游 cores 在) | `.\scripts\verify_golden_l3_v4_32.ps1` |
 
 ---
 
