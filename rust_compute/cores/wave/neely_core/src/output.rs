@@ -24,13 +24,16 @@ use std::collections::HashMap;
 /// 後復權 OHLC 序列。Silver `price_*_fwd` 表已處理漲跌停合併與後復權。
 /// Volume 為選填,Volume Alignment 子規則(§9.1 `volume_alignment`)需要時用。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct OhlcvSeries {
     pub stock_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "\"Daily\" | \"Weekly\" | \"Monthly\" | \"Quarterly\""))]
     pub timeframe: Timeframe,
     pub bars: Vec<OhlcvBar>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct OhlcvBar {
     pub date: NaiveDate,
     pub open: f64,
@@ -41,6 +44,7 @@ pub struct OhlcvBar {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct TimeRange {
     pub start: NaiveDate,
     pub end: NaiveDate,
@@ -51,8 +55,10 @@ pub struct TimeRange {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct NeelyCoreOutput {
     pub stock_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "\"Daily\" | \"Weekly\" | \"Monthly\" | \"Quarterly\""))]
     pub timeframe: Timeframe,
     pub data_range: TimeRange,
 
@@ -113,6 +119,7 @@ pub struct NeelyCoreOutput {
 
 /// Three Rounds Round 3 暫停資訊(neely_core_architecture.md §8.4)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct Round3PauseInfo {
     /// Round 3 觸發原因說明
     pub reason: String,
@@ -127,6 +134,7 @@ pub struct Round3PauseInfo {
 
 /// Missing Wave 位置分類(spec 1055-1057 行)。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum MissingWavePosition {
     /// m1 中心 missing wave:左側標 `:5?`、右側標 `x:c3?` 或 `b:F3?`
     M1Center,
@@ -142,6 +150,7 @@ pub enum MissingWavePosition {
 ///
 /// 對齊 spec 1054-1057 行「missing wave 標記慣例 — 標記成組捆綁」。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct MissingWaveSuspect {
     /// 對應的 monowave index(P2 標 bundle 的 monowave)
     pub monowave_idx: usize,
@@ -163,6 +172,7 @@ pub struct MissingWaveSuspect {
 /// **v4.5.1(2026-05-19)**:加 `ZigzagAsFlatFailure` variant,對齊
 /// `m3Spec/neely_rules.md` 2337-2342 行 Zigzag wave-c 規則。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum EmulationKind {
     /// Running Double Three Combination 偽裝 1st Wave Extension Impulse
     /// spec 1905-1906:thrust > 該段「wave-3」+「wave-3 為 :3」可辨識
@@ -191,6 +201,7 @@ pub enum EmulationKind {
 
 /// Emulation Suspect — 形態偽裝候選。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct EmulationSuspect {
     /// 對應的 Scenario id(若可定位)
     pub scenario_id: Option<String>,
@@ -216,6 +227,7 @@ pub struct EmulationSuspect {
 ///   - 若尚未進場 → 等到可能性收斂為一再進場
 ///   - 若已持倉獲利 → 多套計數出現不代表頂底,而是還有路要走
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct ReverseLogicObservation {
     /// 同一資料上有效 scenario 的數量(forest.len())
     pub scenario_count: usize,
@@ -237,6 +249,7 @@ pub struct ReverseLogicObservation {
 ///
 /// 對齊精華版 Ch7 11 級體系,由小至大列序。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum Degree {
     SubMicro,
     Micro,
@@ -263,6 +276,7 @@ pub enum Degree {
 /// **為何重要**(spec §8.5):台股大部分個股上市 5-15 年,根本到不了 Cycle 級別。
 /// Aggregation 層可據此自動降低顯示的 Degree 標籤,避免「短歷史股票被標為 Supercycle」誤導。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct DegreeCeiling {
     /// 本次分析依資料量可達到的最高 Degree
     pub max_reachable_degree: Degree,
@@ -279,8 +293,10 @@ pub struct DegreeCeiling {
 /// 對齊 architecture §8.6:Neely Core 本來就有完整 monowave 資訊,直接輸出比 Aggregation
 /// 重新解析 `structural_snapshots` 高效。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct CrossTimeframeHints {
     /// 本次分析的 Timeframe
+    #[cfg_attr(feature = "ts", ts(type = "\"Daily\" | \"Weekly\" | \"Monthly\" | \"Quarterly\""))]
     pub timeframe: Timeframe,
     /// 各 monowave 的摘要
     pub monowave_summaries: Vec<MonowaveSummary>,
@@ -288,6 +304,7 @@ pub struct CrossTimeframeHints {
 
 /// 單一 monowave 的跨 Timeframe 摘要(architecture §8.6)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct MonowaveSummary {
     /// 對應 classified_monowaves 的 index
     pub monowave_index: usize,
@@ -305,6 +322,7 @@ pub struct MonowaveSummary {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct NeelyDiagnostics {
     pub monowave_count: usize,
     pub candidate_count: usize,
@@ -331,6 +349,7 @@ pub struct NeelyDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct RuleRejection {
     pub candidate_id: String,
     pub rule_id: RuleId,
@@ -343,6 +362,7 @@ pub struct RuleRejection {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct RuleReference {
     pub rule_id: RuleId,
     pub neely_page: String,
@@ -354,6 +374,7 @@ pub struct RuleReference {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct Scenario {
     pub id: String,
 
@@ -454,6 +475,7 @@ pub struct Scenario {
 /// 丟棄的 Pass 1 候選(對齊 spec「Pass 2 candidates 較 accurate」設計但保留
 /// Pass 1 diagnostic trail)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct MonowaveStructureLabels {
     /// 該 monowave 在 scenario candidate 內的索引(0..wave_count)
     pub monowave_index: usize,
@@ -493,6 +515,7 @@ pub struct MonowaveStructureLabels {
 ///   - compacted_base_label 已 reassign(非預設)+ awaiting = false → Round2
 ///   - 否則 → Round1
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum RoundState {
     Round1,
     Round2,
@@ -504,6 +527,7 @@ pub enum RoundState {
 /// 包裝 `PatternBound` 並標 anchor 起點/終點意圖(start_label / end_label),
 /// 供 Aggregation Layer 「依 Pre-Constructive Logic 標籤定位 scenario 在 higher-degree 中的位置」。
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct PatternIsolationAnchor {
     /// 起點 monowave index(inclusive)
     pub start_idx: usize,
@@ -519,6 +543,7 @@ pub struct PatternIsolationAnchor {
 
 /// Phase 7 — Stage 7.5 諮詢性發現(Channeling / Ch9 Advanced Rules)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct AdvisoryFinding {
     /// 對應的 RuleId(Ch5_Channeling_* / Ch9_*)
     pub rule_id: RuleId,
@@ -529,6 +554,7 @@ pub struct AdvisoryFinding {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum AdvisorySeverity {
     /// 資訊性(channeling 標註,無強制力)
     Info,
@@ -540,6 +566,7 @@ pub enum AdvisorySeverity {
 
 /// Wave Tree(階層化波浪結構)。具體欄位於後續 PR 補完。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct WaveNode {
     pub label: String,
     pub start: NaiveDate,
@@ -557,6 +584,7 @@ pub struct WaveNode {
 /// 未來 Deserialize 預留(目前 Monowave 只 Serialize 寫 JSONB,Python 端走 dict
 /// access,不走 Rust 反序列化)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct Monowave {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
@@ -570,6 +598,7 @@ pub struct Monowave {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum MonowaveDirection {
     Up,
     Down,
@@ -581,6 +610,7 @@ pub enum MonowaveDirection {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum PowerRating {
     StrongBullish,    // +3
     Bullish,          // +2
@@ -596,6 +626,7 @@ pub enum PowerRating {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum NeelyPatternType {
     Impulse,
     Diagonal { sub_kind: DiagonalKind },
@@ -614,12 +645,14 @@ pub enum NeelyPatternType {
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum DiagonalKind {
     Leading,
     Ending,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum ZigzagKind {
     Single,
     Double,
@@ -649,6 +682,7 @@ pub enum ZigzagKind {
 ///
 /// 由 `classifier::flat_classifier::classify_flat` 從 monowave magnitudes 推導。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum FlatKind {
     Common,
     BFailure,
@@ -663,6 +697,7 @@ pub enum FlatKind {
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum TriangleKind {
     Contracting,
     Expanding,
@@ -670,6 +705,7 @@ pub enum TriangleKind {
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum CombinationKind {
     /// Table A 小 x-wave 組合:(5-3-5) + x + (5-3-5) = Double Zigzag
     DoubleZigzag,
@@ -696,6 +732,7 @@ pub enum CombinationKind {
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum ComplexityLevel {
     Simple,
     Intermediate,
@@ -706,6 +743,7 @@ pub enum ComplexityLevel {
 ///
 /// 對齊 m3Spec/neely_core_architecture.md §9.2 PostBehavior::ReachesWaveZone 內部欄。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum WaveNumber {
     W1, W2, W3, W4, W5,
     WX,
@@ -720,6 +758,7 @@ pub enum WaveNumber {
 /// 由 `power_rating::post_behavior::lookup(pattern_type, power_rating, in_triangle_context)`
 /// 查表得出;後續 Stage 5+ 細化規則時可在 classifier 內 override 為 Composite。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum PostBehavior {
     /// 後續必完全回測整段(例:5th Failure、C-Failure、Terminal Impulse)
     FullRetracementRequired,
@@ -744,6 +783,7 @@ pub enum PostBehavior {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct StructuralFacts {
     pub fibonacci_alignment: Option<FibonacciAlignment>,
     pub alternation: Option<AlternationFact>,
@@ -759,12 +799,14 @@ pub struct StructuralFacts {
 
 // 以下 placeholder type 在 Stage 5-7 實作時補欄位
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct FibonacciAlignment {
     pub matched_ratios: Vec<f64>,
 }
 
 /// Alternation 單軸檢查結果(v4.1 — 對齊 NEoWave §Rule of Alternation 五軸)。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum AlternationCheck {
     /// 該軸 alternation 存在(W2 與 W4 在此軸上不同)
     Confirmed,
@@ -781,6 +823,7 @@ pub enum AlternationCheck {
 /// Phase 1 PR 只有 Construction 軸被 validator dispatch;v4.1 補完其他 4 軸
 /// 由 `classifier::structural_facts::alternation` 直接由 monowave metrics 計算。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct AlternationFact {
     /// Price 軸:W2 / W4 retracement % 差異是否顯著(預設門檻 ≥ 25%)
     pub price: AlternationCheck,
@@ -798,6 +841,7 @@ pub struct AlternationFact {
 
 /// Channeling 證據細節(v4.1 — 補 evidence 欄位給 Aggregation 看)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct ChannelingFact {
     pub holds: bool,
     /// 各 trendline touchpoints / channel 偵測證據(對齊 spec §Ch5/Ch9 Channeling
@@ -807,6 +851,7 @@ pub struct ChannelingFact {
 
 /// Time Relationship 細節(v4.1 — 補 durations + Fibonacci ratio evidence)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct TimeRelationship {
     pub label: String,
     /// 各 wave duration in bars(對齊 spec §StructuralFacts.time_relationship)
@@ -817,6 +862,7 @@ pub struct TimeRelationship {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct VolumeAlignment {
     pub holds: bool,
 }
@@ -824,6 +870,7 @@ pub struct VolumeAlignment {
 /// W4 與 W2 區 overlap 關係(v4.1 從 `{ label: String }` 升 enum,
 /// 給 Aggregation 結構化判斷。對齊 spec §Ch5 Overlap Rule 1326-1329 行)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum OverlapPattern {
     /// Trending Impulse:W4 不進入 W2 區(無 overlap)
     Trending {
@@ -841,6 +888,7 @@ pub enum OverlapPattern {
 
 /// Ch8 Extension vs Subdivision 獨立性狀態(v4.1 — 對齊 spec §Ch8 Independent Rule)。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum SubdivisionStatus {
     /// 該段細分結構獨立(典型 Impulse Extension,符合 Independent Rule)
     Independent,
@@ -855,6 +903,7 @@ pub enum SubdivisionStatus {
 /// 對齊 spec §Ch8 Independent Rule(`neely_rules.md` §Ch8 Complex Polywaves)。
 /// v4.1 加入 StructuralFacts 給 Aggregation Layer 對 Ch8 Multiwave / X-wave 偵測伸縮判斷。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct ExtensionSubdivisionPair {
     /// 延伸段在 5-wave Impulse 中的位置(W1 / W3 / W5)
     pub extended_wave: WaveNumber,
@@ -869,6 +918,7 @@ pub struct ExtensionSubdivisionPair {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct Trigger {
     pub trigger_type: TriggerType,
     /// r3 修正:移除 ReduceProbability,改 WeakenScenario(§9.4)
@@ -878,6 +928,7 @@ pub struct Trigger {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum TriggerType {
     PriceBreakBelow(f64),
     PriceBreakAbove(f64),
@@ -887,6 +938,7 @@ pub enum TriggerType {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum OnTriggerAction {
     InvalidateScenario,
     /// 標註該 scenario 進入 deferred,**不**引入機率語意
@@ -901,6 +953,7 @@ pub enum OnTriggerAction {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct FibZone {
     pub label: String,
     pub low: f64,
@@ -931,6 +984,7 @@ pub struct FibZone {
 /// - 維持 PartialEq + Eq 供 `.contains(&rid)` / `==` 比對
 /// - Hash 不需要(無 HashMap/HashSet 用 RuleId 當 key)
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 #[allow(non_camel_case_types)] // r5 章節編碼採 `Ch5_Essential` 風格(architecture §9.3)
 #[allow(dead_code)] // r6 (v3.6):Ch3/Ch4/Ch6/Ch7/Ch8/Ch10/Ch11/Ch12 variants 由 domain-specific structs 提供結果,RuleId 變體本身未 dispatch 構造,純章節追溯參照
 pub enum RuleId {
@@ -944,7 +998,9 @@ pub enum RuleId {
     /// - `sub_rule_index`:同 Condition 內的多條子規則編號
     Ch3_PreConstructive {
         rule: u8,
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         condition: char,
+        #[cfg_attr(feature = "ts", ts(type = "string | null"))]
         category: Option<char>,
         sub_rule_index: Option<u8>,
     },
@@ -1160,6 +1216,7 @@ pub enum RuleId {
 /// Phase 1 PR:只 Construction 軸實際被引用(W2/W4 alternation 用 Construction),
 /// 其他 axis variant 留後續 PR 用。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum AlternationAxis {
     Price,
     Time,
@@ -1170,6 +1227,7 @@ pub enum AlternationAxis {
 
 /// Ch9 Exception Rule Aspect 1 的三個情境(neely_rules.md 1980-1986 行)。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum ExceptionSituation {
     /// A:Multiwave 或更大形態的結尾
     MultiwaveEnd,
@@ -1191,6 +1249,7 @@ pub enum ExceptionSituation {
 /// 用於 `RuleId::Ch6_Impulse_Stage2` / `Ch11_Impulse_WaveByWave` /
 /// `Ch11_Terminal_WaveByWave` 區分依延伸段位置(1st / 3rd / 5th / none)的不同變體規則。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 #[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
 pub enum ImpulseExtension {
     /// 1st 段延伸(W1 ≥ 161.8% × max(W3, W5))
@@ -1206,6 +1265,7 @@ pub enum ImpulseExtension {
 /// Ch11 Flat / Zigzag 的 a/b/c 三段標籤。
 /// 用於 `RuleId::Ch11_Flat_Variant_Rules` / `Ch11_Zigzag_WaveByWave` 指定變體規則對應的 wave。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 #[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
 pub enum WaveAbc {
     A,
@@ -1216,6 +1276,7 @@ pub enum WaveAbc {
 /// Ch11 Triangle 的 a/b/c/d/e 五段標籤。
 /// 用於 `RuleId::Ch11_Triangle_Variant_Rules` 指定 Triangle 變體規則對應的 wave。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 #[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
 pub enum TriangleWave {
     A,
@@ -1228,6 +1289,7 @@ pub enum TriangleWave {
 /// Ch11 Flat 全部變體(neely_rules.md §Corrective — Flat 全部變體 2191-2322 行)。
 /// 用於 `RuleId::Ch11_Flat_Variant_Rules` 區分各 Flat 變體規則。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 #[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
 pub enum FlatVariant {
     /// Common Flat — b ≈ a,c ≈ a
@@ -1258,6 +1320,7 @@ pub enum FlatVariant {
 /// 三種型態(Horizontal / Irregular / Running)× 三種類型(Limiting / Non-Limiting / Expanding)
 /// = 9 變體。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 #[allow(dead_code)] // v3.6 章節追溯參照,未被 dispatch 構造
 pub enum TriangleVariant {
     HorizontalLimiting,
@@ -1308,6 +1371,7 @@ pub fn compaction_base_label(pattern: &NeelyPatternType) -> StructureLabel {
 ///
 /// Phase 2 PR 範圍只宣告 Ch3 引用的 label。未來 Ch4-Ch12 若引入新 label 需擴 enum。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 #[allow(non_camel_case_types)]
 pub enum StructureLabel {
     /// `:5` — 衝動五段(無 Position Indicator)
@@ -1354,6 +1418,7 @@ pub enum StructureLabel {
 /// - MissingWaveBundle(`?` 後綴):missing-wave 場景的束帶標記
 ///   (對齊 neely_rules.md §1054-1057「missing wave 標記慣例」:成組捆綁,一個被棄整組刪)
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum Certainty {
     /// 主要選項(無封裝)
     Primary,
@@ -1367,6 +1432,7 @@ pub enum Certainty {
 
 /// Structure Label Candidate — 單一候選 label + certainty。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct StructureLabelCandidate {
     pub label: StructureLabel,
     pub certainty: Certainty,
@@ -1383,6 +1449,7 @@ pub struct StructureLabelCandidate {
 /// start_label / end_label 是 anchor 標籤(F3/XC3/L3/S5/L5 之一作為起點,
 /// L5/L3 作為終點)。
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct PatternBound {
     /// 起點 monowave index(inclusive)
     pub start_idx: usize,
@@ -1403,6 +1470,7 @@ pub struct PatternBound {
 /// Zigzag DETOUR Test 對 wave_count == 3 candidate 的 annotation
 /// 對齊 m3Spec/neely_rules.md §Zigzag DETOUR Test(1283-1285 行)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct DetourAnnotation {
     /// 對應 candidate id
     pub candidate_id: String,

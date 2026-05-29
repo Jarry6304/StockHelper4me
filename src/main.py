@@ -224,6 +224,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="full_rebuild 時往回幾天(預設由 builder 決定,magic_formula = 30)",
     )
 
+    # ── golden 子命令(Golden L3 fusion 物化:levels/resonance/climate → structural_snapshots)
+    golden_parser = subparsers.add_parser(
+        "golden",
+        help="Golden L3 fusion 物化(levels/resonance/climate → structural_snapshots)",
+    )
+    golden_subparsers = golden_parser.add_subparsers(dest="golden_command", required=True)
+    golden_fusion_parser = golden_subparsers.add_parser(
+        "fusion",
+        help="物化 fusion(levels + resonance per-stock + climate marketwide)",
+    )
+    golden_fusion_parser.add_argument(
+        "--stocks",
+        help="限縮 universe(逗號分隔);不指定 = 全市場",
+    )
+    golden_fusion_parser.add_argument(
+        "--only",
+        help="只物化某些 output(逗號分隔:levels,resonance,climate;預設全做)",
+    )
+    golden_fusion_parser.add_argument(
+        "--as-of",
+        dest="as_of",
+        help="物化日 YYYY-MM-DD(預設 price_daily 最新交易日)",
+    )
+    golden_fusion_parser.add_argument(
+        "--since",
+        help="backfill 起日 YYYY-MM-DD(逐交易日回填,啟用 skip-if-exists)",
+    )
+    golden_fusion_parser.add_argument(
+        "--until",
+        help="backfill 迄日 YYYY-MM-DD(預設 today)",
+    )
+
     # ── refresh 子命令(一鍵手動更新最新資料,以防沒 scheduler)
     refresh_parser = subparsers.add_parser(
         "refresh",
@@ -532,6 +564,11 @@ def main() -> None:
         asyncio.run(_run_cross_cores(args, config))
         return
 
+    # golden 指令(Golden L3 fusion 物化 → structural_snapshots)
+    if args.command == "golden":
+        _run_golden_fusion(args, config)
+        return
+
     # refresh 指令(一鍵手動更新最新資料)
     if args.command == "refresh":
         asyncio.run(_run_refresh(args, config, stock_list_cfg))
@@ -794,8 +831,150 @@ async def _run_cross_cores(args, config) -> None:
 
 
 # =============================================================================
+# 子命令:golden(Golden L3 fusion 物化)
+# =============================================================================
+
+def _run_golden_fusion(args, config) -> None:
+    """Golden L3 fusion 物化:levels/resonance(per-stock)+ climate(marketwide)。
+
+    寫進 structural_snapshots(新 core_name levels_fusion / resonance_fusion /
+    climate_fusion)。daily = always-recompute-latest;`--since` = backfill 逐交易日
+    skip-if-exists。對齊 m3Spec/golden-layers.md + build-pipeline.md。
+    """
+    from datetime import datetime
+    from fusion.materialize import run_climate_materialize, run_fusion_materialize
+
+    def _pd(s: str | None):
+        return datetime.strptime(s, "%Y-%m-%d").date() if s else None
+
+    only_raw = getattr(args, "only", None)
+    only = (
+        {s.strip() for s in only_raw.split(",") if s.strip()}
+        if only_raw else {"levels", "resonance", "climate"}
+    )
+    stocks = (
+        [s.strip() for s in args.stocks.split(",") if s.strip()]
+        if getattr(args, "stocks", None) else None
+    )
+    as_of = _pd(getattr(args, "as_of", None))
+    since = _pd(getattr(args, "since", None))
+    until = _pd(getattr(args, "until", None))
+
+    fusion_only = only & {"levels", "resonance"}
+    want_climate = "climate" in only
+
+    db = create_writer()
+    db.init_schema()
+    try:
+        if since is not None:
+            # backfill 逐交易日(price_daily distinct dates in range)
+            from datetime import date as _date
+
+            from fusion.raw._db import get_connection
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT DISTINCT date FROM price_daily "
+                        "WHERE market='TW' AND date BETWEEN %s AND %s ORDER BY date",
+                        [since, until or _date.today()],
+                    )
+                    dates = [r["date"] for r in cur.fetchall()]
+            finally:
+                conn.close()
+            logger.info(f"[golden] backfill {len(dates)} trading days [{since} .. {until}]")
+            for d in dates:
+                if fusion_only:
+                    r = run_fusion_materialize(
+                        db, as_of=d, stocks=stocks, only=fusion_only, backfill=True
+                    )
+                    logger.info(f"[golden] {d} fusion {r}")
+                if want_climate:
+                    rc = run_climate_materialize(db, as_of=d)
+                    logger.info(f"[golden] {d} climate {rc}")
+        else:
+            results = {}
+            if fusion_only:
+                results["fusion"] = run_fusion_materialize(
+                    db, as_of=as_of, stocks=stocks, only=fusion_only, backfill=False
+                )
+            if want_climate:
+                results["climate"] = run_climate_materialize(db, as_of=as_of)
+
+            print()
+            print("=" * 70)
+            print("Golden L3 fusion 物化結果")
+            print("=" * 70)
+            for name, r in results.items():
+                print(f"[{name}]")
+                for k, v in r.items():
+                    print(f"    {k}: {v}")
+            print()
+    finally:
+        db.close()
+
+
+# =============================================================================
 # 子命令:refresh(一鍵手動更新最新資料)
 # =============================================================================
+
+def _run_refresh_forecast(stocks, config) -> None:
+    """Refresh forecast forward(Phase 3a):emit-neely(裁量軌)+ fuse(統計軌 latest)。
+
+    讓 forecast_log 有當日 band 供 resonance track2 讀。直接呼叫 forecast 模組函式
+    (非 Namespace),對 universe latest date 跑:
+      1. emit_neely_fib — forward 裁量軌(neely_fib internal_only,不餵 track2 但屬 forecast)
+      2. fuse_batch — 統計軌 fused band(resonance track2 真正讀的;需 Phase 3b 校準才有 eligible core)
+
+    ⚠️ 統計軌 _cqr band 來自歷史 backtest + conformalize(Phase 3b,全市場校準,獨立重
+    任務,不在 daily refresh)。未鋪開前 fuse 多回 no_calibrated_inputs。
+    """
+    from datetime import date as _date
+
+    from forecast._db import get_connection as _fc_get_connection
+    from forecast.fusion import fuse_batch
+    from forecast.neely_emitter import emit_neely_fib
+    from fusion.raw._db import fetch_latest_close
+
+    universe = (
+        [s.strip() for s in stocks.split(",") if s.strip()] if stocks else None
+    )
+    with _fc_get_connection() as conn:
+        if universe is None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT stock_id FROM price_daily_fwd "
+                    "WHERE market='TW' ORDER BY stock_id"
+                )
+                universe = [r["stock_id"] for r in cur.fetchall()]
+        with conn.cursor() as cur:
+            cur.execute("SELECT MAX(date) AS d FROM price_daily WHERE market='TW'")
+            row = cur.fetchone()
+        asof = (row["d"] if row and row.get("d") else _date.today())
+        logger.info(f"[Refresh.forecast] universe={len(universe)} asof={asof}")
+
+        # 1) emit-neely(forward 裁量軌)— per-stock graceful
+        emit_ok = 0
+        for sid in universe:
+            try:
+                pr = fetch_latest_close(conn, stock_id=sid, as_of=asof)
+                cp = float(pr["close"]) if pr and pr.get("close") is not None else None
+                emit_neely_fib(conn, sid, asof, current_price=cp)
+                emit_ok += 1
+            except Exception as e:
+                logger.debug(f"[Refresh.forecast] emit-neely {sid} skip: {e}")
+        logger.info(f"[Refresh.forecast] emit-neely {emit_ok}/{len(universe)}")
+
+        # 2) fuse(統計軌 latest;resonance 讀 primary_confidence=0.80 × 三 horizon)
+        try:
+            res = fuse_batch(
+                conn, stock_ids=universe, forecast_dates=[asof],
+                horizons=[21, 63, 126], confidences=[0.80],
+            )
+            logger.info(f"[Refresh.forecast] fuse {res}")
+        except Exception as e:
+            logger.error(f"[Refresh.forecast] fuse 失敗: {e}")
+
 
 async def _run_refresh(args, config, stock_list_cfg) -> None:
     """一鍵更新最新:Bronze incremental → Silver 7c/7a/7b → Cross 8 → M3 cores --dirty。
@@ -828,8 +1007,9 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
     def _record(step: str, status: str, t0: float) -> None:
         step_results.append((step, status, time.monotonic() - t0))
 
-    # Steps: Bronze + Silver 7c/7a/7b + Cross-Stock 8 + M3 cores = 6 max
-    total_steps = 6 if not args.skip_cores else 5
+    # Steps: Bronze + Silver 7c/7a/7b + Cross-Stock 8 + M3 cores + forecast + golden = 8 max
+    # (forecast / golden 與 M3 cores 同受 --skip-cores 控制 — 皆依賴 cores 輸出)
+    total_steps = 8 if not args.skip_cores else 5
     if args.skip_bronze:
         total_steps -= 1
     cur = 0
@@ -964,6 +1144,47 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
                 _record("m3_cores", "failed", t0)
     else:
         logger.info("[Refresh] 跳過 M3 cores(--skip-cores)")
+
+    # Step 7: Forecast forward(Phase 3a — resonance track2 前置)
+    #
+    # resonance track2 讀 forecast_log 統計軌 band。本步驟跑 emit-neely(裁量軌 forward)
+    # + fuse(統計軌 latest,全市場)。⚠️ 統計軌 _cqr band 需逐股 CQR 校準(來自歷史
+    # backtest);未做全市場校準(Phase 3b,獨立重任務,不在 daily refresh)前,fuse 多數
+    # 回 no_calibrated_inputs → resonance 仍 single_track(golden 階段會 warn)。
+    if not args.skip_cores:
+        cur += 1
+        _log_step(cur, total_steps, "Forecast forward (emit-neely + fuse latest)")
+        t0 = time.monotonic()
+        try:
+            _run_refresh_forecast(stocks, config)
+            _record("forecast_forward", "ok", t0)
+        except Exception as e:
+            logger.error(f"[Refresh] Forecast forward 失敗: {e}")
+            _record("forecast_forward", "failed", t0)
+
+    # Step 8: Golden L3 fusion 物化(levels + resonance + climate → structural_snapshots)
+    if not args.skip_cores:
+        cur += 1
+        _log_step(cur, total_steps, "Golden L3 fusion 物化 (levels/resonance/climate)")
+        t0 = time.monotonic()
+        try:
+            golden_args = _argparse.Namespace(
+                command="golden",
+                golden_command="fusion",
+                stocks=stocks,
+                only=None,
+                as_of=None,
+                since=None,
+                until=None,
+                verbose=args.verbose,
+                config=args.config,
+                stock_list=args.stock_list,
+            )
+            _run_golden_fusion(golden_args, config)
+            _record("golden_fusion", "ok", t0)
+        except Exception as e:
+            logger.error(f"[Refresh] Golden fusion 物化 失敗: {e}")
+            _record("golden_fusion", "failed", t0)
 
     # Summary
     elapsed = time.monotonic() - start_time

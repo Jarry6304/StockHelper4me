@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 
 - **alembic head**:`h4i5j6k7l8m9`(v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
-- **開發分支**:`claude/nice-feynman-wpW8l`(v4.30 Option B refresh Silver 7c full-rebuild + v4.29 13-tool MCP fix B/C/A + silver `--builder` flag,PR #110;v4.28 B1+2A+B3 經 PR #108 已 merge claude/beautiful-cori-GZbbe)
+- **開發分支**:`claude/sweet-carson-96j9D`(v4.32 Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen,7 commits;v4.30/v4.31 已 merge main)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
 - **MCP toolkit**:**13 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen;v4.26 加 1)
@@ -291,6 +291,134 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.32 — Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen(2026-05-29)
+
+User 直送「分層 Golden 架構規格」:把原 read-time compute 的 fusion(levels / resonance /
+climate)正名 Golden L3 並**物化**進 `structural_snapshots`(新 core_name),令對外只讀;
+新建**唯讀 FastAPI Web API**(neely forest 完整 passthrough + 壓縮);加 **TypeScript 契約
+codegen**(Rust 引擎加欄位 → 前端型別 drift 被抓)。User 拍版**全規格**。
+分支 `claude/sweet-carson-96j9D`,7 commits / +34 tests。
+
+### 鎖定決策(user 拍版)
+
+| 決策 | 結論 |
+|---|---|
+| 範圍 | 全規格:L3 物化 + FastAPI + TS codegen |
+| levels 粒度 | per-stock,哨兵 timeframe `_all_`(`key_levels()` 零改寫;本就把 daily/weekly/monthly 折進 source 標籤)|
+| resonance 依賴 | 加 forecast 步驟進 `_run_refresh`(emit-neely + fuse latest)— track2 統計軌前置 |
+| codegen 路線 | feature-gated ts-rs(型別衍生自 Rust 唯一真相源、codegen 抓 drift = 治本;Cargo feature 隔離 → 生產 build 零風險 = 簡單)+ pydantic2ts(Python fusion 契約)|
+| `derived_from_core` | 嚴守規格:只存上游 core 名 CSV(lineage),re-derive 不靠它當 cache key |
+| Schema | **0 alembic migration**(重用 structural_snapshots,只新增 core_name / sentinel 值)|
+
+### 範圍(7 commits)
+
+| Commit | 範圍 |
+|---|---|
+| `19490f5` | **Phase 0-4 寫入端**:`src/fusion/materialize/`(_provenance / fusion_stage / climate_stage / read)+ `golden fusion` CLI 子命令 + `_run_refresh` 加 Step7 forecast forward + Step8 golden 物化;`_climate.py` compute_market_context 加 conn 參數 |
+| `39ec85d` | **Phase 5 serving 遷移**:`mcp_server/tools/data.py` 3 工具(stock_levels / dual_track_resonance / market_context)+ `snapshot.py` 改讀物化 row(robust:連線失敗/非 dict → compute fallback;isinstance(dict) 守門)|
+| `40ab661` | **Phase 6 Web API**:`src/web_api/`(async psycopg pool + passthrough handler + brotli/gzip 協商 + 4 routers);pyproject 加 [web] optional + web_api* packages.find |
+| `a06d562` | **Phase 7 Track A**:output.rs 63 型別加 feature-gated ts-rs cfg_attr + char/Timeframe 覆寫 → frontend/src/contracts/neely/*.ts(63 interface)|
+| `250ed97` | **Phase 7 Track B**:web_api/contracts.py pydantic 鏡射 .to_dict() wire shape → fusion.ts;codegen/generate.sh;tsconfig + _verify.ts(tsc strict 全綠)|
+
+### 架構(分層 Golden)
+
+```
+Silver → L1 cores(Rust)→ L2(forecast_log / *_ranked_derived)
+       → L3 fusion(本案物化:levels_fusion / resonance_fusion / climate_fusion → structural_snapshots 新 core_name)
+       → Web API(唯讀 / 切片)
+```
+
+read path 統一:每個 Golden 讀都是 `SELECT snapshot WHERE core_name=?` → 一個 generic
+passthrough handler 服務 forest / levels / resonance / climate / snapshot。
+
+### Golden L3 物化階段(`src/fusion/materialize/`)
+
+- **不是 CrossStockBuilder**(那些寫 *_ranked_derived 欄式表);fusion 寫 JSONB 文件,自成 stage。
+  讀用共享 `get_connection()`(dict_row)傳給 key_levels/resonance(零改寫);寫用 `DBWriter.upsert`。
+- **source_version**:`levels_v1` / `resonance_v1` / `climate_v1`(bump → backfill 全量 re-derive)。
+- **params_hash** canonical:`lv|top20|lb120` / `rz|h63|c0.80|tol0.02|H21-63-126` / `cl|lb60`(同 params → 同 hash → ON CONFLICT UPDATE)。
+- **derived_from_core**:上游 core 名 CSV(純 lineage)。
+- **re-derive**:daily = always-recompute-latest(Option B 每日全市場重跑上游 → skip 不划算);
+  backfill(`golden fusion --since/--until`)= skip-if-exists(靠 fusion row 自身 snapshot_date+source_version)。
+- **sentinel**:levels/climate timeframe `_all_`;climate stock_id `_market_`(既有保留字)。
+- **climate** 獨立 marketwide aggregator(`climate_stage.py`,非塞 per-stock loop)。
+
+### MCP serving 遷移(部分,非硬切換)
+
+`stock_levels`(levels 區段)/ `dual_track_resonance` / `market_context`(+ `snapshot.py`)改先讀
+物化 row,**miss / 連線失敗 / 非預設參數 → compute fallback**(robust helper `_read_materialized_snapshot`,
+`isinstance(dict)` 守門避免 mock conn truthy 誤判)。`key_levels()` read-time 路徑保留(pattern_scan /
+stop_loss 內部仍呼叫,非物化範圍)。
+
+### 唯讀 Web API(`src/web_api/`,跑 `uvicorn web_api.app:app`)
+
+端點:`GET /stocks/{id}/neely/forest`(+ N>250 → 422 完整性保險絲,引擎 cap 200 / 實測 max 37)
+/ `/levels` / `/resonance` / `/snapshot/{core}` / `/market/climate` / `/ohlc` / `/kalman/series`
+/ `/screens/{toolkit}`(白名單)。passthrough 取 `snapshot::text` 原文直出(不 deserialize / 不建
+pydantic),壓縮交 brotli-asgi(brotli q4 + gzip_fallback)。async psycopg_pool(lifespan)。
+
+### TS 契約 codegen(治本 + 簡單)
+
+- **Track A**(Rust → TS):`neely_core` 加 `ts` Cargo feature + ts-rs(chrono-impl);output.rs 63
+  型別 cfg_attr;`cargo test --features ts` 生 63 .ts(`TS_RS_EXPORT_DIR` 控目錄)。char→string、
+  Option<char>→`string|null`、tuple→`[number,number]`、Timeframe→字串 union。**生產 `cargo build -p tw_cores`
+  預設不開 ts feature → 零風險**。
+- **Track B**(Python → TS):`web_api/contracts.py` pydantic 鏡射 `.to_dict()` **wire shape**(date→str、
+  int-key dict→str-key)→ pydantic2ts → `fusion.ts`。
+- 驗證:`(cd frontend && tsc --noEmit)` strict 全綠(Rust 加欄位 → 重生 → drift 被抓)。
+
+### Forecast 進 refresh(Phase 3a)+ ⚠️ 前置依賴
+
+`_run_refresh` 新 Step7 跑 `emit-neely`(裁量軌 forward)+ `fuse`(統計軌 latest,全市場)。
+⚠️ **resonance track2 讀統計軌 _cqr band,需逐股 CQR 校準(歷史 backtest + conformalize,Phase 3b)**;
+CLAUDE.md 記載目前僅 ~8 verify 股有校準 → **市場級校準鋪開前,多數股 fuse 回 no_calibrated_inputs →
+resonance 仍 single_track**(golden 階段 stale 警告會提示)。Phase 3b 為獨立重任務,不在 daily refresh。
+
+### 沙箱驗證
+
+- `pytest tests/`:**865 passed / 2 pre-existing fail**(test_v3_35_1 + test_default_market_is_lowercase_tw,皆與本案無關)/ +34 new(materialize 13 / read migration 7 / web_api 11 / contracts 3)
+- `cargo test --features ts -p neely_core`:485 passed(含 63 export_bindings);`cargo build -p neely_core`(預設)green
+- `tsc --noEmit -p frontend/tsconfig.json`:exit 0(neely 63 + fusion 全型別樹 strict 編譯通過)
+
+### user 本機 production verify(下個 session)
+
+> ⚠️ 前置:先跑過 `refresh` / `refresh_full`(structural_snapshots 要有 neely/trendline/SR/env cores),
+> golden fusion 才讀得到上游。一鍵流水線:`.\scripts\verify_golden_l3_v4_32.ps1`(步驟即下方手動展開)。
+
+```powershell
+git pull
+pip install -e ".[web]" pydantic-to-typescript   # Web API + codegen 依賴
+
+# 一鍵(物化 + SQL + MCP smoke + 印 API/codegen 指令;預設小股集 2330,3030,1101)
+.\scripts\verify_golden_l3_v4_32.ps1
+
+# ── 或手動分步 ──
+# 1. 物化(latest)
+python src/main.py golden fusion                  # levels + resonance + climate → structural_snapshots
+psql $env:DATABASE_URL -c "SELECT core_name,timeframe,COUNT(*) FROM structural_snapshots WHERE core_name LIKE '%_fusion' GROUP BY 1,2;"
+# 2. 唯讀 API
+uvicorn web_api.app:app   # 另開:curl 'localhost:8000/stocks/2330/levels?as_of=2026-05-28' | jq .level_count
+# 3. codegen(可選,Rust 加欄位後)
+bash codegen/generate.sh && (cd frontend && "$(npm root -g)/typescript/bin/tsc" --noEmit -p tsconfig.json)
+```
+
+### 風險
+
+🟢 低:0 alembic / 0 collector.toml(重用 structural_snapshots);ts-rs feature-gated → 生產 Rust build
+零影響;MCP 遷移 robust fallback(物化缺 → compute,0 既有測試 regression)。
+🟡 中:**resonance track2 全市場有效性依賴 Phase 3b CQR 校準**(獨立重任務);daily refresh +forecast+golden
+兩 step wall time 增(Option B 全市場 always-recompute,resonance 最重)。
+🔴 高:無。
+
+### Out of scope(留 future)
+
+- Phase 3b 全市場 forecast CQR 校準 backfill(重,獨立 sprint;本案接其產物)。
+- pattern_scan / stop_loss / indicator_assembly / 其餘 snapshot 區段物化(維持 read-time)。
+- 前端應用本體(本案只產 `frontend/src/contracts/` 型別)、API auth / rate-limit / 部署。
+- ts-rs u64→bigint convention(wire 為 number;如需 number 可後續 ts override)。
 
 ---
 
@@ -7477,6 +7605,7 @@ cd ..
 | `scripts/test_pipeline.ps1` 🆕 v4.4 | **完整測試流水線**(Windows)— 5 phase:Environment check / Sandbox unit tests(Rust 528 + Python 165+)/ Schema health(alembic+row counts)/ Production verify(facts stats + per-EventKind + **Neely forest_size P0 Gate**)/ MCP smoke test;支援 `-OnlyPhase` / `-SkipPhase` / `-DryRun` | `.\scripts\test_pipeline.ps1` |
 | `scripts/test_pipeline.sh` 🆕 v4.4 | 完整測試流水線(Unix Bash 版,對齊 .ps1);環境變數 `SKIP_PHASES` / `ONLY_PHASES` / `DRY_RUN=1` 控制 | `./scripts/test_pipeline.sh` |
 | `scripts/verify_mcp_toolkit_v4_29.py` 🆕 v4.29 | **全覆蓋 13 個 public MCP tool 健康度檢查**。Per-stock(6 tool)+ market-level(7 tool)各跑一次,report status / elapsed / payload_kb / per-tool summary。Payload soft `> 50KB` WARN / hard `> 1MB` FAIL。退碼 0/1 | `python scripts/verify_mcp_toolkit_v4_29.py --stocks 2330,3030 --verbose` |
+| `scripts/verify_golden_l3_v4_32.ps1` 🆕 v4.32 | **Golden L3 production verify 流水線**(PowerShell)— 5 步:(opt)裝 `.[web]`+codegen 依賴 / `golden fusion` 物化(預設小股集 2330,3030,1101)/ SQL spot-check(*_fusion row count + levels/climate 取樣)/ MCP serving-from-materialized smoke(stock_levels/dual_track_resonance/market_context)/(印)Web API uvicorn+curl + codegen tsc 手動指令。前置:已跑過 refresh(上游 cores 在) | `.\scripts\verify_golden_l3_v4_32.ps1` |
 
 ---
 
