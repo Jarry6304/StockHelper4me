@@ -144,6 +144,7 @@ def compute_market_context(
     *,
     lookback_days: int = 60,
     database_url: str | None = None,
+    conn: Any = None,
 ) -> dict[str, Any]:
     """主入口 — 從 PG 撈 market facts + risk_alert 聚合 → 8 components → narrative。
 
@@ -151,6 +152,8 @@ def compute_market_context(
         as_of: 查詢日(預測 / 即時都用同介面)
         lookback_days: facts 期間。預設 60(對齊月頻 + daily 雙重 cover)
         database_url: 可選的 PG 連線字串
+        conn: 可選的既有連線(Golden L3 climate 物化 write-time 共用,避免重開)。
+              給 conn 時不開 / 不關;None 時自開自關(向下相容既有 caller)。
 
     Returns:
         dict 結構對齊 plan §Tool 3 Output(v3.25 後 ~2 KB / ~500 tokens)
@@ -158,7 +161,9 @@ def compute_market_context(
     from fusion.raw._db import get_connection
     from fusion.raw._market import fetch_market_facts
 
-    conn = get_connection(database_url)
+    own_conn = conn is None
+    if own_conn:
+        conn = get_connection(database_url)
     try:
         # Step 1:撈 5 保留字的 market facts(內建 look-ahead filter)
         grouped = fetch_market_facts(
@@ -171,7 +176,8 @@ def compute_market_context(
             conn, as_of=as_of, lookback_days=lookback_days,
         )
     finally:
-        conn.close()
+        if own_conn:
+            conn.close()
 
     # Step 2:把 facts 按 source_core 分組(_global_ 含 3 cores,需要拆)
     facts_by_core: dict[str, list[dict]] = {core: [] for core in _COMPONENT_TO_CORE.values()}
