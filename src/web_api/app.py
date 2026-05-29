@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,6 +15,13 @@ from fastapi import FastAPI
 from web_api import pool as _pool
 from web_api.compression import add_compression
 from web_api.routers import market, screens, series, stocks
+
+# Windows:uvicorn 預設 ProactorEventLoop,psycopg async pool 不相容
+# (raise "Psycopg cannot use the 'ProactorEventLoop' to run in async mode")。
+# import 時切 SelectorEventLoop(uvicorn import 本 module 早於建 loop → lifespan 開 pool
+# 時已是 selector loop)。非 Windows no-op。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @asynccontextmanager
