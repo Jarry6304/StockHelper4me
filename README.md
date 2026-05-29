@@ -1,10 +1,10 @@
 # StockHelper4me — tw-stock-collector
 
-> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API),Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **13 tools**)。
+> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **13 tools** + **唯讀 FastAPI Web API**)。
 
-**版本**:**v4.29**(alembic head `h4i5j6k7l8m9`(v4.28 B1)/ 2026-05-28,**13-tool MCP toolkit 3-bug fix + silver `--builder` flag**,branch `claude/nice-feynman-wpW8l` PR #110)
-**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)5 phase + 新 `scripts/verify_mcp_toolkit_v4_29.py`(v4.29)13-tool MCP 全覆蓋健康度。完整 verify chain 見 [CLAUDE.md §v4.29](CLAUDE.md)
-**狀態**:v4.29 三類 bug 修法 ☕(`indicators` lookback_days slice / `dual_track_resonance` batch query + 30s timeout 安全網 / `monthly_revenue` Silver builder 改從 raw revenue 算 YoY/MoM)+ silver phase 7a/7b 加 `--builder` flag(對齊 cross_cores)。**v4.25 dual-track 共振決策 + v4.26 wave_impulse_screen + v4.27 _picker.py 共用 + v4.28 B1+2A+B3 三 sprint + v4.29** 累積。M3 Cores **39 crates** production-ready;Cross-Stock Cores **12 builders**;Aggregation Layer 4 Phase 全套;MCP toolkit **13 public tools**;**Rust workspace 607 tests passed / 0 failed**(v4.11 baseline → +severity/flat_fib/env-core);**Python tests +36(v4.29)** = 全套 ~800+ passed;1266 stocks × 36 cores / wall time ~12.3 min / facts ~5.1M(VACUUM 後)
+**版本**:**v4.32**(alembic head `h4i5j6k7l8m9` 不變 / 2026-05-29,**Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen**,branch `claude/sweet-carson-96j9D`,PR #113–#117 已 merge main)
+**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(v4.32 Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)。完整 verify chain 見 [CLAUDE.md §v4.32](CLAUDE.md)
+**狀態**:**v4.32**(2026-05-29 production-verified ☕):原 read-time 的 fusion(levels / resonance / climate)正名 **Golden L3** 並物化進 `structural_snapshots`(新 core_name `*_fusion`),對外只讀;新建**唯讀 FastAPI Web API**(`uvicorn web_api.app:app` — neely forest 完整 passthrough + brotli/gzip 協商 + N>250 保險絲;Windows/Py3.14 每請求 sync conn);**TypeScript 契約 codegen**(Rust ts-rs 63 型別 + Python pydantic2ts → `frontend/src/contracts/`)。Phase 3b Kalman 全市場校準腳本 `scripts/recalibrate_kalman.ps1`(讓 resonance track2 非 single_track)。**累積**:v4.25 dual-track 共振 + v4.26 wave_impulse_screen + v4.28 三 sprint + v4.29 + **v4.30/v4.31 + v4.32**。M3 Cores **39 crates**;Cross-Stock **12 builders**;MCP **13 tools** + Web API;**Rust 607 tests + ts feature 485**;**Python ~865 passed / +34(v4.32)**;1266 stocks × 36 cores / facts ~5.1M。
 
 ---
 
@@ -38,7 +38,8 @@
 | **Layer 2 Silver per-stock** | 13 個 `*_derived` SQL builder + 4 個 fwd 表(Rust)+ `price_limit_merge_events` | `python src/main.py silver phase 7a/7b/7c`(`silver/orchestrator.py`)|
 | **Layer 2.5 Cross-Stock Cores**(v3.5 R3 新)| 跨股 ranking(目前 1 個:`magic_formula_ranked_derived`)| `python src/main.py cross_cores phase 8`(`cross_cores/orchestrator.py`)|
 | **Layer 3 M3 Cores** | **39 crates** Rust workspace 全市場全核 dispatch(Wave / Indicator / Chip 8 / Fundamental / Environment 7 / System)| `tw_cores run-all --workflow workflows/tw_stock_standard.toml --write` |
-| **Layer 4 MCP / API 對外** | Aggregation Layer + Streamlit dashboards 6 tabs + FastMCP server **8 public tools**(v3.31 4 個 + v3.32 4 個 cross-stock factor screens:monthly / quarterly / annual_low_risk / monthly_trigger) | `agg.as_of()` / `dashboards/aggregation.py` / `mcp_server/server.py` / `mcp_server/_screens.py` |
+| **Layer 3.5 Golden L3 fusion**(v4.32 新)| levels / resonance / climate **物化**進 `structural_snapshots`(core_name `levels_fusion` / `resonance_fusion` / `climate_fusion`),對外只讀 | `python src/main.py golden fusion`(`fusion/materialize/`)|
+| **Layer 4 MCP / Web API 對外** | FastMCP server **13 tools**(讀物化 + compute fallback)+ **唯讀 FastAPI Web API**(forest passthrough + 壓縮)+ Streamlit dashboards + Aggregation Layer | `mcp_server/server.py` / `uvicorn web_api.app:app`(`src/web_api/`)/ `dashboards/aggregation.py` |
 
 ```
               FinMind / 外部資料
@@ -243,6 +244,30 @@ snap = as_of("2330", date(2026, 5, 16))
 print(snap.facts)              # daily / weekly / monthly / quarterly facts 各自 cutoff
 print(snap.indicator_latest)   # 每 (core, timeframe) 最新一筆
 print(snap.structural)         # neely / pattern cores 結構快照
+```
+
+### 4.9 Golden L3 fusion 物化 + 唯讀 Web API + Phase 3b 校準(v4.32)
+
+```powershell
+pip install -e ".[web]" pydantic-to-typescript          # Web API + codegen 依賴
+
+# 1. Golden L3 物化(levels/resonance/climate → structural_snapshots;前置:先跑過 refresh)
+python src/main.py golden fusion                        # 全市場 latest
+python src/main.py golden fusion --only resonance --stocks 2330   # 限縮
+python src/main.py golden fusion --since 2023-01-01 --until 2026-05-28   # PIT backfill
+
+# 2. 唯讀 Web API(forest 完整 passthrough + brotli/gzip)
+uvicorn web_api.app:app                                 # GET /stocks/{id}/{levels,resonance,neely/forest} · /market/climate · /ohlc · /screens/{toolkit}
+
+# 3. Phase 3b — Kalman 全市場校準(讓 resonance track2 非 single_track;~35 min,週排程非 daily)
+.\scripts\recalibrate_kalman.ps1                        # 一鍵:Kalman backtest → conformalize → 重物化
+.\scripts\install_recalibrate_task.ps1                  # 註冊每週日 02:00 自動跑
+
+# 4. 一鍵 verify(物化 + SQL + MCP serving + 印 API/codegen 指令)
+.\scripts\verify_golden_l3_v4_32.ps1
+
+# 5. TS 契約 codegen(Rust 加欄位後重生,drift 被抓)
+bash codegen/generate.sh && (cd frontend && "$(npm root -g)/typescript/bin/tsc" --noEmit -p tsconfig.json)
 ```
 
 ---
