@@ -15,3 +15,10 @@ chrono         = { workspace = true }
 serde          = { workspace = true }
 serde_json     = { workspace = true }
 inventory      = "0.3"
+# v4.32 Golden L3:TypeScript 契約 codegen(feature-gated → 生產 build 預設不開,零風險)
+ts-rs          = { version = "10", features = ["chrono-impl"], optional = true }
+
+[features]
+# `cargo test --features ts` 從 output.rs 型別樹生 TS interface(drift 被抓 = 治本)。
+# 生產 `cargo build --release -p tw_cores` 走預設 feature(不含 ts)→ 不引入 ts-rs。
+ts = ["dep:ts-rs"]
