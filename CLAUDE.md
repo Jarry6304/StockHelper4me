@@ -7672,6 +7672,7 @@ cd ..
 | `scripts/verify_mcp_toolkit_v4_29.py` 🆕 v4.29 | **全覆蓋 13 個 public MCP tool 健康度檢查**。Per-stock(6 tool)+ market-level(7 tool)各跑一次,report status / elapsed / payload_kb / per-tool summary。Payload soft `> 50KB` WARN / hard `> 1MB` FAIL。退碼 0/1 | `python scripts/verify_mcp_toolkit_v4_29.py --stocks 2330,3030 --verbose` |
 | `scripts/verify_golden_l3_v4_32.ps1` 🆕 v4.32 | **Golden L3 production verify 流水線**(PowerShell)— 5 步:(opt)裝 `.[web]`+codegen 依賴 / `golden fusion` 物化(預設小股集 2330,3030,1101)/ SQL spot-check(*_fusion row count + levels/climate 取樣)/ MCP serving-from-materialized smoke(stock_levels/dual_track_resonance/market_context)/(印)Web API uvicorn+curl + codegen tsc 手動指令。前置:已跑過 refresh(上游 cores 在) | `.\scripts\verify_golden_l3_v4_32.ps1` |
 | `scripts/recalibrate_kalman.ps1` 🆕 v4.32 | **Phase 3b Kalman 全市場校準週排程**(PowerShell,對齊 refresh_full.ps1)— 5 步:Kalman `run-backtest`(Rust 全市場並行)/ settle / conformalize→kalman_cqr / settle / `golden fusion --only resonance` 重物化。讓 resonance track2 全市場非 single_track(kalman_cqr 是 source 偏好 #2,單跑即足)。**不放 daily**(~35 min,header 詳述前因後果);`-Stocks` / `-Since` / `-SkipMaterialize` | `.\scripts\recalibrate_kalman.ps1` |
+| `scripts/install_recalibrate_task.ps1` 🆕 v4.32 | 註冊 Windows Task Scheduler **每週**跑 recalibrate_kalman.ps1(對齊 install_refresh_task.ps1)。預設週日 02:00;`-At` / `-DayOfWeek` / `-Since` / `-Stocks` / `-SkipMaterialize` | `.\scripts\install_recalibrate_task.ps1` |
 
 ---
 
