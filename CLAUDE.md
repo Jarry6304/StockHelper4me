@@ -408,6 +408,58 @@ uvicorn web_api.app:app   # 另開:curl 'localhost:8000/stocks/2330/levels?as_of
 bash codegen/generate.sh && (cd frontend && "$(npm root -g)/typescript/bin/tsc" --noEmit -p tsconfig.json)
 ```
 
+### ✅ Production verified(2026-05-29,user 本機 Windows + Python 3.14)
+
+- **物化**:`golden fusion`(2330/3030/1101)levels 3 / resonance 9(3 tf)/ climate 1,0 errors/warnings。
+- **MCP serving-from-materialized**:stock_levels=20 / dual_track findings=30(2330,非 single_track)/ market_context=neutral。
+- **Web API**(`uvicorn web_api.app:app`):`/stocks/2330/levels` 200(20 levels / total 123 / 264 src pts)、
+  `/stocks/2330/neely/forest` 200(366.5k 完整 passthrough)、`/market/climate` 200。
+- **codegen**:沙箱 `cargo test --features ts` 485 passed + `tsc --noEmit` strict 綠。
+- **Windows event-loop 連環坑收尾**:PR #114 把 main 停在 async pool 舊碼(6afc7f9)→ user 反覆撞
+  ProactorEventLoop;最終 PR #115(`3eda867`)改 **每請求 sync conn**(`fusion.raw._db.get_connection`,
+  = MCP Step4 已驗證路徑)徹底解決 — uvicorn 乾淨啟動、3 端點全 200。
+
+### Phase 3b — 全市場 forecast 校準 runbook(讓 resonance track2 全市場有效)
+
+track2 source 偏好:`fusion → kalman_cqr → log_channel_cqr → chip/macro/fundamental_forecast_core_cqr`
+(`src/fusion/dual_track/track2.py:36`)。**只要任一有 band,track2 即非 single_track** → `kalman_cqr`
+(#2)是最划算路徑:Kalman backtest 走 Rust `run-backtest`,**一個指令全市場 + 並行**。
+
+```powershell
+# 0. 全市場 stock 清單(逗號分隔)
+$ids = (psql $env:DATABASE_URL -t -A -c "SELECT DISTINCT stock_id FROM price_daily_fwd WHERE market='TW' ORDER BY stock_id") -join ','
+
+# ── 最划算路徑:Kalman(Rust,全市場 + 並行;--since 2022 給足 500-day 校準窗 + 126 horizon)──
+cd rust_compute
+.\target\release\tw_cores.exe run-backtest --stocks $ids --start 2022-01-01 --core kalman_forecast_core --write --concurrency 8
+cd ..
+python src/main.py forecast settle --core kalman_forecast_core
+python src/main.py forecast conformalize --raw-core kalman_forecast_core --target-core kalman_cqr --stocks $ids --since 2022-01-01
+python src/main.py forecast settle --core kalman_cqr
+# → track2 全市場有 kalman_cqr band;驗:dual_track_resonance 任一非 verify 股 single_track 應變 False
+
+# ── (可選,較重)Python 非價格 cores → 讓 fusion 真正多源組合(每 core 逐檔 backtest 重)──
+foreach ($core in 'baseline','log_channel','chip_forecast_core','macro_forecast_core','fundamental_forecast_core') {
+    python src/main.py forecast backtest --core $core --stocks $ids --since 2022-01-01
+    python src/main.py forecast settle --core $core
+}
+foreach ($pair in @('log_channel=log_channel_cqr','chip_forecast_core=chip_forecast_core_cqr','macro_forecast_core=macro_forecast_core_cqr','fundamental_forecast_core=fundamental_forecast_core_cqr')) {
+    $raw,$tgt = $pair -split '='
+    python src/main.py forecast conformalize --raw-core $raw --target-core $tgt --stocks $ids --since 2022-01-01
+}
+python src/main.py forecast settle
+python src/main.py forecast fuse --stocks $ids --since 2022-01-01      # Bates-Granger 多源組合 → fusion band
+```
+
+**成本 / 注意**:
+- Kalman(Rust 並行)是全市場唯一輕量路徑;**單跑 Kalman 步驟即足以讓 track2 全市場非 degenerate**。
+- Python cores `backtest`「一次跑一檔較穩」(CLAUDE.md v4.24 ~30 min/股/5yr/core)→ 全市場 × 4 core 極重,
+  建議**分批 / 縮窗 / 先做流動性高的子集**,或接受跑數小時~數日。
+- `--since 2022-01-01` 給 conformalize 預設 500-day 校準窗 + 126 horizon settle 充足 history。
+- **不是 daily**:daily `refresh` Step7 只 emit-neely + fuse(latest),**不**重跑統計軌 backtest-forward
+  → 3b 是週期性(例如每週)重跑 Kalman 步驟保持 track2 fresh;或未來把 `run-backtest --end today` 併進 refresh。
+- 驗證:`python src/main.py forecast score --stocks 2330,1101,...` 看各 source_core pinball vs baseline。
+
 ### 風險
 
 🟢 低:0 alembic / 0 collector.toml(重用 structural_snapshots);ts-rs feature-gated → 生產 Rust build
