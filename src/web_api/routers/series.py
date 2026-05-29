@@ -10,7 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from web_api import _passthrough as pt
-from web_api.pool import get_pool
+from web_api.pool import db_conn
 
 router = APIRouter(prefix="/stocks", tags=["series"])
 
@@ -20,7 +20,7 @@ def ohlc(
     stock_id: str,
     from_: date = Query(..., alias="from"),
     to: date = Query(...),
-    pool: Any = Depends(get_pool),
+    conn: Any = Depends(db_conn),
 ):
     """後復權 OHLCV 切片(price_daily_fwd,ORDER BY date ASC)。"""
     sql = (
@@ -28,16 +28,15 @@ def ohlc(
         "WHERE market = 'TW' AND stock_id = %s AND date BETWEEN %s AND %s "
         "ORDER BY date ASC"
     )
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, [stock_id, from_, to])
-            rows = cur.fetchall()
+    with conn.cursor() as cur:
+        cur.execute(sql, [stock_id, from_, to])
+        rows = cur.fetchall()
     return JSONResponse(content=jsonable_encoder({"stock_id": stock_id, "rows": rows}))
 
 
 @router.get("/{stock_id}/kalman/series")
 def kalman_series(
-    stock_id: str, as_of: date, timeframe: str = "daily", pool: Any = Depends(get_pool),
+    stock_id: str, as_of: date, timeframe: str = "daily", conn: Any = Depends(db_conn),
 ):
     """Kalman 最新 indicator value 原文(含 multi-horizon series),value_date <= as_of。"""
     sql = (
@@ -46,8 +45,7 @@ def kalman_series(
         "  AND value_date <= %s AND timeframe = %s "
         "ORDER BY value_date DESC LIMIT 1"
     )
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, [stock_id, as_of, timeframe])
-            row = cur.fetchone()
+    with conn.cursor() as cur:
+        cur.execute(sql, [stock_id, as_of, timeframe])
+        row = cur.fetchone()
     return pt.raw_json_response(row["j"] if row else None)

@@ -1,8 +1,8 @@
-"""v4.32 Golden L3 唯讀 Web API 測試(FastAPI TestClient + fake sync pool)。
+"""v4.32 Golden L3 唯讀 Web API 測試(FastAPI TestClient + fake sync conn)。
 
-不依賴真實 PG:dependency_overrides 注入 FakePool,sync cursor 回 canned rows。
-TestClient 不以 context manager 進入 → lifespan(open_pool)不觸發。
-handler 為 sync(FastAPI threadpool)+ sync pool → 不碰 event loop(Windows 安全)。
+不依賴真實 PG:dependency_overrides 注入 FakeConn(每請求 sync conn),sync cursor 回
+canned rows。handler 為 sync(FastAPI threadpool)+ 每請求 sync conn → 不碰 event loop
+(Windows ProactorEventLoop / Python 3.14 安全)。
 """
 
 from datetime import date
@@ -10,10 +10,10 @@ from datetime import date
 from fastapi.testclient import TestClient
 
 from web_api.app import create_app
-from web_api.pool import get_pool
+from web_api.pool import db_conn
 
 
-# ── fake sync pool ──────────────────────────────────────────────────────────
+# ── fake sync conn ──────────────────────────────────────────────────────────
 class _FakeCursor:
     def __init__(self, rows):
         self._rows = rows
@@ -35,7 +35,7 @@ class _FakeCursor:
         return list(self._rows)
 
 
-class _FakeConn:
+class FakeConn:
     def __init__(self, rows):
         self._rows = rows
 
@@ -43,28 +43,9 @@ class _FakeConn:
         return _FakeCursor(self._rows)
 
 
-class _FakeConnCtx:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def __enter__(self):
-        return _FakeConn(self._rows)
-
-    def __exit__(self, *a):
-        return False
-
-
-class FakePool:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def connection(self):
-        return _FakeConnCtx(self._rows)
-
-
 def _client(rows):
     app = create_app()
-    app.dependency_overrides[get_pool] = lambda: FakePool(rows)
+    app.dependency_overrides[db_conn] = lambda: FakeConn(rows)
     return TestClient(app)
 
 

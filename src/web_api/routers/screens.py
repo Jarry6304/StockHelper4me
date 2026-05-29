@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+
+from web_api.pool import db_conn
 
 router = APIRouter(prefix="/screens", tags=["screens"])
 
@@ -32,6 +35,7 @@ def screen(
     as_of: date = Query(..., alias="date"),
     top_n: int = 30,
     offset: int = 0,
+    conn: Any = Depends(db_conn),
 ):
     """某 toolkit 在 latest ranking_date <= date 的 top_n(offset 分頁)。"""
     table = _ALLOWED.get(toolkit)
@@ -41,15 +45,11 @@ def screen(
             detail=f"unknown screen toolkit '{toolkit}'. allowed: {sorted(_ALLOWED)}",
         )
 
-    from fusion.raw._db import fetch_cross_stock_ranked, get_connection
+    from fusion.raw._db import fetch_cross_stock_ranked
 
-    conn = get_connection()
-    try:
-        ranking_date, rows = fetch_cross_stock_ranked(
-            conn, source_table=table, as_of=as_of, top_n=top_n + offset,
-        )
-    finally:
-        conn.close()
+    ranking_date, rows = fetch_cross_stock_ranked(
+        conn, source_table=table, as_of=as_of, top_n=top_n + offset,
+    )
     rows = rows[offset:offset + top_n]
     return JSONResponse(content=jsonable_encoder({
         "toolkit": toolkit, "ranking_date": ranking_date,

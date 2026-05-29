@@ -1,6 +1,6 @@
 """Golden 讀取 passthrough — 取 snapshot::text 原文直出(不 deserialize、不建 model)。
 
-v4.32 後 **sync**(pool 改 sync;FastAPI sync handler 走 threadpool)。對齊
+v4.32 後 **sync,per-request conn**(無 pool / 無 async / 無 event loop)。對齊
 m3Spec/read-api.md:每個 Golden 讀都是 `SELECT snapshot WHERE core_name=?`,一個
 generic handler 服務 forest / levels / resonance / climate / snapshot。
 forest 保險絲:N > 250 → 422(引擎 cap 200,production max 37)。
@@ -18,7 +18,7 @@ FOREST_FUSE_CAP = 250
 
 
 def fetch_snapshot_text(
-    pool: Any,
+    conn: Any,
     *,
     stock_id: str,
     as_of: date,
@@ -36,15 +36,14 @@ def fetch_snapshot_text(
         params.append(timeframe)
     sql += " ORDER BY snapshot_date DESC LIMIT 1"
 
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            row = cur.fetchone()
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        row = cur.fetchone()
     return row["j"] if row else None
 
 
 def scenario_forest_len(
-    pool: Any,
+    conn: Any,
     *,
     stock_id: str,
     as_of: date,
@@ -58,10 +57,9 @@ def scenario_forest_len(
         "  AND snapshot_date <= %s AND timeframe = %s "
         "ORDER BY snapshot_date DESC LIMIT 1"
     )
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, [stock_id, as_of, timeframe])
-            row = cur.fetchone()
+    with conn.cursor() as cur:
+        cur.execute(sql, [stock_id, as_of, timeframe])
+        row = cur.fetchone()
     return row["n"] if row else None
 
 
@@ -72,9 +70,9 @@ def raw_json_response(text: str | None) -> Response:
     return Response(content=text, media_type="application/json")
 
 
-def guard_forest_cap(pool: Any, *, stock_id: str, as_of: date, timeframe: str) -> None:
+def guard_forest_cap(conn: Any, *, stock_id: str, as_of: date, timeframe: str) -> None:
     """neely forest 完整性保險絲:N > 250 → 422(不靜默截斷)。None(無 row)放行交 404。"""
-    n = scenario_forest_len(pool, stock_id=stock_id, as_of=as_of, timeframe=timeframe)
+    n = scenario_forest_len(conn, stock_id=stock_id, as_of=as_of, timeframe=timeframe)
     if n is not None and n > FOREST_FUSE_CAP:
         raise HTTPException(
             status_code=422,
