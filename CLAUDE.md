@@ -456,8 +456,18 @@ python src/main.py forecast fuse --stocks $ids --since 2022-01-01      # Bates-G
 - Python cores `backtest`「一次跑一檔較穩」(CLAUDE.md v4.24 ~30 min/股/5yr/core)→ 全市場 × 4 core 極重,
   建議**分批 / 縮窗 / 先做流動性高的子集**,或接受跑數小時~數日。
 - `--since 2022-01-01` 給 conformalize 預設 500-day 校準窗 + 126 horizon settle 充足 history。
-- **不是 daily**:daily `refresh` Step7 只 emit-neely + fuse(latest),**不**重跑統計軌 backtest-forward
-  → 3b 是週期性(例如每週)重跑 Kalman 步驟保持 track2 fresh;或未來把 `run-backtest --end today` 併進 refresh。
+- **一鍵週排程腳本**:`.\scripts\recalibrate_kalman.ps1`(對齊 refresh_full.ps1 風格)把上面 Kalman
+  4 步 + 重物化 resonance 包起來(`-Stocks` / `-Since` / `-SkipMaterialize` 參數)。
+- **不是 daily(前因後果)**:
+  - **前因**:track2 讀 forecast_log 統計軌 band(kalman_cqr 等),來自 backtest + conformalize;daily
+    `refresh` Step7 只 emit-neely + fuse(latest),**不**重跑統計軌 → band 隨時間 stale。
+  - **成本/決議**:recalibrate_kalman 全市場 ~35 min(Kalman ~12 + conformalize ~21)。併進 daily →
+    daily 從 ~26 min(bronze/silver ~14 + M3 cores ~12)→ ~61 min,對「一鍵每日」過重 → **決議獨立成
+    週排程,不放 daily**。
+  - **取捨**:兩次週跑間 track2 band 最多 stale ~7 天;resonance 是結構×統計 confluence、horizon 21/63/126,
+    數天漂移影響小 → 可接受。
+  - **未來若要 daily**:須把 `run-backtest` 改「增量 latest-only」(只算最新 1 日 forward + conformalize
+    latest,校準窗 history 已在 DB)→ 估 ~2-5 min 才適合併進 refresh Step7;目前走 [start, today] 全區間,故先週排程。
 - 驗證:`python src/main.py forecast score --stocks 2330,1101,...` 看各 source_core pinball vs baseline。
 
 ### 風險
@@ -7661,6 +7671,7 @@ cd ..
 | `scripts/test_pipeline.sh` 🆕 v4.4 | 完整測試流水線(Unix Bash 版,對齊 .ps1);環境變數 `SKIP_PHASES` / `ONLY_PHASES` / `DRY_RUN=1` 控制 | `./scripts/test_pipeline.sh` |
 | `scripts/verify_mcp_toolkit_v4_29.py` 🆕 v4.29 | **全覆蓋 13 個 public MCP tool 健康度檢查**。Per-stock(6 tool)+ market-level(7 tool)各跑一次,report status / elapsed / payload_kb / per-tool summary。Payload soft `> 50KB` WARN / hard `> 1MB` FAIL。退碼 0/1 | `python scripts/verify_mcp_toolkit_v4_29.py --stocks 2330,3030 --verbose` |
 | `scripts/verify_golden_l3_v4_32.ps1` 🆕 v4.32 | **Golden L3 production verify 流水線**(PowerShell)— 5 步:(opt)裝 `.[web]`+codegen 依賴 / `golden fusion` 物化(預設小股集 2330,3030,1101)/ SQL spot-check(*_fusion row count + levels/climate 取樣)/ MCP serving-from-materialized smoke(stock_levels/dual_track_resonance/market_context)/(印)Web API uvicorn+curl + codegen tsc 手動指令。前置:已跑過 refresh(上游 cores 在) | `.\scripts\verify_golden_l3_v4_32.ps1` |
+| `scripts/recalibrate_kalman.ps1` 🆕 v4.32 | **Phase 3b Kalman 全市場校準週排程**(PowerShell,對齊 refresh_full.ps1)— 5 步:Kalman `run-backtest`(Rust 全市場並行)/ settle / conformalize→kalman_cqr / settle / `golden fusion --only resonance` 重物化。讓 resonance track2 全市場非 single_track(kalman_cqr 是 source 偏好 #2,單跑即足)。**不放 daily**(~35 min,header 詳述前因後果);`-Stocks` / `-Since` / `-SkipMaterialize` | `.\scripts\recalibrate_kalman.ps1` |
 
 ---
 
