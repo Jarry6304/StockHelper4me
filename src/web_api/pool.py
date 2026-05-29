@@ -1,7 +1,10 @@
-"""async psycopg connection pool(lifespan singleton)+ get_pool 依賴。
+"""sync psycopg ConnectionPool(lifespan singleton)+ get_pool 依賴。
 
-對齊 src/fusion/raw/_db.py 的 DATABASE_URL / .env 解析,但走 AsyncConnectionPool
-(唯讀 API 全 async handler)。
+v4.32 後改 **sync** pool(原 async 在 Windows + Python 3.14 撞 ProactorEventLoop
+不相容 psycopg async)。sync psycopg 走 thread 阻塞 I/O,與 event loop 無關 →
+跨 OS / Python 版本穩定;FastAPI 把 sync handler 丟 threadpool 跑,讀 API I/O 輕量足夠。
+
+對齊 src/fusion/raw/_db.py 的 DATABASE_URL / .env 解析。
 """
 
 from __future__ import annotations
@@ -30,27 +33,27 @@ def _resolve_url(database_url: str | None = None) -> str:
     return url
 
 
-async def open_pool(database_url: str | None = None) -> Any:
-    """開 AsyncConnectionPool(lifespan startup)。"""
+def open_pool(database_url: str | None = None) -> Any:
+    """開 sync ConnectionPool(lifespan startup)。"""
     global _pool
     from psycopg.rows import dict_row
-    from psycopg_pool import AsyncConnectionPool
+    from psycopg_pool import ConnectionPool
 
     url = _resolve_url(database_url)
-    _pool = AsyncConnectionPool(
+    _pool = ConnectionPool(
         url, min_size=1, max_size=10,
         kwargs={"row_factory": dict_row, "autocommit": True},
         open=False,
     )
-    await _pool.open()
+    _pool.open()
     return _pool
 
 
-async def close_pool() -> None:
+def close_pool() -> None:
     """關 pool(lifespan shutdown)。"""
     global _pool
     if _pool is not None:
-        await _pool.close()
+        _pool.close()
         _pool = None
 
 

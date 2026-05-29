@@ -1,4 +1,4 @@
-"""時序切片:price OHLCV(price_daily_fwd)+ Kalman series(indicator_values)。"""
+"""時序切片:price OHLCV(price_daily_fwd)+ Kalman series(indicator_values)。sync handlers。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/stocks", tags=["series"])
 
 
 @router.get("/{stock_id}/ohlc")
-async def ohlc(
+def ohlc(
     stock_id: str,
     from_: date = Query(..., alias="from"),
     to: date = Query(...),
@@ -28,26 +28,26 @@ async def ohlc(
         "WHERE market = 'TW' AND stock_id = %s AND date BETWEEN %s AND %s "
         "ORDER BY date ASC"
     )
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(sql, [stock_id, from_, to])
-            rows = await cur.fetchall()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, [stock_id, from_, to])
+            rows = cur.fetchall()
     return JSONResponse(content=jsonable_encoder({"stock_id": stock_id, "rows": rows}))
 
 
 @router.get("/{stock_id}/kalman/series")
-async def kalman_series(
+def kalman_series(
     stock_id: str, as_of: date, timeframe: str = "daily", pool: Any = Depends(get_pool),
 ):
-    """Kalman 最新 indicator value 原文(含 multi-horizon series),snapshot_date <= as_of。"""
+    """Kalman 最新 indicator value 原文(含 multi-horizon series),value_date <= as_of。"""
     sql = (
         "SELECT value::text AS j FROM indicator_values "
         "WHERE stock_id = %s AND source_core = 'kalman_filter_core' "
         "  AND value_date <= %s AND timeframe = %s "
         "ORDER BY value_date DESC LIMIT 1"
     )
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(sql, [stock_id, as_of, timeframe])
-            row = await cur.fetchone()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, [stock_id, as_of, timeframe])
+            row = cur.fetchone()
     return pt.raw_json_response(row["j"] if row else None)

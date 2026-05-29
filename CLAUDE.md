@@ -358,7 +358,9 @@ stop_loss 內部仍呼叫,非物化範圍)。
 端點:`GET /stocks/{id}/neely/forest`(+ N>250 → 422 完整性保險絲,引擎 cap 200 / 實測 max 37)
 / `/levels` / `/resonance` / `/snapshot/{core}` / `/market/climate` / `/ohlc` / `/kalman/series`
 / `/screens/{toolkit}`(白名單)。passthrough 取 `snapshot::text` 原文直出(不 deserialize / 不建
-pydantic),壓縮交 brotli-asgi(brotli q4 + gzip_fallback)。async psycopg_pool(lifespan)。
+pydantic),壓縮交 brotli-asgi(brotli q4 + gzip_fallback)。**sync** psycopg ConnectionPool(lifespan)+ sync
+handler(FastAPI threadpool)— production verify 揭露 Windows + Python 3.14 async psycopg 撞 ProactorEventLoop
+不相容,改 sync pool 走 thread 阻塞 I/O 與 event loop 解耦,跨 OS/Python 穩定(commit 39ec85d 後 hotfix)。
 
 ### TS 契約 codegen(治本 + 簡單)
 

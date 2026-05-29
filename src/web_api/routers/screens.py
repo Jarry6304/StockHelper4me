@@ -1,11 +1,9 @@
-"""跨股排行榜:*_ranked_derived(重用既有 sync fetch_cross_stock_ranked,跑於 threadpool)。"""
+"""跨股排行榜:*_ranked_derived(重用既有 sync fetch_cross_stock_ranked)。sync handler。"""
 
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
 
-import anyio
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -29,7 +27,7 @@ _ALLOWED: dict[str, str] = {
 
 
 @router.get("/{toolkit}")
-async def screen(
+def screen(
     toolkit: str,
     as_of: date = Query(..., alias="date"),
     top_n: int = 30,
@@ -43,19 +41,16 @@ async def screen(
             detail=f"unknown screen toolkit '{toolkit}'. allowed: {sorted(_ALLOWED)}",
         )
 
-    def _run() -> tuple[Any, list[dict[str, Any]]]:
-        from fusion.raw._db import fetch_cross_stock_ranked, get_connection
+    from fusion.raw._db import fetch_cross_stock_ranked, get_connection
 
-        conn = get_connection()
-        try:
-            ranking_date, rows = fetch_cross_stock_ranked(
-                conn, source_table=table, as_of=as_of, top_n=top_n + offset,
-            )
-        finally:
-            conn.close()
-        return ranking_date, rows[offset:offset + top_n]
-
-    ranking_date, rows = await anyio.to_thread.run_sync(_run)
+    conn = get_connection()
+    try:
+        ranking_date, rows = fetch_cross_stock_ranked(
+            conn, source_table=table, as_of=as_of, top_n=top_n + offset,
+        )
+    finally:
+        conn.close()
+    rows = rows[offset:offset + top_n]
     return JSONResponse(content=jsonable_encoder({
         "toolkit": toolkit, "ranking_date": ranking_date,
         "top_n": top_n, "offset": offset, "rows": rows,

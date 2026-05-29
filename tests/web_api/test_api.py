@@ -1,7 +1,8 @@
-"""v4.32 Golden L3 唯讀 Web API 測試(FastAPI TestClient + fake async pool)。
+"""v4.32 Golden L3 唯讀 Web API 測試(FastAPI TestClient + fake sync pool)。
 
-不依賴真實 PG:dependency_overrides 注入 FakePool,async cursor 回 canned rows。
+不依賴真實 PG:dependency_overrides 注入 FakePool,sync cursor 回 canned rows。
 TestClient 不以 context manager 進入 → lifespan(open_pool)不觸發。
+handler 為 sync(FastAPI threadpool)+ sync pool → 不碰 event loop(Windows 安全)。
 """
 
 from datetime import date
@@ -12,25 +13,25 @@ from web_api.app import create_app
 from web_api.pool import get_pool
 
 
-# ── fake async pool ─────────────────────────────────────────────────────────
+# ── fake sync pool ──────────────────────────────────────────────────────────
 class _FakeCursor:
     def __init__(self, rows):
         self._rows = rows
         self.executed = []
 
-    async def __aenter__(self):
+    def __enter__(self):
         return self
 
-    async def __aexit__(self, *a):
+    def __exit__(self, *a):
         return False
 
-    async def execute(self, sql, params=None):
+    def execute(self, sql, params=None):
         self.executed.append((sql, params))
 
-    async def fetchone(self):
+    def fetchone(self):
         return self._rows[0] if self._rows else None
 
-    async def fetchall(self):
+    def fetchall(self):
         return list(self._rows)
 
 
@@ -46,10 +47,10 @@ class _FakeConnCtx:
     def __init__(self, rows):
         self._rows = rows
 
-    async def __aenter__(self):
+    def __enter__(self):
         return _FakeConn(self._rows)
 
-    async def __aexit__(self, *a):
+    def __exit__(self, *a):
         return False
 
 
