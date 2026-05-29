@@ -319,6 +319,39 @@ def kalman_trend(
     return compute_kalman_trend(stock_id, _parse_date(date), lookback_days=lookback_days)
 
 
+def _read_materialized_snapshot(
+    stock_id: str,
+    as_of,
+    core_name: str,
+    *,
+    timeframe: str | None = None,
+    database_url: str | None = None,
+) -> dict[str, Any] | None:
+    """讀已物化 Golden L3 fusion row(stock_levels / dual_track_resonance /
+    market_context 改讀物化共用)。回 snapshot dict 或 None(→ caller compute fallback)。
+
+    Robust:連線失敗 / 無 row / snapshot 非 dict → 一律回 None(→ compute fallback)。
+    `isinstance(snapshot, dict)` 守門確保只回真實物化 dict(避免 mock conn 的 truthy 回值
+    被誤當成物化結果;對齊既有測試僅 mock compute path 的行為)。
+    """
+    from fusion.materialize.read import fetch_fusion_doc
+    from fusion.raw._db import get_connection
+
+    try:
+        conn = get_connection(database_url)
+        try:
+            row = fetch_fusion_doc(
+                conn, stock_id=stock_id, as_of=as_of,
+                core_name=core_name, timeframe=timeframe,
+            )
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — 連線 / 查詢失敗 → compute fallback
+        return None
+    snap = row.get("snapshot") if hasattr(row, "get") else None
+    return snap if isinstance(snap, dict) else None
+
+
 def market_context(
     date: str,
     lookback_days: int = 60,
@@ -353,9 +386,18 @@ def market_context(
           "narrative": "..."
         }
     """
+    as_of = _parse_date(date)
+    # v4.32 Golden L3:預設 lookback 讀物化 climate_fusion;非預設 → compute fresh
+    if lookback_days == 60:
+        doc = _read_materialized_snapshot(
+            "_market_", as_of, "climate_fusion", timeframe="_all_",
+        )
+        if doc is not None:
+            return doc
+
     from mcp_server._climate import compute_market_context
 
-    return compute_market_context(_parse_date(date), lookback_days=lookback_days)
+    return compute_market_context(as_of, lookback_days=lookback_days)
 
 
 # ────────────────────────────────────────────────────────────
@@ -988,8 +1030,17 @@ def stock_levels(
     out: dict[str, Any] = {"stock_id": stock_id, "as_of": as_of.isoformat()}
 
     try:
-        from fusion.key_levels import key_levels as _kl
-        out["key_levels"] = _kl(stock_id, as_of, database_url=database_url)
+        # v4.32 Golden L3:先讀物化 levels_fusion(哨兵 tf _all_);缺 → compute fallback。
+        # pattern_scan / stop_loss 維持 read-time(非物化範圍,且仍內部呼叫 key_levels)。
+        doc = _read_materialized_snapshot(
+            stock_id, as_of, "levels_fusion", timeframe="_all_",
+            database_url=database_url,
+        )
+        if doc is not None:
+            out["key_levels"] = doc
+        else:
+            from fusion.key_levels import key_levels as _kl
+            out["key_levels"] = _kl(stock_id, as_of, database_url=database_url)
     except Exception as e:  # noqa: BLE001
         out["key_levels"] = {"error": f"{type(e).__name__}: {e}", "section": "key_levels"}
 
@@ -1193,6 +1244,20 @@ def dual_track_resonance(
     from fusion.raw._db import get_connection
 
     as_of = _parse_date(date)
+    # v4.32 Golden L3:預設參數 → 讀物化 resonance_fusion(daily);非預設 → compute fallback。
+    # 物化 row = resonance().to_dict() 全量,讀到即直接回(免 30s timeout / fib cap 路徑)。
+    if (
+        primary_horizon == 63
+        and primary_confidence == 0.80
+        and cross_stock_table == "magic_formula_ranked_derived"
+    ):
+        doc = _read_materialized_snapshot(
+            stock_id, as_of, "resonance_fusion", timeframe="daily",
+            database_url=database_url,
+        )
+        if doc is not None:
+            return doc
+
     # v4.28+ 安全網:30s statement timeout — v4.28 batch query 後既有 path 應 < 1s;
     # 若未來其他未知瓶頸(forecast_log 表規模 / index plan regression / scenario forest
     # 突增等)再次拖垮,LLM 拿明確 timeout error 而非 hang 4 分鐘。SET LOCAL 限本

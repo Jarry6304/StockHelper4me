@@ -60,7 +60,27 @@ def stock_snapshot(
         stock_id, as_of, lookback_days=30, database_url=database_url))
     risk = _safe("risk_alert", lambda: compute_risk_alert_status(
         stock_id, as_of, database_url=database_url))
-    market = _safe("market_context", lambda: compute_market_context(as_of))
+    def _market_context():
+        # v4.32 Golden L3:先讀物化 climate_fusion,缺 / 失敗 → compute_market_context fallback。
+        # isinstance(dict) 守門 + try/except → 連線失敗或 mock conn 都安全降級為 compute。
+        from fusion.materialize.read import fetch_fusion_doc
+        try:
+            _c = get_connection(database_url)
+            try:
+                _row = fetch_fusion_doc(
+                    _c, stock_id="_market_", as_of=as_of,
+                    core_name="climate_fusion", timeframe="_all_",
+                )
+            finally:
+                _c.close()
+            _snap = _row.get("snapshot") if hasattr(_row, "get") else None
+            if isinstance(_snap, dict):
+                return _snap
+        except Exception:  # noqa: BLE001
+            pass
+        return compute_market_context(as_of)
+
+    market = _safe("market_context", _market_context)
     commodity = _safe("commodity_macro", lambda: compute_commodity_macro_snapshot(
         as_of, commodities=["GOLD"], database_url=database_url))
 
