@@ -270,6 +270,42 @@ uvicorn web_api.app:app                                 # GET /stocks/{id}/{leve
 bash codegen/generate.sh && (cd frontend && "$(npm root -g)/typescript/bin/tsc" --noEmit -p tsconfig.json)
 ```
 
+### 4.10 排程與任務總覽(一次看懂要跑什麼)
+
+**A. 一次性 setup(初次部署)**
+```powershell
+pip install -e ".[dev,web,mcp]"; pip install pydantic-to-typescript   # 依賴
+alembic upgrade head                                                  # schema
+cd rust_compute; cargo build --release; cd ..                         # tw_cores + tw_stock_compute
+python src/main.py backfill                                           # Bronze 全量回補(估數小時 @ sponsor tier)
+.\scripts\refresh_full.ps1                                            # 完整補完:Silver/Cross/M3 全市場
+.\scripts\recalibrate_kalman.ps1                                      # Phase 3b:seed kalman_cqr(讓 resonance track2 活)
+```
+
+**B. 自動排程(裝一次,之後自動;走 Windows Task Scheduler,不需 admin)**
+```powershell
+.\scripts\install_refresh_task.ps1            # 每日 18:00 — refresh(Bronze→Silver→Cross→M3→forecast→golden)
+.\scripts\install_recalibrate_task.ps1        # 每週日 02:00 — Kalman 校準(track2 kalman_cqr 刷新 + 重物化 resonance)
+# 驗證 / 移除:Get-ScheduledTask / Start-ScheduledTask / Unregister-ScheduledTask -TaskName <name>
+```
+
+**C. cadence 對照表**
+
+| 頻率 | 排程 / 指令 | 做什麼 | 估時 |
+|---|---|---|---|
+| **每日(自動)** | `install_refresh_task` → `refresh_daily.ps1` → `python src/main.py refresh` | Bronze incremental → Silver 7c(full)/7a/7b → Cross 8 → M3 cores 全市場 → **Step7 forecast forward** → **Step8 Golden L3 物化** | ~30-50 min※ |
+| **每週(自動)** | `install_recalibrate_task` → `recalibrate_kalman.ps1` | Kalman `run-backtest` 全市場 → conformalize→kalman_cqr → 重物化 resonance(track2 非 single_track) | ~35 min |
+| **隔久 / 遷移後 / >30 天** | `refresh_full.ps1` | 完整補完(Silver 7a/7b/Cross 全 `--full-rebuild` + M3 全市場) | ~40-60 min |
+| **as-needed** | `python src/main.py golden fusion --since A --until B` | Golden L3 PIT 歷史回填(skip-if-exists) | 視範圍 |
+| **唯讀對外** | `uvicorn web_api.app:app` | 長駐 Web API(LLM / 前端 / dashboard 消費) | 常駐 |
+| **push 前 / 健檢** | `verify_golden_l3_v4_32.ps1` / `verify_mcp_toolkit_v4_29.py` / `test_pipeline.ps1` | 物化 / MCP / 全 pipeline 健康度 | 數分 |
+
+> ※ 每日 refresh 自 v4.30(M3 cores 全市場)+ v4.32(Step7 forecast + Step8 golden 全市場 resonance)後變重;
+> 實際 wall time 建議首次手動跑 `python src/main.py refresh` 量測。若過重,可考慮 Step8 golden 只留 levels/climate
+> 每日、resonance 交給每週 `recalibrate_kalman`(其 Step5 已重物化 resonance)。
+>
+> **最小可動**:只裝 **A**(一次)+ **B 的兩個排程** → 系統自動維持 daily 資料 + weekly track2 校準。
+
 ---
 
 ## 5. CLI 指令
