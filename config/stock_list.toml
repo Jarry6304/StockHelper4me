@@ -15,7 +15,7 @@ mode = "db"
 # 篩選條件（僅 mode = "db" 時生效）
 # -----------------------------------------------------------------------------
 [filter]
-market_type      = ["twse", "otc"]   # twse=上市, otc=上櫃, emerging=興櫃
+market_type      = ["twse", "tpex"]  # twse=上市, tpex=上櫃, emerging=興櫃(對齊 stock_info_ref.type / FinMind 值;舊值 "otc" 與 DB 不符 → 漏掉全部上櫃)
 exclude_etf      = false             # 是否排除 ETF
 exclude_warrant  = true              # 排除權證
 exclude_tdr      = true              # 排除 TDR（台灣存託憑證）

@@ -485,6 +485,19 @@ python src/main.py forecast fuse --stocks $ids --since 2022-01-01      # Bates-G
 - 前端應用本體(本案只產 `frontend/src/contracts/` 型別)、API auth / rate-limit / 部署。
 - ts-rs u64→bigint convention(wire 為 number;如需 number 可後續 ts override)。
 
+### v4.32.1 hotfix(2026-05-31)— stock_list.toml market_type `otc` → `tpex`(解鎖全上櫃)
+
+production verify(user 查 3537「有籌碼估值、無行情」)揭露既有(pre-existing)bug:
+`config/stock_list.toml` `[filter].market_type = ["twse", "otc"]`,但 `stock_info_ref.type`
+(對齊 FinMind)的上櫃值是 **`tpex`** 不是 `otc` → `stock_resolver` 的 `type IN ('twse','otc')`
+**一檔上櫃都 match 不到** → `universe_filter`(只 price_daily / institutional_daily 有)把
+**全部 1107 檔上櫃股**排除在價格 universe 外(其餘無 filter 的 feed 照收 → 上櫃股「有籌碼/估值、無行情/技術/Neely/Kalman」)。也解釋 daily refresh 一直只 ~1254 檔(≈ twse-only)。
+
+修:`market_type` `["twse","otc"]` → **`["twse","tpex"]`**(對齊 DB/FinMind 值)。
+⚠️ user 拍版解鎖上櫃,需一次性大 backfill(price + institutional 重抓 history → Silver/Cross/M3
+重算 → golden 物化 + recalibrate),之後 universe ~2360 檔、daily refresh 變重。emerging(興櫃 368)
+未納入(user 未選)。type 分布:twse 1539 / tpex 1107 / emerging 368。
+
 ---
 
 ## v4.30 — dirty queue 設計修法:refresh Silver 7c 強制 full-rebuild(Option B,2026-05-29)
