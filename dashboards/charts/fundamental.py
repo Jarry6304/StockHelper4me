@@ -38,10 +38,12 @@ def build_revenue_chart(revenue_indicator: dict[str, Any] | None) -> go.Figure:
         fig.update_layout(height=400, title="月營收")
         return fig
 
-    dates = [coerce_date(p["date"]) for p in series if "date" in p]
-    revenue = [p.get("revenue") for p in series if "date" in p]
-    yoy = [p.get("yoy_pct") for p in series if "date" in p]
-    mom = [p.get("mom_pct") for p in series if "date" in p]
+    # v4.34:RevenuePoint 序列化無 `date` 欄(只有 period / fact_date / report_date)
+    # → 舊讀 p["date"] 永遠 False,revenue chart 靜默空白。改讀 fact_date(月底日,畫圖最準)。
+    dates = [coerce_date(p["fact_date"]) for p in series if "fact_date" in p]
+    revenue = [p.get("revenue") for p in series if "fact_date" in p]
+    yoy = [p.get("yoy_pct") for p in series if "fact_date" in p]
+    mom = [p.get("mom_pct") for p in series if "fact_date" in p]
 
     fig.add_trace(
         go.Bar(x=dates, y=revenue, name="月營收", marker_color="#1976D2", opacity=0.7),
@@ -165,11 +167,13 @@ def build_financial_statement_view(fin_indicator: dict[str, Any] | None) -> tupl
         fig.update_layout(height=500, title="財報季頻")
         return fig, []
 
-    dates = [coerce_date(p["date"]) for p in series if "date" in p]
-    eps = [p.get("eps") for p in series if "date" in p]
-    revenue = [p.get("revenue") for p in series if "date" in p]
-    gross = [p.get("gross_profit") for p in series if "date" in p]
-    net = [p.get("net_income") for p in series if "date" in p]
+    # v4.34:FinancialPoint 序列化無 `date` 欄(只有 period / fact_date / report_date)
+    # → 舊讀 p["date"] 永遠 False,財報 chart 靜默空白。改讀 fact_date(季末日)。
+    dates = [coerce_date(p["fact_date"]) for p in series if "fact_date" in p]
+    eps = [p.get("eps") for p in series if "fact_date" in p]
+    revenue = [p.get("revenue") for p in series if "fact_date" in p]
+    gross = [p.get("gross_profit") for p in series if "fact_date" in p]
+    net = [p.get("net_income") for p in series if "fact_date" in p]
 
     # EPS bar
     eps_colors = [PALETTE["macd_hist_up"] if (e or 0) >= 0 else PALETTE["macd_hist_down"] for e in eps]
@@ -201,12 +205,12 @@ def build_financial_statement_view(fin_indicator: dict[str, Any] | None) -> tupl
         plot_bgcolor="rgba(250, 250, 252, 1)",
     )
 
-    # Table rows(展開所有 fields)
+    # Table rows(展開所有 fields;v4.34:無 `date` 欄,改以 period/fact_date 領頭)
     table_rows = []
     for p in series:
-        row = {"date": p.get("date")}
+        row = {"period": p.get("period"), "fact_date": p.get("fact_date")}
         for k, v in p.items():
-            if k != "date":
+            if k not in row:
                 row[k] = v
         table_rows.append(row)
     return fig, table_rows
