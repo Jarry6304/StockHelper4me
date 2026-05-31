@@ -11,6 +11,16 @@ from pathlib import Path
 from typing import Any
 
 
+def _repo_root_env_path() -> Path:
+    """repo root 的 .env 路徑。
+
+    本檔在 src/fusion/raw/_db.py,需上溯 4 層到 repo root(parents[3]:
+    raw → fusion → src → repo root)。舊碼 parent.parent.parent 只到 src/ 是 bug
+    (對齊 src/db.py 時忘了 src/db.py 在 src/ 下故只 ×2,本檔深 2 層故須 ×4)。
+    """
+    return Path(__file__).resolve().parents[3] / ".env"
+
+
 def get_connection(database_url: str | None = None):
     """回傳 psycopg.Connection(read-only,autocommit=True,row_factory=dict_row)。
 
@@ -34,11 +44,11 @@ def get_connection(database_url: str | None = None):
             "psycopg not installed. Run: pip install 'psycopg[binary]>=3.2'"
         ) from e
 
-    # 對齊 src/db.py 載入 .env 行為
+    # 對齊 src/db.py 載入 .env 行為(路徑層數見 _repo_root_env_path docstring)
     try:
         from dotenv import load_dotenv
 
-        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+        env_path = _repo_root_env_path()
         if env_path.exists():
             load_dotenv(env_path)
     except ImportError:
