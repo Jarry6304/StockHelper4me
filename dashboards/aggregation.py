@@ -332,6 +332,30 @@ with tab_neely:
         )
         st.plotly_chart(deep_fig, use_container_width=True)
 
+        # ── v4.33 NeelyWave 複合雲圖(過去折線 + 未來密度雲 + 合成波型 + 共振)──
+        st.markdown("#### 🌥️ 複合雲圖(forest 級)")
+        show_res = st.checkbox("疊雙軌共振(額外讀 forecast_log)", value=True)
+        current_price = float(ohlc[-1]["close"]) if ohlc else None
+        resonance_result = None
+        if show_res:
+            try:
+                from fusion.dual_track.resonance import resonance
+                from fusion.raw._db import get_connection
+                with get_connection() as _conn:
+                    resonance_result = resonance(
+                        stock_id, as_of_date, conn=_conn,
+                    ).to_dict()
+            except Exception as e:  # forecast_log 無料 / 連線失敗 → 共振層 skip
+                st.caption(f"（共振層略過:{e}）")
+                resonance_result = None
+        cloud_fig = neely_wave.build_neely_forest_cloud(
+            ohlc, structural_neely,
+            current_price=current_price,
+            resonance_result=resonance_result,
+            show_resonance=show_res,
+        )
+        st.plotly_chart(cloud_fig, use_container_width=True)
+
         with st.expander("🔧 Diagnostics", expanded=False):
             diag = neely_wave.render_diagnostics(structural_neely)
             st.json(diag, expanded=True)

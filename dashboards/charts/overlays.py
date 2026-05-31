@@ -13,6 +13,7 @@ from dashboards.charts._base import (
     PALETTE,
     coerce_date,
     extract_series,
+    neely_monowave_points,
 )
 
 
@@ -185,26 +186,8 @@ def add_neely_zigzag(
     if not monowaves:
         return
 
-    # Zigzag:每個 monowave 用 (start, end) 兩個 endpoint 連線
-    # Endpoint price 取 (low) for downward, (high) for upward;若無 direction 信息,
-    # 用中位數 (high + low) / 2 fallback
-    pts_x: list[Any] = []
-    pts_y: list[float] = []
-
-    for mw in monowaves:
-        start = mw.get("start")
-        end = mw.get("end")
-        price_range = mw.get("price_range") or {}
-        low = price_range.get("low")
-        high = price_range.get("high")
-        if start and low is not None and high is not None:
-            # 第 1 個點:取 mid (兩端都有時)
-            if not pts_x:
-                pts_x.append(coerce_date(start))
-                pts_y.append((float(low) + float(high)) / 2)
-        if end and low is not None and high is not None:
-            pts_x.append(coerce_date(end))
-            pts_y.append((float(low) + float(high)) / 2)
+    # Zigzag:每段方向性 (start→end),折線接連續 end_price(v4.33 欄位修復)
+    pts_x, pts_y = neely_monowave_points(monowaves)
 
     if pts_x:
         fig.add_trace(
@@ -224,13 +207,12 @@ def add_neely_zigzag(
     if show_labels:
         for mw in monowaves:
             label = mw.get("label")
-            end = mw.get("end")
-            price_range = mw.get("price_range") or {}
-            high = price_range.get("high")
-            if label and end and high is not None:
+            end = mw.get("end_date")
+            end_price = mw.get("end_price")
+            if label and end is not None and end_price is not None:
                 fig.add_annotation(
                     x=coerce_date(end),
-                    y=float(high),
+                    y=float(end_price),
                     text=label,
                     showarrow=False,
                     font=dict(size=10, color=PALETTE["neely_label"]),
