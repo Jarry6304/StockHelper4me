@@ -177,6 +177,40 @@ def coerce_date(d: Any) -> date:
     raise TypeError(f"無法 coerce 成 date: {type(d).__name__}={d!r}")
 
 
+def neely_monowave_points(
+    monowaves: list[dict[str, Any]] | None,
+) -> tuple[list[date], list[float]]:
+    """monowave_series → zigzag 折線點序 (xs, ys)。
+
+    v4.33 修復:production Rust `Monowave` 序列化為 snake_case
+    `start_date` / `end_date` / `start_price` / `end_price`(無 serde rename),
+    舊 dashboard 讀 `start` / `end` / `price_range.{low,high}` 對真實資料全回 None
+    → zigzag 永遠畫空。
+
+    每段是方向性 (start→end),折線接連續 `end_price`:
+        xs = [mw0.start_date] + [mw_i.end_date   for all i]
+        ys = [mw0.start_price] + [mw_i.end_price for all i]
+
+    N 段 monowave → N+1 點。缺 date / price 的段跳過。
+    """
+    xs: list[date] = []
+    ys: list[float] = []
+    for mw in monowaves or []:
+        start_date = mw.get("start_date")
+        end_date = mw.get("end_date")
+        start_price = mw.get("start_price")
+        end_price = mw.get("end_price")
+        if not xs:
+            # 首段補 start endpoint
+            if start_date is not None and start_price is not None:
+                xs.append(coerce_date(start_date))
+                ys.append(float(start_price))
+        if end_date is not None and end_price is not None:
+            xs.append(coerce_date(end_date))
+            ys.append(float(end_price))
+    return xs, ys
+
+
 def extract_series(indicator: dict[str, Any] | None) -> list[dict[str, Any]]:
     """從 indicator_latest dict 抽 series array。
 

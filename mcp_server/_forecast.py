@@ -44,6 +44,14 @@ from fusion._picker import (
     power_rating_sign as _power_rating_sign,
     power_rating_strength as _power_rating_strength,
 )
+# v4.33 投影 / 失效抽取 helper 抽到 fusion._fib_projection(single source of truth,
+# dashboards neelywave 複合雲圖共用)。以舊私名 alias 保留,內部呼叫端 0 改動。
+from fusion._fib_projection import (
+    TIMEFRAME_FIB_RANGE as _TIMEFRAME_FIB_RANGE,
+    extract_invalidation_price as _extract_invalidation_price,
+    find_closest_zone as _find_closest_zone,
+    project_range as _project_range,
+)
 
 # ────────────────────────────────────────────────────────────
 # 4 時間框架 Fibonacci ratio scaling(plan §Tool 1 第 2 點)
@@ -54,11 +62,7 @@ from fusion._picker import (
 #
 # 每個 horizon 用 fib zones 的 ratio 範圍取 range_high / range_low
 # ratio_lo = 預期下界 fib;ratio_hi = 預期上界 fib
-_TIMEFRAME_FIB_RANGE: dict[str, tuple[float, float]] = {
-    "1m": (0.382, 0.618),
-    "3m": (0.618, 1.000),
-    "6m": (1.000, 1.382),
-}
+# (v4.33 _TIMEFRAME_FIB_RANGE 定義搬到 fusion._fib_projection,上方 import 回來)
 
 # Prob_up 時間衰減(plan §Tool 1 第 3 點;v3.38 對齊 3 horizon)
 _TIMEFRAME_DECAY: dict[str, float] = {
@@ -1065,65 +1069,6 @@ def _get_last_series_point(value: dict) -> dict | None:
     return None
 
 
-def _project_range(
-    fib_zones: list[dict],
-    ratio_lo: float,
-    ratio_hi: float,
-    current_price: float,
-    sign: int,
-) -> tuple[list[float] | None, list[float] | None]:
-    """從 fib_zones 中找最接近 ratio_lo / ratio_hi 的 zone,回 (range_low, range_high)。
-
-    每個 range 用 [low, high] list 表達(對應 FibZone.low / FibZone.high)。
-    若 fib_zones 為空 → fallback 用 current_price × ratio 估算。
-    """
-    if not fib_zones:
-        # Fallback:用 current_price × ratio scaling
-        if sign >= 0:
-            # bullish:預期上漲,target 高於 current
-            return (
-                [current_price * (1 - ratio_lo / 10), current_price * (1 - ratio_lo / 20)],
-                [current_price * (1 + ratio_lo / 10), current_price * (1 + ratio_hi / 10)],
-            )
-        else:
-            # bearish:預期下跌,target 低於 current
-            return (
-                [current_price * (1 - ratio_hi / 10), current_price * (1 - ratio_lo / 10)],
-                [current_price * (1 + ratio_lo / 20), current_price * (1 + ratio_lo / 10)],
-            )
-
-    # 從 fib_zones 找 ratio_lo / ratio_hi 對應的 zone
-    zone_lo = _find_closest_zone(fib_zones, ratio_lo)
-    zone_hi = _find_closest_zone(fib_zones, ratio_hi)
-
-    range_low = [zone_lo["low"], zone_lo["high"]] if zone_lo else None
-    range_high = [zone_hi["low"], zone_hi["high"]] if zone_hi else None
-
-    # 確保 range_high 真的 ≥ current,range_low 真的 ≤ current(bullish 場景)
-    # bearish 場景 swap
-    if sign < 0 and range_high and range_low:
-        # bearish 反過來
-        range_low, range_high = range_high, range_low
-
-    return range_low, range_high
-
-
-def _find_closest_zone(fib_zones: list[dict], target_ratio: float) -> dict | None:
-    """找 source_ratio 最接近 target 的 fib zone。"""
-    best = None
-    best_diff = float("inf")
-    for z in fib_zones:
-        try:
-            r = float(z.get("source_ratio") or 0)
-            diff = abs(r - target_ratio)
-            if diff < best_diff:
-                best_diff = diff
-                best = z
-        except (TypeError, ValueError):
-            continue
-    return best
-
-
 def _round_range(rng: list[float] | None) -> list[float] | None:
     """範圍 round 到 2 位小數。"""
     if rng is None:
@@ -1163,21 +1108,3 @@ def _extract_key_levels(primary: dict | None, current_price: float) -> dict[str,
     }
 
 
-def _extract_invalidation_price(primary: dict | None, current_price: float) -> float | None:
-    """從 primary scenario 的 invalidation_triggers 抽價格(PriceBreakBelow / PriceBreakAbove)。"""
-    if primary is None:
-        return None
-    triggers = primary.get("invalidation_triggers") or []
-    pr_sign = _power_rating_sign(primary.get("power_rating"))
-
-    # bullish 看 break_below 失效;bearish 看 break_above 失效
-    target_key = "PriceBreakBelow" if pr_sign >= 0 else "PriceBreakAbove"
-
-    for t in triggers:
-        trigger_type = t.get("trigger_type")
-        if isinstance(trigger_type, dict) and target_key in trigger_type:
-            try:
-                return round(float(trigger_type[target_key]), 2)
-            except (TypeError, ValueError):
-                continue
-    return None
