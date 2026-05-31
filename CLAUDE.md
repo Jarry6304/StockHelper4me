@@ -356,8 +356,6 @@ neely_core spec §7.2「合法的『Neely 對現況無解』」)。**code 行為
 
 ---
 
----
-
 ## v4.32 — Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen(2026-05-29)
 
 User 直送「分層 Golden 架構規格」:把原 read-time compute 的 fusion(levels / resonance /

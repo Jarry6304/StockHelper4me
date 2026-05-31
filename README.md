@@ -2,9 +2,9 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **13 tools** + **唯讀 FastAPI Web API**)。
 
-**版本**:**v4.32**(alembic head `h4i5j6k7l8m9` 不變 / 2026-05-29,**Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen**,branch `claude/sweet-carson-96j9D`,PR #113–#117 已 merge main)
-**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(v4.32 Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)。完整 verify chain 見 [CLAUDE.md §v4.32](CLAUDE.md)
-**狀態**:**v4.32**(2026-05-29 production-verified ☕):原 read-time 的 fusion(levels / resonance / climate)正名 **Golden L3** 並物化進 `structural_snapshots`(新 core_name `*_fusion`),對外只讀;新建**唯讀 FastAPI Web API**(`uvicorn web_api.app:app` — neely forest 完整 passthrough + brotli/gzip 協商 + N>250 保險絲;Windows/Py3.14 每請求 sync conn);**TypeScript 契約 codegen**(Rust ts-rs 63 型別 + Python pydantic2ts → `frontend/src/contracts/`)。Phase 3b Kalman 全市場校準腳本 `scripts/recalibrate_kalman.ps1`(讓 resonance track2 非 single_track)。**累積**:v4.25 dual-track 共振 + v4.26 wave_impulse_screen + v4.28 三 sprint + v4.29 + **v4.30/v4.31 + v4.32**。M3 Cores **39 crates**;Cross-Stock **12 builders**;MCP **13 tools** + Web API;**Rust 607 tests + ts feature 485**;**Python ~865 passed / +34(v4.32)**;1266 stocks × 36 cores / facts ~5.1M。
+**版本**:**v4.33**(alembic head `h4i5j6k7l8m9` 不變 / 2026-05-31)。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug。皆已 merge main
+**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)+ Phase 3b `scripts/recalibrate_kalman.ps1`(Kalman 全市場校準 → resonance track2 非 single_track)。完整 verify chain 見 [CLAUDE.md §v4.32/v4.33](CLAUDE.md)
+**狀態**:**v4.32**(2026-05-29 production-verified ☕):原 read-time 的 fusion(levels / resonance / climate)正名 **Golden L3** 並物化進 `structural_snapshots`(新 core_name `*_fusion`),對外只讀;新建**唯讀 FastAPI Web API**(`uvicorn web_api.app:app` — neely forest 完整 passthrough + brotli/gzip 協商 + N>250 保險絲;Windows/Py3.14 每請求 sync conn);**TypeScript 契約 codegen**(Rust ts-rs 63 型別 + Python pydantic2ts → `frontend/src/contracts/`)。Phase 3b Kalman 全市場校準腳本 `scripts/recalibrate_kalman.ps1`(讓 resonance track2 非 single_track)。**累積**:v4.25 dual-track 共振 + v4.26 wave_impulse_screen + v4.28 三 sprint + v4.29 + **v4.30/v4.31 + v4.32**。M3 Cores **39 crates**;Cross-Stock **12 builders**;MCP **13 tools** + Web API;**Rust 607 tests + ts feature 485**;**Python ~865 passed / +34(v4.32);fusion + mcp_server 子集 476 passed / 1 skipped / 0 failed(v4.33.1 後)**;v4.32.1 tpex 解鎖後 universe ~2172 stocks × 41 cores dispatch / facts daily ~78k new rows。
 
 ---
 
@@ -214,7 +214,7 @@ python src/main.py cross_cores phase 8 --builder magic_formula
 # Stage 1: dry-run smoke(~30 秒)
 ./rust_compute/target/release/tw_cores run-all --limit 5
 
-# Stage 2: 全市場 1263 stocks × 35 cores(預估 ~9 分鐘 @ concurrency=32)
+# Stage 2: 全市場 ~2172 stocks(v4.32.1 tpex 解鎖後)× 41 cores dispatch(M3 run-all wall ~37 分;concurrency 依機器調整)
 ./rust_compute/target/release/tw_cores run-all \
     --workflow workflows/tw_stock_standard.toml \
     --write \
@@ -830,3 +830,28 @@ repo root 已有正確 `.env` 卻仍報錯,是 v4.33 修掉的路徑 bug
 export DATABASE_URL=postgresql://twstock:twstock@localhost:5432/twstock   # Windows: $env:DATABASE_URL=...
 python -m streamlit run dashboards/aggregation.py
 ```
+
+### 任何 CLI / MCP / `golden fusion` 報 `IndentationError` 或 import 失敗
+
+通常是**本地分支落後遠端、`git pull` 沒覆蓋到手改過的檔**,導致工作樹有殘缺檔
+(`git pull` 不會覆蓋本地已修改的檔)。先同步,再用遠端良好版還原單一壞檔:
+
+```bash
+git fetch origin main
+git status            # 若顯示 "Your branch is behind ... by N commits" 即為此情形
+git pull              # fast-forward 對齊遠端
+
+# 若某檔仍壞(本地有未提交的殘缺改動),用遠端良好版覆蓋:
+git checkout origin/main -- src/fusion/raw/_db.py
+python -c "import ast,io; ast.parse(io.open('src/fusion/raw/_db.py',encoding='utf-8').read()); print('OK')"
+```
+
+> 養成每個 session 開工前先 `git pull` 的習慣,可避免本地檔案 drift。
+
+### 上櫃股「有籌碼/估值、無行情/技術/Neely/Kalman」
+
+v4.32.1 前的既有 bug:`config/stock_list.toml` `market_type` 用 `otc`,但
+`stock_info_ref.type`(對齊 FinMind)上櫃值是 **`tpex`** → universe filter 漏掉
+全部上櫃股(daily refresh 一直只 ~1254 檔 ≈ twse-only)。已於 **v4.32.1** 改
+`["twse","tpex"]` 解鎖(universe ~2172)。升級後需跑一次完整 backfill +
+`refresh_full`,補齊上櫃股的行情/技術/Neely/Kalman。興櫃 emerging 未納入。
