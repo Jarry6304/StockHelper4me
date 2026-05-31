@@ -12,15 +12,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
+**v4.32 後升 6 層**(加 Golden L3 fusion 物化 + 唯讀 Web API)。
 
 - **alembic head**:`h4i5j6k7l8m9`(v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
-- **開發分支**:`claude/sweet-carson-96j9D`(v4.32 Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen,7 commits;v4.30/v4.31 已 merge main)
+- **開發分支(近期)**:`claude/neely-forest-cloud-zigzag-Xv13d`(v4.32.1 tpex 解鎖 + NeelyWave 複合雲圖 + v4.33 fusion `.env` 路徑修復,皆已 merge main);`claude/sweet-carson-96j9D`(v4.32 Golden L3 物化 + 唯讀 Web API + TS codegen,已 merge)
+- **main HEAD**:`17b87c2`(v4.33 後 + test 對齊;早期 PR #110~#122 全 merge)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
+- **universe**:`config/stock_list.toml` `market_type = ["twse","tpex"]`(v4.32.1 `otc`→`tpex` 解鎖全部上櫃股;daily refresh 實測 universe ~2172;興櫃 emerging 未納入)
 - **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
+- **Python tests**:`tests/fusion/` + `tests/mcp_server/` **476 passed / 1 skipped / 0 failed**(v4.33 後;`test_v3_35_1` pre-existing fail 已於 caveat-wording 對齊修掉)
 - **MCP toolkit**:**13 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen;v4.26 加 1)
 - **cross_cores Phase 8 builders**:**12**(magic_formula + v3.32 10 + v4.26 wave_impulse_screen)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
-- **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
+- **Production state**(v4.32.1 tpex 解鎖後):~2172 stocks × **41 cores** dispatch / M3 `run-all` wall ~37 min(tpex universe + golden + forecast)/ facts daily ~78k new rows;Round 7 + Round 8 + **Round 9** calibration **完整結算**
+- **Golden L3 + Web API(v4.32)**:`golden fusion` 物化 levels/resonance/climate → `structural_snapshots`;唯讀 FastAPI(`uvicorn web_api.app:app`);Phase 3b Kalman 全市場校準週排程(`recalibrate_kalman.ps1`,production verify 2603 `single_track=False` / 30 findings ✅)
 - **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏 P1.1-P1.4 全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神
 - **v4.5 → v4.9**(2026-05-19):M3SPEC 闕漏補完 8 sub-PR + Out-of-Scope backlog Items 1+2+3 完整收尾 ☕☕☕ — Group 2(4 sub-PR)+ Group 3(Monowave bar_indices)+ Group 1(3 sub-PR polywave 嵌套依賴鏈)+ v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)+ v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞);全市場 1266 stocks G1 P0 Gate **全綠**(max=196 / p95=28 / overflow=0)
 - **v4.10**(2026-05-20)☕:Out-of-Scope **Item 4 Pre-Constructive 2-pass diagnostics union** 完整收尾 — `pre_constructive::run_pass2` 新函式回傳 `HashMap<classified_idx, Vec<StructureLabelCandidate>>` Pass 1-only diff(label 比對);`MonowaveStructureLabels` 加 `classified_index` + `pass1_only_labels` 兩欄;lib.rs Stage 8.5 refill loop 把 Pass 2 result + diff 寫回 forest 每個 scenario;**Out-of-Scope backlog 全部清空**
@@ -331,10 +336,25 @@ env var 永遠最優先:`$env:DATABASE_URL = "..."` 再跑 streamlit。
 
 ### 驗證
 
-`pytest tests/fusion/ tests/mcp_server/`(--ignore render_tools)→ **475 passed /
-1 skipped / 1 pre-existing fail**(`test_v3_35_1` 與本 PR 無關),0 regression。
+`pytest tests/fusion/ tests/mcp_server/`(--ignore render_tools)→ 本 PR 當下 **475
+passed / 1 skipped / 1 pre-existing fail**(`test_v3_35_1` 與本 PR 無關),0 regression。
+該 pre-existing fail 已於 v4.33.1 修掉(見下),現全套 **476 passed / 1 skipped / 0 failed**。
 
 🟢 極低風險:1 檔 + 1 test。Rollback:單 commit `git revert`。
+
+### v4.33.1 — 修掉 v3.35.1 caveat test 的 stale 斷言(2026-05-31)
+
+`test_v3_35_1_quality_caveat_fib_decoupled_from_price` 自 **v4.22** 起一直 pre-existing
+fail:test 斷言舊警告字串「不適用當前 price level」,但 v4.22 刻意把 fib 脫節警告改成
+spec-grounded 文字(「Neely 引擎對近期結構無有效 scenario…forecasts 區間請忽略」,對齊
+neely_core spec §7.2「合法的『Neely 對現況無解』」)。**code 行為正確且刻意,只是 test
+斷言沒同步**。
+
+修法(`17b87c2`):改 test 斷言對齊 v4.22 新文字 + 驗 `current_price=395` 出現在警告中
+(保留原意「警告含 price 數字」)。**0 code 改動**,只動 `tests/mcp_server/test_toolkit_v2.py`
+(+7/-2)。全套 fusion + mcp_server **476 passed / 1 skipped / 0 failed**。
+
+---
 
 ---
 
