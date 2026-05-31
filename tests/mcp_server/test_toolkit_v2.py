@@ -1187,8 +1187,13 @@ class TestV3_35Picker:
         result = data_tools.neely_forecast("TEST", "2026-05-15")
         caveat = result["quality_caveat"]
         assert caveat["fib_zones_decoupled_from_price"] is True
-        # current=395 不在 [1100, 1500] +/- 50% buffer
-        assert any("不適用當前 price level" in w for w in caveat["warnings"])
+        # current=395 不在 [1100, 1500] +/- 50% buffer;v4.22 起警告文字改 spec-grounded
+        # (「不適用 Neely 波浪預測,forecasts 區間請忽略」),斷言對齊新文字 + price 數字
+        decoupled_warnings = [
+            w for w in caveat["warnings"] if "current_price=395" in w
+        ]
+        assert decoupled_warnings, "缺少 fib 脫節警告(含 current_price 數字)"
+        assert any("forecasts 區間請忽略" in w for w in decoupled_warnings)
 
     def test_v3_35_1_quality_caveat_usable_when_long_degree_and_aligned(self, monkeypatch):
         """v3.35.1:long-degree + fib zones 對齊 current_price → is_usable=True 無 warning。"""
