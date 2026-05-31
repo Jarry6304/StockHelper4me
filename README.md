@@ -816,3 +816,17 @@ WHERE core_name = 'neely_core'
 ## 9. License
 
 MIT
+
+
+## 疑難排解
+
+### `streamlit run dashboards/aggregation.py` 報「DATABASE_URL 未設定」
+
+repo root 已有正確 `.env` 卻仍報錯,是 v4.33 修掉的路徑 bug
+(`src/fusion/raw/_db.py` 找 `.env` 時層數算錯,只上溯到 `src/`)。**升級到含 v4.33
+的版本即修復**;或在啟動前先設環境變數(env var 優先序高於 `.env`):
+
+```bash
+export DATABASE_URL=postgresql://twstock:twstock@localhost:5432/twstock   # Windows: $env:DATABASE_URL=...
+python -m streamlit run dashboards/aggregation.py
+```

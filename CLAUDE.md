@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.29,最新 2026-05-28;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.33,最新 2026-05-31;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
@@ -291,6 +291,50 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.33 — fusion get_connection repo-root `.env` 路徑修復(2026-05-31)
+
+User `streamlit run dashboards/aggregation.py` 乾淨啟動撞「DATABASE_URL 未設定」
+RuntimeError(repo root `.env` 存在且正確卻沒被載入)。
+
+### Root cause
+
+`src/fusion/raw/_db.py::get_connection` 用 `Path(__file__).resolve().parent.parent.parent
+/ ".env"` 找 `.env`。但此檔在 `src/fusion/raw/_db.py`,往上三層只到 **`src/`** →
+找 `src/.env`(不存在)→ `load_dotenv` 從沒被呼叫 → `os.getenv` 空 → RuntimeError。
+docstring 自己寫「從 repo root .env 載入」,註解與實作對不上。作者把 `src/db.py`
+(在 `src/` 下,`parent.parent` 對)的 2 層邏輯複製進**深 2 層**的 `_db.py` 卻沒調整層數。
+
+之前沒人踩到:CLI / `refresh_daily.ps1` / 排程都先設 `DATABASE_URL` env var(優先序
+在 `.env` 自動載入之前),唯獨 streamlit 乾淨啟動這條路徑第一次走到 `.env` fallback。
+
+### Sweep:全 repo `.env` loader 只此一處錯
+
+`src/db.py` / `alembic/env.py` / `scripts/probe_finmind_report_date.py` 都 `parent.parent`
+且檔案在淺一層 → 正確解到 repo root;只有 `src/fusion/raw/_db.py` 深 2 層卻沒補層數。
+`fusion/` 其餘檔(`query.py` / `materialize/fusion_stage.py`)delegate 到 `get_connection`
+→ single entry,改一處覆蓋 dashboards + MCP tools。
+
+### 修法(1 檔 + 1 test / 0 Rust / 0 alembic / 0 collector.toml)
+
+- `src/fusion/raw/_db.py`:抽 `_repo_root_env_path()` 用 `parents[3]` 正確上溯 4 層
+  (raw → fusion → src → repo root);`get_connection` 改用 helper。**env var 優先序
+  不變**(只修 `.env` fallback 路徑層數)。
+- `tests/fusion/test_db_env_path.py`(新):regression-lock — `_repo_root_env_path()`
+  解到含 `pyproject.toml` 的 dir 且 `parent.name != "src"`。不打真 DB,沙箱可跑。
+
+### 立即解(不改 code)
+
+env var 永遠最優先:`$env:DATABASE_URL = "..."` 再跑 streamlit。
+
+### 驗證
+
+`pytest tests/fusion/ tests/mcp_server/`(--ignore render_tools)→ **475 passed /
+1 skipped / 1 pre-existing fail**(`test_v3_35_1` 與本 PR 無關),0 regression。
+
+🟢 極低風險:1 檔 + 1 test。Rollback:單 commit `git revert`。
 
 ---
 
