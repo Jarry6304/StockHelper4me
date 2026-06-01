@@ -2,7 +2,7 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **13 tools** + **唯讀 FastAPI Web API**)。
 
-**版本**:**v4.33**(alembic head `h4i5j6k7l8m9` 不變 / 2026-05-31)。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug。皆已 merge main
+**版本**:**v4.34**(alembic head `h4i5j6k7l8m9` 不變 / 2026-05-31)。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug;**v4.34** 修復 revenue / financial / 景氣指標 3 個 dashboard chart 的 x 軸欄位(月/季頻 core 無 `date` 欄,改讀 `fact_date`)。皆已 merge main
 **測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)+ Phase 3b `scripts/recalibrate_kalman.ps1`(Kalman 全市場校準 → resonance track2 非 single_track)。完整 verify chain 見 [CLAUDE.md §v4.32/v4.33](CLAUDE.md)
 **狀態**:**v4.32**(2026-05-29 production-verified ☕):原 read-time 的 fusion(levels / resonance / climate)正名 **Golden L3** 並物化進 `structural_snapshots`(新 core_name `*_fusion`),對外只讀;新建**唯讀 FastAPI Web API**(`uvicorn web_api.app:app` — neely forest 完整 passthrough + brotli/gzip 協商 + N>250 保險絲;Windows/Py3.14 每請求 sync conn);**TypeScript 契約 codegen**(Rust ts-rs 63 型別 + Python pydantic2ts → `frontend/src/contracts/`)。Phase 3b Kalman 全市場校準腳本 `scripts/recalibrate_kalman.ps1`(讓 resonance track2 非 single_track)。**累積**:v4.25 dual-track 共振 + v4.26 wave_impulse_screen + v4.28 三 sprint + v4.29 + **v4.30/v4.31 + v4.32**。M3 Cores **39 crates**;Cross-Stock **12 builders**;MCP **13 tools** + Web API;**Rust 607 tests + ts feature 485**;**Python ~865 passed / +34(v4.32);fusion + mcp_server 子集 476 passed / 1 skipped / 0 failed(v4.33.1 後)**;v4.32.1 tpex 解鎖後 universe ~2172 stocks × 41 cores dispatch / facts daily ~78k new rows。
 
@@ -855,3 +855,10 @@ v4.32.1 前的既有 bug:`config/stock_list.toml` `market_type` 用 `otc`,但
 全部上櫃股(daily refresh 一直只 ~1254 檔 ≈ twse-only)。已於 **v4.32.1** 改
 `["twse","tpex"]` 解鎖(universe ~2172)。升級後需跑一次完整 backfill +
 `refresh_full`,補齊上櫃股的行情/技術/Neely/Kalman。興櫃 emerging 未納入。
+
+### Dashboard 的 revenue / 財報 / 景氣指標圖空白
+
+v4.34 前的既有 bug:這 3 個 chart 對應的是**月/季頻** core(`revenue_core` /
+`financial_statement_core` / `business_indicator_core`),其 `Point` 序列化用
+`period`/`fact_date` 而非 `date`,但 chart 仍讀 `p["date"]` → 永遠空圖(不 crash)。
+已於 **v4.34** 改讀 `fact_date` 修復。升級到含 v4.34 的版本後重開 streamlit 即有資料。

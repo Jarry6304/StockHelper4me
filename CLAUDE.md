@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.33,最新 2026-05-31;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.34,最新 2026-05-31;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
@@ -296,6 +296,47 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.34 — dashboard chart x 軸欄位對齊真實序列化 shape(2026-05-31)
+
+User 逐 tab 逐欄位審計 dashboard chart(23 Rust core × 8 chart 檔),揭露 **3 個
+「靜默空圖」bug** —— monthly/quarterly core 的 `Point` struct 用
+`period`/`fact_date`/`report_date` 而非 `date`(因非日頻),但對應 chart 仍讀
+`p["date"]` 的 `if "date" in p` → 永遠 False → 圖空白(不 crash,比 crash 更難察覺)。
+
+### Root cause(同一病灶,3 個 core 中招)
+
+| Core | 頻率 | chart fn | 序列化欄位 | 舊讀 key |
+|---|---|---|---|---|
+| `revenue_core` | 月 | `build_revenue_chart` | `period`/`fact_date`/`report_date`(無 date)| `p["date"]` ❌ |
+| `financial_statement_core` | 季 | `build_financial_statement_view` | 同上 | `p["date"]` ❌ |
+| `business_indicator_core` | 月 | `build_business_indicator_matrix` | 同上 | `p["date"]` ❌ |
+
+日頻 core(chip 5 / indicator 6 / taiex / us_market / exchange_rate / fear_greed /
+market_margin / valuation / shareholder)序列化都有 `date` 欄,key 全部吻合,**無 bug**。
+
+### 修法(2 檔 + 1 test / 0 Rust / 0 schema)
+
+- `dashboards/charts/fundamental.py`:`build_revenue_chart` + `build_financial_statement_view`
+  x 軸 + 各 trace 改以 `fact_date` 過濾;financial table_rows 改 `period`/`fact_date` 領頭。
+- `dashboards/charts/environment.py`:`build_business_indicator_matrix` 同款改 `fact_date`。
+- `tests/dashboards/test_fundamental_charts.py`(新):3 regression(真實 production shape
+  fixture,驗 x 軸不再空);`plotly` importorskip。
+
+### 兩處對齊 audit 報告的修正
+
+- **business_indicator**:audit 報告原標 ✅,但 `BusinessIndicatorPoint` struct 證明
+  無 `date` 欄 → 實為 bug(本版修)。
+- **taiex RSI**:audit 報告標 🔴 bug(稱 `TaiexPoint` 無 rsi),但 struct line 92
+  確有 `pub rsi: f64`,`p.get("rsi")` 合法 → **非 bug,不動**(避免把正常功能改壞)。
+
+### 驗證
+
+`pytest tests/dashboards/test_fundamental_charts.py` → 3 passed;
+`tests/fusion/ tests/mcp_server/ tests/dashboards/` → **498 passed / 1 skipped / 0 failed**。
+🟢 純 dashboard read-site;revenue/financial/景氣指標三圖原本空白,修後有資料。
 
 ---
 
