@@ -16,3 +16,9 @@ chrono        = { workspace = true }
 serde         = { workspace = true }
 serde_json    = { workspace = true }
 inventory     = "0.3"
+# v4.32 Golden L3 #3:TypeScript 契約 codegen(feature-gated → 生產 build 預設不開)。
+# 對齊 neely_core 既有 pattern:`cargo test --features ts -p kalman_filter_core` 生 TS。
+ts-rs         = { version = "10", features = ["chrono-impl"], optional = true }
+
+[features]
+ts = ["dep:ts-rs"]

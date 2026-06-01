@@ -311,6 +311,40 @@ def fetch_stock_info_ref(
     return {r["stock_id"]: r for r in rows}
 
 
+def search_stocks(
+    conn,
+    *,
+    q: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """#7:給 `/stocks?q=` 端點用的 stock 搜尋(prefix on stock_id + substring on name)。
+
+    匹配規則(OR):
+    - `stock_id ILIKE 'q%'`(prefix:對台股 4 碼 ticker 自然 — 2330 → 2330)
+    - `stock_name ILIKE '%q%'`(substring:對中文 / 簡稱 — 台積 → 台積電)
+
+    Args:
+        q:     非空字串(caller 確保 strip 後非空)
+        limit: 最多回幾筆(預設 20,前端 autocomplete 充足;cap 100 防濫用)
+
+    Returns:
+        list of {stock_id, stock_name, industry_category},ORDER BY stock_id ASC
+    """
+    capped = max(1, min(int(limit), 100))
+    sql = """
+        SELECT stock_id, stock_name, industry_category
+          FROM stock_info_ref
+         WHERE market = 'TW'
+           AND delisting_date IS NULL
+           AND (stock_id ILIKE %s OR stock_name ILIKE %s)
+         ORDER BY stock_id ASC
+         LIMIT %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, [f"{q}%", f"%{q}%", capped])
+        return cur.fetchall()
+
+
 def fetch_structural_latest(
     conn,
     *,

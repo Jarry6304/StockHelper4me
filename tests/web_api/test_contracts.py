@@ -79,3 +79,126 @@ def test_climate_contract_matches_market_context_shape():
     m = ClimateFusion.model_validate(doc)
     assert m.components["taiex"].fact_count == 5
     assert m.components["risk_alert"].active_disposition_stocks == 3
+
+
+# ── screens 契約對齊 #1 後的真實 wire shape ─────────────────────────────────
+def test_screen_response_base_matches_wire():
+    """#2:對齊 #1 後 /screens/{toolkit} JSON 形狀(rank 正規化 + denylist)。"""
+    from web_api.contracts import ScreenResponse
+
+    doc = {
+        "toolkit": "f_score",
+        "ranking_date": "2026-05-28",
+        "top_n": 30,
+        "offset": 0,
+        "rows": [
+            {
+                "stock_id": "2330", "market": "TW", "date": "2026-05-28",
+                "stock_name": "台積電", "industry_category": "半導體業",
+                "universe_size": 1200, "excluded_reason": None,
+                "rank": 1, "is_top_n": True,
+            },
+        ],
+    }
+    m = ScreenResponse.model_validate(doc)
+    assert m.toolkit == "f_score" and m.ranking_date == "2026-05-28"
+    assert m.rows[0].rank == 1 and m.rows[0].is_top_n is True
+
+
+def test_screen_row_f_score_metric_extension():
+    """f_score 4 個 metric 欄(全 int):f_score / profitability / leverage / efficiency。"""
+    from web_api.contracts import ScreenRowFScore
+
+    doc = {
+        "stock_id": "2330", "market": "TW", "date": "2026-05-28",
+        "is_top_n": True, "rank": 1,
+        "f_score": 8, "profitability": 4, "leverage": 2, "efficiency": 2,
+    }
+    m = ScreenRowFScore.model_validate(doc)
+    assert m.f_score == 8 and m.profitability == 4
+    # base 欄(default None)亦正確
+    assert m.stock_name is None and m.universe_size is None
+
+
+def test_screen_row_magic_formula_metric_extension():
+    """magic_formula 10 個 metric 欄(8 float + 2 int rank)。"""
+    from web_api.contracts import ScreenRowMagicFormula
+
+    doc = {
+        "stock_id": "2330", "market": "TW", "date": "2026-05-28",
+        "is_top_n": True, "rank": 1,
+        "ebit_ttm": 1.234e12, "market_cap": 1.5e13,
+        "total_debt": 5.0e11, "cash": 2.0e12,
+        "enterprise_value": 1.4e13, "invested_capital": 8.0e12,
+        "earnings_yield": 0.088, "roic": 0.154,
+        "ey_rank": 10, "roic_rank": 5,
+    }
+    m = ScreenRowMagicFormula.model_validate(doc)
+    assert m.earnings_yield == 0.088 and m.ey_rank == 10
+
+
+def test_price_series_contract_matches_ohlc_wire_shape():
+    """#4:對齊 /stocks/{id}/ohlc 回傳 dict 形狀(date ISO str / Decimal→float / BIGINT→int)。"""
+    from web_api.contracts import PriceSeries
+
+    # 對應 series.py:ohlc() 的回傳 — jsonable_encoder 後形狀
+    doc = {
+        "stock_id": "2330",
+        "rows": [
+            {"date": "2026-01-02", "open": 100.0, "high": 102.0,
+             "low": 99.0, "close": 101.0, "volume": 12345},
+            {"date": "2026-01-03", "open": 101.0, "high": 103.0,
+             "low": 100.0, "close": 102.5, "volume": 23456},
+        ],
+    }
+    m = PriceSeries.model_validate(doc)
+    assert m.stock_id == "2330" and len(m.rows) == 2
+    assert m.rows[0].date == "2026-01-02"
+    assert m.rows[0].close == 101.0
+    assert m.rows[0].volume == 12345
+
+
+def test_price_bar_all_nullable_metrics():
+    """OHLCV 各欄皆 nullable(對齊 schema 允許 NULL — 停牌等場景)。"""
+    from web_api.contracts import PriceBar
+
+    m = PriceBar.model_validate({"date": "2026-01-02"})
+    assert m.date == "2026-01-02"
+    assert m.open is None and m.close is None and m.volume is None
+
+
+def test_screen_row_subclasses_have_required_extras():
+    """10 subclass 各帶正確 metric 欄(spec table 對齊;regression-lock)。"""
+    from web_api import contracts as C
+
+    expected_extras: dict[type, set[str]] = {
+        C.ScreenRowMagicFormula: {
+            "ebit_ttm", "market_cap", "total_debt", "cash",
+            "enterprise_value", "invested_capital",
+            "earnings_yield", "roic", "ey_rank", "roic_rank",
+        },
+        C.ScreenRowPersistentMomentum: {
+            "return_6m", "return_12m_1m", "persistent_months",
+        },
+        C.ScreenRowRevenueMomentum: {"revenue_yoy_latest", "consecutive_positive"},
+        C.ScreenRowInstitutionalConcert: {
+            "concert_days", "foreign_cumulative_20d",
+            "shares_outstanding", "cumulative_pct",
+        },
+        C.ScreenRowFScore: {"f_score", "profitability", "leverage", "efficiency"},
+        C.ScreenRowLowVolatility: {"std_252d"},
+        C.ScreenRowIndustryAdjGp: {
+            "gross_profitability", "industry",
+            "industry_median_gp", "industry_adj_gp",
+        },
+        C.ScreenRowLongTermLowVol: {"std_36m"},
+        C.ScreenRowDividendYield: {
+            "dividend_yield_pct", "return_12m_pct", "payout_years_5y",
+        },
+        C.ScreenRowMom12_1: {"return_12m_1m"},
+    }
+    base_fields = set(C.ScreenRowBase.model_fields.keys())
+    for cls, extras in expected_extras.items():
+        cls_fields = set(cls.model_fields.keys())
+        diff = cls_fields - base_fields
+        assert diff == extras, f"{cls.__name__} extras mismatch: got {diff}, want {extras}"

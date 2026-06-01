@@ -224,3 +224,55 @@ def test_screens_all_10_toolkits_dispatch_with_correct_rank_col():
         r = c.get(f"/screens/{toolkit}?date=2026-05-28")
         assert r.status_code == 200, f"toolkit {toolkit} 500'd: {r.text}"
         assert r.json()["toolkit"] == toolkit
+
+
+# ── #7 個股入口 /stocks?q= search ────────────────────────────────────────────
+def test_stocks_search_happy_path():
+    rows = [
+        {"stock_id": "2330", "stock_name": "台積電", "industry_category": "半導體業"},
+        {"stock_id": "2317", "stock_name": "鴻海",   "industry_category": "其他電子業"},
+    ]
+    c = _client(rows)
+    r = c.get("/stocks?q=23")
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body, list) and len(body) == 2
+    assert body[0]["stock_id"] == "2330"
+    assert body[0]["stock_name"] == "台積電"
+
+
+def test_stocks_search_empty_q_422():
+    c = _client([])
+    r = c.get("/stocks?q=")
+    assert r.status_code == 422
+
+
+def test_stocks_search_whitespace_q_422():
+    c = _client([])
+    r = c.get("/stocks?q=%20%20")  # "  " (URL-encoded spaces)
+    assert r.status_code == 422
+    assert "non-empty" in r.json()["detail"]
+
+
+def test_stocks_search_default_limit_20():
+    """limit 預設 20,SQL 帶 LIMIT 20。"""
+    rows = [{"stock_id": f"{i:04d}", "stock_name": f"stock{i}",
+             "industry_category": None} for i in range(20)]
+    c = _client(rows)
+    r = c.get("/stocks?q=2")
+    assert r.status_code == 200
+    assert len(r.json()) == 20
+
+
+def test_stocks_search_limit_cap_to_100():
+    """limit > 100 被 Query 驗證擋(le=100)→ 422。"""
+    c = _client([])
+    r = c.get("/stocks?q=2&limit=500")
+    assert r.status_code == 422
+
+
+def test_stocks_search_does_not_shadow_neely_route():
+    """`/stocks/2330/neely/forest` 不被 `/stocks` search 攔。"""
+    c = _client([{"n": 0, "j": '{"scenario_forest": []}'}])
+    r = c.get("/stocks/2330/neely/forest?as_of=2026-05-28")
+    assert r.status_code == 200

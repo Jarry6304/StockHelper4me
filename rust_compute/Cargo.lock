@@ -1161,6 +1161,7 @@ dependencies = [
  "ohlcv_loader",
  "serde",
  "serde_json",
+ "ts-rs",
 ]
 
 [[package]]

@@ -57,6 +57,18 @@ export interface LevelsFusion {
   level_count: number;
   levels: Level[];
 }
+export interface PriceBar {
+  date: string;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  close?: number | null;
+  volume?: number | null;
+}
+export interface PriceSeries {
+  stock_id: string;
+  rows: PriceBar[];
+}
 export interface ResonanceFusion {
   stock_id: string;
   as_of: string;
@@ -106,4 +118,170 @@ export interface Track2Band {
   source_core: string;
   width_ratio: number | null;
   is_overly_wide: boolean;
+}
+export interface ScreenResponse {
+  toolkit: string;
+  ranking_date: string | null;
+  top_n: number;
+  offset: number;
+  rows: ScreenRowBase[];
+}
+export interface ScreenRowBase {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+}
+export interface ScreenRowDividendYield {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  dividend_yield_pct?: number | null;
+  return_12m_pct?: number | null;
+  payout_years_5y?: number | null;
+}
+export interface ScreenRowFScore {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  f_score?: number | null;
+  profitability?: number | null;
+  leverage?: number | null;
+  efficiency?: number | null;
+}
+export interface ScreenRowIndustryAdjGp {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  gross_profitability?: number | null;
+  industry?: string | null;
+  industry_median_gp?: number | null;
+  industry_adj_gp?: number | null;
+}
+export interface ScreenRowInstitutionalConcert {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  concert_days?: number | null;
+  foreign_cumulative_20d?: number | null;
+  shares_outstanding?: number | null;
+  cumulative_pct?: number | null;
+}
+export interface ScreenRowLongTermLowVol {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  std_36m?: number | null;
+}
+export interface ScreenRowLowVolatility {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  std_252d?: number | null;
+}
+export interface ScreenRowMagicFormula {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  ebit_ttm?: number | null;
+  market_cap?: number | null;
+  total_debt?: number | null;
+  cash?: number | null;
+  enterprise_value?: number | null;
+  invested_capital?: number | null;
+  earnings_yield?: number | null;
+  roic?: number | null;
+  ey_rank?: number | null;
+  roic_rank?: number | null;
+}
+export interface ScreenRowMom12_1 {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  return_12m_1m?: number | null;
+}
+export interface ScreenRowPersistentMomentum {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  return_6m?: number | null;
+  return_12m_1m?: number | null;
+  persistent_months?: number | null;
+}
+export interface ScreenRowRevenueMomentum {
+  stock_id: string;
+  market: string;
+  date: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
+  universe_size?: number | null;
+  excluded_reason?: string | null;
+  rank?: number | null;
+  is_top_n: boolean;
+  revenue_yoy_latest?: number | null;
+  consecutive_positive?: number | null;
+}
+export interface StockRef {
+  stock_id: string;
+  stock_name?: string | null;
+  industry_category?: string | null;
 }

@@ -162,8 +162,10 @@ pub fn halflife_bars_for_q(q: f64) -> f64 {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "kalman/"))]
 pub struct KalmanFilterOutput {
     pub stock_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "\"Daily\" | \"Weekly\" | \"Monthly\" | \"Quarterly\""))]
     pub timeframe: Timeframe,
     /// primary horizon label(top-level `series` + `events` 對齊此 horizon)
     pub primary_horizon: String,
@@ -176,6 +178,7 @@ pub struct KalmanFilterOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "kalman/"))]
 pub struct KalmanPoint {
     pub date: NaiveDate,
     pub raw_close: f64,
@@ -188,6 +191,7 @@ pub struct KalmanPoint {
 /// v3.33:per-horizon output(只記 latest state + event count,full series 不存
 /// 避免 indicator_values JSONB 體積膨脹 4×)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "kalman/"))]
 pub struct KalmanHorizonOutput {
     pub label: String,
     pub process_noise_q: f64,
@@ -201,6 +205,7 @@ pub struct KalmanHorizonOutput {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "kalman/"))]
 pub enum Regime {
     StableUp,
     Accelerating,
@@ -210,13 +215,17 @@ pub enum Regime {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "kalman/"))]
 pub struct KalmanEvent {
     pub date: NaiveDate,
     pub kind: KalmanEventKind,
+    /// fact_schema::with_event_kind 慣例:`{ event_kind: string, ... }`(任意附加欄)
+    #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown>"))]
     pub metadata: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "kalman/"))]
 pub enum KalmanEventKind {
     EnteredStableUp,
     EnteredAccelerating,
