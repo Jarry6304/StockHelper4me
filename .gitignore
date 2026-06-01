@@ -219,6 +219,10 @@ data/*.db-wal
 data/*.db-shm
 logs/
 rust_compute/target/
+# ts-rs default 副作用:cargo test --features ts 若未設 TS_RS_EXPORT_DIR,會落在
+# {crate_root}/bindings/。真實 codegen 走 codegen/generate.sh 寫進
+# frontend/src/contracts/{neely,kalman}/。
+rust_compute/cores/*/*/bindings/
 scripts/test_28_apis_result.json
 *.db
 *.sqlite
