@@ -1224,7 +1224,7 @@ CREATE TABLE IF NOT EXISTS magic_formula_ranked_derived (
     roic_rank         INTEGER,
     combined_rank     INTEGER,
     universe_size     INTEGER,
-    is_top_30         BOOLEAN NOT NULL DEFAULT FALSE,
+    is_top_n          BOOLEAN NOT NULL DEFAULT FALSE,
     excluded_reason   TEXT,
     detail            JSONB,
     is_dirty          BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1232,9 +1232,9 @@ CREATE TABLE IF NOT EXISTS magic_formula_ranked_derived (
     PRIMARY KEY (market, stock_id, date)
 );
 
-CREATE INDEX IF NOT EXISTS idx_mf_top30
+CREATE INDEX IF NOT EXISTS idx_mf_topn
     ON magic_formula_ranked_derived (market, date, combined_rank)
-    WHERE is_top_30 = TRUE;
+    WHERE is_top_n = TRUE;
 
 CREATE INDEX IF NOT EXISTS idx_mf_dirty
     ON magic_formula_ranked_derived (market, stock_id)

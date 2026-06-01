@@ -67,7 +67,7 @@ def compute_magic_formula_screen(
             as_of=as_of,
             top_n=top_n,
             rank_col="combined_rank",
-            is_top_col="is_top_30",
+            is_top_col="is_top_n",  # v4.34:對齊改名後欄位
         )
         if ranking_date is None:
             return _empty_result(as_of, top_n,

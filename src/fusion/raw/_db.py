@@ -223,7 +223,7 @@ def fetch_cross_stock_ranked(
     as_of,
     top_n: int = 30,
     rank_col: str = "combined_rank",
-    is_top_col: str = "is_top_30",
+    is_top_col: str = "is_top_n",
     extra_cols: list[str] | None = None,
 ) -> tuple[Any | None, list[dict[str, Any]]]:
     """v3.5 R5 C13:cross-stock ranked 結果通用 fetcher。
@@ -236,7 +236,7 @@ def fetch_cross_stock_ranked(
         as_of:         上界(包含);先找 latest ranking_date ≤ as_of
         top_n:         取 top N rank rows
         rank_col:      排名欄名(預設 "combined_rank")
-        is_top_col:    top-N 旗標欄名(預設 "is_top_30")
+        is_top_col:    top-N 旗標欄名(預設 "is_top_n";對齊 12 個 ranked 表 canonical 欄名)
         extra_cols:    額外要 SELECT 的欄位(預設 None = 全選 *)
 
     Returns:

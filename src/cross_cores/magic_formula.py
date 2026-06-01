@@ -4,7 +4,7 @@ cross_cores/magic_formula.py
 Magic Formula(Greenblatt 2005)cross-stock ranking。
 
 v3.5 R3 從 `silver/builders/magic_formula_ranked.py` 搬家,歸位 Layer 2.5
-Cross-Stock Cores 新層。原因:cross-rank 輸出 ranks / is_top_30 需要全市場
+Cross-Stock Cores 新層。原因:cross-rank 輸出 ranks / is_top_n 需要全市場
 universe context,違反 SilverBuilder per-stock 契約(audit Layer 1+2 痛點 4)。
 
 DB 表名仍是 `magic_formula_ranked_derived`(不改 schema,0 alembic migration);
@@ -302,7 +302,7 @@ def _build_rank_rows_for_date(
             "roic_rank":        None,
             "combined_rank":    None,
             "universe_size":    None,
-            "is_top_30":        False,
+            "is_top_n":         False,
             "excluded_reason":  excluded,
         }
 
@@ -362,10 +362,10 @@ def _build_rank_rows_for_date(
         r["combined_rank"] = r["ey_rank"] + r["roic_rank"]
         r["universe_size"] = n
 
-    # Top N 判定:依 combined_rank 升序;若有 tie 都記 is_top_30(rank ≤ 30)
+    # Top N 判定:依 combined_rank 升序;若有 tie 都記 is_top_n(rank ≤ 30)
     eligible.sort(key=lambda r: r["combined_rank"])
     for i, r in enumerate(eligible[:TOP_N]):
-        r["is_top_30"] = True
+        r["is_top_n"] = True
 
     return rows
 

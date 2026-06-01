@@ -177,7 +177,7 @@ def fetch_is_top_30(
     stock_id: str,
     as_of: date,
     source_table: str = DEFAULT_CROSS_STOCK_TABLE,
-    is_top_col: str = "is_top_30",
+    is_top_col: str = "is_top_n",  # 實體欄名(magic_formula v4.34 對齊 canonical);輸出語意旗標仍叫 is_top_30
 ) -> tuple[bool, date | None]:
     """查 cross_stock ranked_derived 表,取對齊 as_of 的當下最新 ranking_date
     對該股的 is_top_30 旗標。
