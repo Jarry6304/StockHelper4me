@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.34,最新 2026-05-31;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.35,最新 2026-06-01;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
 **v4.32 後升 6 層**(加 Golden L3 fusion 物化 + 唯讀 Web API)。
 
-- **alembic head**:`h4i5j6k7l8m9`(v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
+- **alembic head**:`i5j6k7l8m9n0`(v4.35 magic_formula `is_top_30`→`is_top_n` rename;h4i5j6k7l8m9 v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
 - **開發分支(近期)**:`claude/neely-forest-cloud-zigzag-Xv13d`(v4.32.1 tpex 解鎖 + NeelyWave 複合雲圖 + v4.33 fusion `.env` 路徑修復,皆已 merge main);`claude/sweet-carson-96j9D`(v4.32 Golden L3 物化 + 唯讀 Web API + TS codegen,已 merge)
 - **main HEAD**:`17b87c2`(v4.33 後 + test 對齊;早期 PR #110~#122 全 merge)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
@@ -296,6 +296,62 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.35 — magic_formula `is_top_30` → `is_top_n` schema 對齊(2026-06-01)
+
+`magic_formula_ranked_derived`(2026-05-15 最早建)是唯一用 `is_top_30` 欄名的
+cross-stock ranked 表;v3.32(d9e0f1g2h3i4)10 表 + v4.26(g3h4i5j6k7l8)wave_impulse
+全部 canonical `is_top_n`。本版把 magic_formula 對齊,令 **12 個 ranked 表 schema 統一**。
+
+### ⚠️ 兩種 `is_top_30` 嚴格分清(下個 session 動 API 務必牢記)
+
+| | 意義 | 位置 | v4.35 |
+|---|---|---|---|
+| **A. 實體欄位** | `magic_formula_ranked_derived` 儲存欄 | `schema_pg.sql` / `idx_mf_top30` / `magic_formula.py` writer dict key | ✅ 改名 `is_top_n` |
+| **B. 語意旗標** | resonance「cross-stock 旁路升振」概念 | `_shared.py::DualTrackResult.is_top_30/_source/_date` + `.to_dict()` 輸出 / `resonance.py::fetch_is_top_30` **函式名** / 前端契約(`web_api/contracts.py` → `fusion.ts`)| ⛔ **全凍**(改 = breaking API)|
+
+耦合點:`fetch_is_top_30()` SELECT 的是 A 欄、輸出的是 B 名。故 A 改名後只翻它的
+**讀欄預設** `is_top_col`,函式名 / 輸出欄 / DualTrackResult / 前端契約一律不動。
+
+### 改動(1 migration + 6 檔,同一 commit `1054c97` 同次部署)
+
+| # | 檔 | 動作 |
+|---|---|---|
+| 1 | `alembic/.../i5j6k7l8m9n0` 新 migration | `RENAME COLUMN is_top_30 → is_top_n` + DROP `idx_mf_top30` + CREATE `idx_mf_topn`;downgrade 對稱可逆 |
+| 2 | `src/schema_pg.sql` | fresh-install 欄名 + index 同步 |
+| 3 | `src/cross_cores/magic_formula.py` | writer dict key 兩處 `is_top_30` → `is_top_n`(`upsert_silver` 靠 dict key 當欄名)|
+| 4 | `src/fusion/raw/_db.py` | `fetch_cross_stock_ranked` 讀欄預設 `is_top_col` → `is_top_n` |
+| 5 | `src/fusion/dual_track/resonance.py` | `fetch_is_top_30` 讀欄預設 → `is_top_n`(**僅讀欄;函式名/輸出/narrative 不動**)|
+| 6 | `mcp_server/_magic_formula.py` | **顯式** `is_top_col="is_top_30"` → `is_top_n`(原 plan 漏列;不改會炸 magic_formula 端口)|
+| 7 | `tests/cross_cores/test_magic_formula.py` | 7 斷言 `r["is_top_30"]` → `r["is_top_n"]` |
+
+`web_api/routers/screens.py` 吃 `fetch_cross_stock_ranked` 新預設 → **零改動**自動一致。
+
+### ⚠️ 部署順序雷
+
+migration(#1)+ 寫入端 dict key(#3)+ MCP 顯式參數(#6)**同一 commit 同次部署**。
+中間若只上 migration、refresh 還在寫 `is_top_30` → `upsert_silver` 找不到欄炸;反之亦然。
+一個 commit 一起上 + 一次 `alembic upgrade head`,無中間態。
+
+### 驗證
+
+沙箱:magic_formula 11 + resonance/track1 72 + 全套 fusion+mcp_server+cross_cores
+**593 passed / 1 skipped / 0 failed**;A 側 0 殘留 `is_top_30`(僅 migration RENAME SQL),
+B 側 `_shared`(7)/`resonance`(23)語意引用全凍。
+
+user 本機(DB-bound,沙箱無法跑):
+```powershell
+git pull
+alembic upgrade head        # h4i5j6k7l8m9 → i5j6k7l8m9n0
+python src/main.py cross_cores phase 8 --builder magic_formula --full-rebuild   # 驗 #3 寫入
+# 驗 10 個 /screens/{toolkit} 全 200(尤其 magic_formula 走 #6 改後路徑)
+# 驗 dual_track_resonance('2330',...) 輸出 is_top_30 欄仍在(B 側未波及)
+```
+
+🟡 中:schema rename(destructive 但 downgrade 對稱)。0 前端契約改動(B 側全凍)。
+Rollback:`git revert 1054c97` + `alembic downgrade -1`。
 
 ---
 
