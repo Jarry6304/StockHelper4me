@@ -17,6 +17,7 @@ from dashboards.charts.fundamental import (  # noqa: E402
     build_financial_statement_view,
     build_revenue_chart,
 )
+from dashboards.charts.environment import build_business_indicator_matrix  # noqa: E402
 
 
 def _revenue_indicator() -> dict:
@@ -64,3 +65,27 @@ def test_financial_view_x_axis_uses_fact_date():
     assert table_rows[0]["period"] == "2026Q1"
     assert table_rows[0]["fact_date"] == "2026-03-31"
     assert table_rows[0]["eps"] == 1.5
+
+
+def _business_indicator() -> dict:
+    """對齊 BusinessIndicatorPoint 真實序列化:period / fact_date(無 date)。"""
+    return {
+        "value": {
+            "series": [
+                {"period": "2026-01", "fact_date": "2026-01-31", "report_date": "2026-02-27",
+                 "leading_indicator": 99.5, "coincident_indicator": 101.2,
+                 "lagging_indicator": 100.0, "monitoring": 28, "monitoring_color": "G"},
+                {"period": "2026-02", "fact_date": "2026-02-28", "report_date": "2026-03-27",
+                 "leading_indicator": 100.1, "coincident_indicator": 102.0,
+                 "lagging_indicator": 100.5, "monitoring": 32, "monitoring_color": "YR"},
+            ]
+        }
+    }
+
+
+def test_business_indicator_matrix_x_axis_uses_fact_date():
+    fig = build_business_indicator_matrix(_business_indicator())
+    # monitoring bar(對策信號)x 軸應有 2 點(改讀 fact_date 後不再空)
+    bar = next(t for t in fig.data if t.type == "bar")
+    assert len(bar.x) == 2, "景氣指標 bar x 軸空白 — fact_date 讀取失敗"
+    assert list(bar.y) == [28, 32]
