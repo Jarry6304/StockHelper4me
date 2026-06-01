@@ -216,13 +216,16 @@ def fetch_latest_close(
     }
 
 
+_RANKED_DENYLIST: frozenset[str] = frozenset({"detail", "is_dirty", "dirty_at"})
+
+
 def fetch_cross_stock_ranked(
     conn,
     *,
     source_table: str,
     as_of,
+    rank_col: str,
     top_n: int = 30,
-    rank_col: str = "combined_rank",
     is_top_col: str = "is_top_n",
     extra_cols: list[str] | None = None,
 ) -> tuple[Any | None, list[dict[str, Any]]]:
@@ -231,11 +234,16 @@ def fetch_cross_stock_ranked(
     給 cross_cores/ Layer 2.5 各 builder 的對應 MCP / dashboard tool 用
     (magic_formula / 未來 pairs_trading / sector_rotation 都用同一個 helper)。
 
+    輸出 row 後處理:
+    - `{rank_col}` 鍵的值會額外複製到正規化的 `rank` 鍵(原 per-toolkit 欄位保留)。
+    - denylist 砍 `detail` / `is_dirty` / `dirty_at` 三欄(內部欄位,不對外揭露)。
+
     Args:
         source_table:  cross-stock derived 表名(e.g. "magic_formula_ranked_derived")
         as_of:         上界(包含);先找 latest ranking_date ≤ as_of
+        rank_col:      排名欄名(per-toolkit 各異:magic_formula 用 combined_rank,
+                       persistent_momentum 用 momentum_rank,以此類推);required。
         top_n:         取 top N rank rows
-        rank_col:      排名欄名(預設 "combined_rank")
         is_top_col:    top-N 旗標欄名(預設 "is_top_n";對齊 12 個 ranked 表 canonical 欄名)
         extra_cols:    額外要 SELECT 的欄位(預設 None = 全選 *)
 
@@ -269,7 +277,15 @@ def fetch_cross_stock_ranked(
     with conn.cursor() as cur:
         cur.execute(sql_top, [ranking_date, top_n])
         rows = cur.fetchall()
-    return ranking_date, rows
+
+    # 3. 後處理:denylist 砍三欄 + 正規化 rank 鍵
+    cleaned: list[dict[str, Any]] = []
+    for r in rows:
+        out = {k: v for k, v in r.items() if k not in _RANKED_DENYLIST}
+        if rank_col in out:
+            out["rank"] = out[rank_col]
+        cleaned.append(out)
+    return ranking_date, cleaned
 
 
 def fetch_stock_info_ref(

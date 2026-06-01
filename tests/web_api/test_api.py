@@ -129,3 +129,98 @@ def test_screens_unknown_toolkit_404():
     r = c.get("/screens/bogus?date=2026-05-28")
     assert r.status_code == 404
     assert "unknown screen toolkit" in r.json()["detail"]
+
+
+# ── screens 多查詢 fake conn(date lookup + 排名 rows 分兩輪)──────────────
+class _MultiRoundFakeConn:
+    """每次 conn.cursor() 取 row-set 序列下一筆;對 fetch_cross_stock_ranked
+    2 個 query(MAX(date) → top rows)準確切片。
+    """
+
+    def __init__(self, row_sets: list[list[dict]]):
+        self._sets = list(row_sets)
+
+    def cursor(self):
+        rows = self._sets.pop(0) if self._sets else []
+        return _FakeCursor(rows)
+
+
+def _client_multi(row_sets):
+    app = create_app()
+    app.dependency_overrides[db_conn] = lambda: _MultiRoundFakeConn(row_sets)
+    return TestClient(app)
+
+
+def test_screens_f_score_happy_path():
+    """v4.x #1:非-magic_formula toolkit happy-path(原 500 → fixed)。
+    驗:rank 正規化(score_rank → rank)+ denylist 砍三欄 + ranking_date 傳遞。
+    """
+    ranking_date = date(2026, 5, 28)
+    raw_row = {
+        "market": "TW", "stock_id": "2330", "date": ranking_date,
+        "f_score": 8, "profitability": 4, "leverage": 2, "efficiency": 2,
+        "score_rank": 1, "universe_size": 1200,
+        "is_top_n": True, "excluded_reason": None,
+        # 應被 denylist 砍掉的三欄:
+        "detail": {"raw": "should_not_leak"},
+        "is_dirty": False, "dirty_at": None,
+        # LEFT JOIN stock_info_ref:
+        "stock_name": "台積電", "industry_category": "半導體業",
+    }
+    c = _client_multi([[{"d": ranking_date}], [raw_row]])
+    r = c.get("/screens/f_score?date=2026-05-28&top_n=10")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["toolkit"] == "f_score"
+    assert body["ranking_date"] == "2026-05-28"
+    assert body["top_n"] == 10
+    assert len(body["rows"]) == 1
+    out = body["rows"][0]
+    # rank 正規化(來自 score_rank)
+    assert out["rank"] == 1
+    assert out["score_rank"] == 1  # 原欄保留(spec:不破壞 backward compat)
+    # 原有 metric 欄保留
+    assert out["f_score"] == 8 and out["profitability"] == 4
+    # LEFT JOIN 欄
+    assert out["stock_name"] == "台積電"
+    assert out["industry_category"] == "半導體業"
+    # denylist 砍三欄
+    assert "detail" not in out
+    assert "is_dirty" not in out
+    assert "dirty_at" not in out
+
+
+def test_screens_empty_when_no_ranking_date():
+    """無 ranking_date → ranking_date=None + rows=[](對齊 CardState.empty)。"""
+    c = _client_multi([[{"d": None}]])  # MAX(date) 回 None
+    r = c.get("/screens/persistent_momentum?date=2026-05-28")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ranking_date"] is None
+    assert body["rows"] == []
+
+
+def test_screens_all_10_toolkits_dispatch_with_correct_rank_col():
+    """v4.x #1 acceptance:10 toolkits 全不 500。SQL 中含 per-toolkit rank_col。"""
+    from web_api.routers.screens import _ALLOWED
+
+    # 對齊 spec:per-toolkit (table, rank_col)
+    expected = {
+        "magic_formula":         ("magic_formula_ranked_derived",         "combined_rank"),
+        "persistent_momentum":   ("persistent_momentum_ranked_derived",   "momentum_rank"),
+        "revenue_momentum":      ("revenue_momentum_ranked_derived",      "revenue_rank"),
+        "institutional_concert": ("institutional_concert_ranked_derived", "concert_rank"),
+        "f_score":               ("f_score_ranked_derived",               "score_rank"),
+        "low_volatility":        ("low_volatility_ranked_derived",        "vol_rank"),
+        "industry_adj_gp":       ("industry_adj_gp_ranked_derived",       "gp_rank"),
+        "long_term_low_vol":     ("long_term_low_vol_ranked_derived",     "vol_rank"),
+        "dividend_yield":        ("dividend_yield_ranked_derived",        "yield_rank"),
+        "mom_12_1":              ("mom_12_1_ranked_derived",              "mom_rank"),
+    }
+    assert _ALLOWED == expected
+    # 每個 toolkit 走 happy-path(empty ranking_date 即可,證明 dispatch + arg 傳遞無誤)
+    for toolkit in expected:
+        c = _client_multi([[{"d": None}]])
+        r = c.get(f"/screens/{toolkit}?date=2026-05-28")
+        assert r.status_code == 200, f"toolkit {toolkit} 500'd: {r.text}"
+        assert r.json()["toolkit"] == toolkit
