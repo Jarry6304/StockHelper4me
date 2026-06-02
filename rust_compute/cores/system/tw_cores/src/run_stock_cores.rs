@@ -60,6 +60,36 @@ pub async fn run_stock_cores(
         }
     }
 
+    // ---- 1b. Wave: traditional_core(獨立 vertical,純函式 run() — 寫 traditional_snapshots)----
+    //
+    // 與 neely 並排、完全解耦:不走 WaveCore trait dispatch,自帶 loader 直讀 Silver price_*_fwd。
+    // 同 neely multi-timeframe 哲學:tf==Daily 入口時跑 Daily+Weekly+Monthly 三 timeframe,
+    // 各自寫獨立 traditional_snapshots row(PK 含 timeframe column)。
+    if filter.is_enabled("traditional_core") {
+        let trad_tfs: Vec<Timeframe> = if tf == Timeframe::Daily {
+            vec![Timeframe::Daily, Timeframe::Weekly, Timeframe::Monthly]
+        } else {
+            vec![tf]
+        };
+        for nt in trad_tfs {
+            let cfg = traditional_core::TraditionalEngineConfig {
+                timeframe: nt,
+                ..Default::default()
+            };
+            match traditional_core::loader::load_for_timeframe(pool, stock_id, &cfg).await {
+                Ok(series) => summary.push(
+                    crate::dispatcher::dispatch_traditional(pool, stock_id, &series, cfg, write).await,
+                ),
+                Err(e) => summary.push(loader_err_summary(
+                    "traditional_core",
+                    stock_id,
+                    "load_for_timeframe",
+                    &e,
+                )),
+            }
+        }
+    }
+
     // ---- 2-19. Indicator(P1 8 + P3 8 + P2 pattern 3 = 19)— 共用 OhlcvSeries ----
     // 19 cores 共用 ohlcv,若全 disabled 可整段 skip(節省 1 個 query)
     let any_indicator_enabled = [

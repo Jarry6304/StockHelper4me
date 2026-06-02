@@ -386,3 +386,84 @@ pub async fn dispatch_neely(
         ),
     }
 }
+
+/// dispatch_traditional — Traditional Wave Core(獨立 vertical,**純函式 run()**,不走 WaveCore trait)。
+/// 寫 traditional_snapshots(自有表),**不寫** facts / indicator_values / structural_snapshots。
+pub async fn dispatch_traditional(
+    pool: &PgPool,
+    stock_id: &str,
+    series: &traditional_core::TradOhlcvSeries,
+    config: traditional_core::TraditionalEngineConfig,
+    write: bool,
+) -> CoreRunSummary {
+    let start = Instant::now();
+    let hash = params_hash(&config).unwrap_or_default();
+    let tf = config.timeframe;
+
+    match traditional_core::run(series, &config) {
+        Ok(output) => {
+            let mut iv_written = 0u64; // 借用欄位記 snapshot 寫 1 row(對齊 dispatch_neely 慣例)
+            if write {
+                let forest_json = match serde_json::to_value(&output) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return CoreRunSummary::err(
+                            "traditional_core",
+                            stock_id,
+                            format!("serialize output failed: {}", e),
+                            start,
+                        );
+                    }
+                };
+                let diag_json = match serde_json::to_value(&output.diagnostics) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return CoreRunSummary::err(
+                            "traditional_core",
+                            stock_id,
+                            format!("serialize diagnostics failed: {}", e),
+                            start,
+                        );
+                    }
+                };
+                match crate::writers::write_traditional_snapshot(
+                    pool,
+                    &output.stock_id,
+                    tf,
+                    &hash,
+                    &forest_json,
+                    &diag_json,
+                    output.data_range.start,
+                    output.data_range.end,
+                )
+                .await
+                {
+                    Ok(()) => iv_written = 1,
+                    Err(e) => tracing::warn!(
+                        core = "traditional_core",
+                        stock_id,
+                        "write_traditional_snapshot failed: {:#}",
+                        e
+                    ),
+                }
+            }
+
+            CoreRunSummary {
+                core: "traditional_core".to_string(),
+                stock_id: stock_id.to_string(),
+                status: "ok".to_string(),
+                events: output.scenario_forest.len() as u64, // forest size(traditional 不寫 facts)
+                iv_written,
+                fact_written: 0,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                error: None,
+            }
+        }
+        Err(e) => CoreRunSummary::err(
+            "traditional_core",
+            stock_id,
+            format!("compute failed: {:#}", e),
+            start,
+        ),
+    }
+}
