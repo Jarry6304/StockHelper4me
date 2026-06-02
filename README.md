@@ -1,6 +1,6 @@
 # StockHelper4me — tw-stock-collector
 
-> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **13 tools** + **唯讀 FastAPI Web API**)。
+> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **14 tools** + **唯讀 FastAPI Web API** + **Traditional Core 獨立波浪引擎**)。
 
 **版本**:**v4.35**(alembic head `i5j6k7l8m9n0` / 2026-06-01)。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug;**v4.34** 修復 revenue / financial / 景氣指標 3 個 dashboard chart 的 x 軸欄位(月/季頻 core 無 `date` 欄,改讀 `fact_date`);**v4.35** magic_formula `is_top_30`→`is_top_n` schema 對齊(12 個 ranked 表統一欄名;需 `alembic upgrade head` + magic_formula refresh)。皆已 merge main
 **測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)+ Phase 3b `scripts/recalibrate_kalman.ps1`(Kalman 全市場校準 → resonance track2 非 single_track)。完整 verify chain 見 [CLAUDE.md §v4.32/v4.33](CLAUDE.md)
@@ -78,6 +78,21 @@
 
 ---
 
+### 波浪雙引擎(並排,不整合)
+
+Layer 3 的波浪分析有**兩個完全獨立的 vertical**,並排呈現、不做共識比對:
+
+| 引擎 | crate | 派別 | 儲存 | 對外 |
+|---|---|---|---|---|
+| **Neely** | `cores/wave/neely_core/` | NEoWave(Glenn Neely)| `structural_snapshots`(core_name=`neely_core`)| `/stocks/{id}/neely/forest` · MCP `neely_forecast` |
+| **Traditional**(2026-06-02 / PR #123)| `cores/wave/traditional_core/` | Frost & Prechter EWP | `traditional_snapshots`(自有表)| `/stocks/{id}/traditional/forest` · `/stocks/{id}/waves`(`{neely, traditional}` 並排組裝)· MCP `traditional_wave_forest` · Streamlit「🌲 Traditional Wave」|
+
+Traditional Core 與 Neely **完全解耦**(`cargo tree -p traditional_core` 零 neely;不 impl `WaveCore`;純函式 `run()`)。**由下而上多度數 fractal 引擎**:子浪細分(R6/R7/R8/R11)在 degree≥2 為硬建構約束,degree-0 monowave 為線、deferred(忠於原書「最小級數的浪不可再分」)。forest **不選 primary**,排序鍵 = `preference_score`(guidelines + qualifiers)。引擎/儲存/API/MCP/dashboard 全自有,沿用既有 plumbing 模式。詳見 `m3Spec/traditional_rules.md` + CLAUDE.md §「Traditional Core v2 / v3」。
+
+> 校準:Traditional Core 走 production 前需跑多股 **P0-Gate**(`run-all` 後看 `traditional_snapshots` 的 forest p50/p95/max + elapsed),必要時調 `monowave_epsilon` / `round_beam_size` / `max_degree_levels`(`config.rs` 編譯期 default)。harness:`tw_cores traditional-debug --stock-id 3363`。
+
+---
+
 ## 2. 系統需求
 
 | 項目 | 版本 | 備註 |
@@ -127,7 +142,8 @@ StockHelper4me/
 │   └── schema_pg.sql                # 完整 schema DDL(給 fresh DB init)
 ├── rust_compute/                    # Rust workspace 35 crates
 │   ├── cores_shared/fact_schema/    # Fact + IndicatorCore / WaveCore trait + params_hash
-│   ├── cores/wave/neely_core/       # P0 Wave Core(Stage 1-10 完整 + v3.6 RuleId 81 variants + v3.7 真窮舉 compaction)
+│   ├── cores/wave/neely_core/       # P0 Wave Core(NEoWave;Stage 1-10 完整 + v3.6 RuleId 81 variants + v3.7 真窮舉 compaction)
+│   ├── cores/wave/traditional_core/ # Traditional Core(Frost & Prechter EWP)獨立波浪引擎 — 多度數 fractal,與 neely 解耦
 │   ├── cores/indicator/             # 8 P1 + 8 P3 + 3 P2 pattern + ATR / Bollinger / OBV
 │   ├── cores/chip/                  # 8 P2(day_trading / institutional / margin / foreign_holding / shareholder + v3.21:loan_collateral / block_trade / risk_alert)
 │   ├── cores/fundamental/           # 3 P2(revenue / valuation / financial_statement)

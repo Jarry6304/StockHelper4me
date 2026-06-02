@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.35,最新 2026-06-01;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.35 + Traditional Core v2/v3,最新 2026-06-02;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
@@ -11,17 +11,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
-Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
+Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾 + **traditional_core 獨立波浪 vertical**)。
 **v4.32 後升 6 層**(加 Golden L3 fusion 物化 + 唯讀 Web API)。
+**Traditional Core(2026-06-02 / PR #123 merged)**:第 2 個波浪 vertical(Frost & Prechter EWP),與 Neely **完全解耦、並排不整合**;由下而上多度數 fractal 引擎(子浪細分 R6/R7/R8/R11 = 建構約束);自有 `traditional_snapshots` + `/traditional/forest` + `/waves` + MCP `traditional_wave_forest` + Streamlit「🌲 Traditional Wave」。詳見下方 §「Traditional Core v2 / v3」。
 
-- **alembic head**:`i5j6k7l8m9n0`(v4.35 magic_formula `is_top_30`→`is_top_n` rename;h4i5j6k7l8m9 v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
+- **alembic head**:`j6k7l8m9n0o1`(PR #123 Traditional Core `traditional_snapshots` 自有表;i5j6k7l8m9n0 v4.35 magic_formula `is_top_30`→`is_top_n` rename;h4i5j6k7l8m9 v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
 - **開發分支(近期)**:`claude/neely-forest-cloud-zigzag-Xv13d`(v4.32.1 tpex 解鎖 + NeelyWave 複合雲圖 + v4.33 fusion `.env` 路徑修復,皆已 merge main);`claude/sweet-carson-96j9D`(v4.32 Golden L3 物化 + 唯讀 Web API + TS codegen,已 merge)
-- **main HEAD**:`17b87c2`(v4.33 後 + test 對齊;早期 PR #110~#122 全 merge)
+- **main HEAD**:`11299d2`(PR #123 Traditional Core v2+v3 merge,2026-06-02;17b87c2 v4.33 後;PR #110~#122 全 merge)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
 - **universe**:`config/stock_list.toml` `market_type = ["twse","tpex"]`(v4.32.1 `otc`→`tpex` 解鎖全部上櫃股;daily refresh 實測 universe ~2172;興櫃 emerging 未納入)
-- **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
+- **Rust tests**:**40 crates**;`cargo test --workspace` 全綠(neely/fusion 後 607 + **traditional_core 22**)
 - **Python tests**:`tests/fusion/` + `tests/mcp_server/` **476 passed / 1 skipped / 0 failed**(v4.33 後;`test_v3_35_1` pre-existing fail 已於 caveat-wording 對齊修掉)
-- **MCP toolkit**:**13 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen;v4.26 加 1)
+- **MCP toolkit**:**14 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen + **1 traditional_wave_forest**;PR #123 加 1)
 - **cross_cores Phase 8 builders**:**12**(magic_formula + v3.32 10 + v4.26 wave_impulse_screen)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
 - **Production state**(v4.32.1 tpex 解鎖後):~2172 stocks × **41 cores** dispatch / M3 `run-all` wall ~37 min(tpex universe + golden + forecast)/ facts daily ~78k new rows;Round 7 + Round 8 + **Round 9** calibration **完整結算**
