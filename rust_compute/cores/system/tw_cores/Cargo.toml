@@ -20,6 +20,9 @@ core_registry     = { path = "../../../cores_shared/core_registry" }
 # Wave Core(P0)
 neely_core        = { path = "../../wave/neely_core" }
 
+# Traditional Wave Core(獨立 vertical,純函式 run() — 不走 trait dispatch)
+traditional_core  = { path = "../../wave/traditional_core" }
+
 # Indicator Cores(P1 — 8 + P3 — 7)
 macd_core         = { path = "../../indicator/macd_core" }
 rsi_core          = { path = "../../indicator/rsi_core" }

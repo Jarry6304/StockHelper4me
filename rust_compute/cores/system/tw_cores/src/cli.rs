@@ -32,6 +32,16 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         write: bool,
     },
+    /// 產品閘 harness — 對指定 stock 跑 traditional_core(獨立 vertical),印 forest summary(不寫 DB)
+    #[command(name = "traditional-debug")]
+    TraditionalDebug {
+        /// 股票代號(例 2330 / 3363)
+        #[arg(long)]
+        stock_id: String,
+        /// 時間粒度:daily / weekly / monthly
+        #[arg(long, default_value = "daily")]
+        timeframe: String,
+    },
     /// v0.3 spine — Causal one-pass backtest:每個歷史日 T 跑 forecast core,
     /// 寫 forecast_log。PIT-aware loader 保證沒有 lookahead。
     #[command(name = "run-backtest")]

@@ -299,6 +299,56 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## Traditional Core v2 — Phase 1:獨立引擎 + 產品閘(2026-06-02)
+
+User 直送 Traditional Core v2 spec(與 Neely **完全解耦、並排不整合**的傳統派 Frost & Prechter
+EWP 波浪引擎)。規則層 `m3Spec/traditional_rules.md`(R1–R13 + 9 級 Degree + §A–D)。Phase 1 落地
+**引擎 + 產品閘 harness**,過閘(forest 可讀性)再做 Phase 2 plumbing。分支 `claude/gracious-mendel-QeG15`。
+
+### 鎖定設計(對齊 v2,推翻 r1「共用 WaveCore + structural_snapshots」)
+- 新 crate `rust_compute/cores/wave/traditional_core/`(workspace 39 → **40 crates**)
+- entry = **純函式** `traditional_core::run(series, config)`,**不 impl `WaveCore`**(不走 trait dispatch)
+- **不 dep `neely_core` / `ohlcv_loader`**(後者 re-export neely `OhlcvSeries` 會耦合)→ 自帶
+  `loader.rs` 直讀 Silver `price_*_fwd`;`cargo tree -p traditional_core | grep neely` = **空** ✅
+- 僅 reuse `fact_schema::Timeframe` + `core_registry`(平台 util,皆無 neely dep,非 wave 型別)
+- forest **不選 primary**;無 confidence/composite_score;`preference_score = guidelines + qualifiers`
+
+### 8-stage pipeline(對齊 v2 `references/engine.md`)
+pivot(ATR×k)→ candidates(+形態假設 HypoKind)→ 硬 Validator → classifier → guidelines → fibonacci → triggers → degree+forest。
+- **硬規則(淘汰,pivot-level 可評估)**:R1 / R3 / R4(Impulse+Diagonal)、R5(僅 Impulse)、R9(僅 Diagonal)。
+- **Deferred(不淘汰,v1 honest scoping)**:R2 `[待查證]`;**R6/R7/R8/R11 子浪細分需遞迴子浪分解 = v2 深度**
+  ← 正是產品閘要揭露的引擎深度問題之一。
+- R5/R9 分流(關鍵):浪 4 重疊浪 1 → Impulse 被 R5 淘汰、**同幾何 Diagonal 合法**(對齊 R8 rev2 擴張引導對角)。
+- Fib 永不淘汰(僅計指引 + 出 `expected_fib_zones`,從正統終點量起)。
+
+### 產品閘 harness(`tw_cores` 子命令,不寫 DB)
+```powershell
+git pull
+cd rust_compute && cargo build -p tw_cores && cd ..
+.\rust_compute\target\debug\tw_cores.exe traditional-debug --stock-id 3363   # 或 release build
+```
+印 forest summary(pivots / candidates / pass-rej / forest size + overflow / 每 scenario
+`structure_label` + degree + `preference_score` + invalidation + fib zones)。**user 本機對手標股
+(3363 + 補充清單)目測 forest 是否 ≤ forest_max_size(200)且人能讀、pivot(`swing_atr_multiplier=3.0`)
+是否合理 → 決定引擎是否做完 / 調 pivot。過閘才進 Phase 2。**
+
+### 沙箱驗證
+- `cargo test -p traditional_core` **14 passed / 0 failed / 0 warning**(R1/R3/R4/R5/R9 各 1 +
+  R5-impulse-vs-diagonal 分流 + pivot/candidates/degree/config + run() smoke + insufficient + overflow)
+- `cargo build -p tw_cores` 綠;`tw_cores list-cores` 顯示 `traditional_core v0.1.0 [Wave / P3]`
+- `cargo tree -p traditional_core` 零 `neely_core` / `ohlcv_loader`(解耦不變式)
+
+### Phase 2(過閘後,未動工)
+alembic `traditional_snapshots`(**自有表,非** structural_snapshots)+ tw_cores `dispatch_traditional()`
++ `write_traditional_snapshot()` + multi-tf loop + FastAPI `/stocks/{id}/traditional/forest` +
+`/stocks/{id}/waves` 邊緣組裝(`{neely, traditional}` 並排不合併)+ MCP `traditional_wave_forest` +
+Streamlit tab(複製 neely zigzag/fib render)。
+
+🟢 風險:Phase 1 純加新 crate + tw_cores 子命令(CLI + 1 harness fn + list-cores 1 行),
+**0 alembic / 0 既有 code 邏輯改 / 0 既有 test 影響**;Rollback 單 commit `git revert`。
+
+---
+
 ## v4.35 — magic_formula `is_top_30` → `is_top_n` schema 對齊(2026-06-01)
 
 `magic_formula_ranked_derived`(2026-05-15 最早建)是唯一用 `is_top_30` 欄名的

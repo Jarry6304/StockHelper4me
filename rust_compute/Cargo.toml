@@ -11,6 +11,8 @@ members = [
     "cores_shared/core_registry",
     # Wave Cores(P0)
     "cores/wave/neely_core",
+    # Traditional Wave Core(獨立 vertical,與 neely 解耦;不 impl WaveCore)
+    "cores/wave/traditional_core",
     # Indicator Cores(P1 — 8 個 / P3 — 7 個)
     "cores/indicator/macd_core",
     "cores/indicator/rsi_core",
