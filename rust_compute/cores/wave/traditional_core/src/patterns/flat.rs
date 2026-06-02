@@ -18,6 +18,10 @@ pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
         Some(d) => d,
         None => return Vec::new(),
     };
+    // 位置約束:C(motive slot)不可是 Leading Diagonal(C 處只可 Ending)
+    if w[2].kind == PatternKind::LeadingDiagonal {
+        return Vec::new();
+    }
     let mut passed = vec![TradRuleId::R10CorrectionNeverFive];
     if deferred.is_empty() {
         passed.push(TradRuleId::R11CorrectiveSubdivision);

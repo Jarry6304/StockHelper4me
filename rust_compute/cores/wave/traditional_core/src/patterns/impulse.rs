@@ -32,6 +32,10 @@ pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
     if w[2].mode != Mode::Unknown && w[2].kind != PatternKind::Impulse {
         return Vec::new();
     }
+    // 位置約束:浪1 不可是 Ending Diagonal(Ending 僅 5/C);浪5 不可是 Leading Diagonal(Leading 僅 1/A)
+    if w[0].kind == PatternKind::EndingDiagonal || w[4].kind == PatternKind::LeadingDiagonal {
+        return Vec::new();
+    }
     let mut passed = vec![
         TradRuleId::R1Wave2Retracement,
         TradRuleId::R3Wave3ExceedsWave1,
@@ -148,5 +152,21 @@ mod tests {
             1,
         );
         assert!(group(&w).is_empty(), "浪3 須是 Impulse");
+    }
+
+    // 位置約束:浪5 是 Leading Diagonal → 硬淘汰(Leading 僅 1/A)
+    #[test]
+    fn deg2_wave5_leading_diagonal_rejected() {
+        let w = impulse_geometry(
+            [
+                (PatternKind::Impulse, Mode::Motive),
+                (PatternKind::Zigzag, Mode::Corrective),
+                (PatternKind::Impulse, Mode::Motive),
+                (PatternKind::Flat, Mode::Corrective),
+                (PatternKind::LeadingDiagonal, Mode::Motive), // ✗ 浪5 不可是 Leading
+            ],
+            1,
+        );
+        assert!(group(&w).is_empty(), "浪5 不可是 Leading Diagonal");
     }
 }
