@@ -375,6 +375,25 @@ pytest tests/web_api/test_api.py tests/mcp_server/test_traditional.py
 > **產品閘(spec 待議 #1)未跑**:user 選擇直接續做。forest 可讀性 / 大小(尤其 R6/R7/R8/R11
 > 子浪細分仍 Deferred → 可能 forest 偏碎)待 production verify;爆了回頭調 pivot 或補遞迴分解。
 
+### v3 — 忠於原書多度數 fractal 引擎(2026-06-02,user 拍版「做到完、忠於原書」)
+
+User 推翻 v1「R6/R7/R8/R11 標 Deferred + 單股判 forest」框法:**子浪細分要真執行(忠於原書)、
+驗收看多股分布(非單股)**。引擎核心重做為**由下而上逐度數 compaction**,子浪細分 = 建構約束。
+
+- **核心**:degree-N 形態的 children mode 必須符合(Impulse 5-3-5-3-5 / Zigzag 5-3-5 / Ending 對角全3…)。
+  遞迴在資料解析度觸底(monowave 就是線,degree 0→1 子浪不可見 → R6 進 deferred;degree≥2 → **HARD 淘汰**)。
+- **L9 骨幹**:actionary ≠ 永遠是 5(Ending 對角浪 1/3/5 雖 actionary 卻細分為 3)。
+- **新模組**(M1 `75513b9` + M2):monowave / mode(L9 表)/ node(EngineNode)/ rules(R1/R3/R4/R5/R9 幾何)/
+  patterns/{impulse,diagonal,zigzag,flat,triangle,**combination**} / compaction(round+beam+dedup+degree ceiling)/ scenario。
+  `lib.rs::run` 重接 monowave→compaction→scenario;**output.rs wire contract 0 改**(WaveNode.children 已遞迴)
+  → Phase 2 plumbing(table/API/MCP/dashboard)全沿用。M2 combination = Double/Triple Three + Double/Triple Zigzag + R12。
+- **沙箱驗證**:`cargo test -p traditional_core` **29 passed**(headline:degree≥2 子浪模式錯/浪3 非 Impulse → 硬淘汰;
+  degree-0 → R6 deferred;R12 三角僅最終組件);`cargo build -p tw_cores` 綠;`cargo tree` 零 neely。
+- **⚠️ 待 user P0-Gate 校準**:monowave 不過濾(faithful)→ 長序列 base 多 → compaction beam/clone 成本高。
+  production `run-all` 前/後看 forest p50/p95/max + elapsed_ms,**`monowave_epsilon` 調大**(去雜訊)/ `round_beam_size`
+  / `max_degree_levels` 調控(對齊 neely P0-Gate 1264-stock 慣例)。forest 仍不選 primary、cap 只當安全網。
+  v1 模組(pivot/candidates/validator/classifier)superseded、暫留(geometry test 覆蓋),後續 cleanup PR 移除。
+
 ---
 
 ## v4.35 — magic_formula `is_top_30` → `is_top_n` schema 對齊(2026-06-01)

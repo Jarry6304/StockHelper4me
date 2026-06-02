@@ -4,6 +4,7 @@
 // 試組成下一度數的 parent;子浪細分(R6/R7/R8/R11)以 children 的 mode 強制
 // (degree-0 child 無 mode → defer;degree≥1 child mode 不符 → 硬淘汰)。
 
+pub mod combination;
 pub mod diagonal;
 pub mod flat;
 pub mod impulse;
@@ -21,11 +22,13 @@ pub fn try_all(w: &[EngineNode]) -> Vec<EngineNode> {
         3 => {
             out.extend(zigzag::group(w));
             out.extend(flat::group(w));
+            out.extend(combination::group(w)); // Double Three / Double Zigzag
         }
         5 => {
             out.extend(impulse::group(w));
             out.extend(diagonal::group(w));
             out.extend(triangle::group(w));
+            out.extend(combination::group(w)); // Triple Three / Triple Zigzag
         }
         _ => {}
     }
