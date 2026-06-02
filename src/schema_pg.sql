@@ -1749,6 +1749,7 @@ CREATE TABLE IF NOT EXISTS forecast_log (
     source_core     TEXT NOT NULL,
     regime_tag      TEXT,
     params_hash     TEXT,
+    logic_version   TEXT NOT NULL DEFAULT 'pre_b1',
     resolved_date   DATE,
     realized_price  NUMERIC(15, 4),
     hit             BOOLEAN,
