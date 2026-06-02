@@ -243,10 +243,10 @@ async fn run_traditional_debug(stock_id: &str, timeframe: &str) -> Result<()> {
     }
 
     println!();
-    println!("note: 子浪細分硬規則(R6/R7/R8/R11)v1 標 Deferred(需遞迴子浪分解 = v2 深度);");
+    println!("note: v3 多度數引擎 — 子浪細分 R6/R7/R8/R11 於 degree≥2 真執行(degree-0 monowave 為線、deferred);");
     println!(
-        "      forest_max_size={}, swing_atr_multiplier={} — forest 過大/不可讀 → 先調 pivot 設定。",
-        cfg.forest_max_size, cfg.swing_atr_multiplier
+        "      forest_max_size={} / monowave_epsilon={} / round_beam_size={} — forest 過大或慢 → P0-Gate 調這些。",
+        cfg.forest_max_size, cfg.monowave_epsilon, cfg.round_beam_size
     );
     Ok(())
 }

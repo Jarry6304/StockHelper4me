@@ -15,7 +15,6 @@ use anyhow::{anyhow, Result};
 use std::time::Instant;
 
 pub mod candidates;
-pub mod classifier;
 pub mod compaction;
 pub mod config;
 pub mod degree;
@@ -27,11 +26,9 @@ pub mod monowave;
 pub mod node;
 pub mod output;
 pub mod patterns;
-pub mod pivot;
 pub mod rules;
 pub mod scenario;
 pub mod triggers;
-pub mod validator;
 
 pub use config::TraditionalEngineConfig;
 pub use output::{
@@ -203,11 +200,7 @@ mod tests {
 
     #[test]
     fn run_produces_forest_with_impulse_and_no_primary_concept() {
-        let cfg = TraditionalEngineConfig {
-            atr_period: 4,
-            swing_atr_multiplier: 1.0,
-            ..Default::default()
-        };
+        let cfg = TraditionalEngineConfig::default();
         let out = run(&clean_impulse_series(), &cfg).unwrap();
         assert!(!out.diagnostics.insufficient_data);
         assert!(out.diagnostics.pivot_count >= 6, "pivots={}", out.diagnostics.pivot_count);
@@ -247,8 +240,6 @@ mod tests {
     fn forest_overflow_caps_at_max() {
         // 用極小 forest_max_size 強制 overflow(只要候選 > max)
         let cfg = TraditionalEngineConfig {
-            atr_period: 4,
-            swing_atr_multiplier: 1.0,
             forest_max_size: 1,
             ..Default::default()
         };

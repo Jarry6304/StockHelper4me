@@ -94,3 +94,53 @@ fn diag_node(
     };
     build_parent(pk, w.to_vec(), passed, deferred, Some((kind, shape, sub)), None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::Direction;
+    use chrono::NaiveDate;
+
+    fn mw(sp: f64, ep: f64, i: usize) -> EngineNode {
+        let dir = if ep >= sp { Direction::Up } else { Direction::Down };
+        EngineNode {
+            kind: PatternKind::Monowave,
+            mode: Mode::Unknown,
+            direction: dir,
+            degree_level: 0,
+            start_bar: i,
+            end_bar: i + 1,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+            start_price: sp,
+            end_price: ep,
+            diag: None,
+            variant: None,
+            children: Vec::new(),
+            passed_rules: Vec::new(),
+            deferred_rules: Vec::new(),
+        }
+    }
+
+    // 浪4 重疊浪1(13 < 14):Impulse 被 R5 淘汰、**同幾何 Diagonal 合法**(R8 rev2 擴張引導對角)
+    #[test]
+    fn overlap_kills_impulse_but_diagonal_legal() {
+        let prices = [
+            (10.0, 14.0),
+            (14.0, 12.5),
+            (12.5, 18.0),
+            (18.0, 13.0),
+            (13.0, 20.0),
+        ];
+        let w: Vec<EngineNode> = prices
+            .iter()
+            .enumerate()
+            .map(|(i, (s, e))| mw(*s, *e, i))
+            .collect();
+        assert!(
+            crate::patterns::impulse::group(&w).is_empty(),
+            "浪4 重疊浪1 → Impulse 被 R5 淘汰"
+        );
+        assert!(!group(&w).is_empty(), "同幾何 → Diagonal 合法(R5 不套、R9 通過)");
+    }
+}
