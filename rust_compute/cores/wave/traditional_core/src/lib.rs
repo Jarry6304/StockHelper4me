@@ -16,13 +16,20 @@ use std::time::Instant;
 
 pub mod candidates;
 pub mod classifier;
+pub mod compaction;
 pub mod config;
 pub mod degree;
 pub mod fibonacci;
 pub mod guidelines;
 pub mod loader;
+pub mod mode;
+pub mod monowave;
+pub mod node;
 pub mod output;
+pub mod patterns;
 pub mod pivot;
+pub mod rules;
+pub mod scenario;
 pub mod triggers;
 pub mod validator;
 
@@ -32,8 +39,11 @@ pub use output::{
     TraditionalScenario,
 };
 
-/// 純函式入口(不 impl WaveCore)。對給定後復權 OHLCV 序列跑完整 8-stage pipeline。
+/// 純函式入口(不 impl WaveCore)。**v3 由下而上多度數 fractal 引擎**:
+/// monowave(degree-0)→ compaction(逐度數,子浪細分 = 建構約束)→ scenario 組裝 → forest cap。
 pub fn run(series: &TradOhlcvSeries, config: &TraditionalEngineConfig) -> Result<TraditionalCoreOutput> {
+    use crate::output::{Direction, Pivot, PivotKind};
+
     let started = Instant::now();
     let bars = &series.bars;
     if bars.is_empty() {
@@ -44,19 +54,39 @@ pub fn run(series: &TradOhlcvSeries, config: &TraditionalEngineConfig) -> Result
         end: bars[bars.len() - 1].date,
     };
 
-    // Stage 1 — Pivot
-    let pivots = pivot::detect_pivots(bars, config.atr_period, config.swing_atr_multiplier);
+    // Stage 1 — degree-0 monowaves(close-based,不 ATR 過濾)
+    let monowaves = monowave::detect_monowaves(bars, config.monowave_epsilon);
 
-    // 資料不足(少於一個 3-leg 修正窗所需 4 pivot)
-    if pivots.len() < 4 {
+    // pivot_series(dashboard skeleton):monowave 端點
+    let mut pivot_series: Vec<Pivot> = Vec::new();
+    for (i, mw) in monowaves.iter().enumerate() {
+        let up = matches!(mw.direction, Direction::Up);
+        if i == 0 {
+            pivot_series.push(Pivot {
+                bar_index: mw.start_bar,
+                date: mw.start_date,
+                price: mw.start_price,
+                kind: if up { PivotKind::Low } else { PivotKind::High },
+            });
+        }
+        pivot_series.push(Pivot {
+            bar_index: mw.end_bar,
+            date: mw.end_date,
+            price: mw.end_price,
+            kind: if up { PivotKind::High } else { PivotKind::Low },
+        });
+    }
+
+    // 資料不足(少於一個 3-leg 修正窗所需 monowave)
+    if monowaves.len() < 3 {
         return Ok(TraditionalCoreOutput {
             stock_id: series.stock_id.clone(),
             timeframe: series.timeframe,
             data_range,
-            pivot_series: pivots.clone(),
+            pivot_series,
             scenario_forest: Vec::new(),
             diagnostics: TraditionalDiagnostics {
-                pivot_count: pivots.len(),
+                pivot_count: monowaves.len(),
                 candidate_count: 0,
                 validator_pass_count: 0,
                 validator_reject_count: 0,
@@ -68,71 +98,28 @@ pub fn run(series: &TradOhlcvSeries, config: &TraditionalEngineConfig) -> Result
         });
     }
 
-    // Stage 2 — 候選 + 形態假設
-    let cands = candidates::generate(&pivots);
-    let candidate_count = cands.len();
+    // Stage 2-4 — 由下而上 compaction(子浪細分 = 建構約束)→ top-level pattern 節點
+    let top_nodes = compaction::compact(monowaves.clone(), config);
+    let candidate_count = top_nodes.len();
 
-    let mut scenarios: Vec<TraditionalScenario> = Vec::new();
-    let mut rejections = Vec::new();
-    let mut pass = 0usize;
-    let mut reject = 0usize;
+    // Stage 5-8 — 各 top 節點組裝 TraditionalScenario(guidelines/fib/triggers/degree)
+    let scenarios = scenario::assemble(&top_nodes, config);
 
-    for c in &cands {
-        // Stage 3 — 硬 Validator
-        let vo = validator::validate(c);
-        if !vo.is_legal() {
-            reject += 1;
-            rejections.extend(vo.rejections);
-            continue;
-        }
-        pass += 1;
-
-        // Stage 4 — 形態確認
-        let cl = classifier::classify(c);
-        // Stage 5 — 指引 / 限定語(客觀計數)
-        let (g, q) = guidelines::evaluate(c, config.fib_tolerance);
-        let preference_score = g.len() + q.len();
-        // Stage 6 — Fib 投影(永不淘汰)
-        let fib = fibonacci::project(c, &cl.wave_tree.label, config.fib_tolerance);
-        // Stage 7 — 失效條件
-        let trig = triggers::build(c);
-        // Stage 8(a)— 相對度數(由 bar 跨度)
-        let span = c.pivots.last().unwrap().bar_index - c.pivots.first().unwrap().bar_index;
-        let deg = degree::degree_for_span(span);
-
-        scenarios.push(TraditionalScenario {
-            id: c.id.clone(),
-            wave_tree: cl.wave_tree,
-            pattern_type: cl.pattern_type,
-            direction: c.direction,
-            structure_label: cl.structure_label,
-            degree: deg,
-            passed_rules: vo.passed_rules,
-            deferred_rules: vo.deferred_rules,
-            guidelines_satisfied: g,
-            qualifiers_met: q,
-            preference_score,
-            invalidation_triggers: trig,
-            expected_fib_zones: fib,
-        });
-    }
-
-    // Stage 8(b)— Forest 組裝(不選 primary;超 max 走 beam fallback)
+    // Forest 組裝(不選 primary;超 max 走 beam fallback)
     let (forest, overflow) = degree::finalize_forest(scenarios, config.forest_max_size);
-    let pivot_count = pivots.len();
 
     Ok(TraditionalCoreOutput {
         stock_id: series.stock_id.clone(),
         timeframe: series.timeframe,
         data_range,
-        pivot_series: pivots,
+        pivot_series,
         scenario_forest: forest,
         diagnostics: TraditionalDiagnostics {
-            pivot_count,
+            pivot_count: monowaves.len(),
             candidate_count,
-            validator_pass_count: pass,
-            validator_reject_count: reject,
-            rejections,
+            validator_pass_count: candidate_count,
+            validator_reject_count: 0,
+            rejections: Vec::new(),
             forest_overflow_triggered: overflow,
             insufficient_data: false,
             elapsed_ms: started.elapsed().as_millis() as u64,

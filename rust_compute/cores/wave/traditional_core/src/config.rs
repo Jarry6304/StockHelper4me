@@ -17,6 +17,13 @@ pub struct TraditionalEngineConfig {
     pub fib_tolerance: f64,
     /// `[工程添加]` Forest 上限保護(P0 Gate 校準);超過走 beam fallback(beam 鍵 = preference_score)。
     pub forest_max_size: usize,
+    /// `[工程添加]` v3 monowave 數值雜訊守門:`|Δclose|` 小於 `start×epsilon` 視為平盤(只去數值塵,
+    /// **不**抹低度數)。0.0 = 純每根反轉。P0-Gate 可調。
+    pub monowave_epsilon: f64,
+    /// `[工程添加]` v3 compaction per-round scenario beam(每度數保留 top-N tiling,控 forest 爆炸)。
+    pub round_beam_size: usize,
+    /// `[工程添加]` v3 compaction 最大度數層數(degree ceiling 的工程硬上限)。
+    pub max_degree_levels: usize,
 }
 
 impl Default for TraditionalEngineConfig {
@@ -27,6 +34,9 @@ impl Default for TraditionalEngineConfig {
             swing_atr_multiplier: 3.0,
             fib_tolerance: 0.04,
             forest_max_size: 200,
+            monowave_epsilon: 0.0,
+            round_beam_size: 64,
+            max_degree_levels: 8,
         }
     }
 }
