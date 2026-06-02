@@ -79,3 +79,38 @@ def guard_forest_cap(conn: Any, *, stock_id: str, as_of: date, timeframe: str) -
             detail=f"forest_overflow: scenario_forest size {n} exceeds fuse cap "
                    f"{FOREST_FUSE_CAP} (engine cap 200, prod max 37)",
         )
+
+
+# ── Traditional Core(獨立 vertical)— 自有表 traditional_snapshots(無 snapshot_date / 無 core_name)──
+
+def fetch_traditional_forest_text(
+    conn: Any,
+    *,
+    stock_id: str,
+    timeframe: str,
+) -> str | None:
+    """取 traditional_snapshots 最新(by computed_at)forest JSON 原文。
+
+    與 structural_snapshots 不同:此表為 latest-per-(stock, timeframe, params),無 snapshot_date。
+    """
+    sql = (
+        "SELECT forest::text AS j FROM traditional_snapshots "
+        "WHERE stock_id = %s AND timeframe = %s "
+        "ORDER BY computed_at DESC LIMIT 1"
+    )
+    with conn.cursor() as cur:
+        cur.execute(sql, [stock_id, timeframe])
+        row = cur.fetchone()
+    return row["j"] if row else None
+
+
+def compose_waves(neely_text: str | None, traditional_text: str | None) -> Response:
+    """邊緣組裝 `{ neely, traditional }` 並排(**不合併、無 consensus**)。
+
+    raw passthrough 字串拼接(不 deserialize),缺值 → null。
+    """
+    body = '{"neely":%s,"traditional":%s}' % (
+        neely_text if neely_text is not None else "null",
+        traditional_text if traditional_text is not None else "null",
+    )
+    return Response(content=body, media_type="application/json")

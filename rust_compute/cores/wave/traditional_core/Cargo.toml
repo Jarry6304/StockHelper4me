@@ -1,0 +1,23 @@
+[package]
+name        = "traditional_core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Traditional Core(Frost & Prechter EWP)波浪引擎 — 與 Neely 完全解耦的獨立 vertical。對齊 m3Spec/traditional_rules.md(規則層)+ Traditional Core v2 SPEC。"
+
+[lib]
+path = "src/lib.rs"
+
+# ── 解耦不變式 ──
+# 1. 不 dep `neely_core`、不 dep `ohlcv_loader`(後者 re-export neely OhlcvSeries → 會耦合)
+# 2. 不 impl `fact_schema::WaveCore` trait(entry = 純函式 run())
+# 3. `fact_schema` / `core_registry` 僅取平台 util(Timeframe / params_hash / CoreRegistration),
+#    皆非 wave 型別、皆無 neely 依賴 → 不違反「無 cores_shared wave 型別 import」acceptance
+[dependencies]
+fact_schema   = { path = "../../../cores_shared/fact_schema" }
+core_registry = { path = "../../../cores_shared/core_registry" }
+sqlx          = { workspace = true }
+anyhow        = { workspace = true }
+chrono        = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+inventory     = "0.3"

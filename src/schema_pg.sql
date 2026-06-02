@@ -1467,6 +1467,22 @@ CREATE INDEX IF NOT EXISTS idx_structural_snapshots_core
     ON structural_snapshots(core_name, snapshot_date DESC);
 
 
+-- Traditional Core(Frost & Prechter EWP)獨立 vertical 自有表(alembic j6k7l8m9n0o1)
+-- 對齊 Traditional Core v2 storage-and-io.md;**不**復用 structural_snapshots(無 core_name / 無 FK)。
+CREATE TABLE IF NOT EXISTS traditional_snapshots (
+    stock_id     TEXT        NOT NULL,
+    timeframe    TEXT        NOT NULL,
+    forest       JSONB       NOT NULL,
+    diagnostics  JSONB       NOT NULL,
+    params_hash  TEXT        NOT NULL,
+    data_range   TSTZRANGE,
+    computed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (stock_id, timeframe, params_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_traditional_snapshots_stock_tf
+    ON traditional_snapshots(stock_id, timeframe);
+
+
 CREATE TABLE IF NOT EXISTS facts (
     id             BIGSERIAL PRIMARY KEY,
     stock_id       TEXT NOT NULL,

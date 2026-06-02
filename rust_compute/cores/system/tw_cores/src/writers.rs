@@ -90,6 +90,49 @@ pub async fn write_structural_snapshot(
     Ok(())
 }
 
+/// 寫 traditional_snapshots(Traditional Core 獨立 vertical 自有表;對齊 storage-and-io.md DDL)。
+///
+/// - `forest` = 整個 TraditionalCoreOutput(materialized read model — API 純 passthrough 此欄)
+/// - `diagnostics` = output.diagnostics(便於查詢)
+/// - `data_range` = tstzrange(start, end, '[]')
+/// - ON CONFLICT (stock_id, timeframe, params_hash) → 覆寫(latest snapshot per (stock,tf,params))
+#[allow(clippy::too_many_arguments)]
+pub async fn write_traditional_snapshot(
+    pool: &PgPool,
+    stock_id: &str,
+    timeframe: Timeframe,
+    params_hash_hex: &str,
+    forest_json: &serde_json::Value,
+    diagnostics_json: &serde_json::Value,
+    data_start: NaiveDate,
+    data_end: NaiveDate,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO traditional_snapshots
+            (stock_id, timeframe, forest, diagnostics, params_hash, data_range, computed_at)
+        VALUES ($1, $2, $3, $4, $5, tstzrange($6::timestamptz, $7::timestamptz, '[]'), NOW())
+        ON CONFLICT (stock_id, timeframe, params_hash)
+        DO UPDATE SET
+            forest      = EXCLUDED.forest,
+            diagnostics = EXCLUDED.diagnostics,
+            data_range  = EXCLUDED.data_range,
+            computed_at = NOW()
+        "#,
+    )
+    .bind(stock_id)
+    .bind(timeframe.as_str())
+    .bind(forest_json)
+    .bind(diagnostics_json)
+    .bind(params_hash_hex)
+    .bind(data_start)
+    .bind(data_end)
+    .execute(pool)
+    .await
+    .context("insert traditional_snapshots failed")?;
+    Ok(())
+}
+
 /// PR-9c batch INSERT 取代 per-event loop:用 UNNEST array bind 一次插入 N row。
 /// per-event INSERT 是 stage 5 主要 bottleneck;batch INSERT 降至 N batches round-trip。
 /// BATCH_SIZE 4000 conservative,避免單筆 query 過大。

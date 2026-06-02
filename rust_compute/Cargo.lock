@@ -2585,6 +2585,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "traditional_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core_registry",
+ "fact_schema",
+ "inventory",
+ "serde",
+ "serde_json",
+ "sqlx",
+]
+
+[[package]]
 name = "trendline_core"
 version = "0.1.0"
 dependencies = [
@@ -2681,6 +2695,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "traditional_core",
  "trendline_core",
  "us_market_core",
  "valuation_core",

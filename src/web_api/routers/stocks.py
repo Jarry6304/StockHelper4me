@@ -59,3 +59,31 @@ def snapshot(
         conn, stock_id=stock_id, as_of=as_of, core_name=core, timeframe=timeframe,
     )
     return pt.raw_json_response(text)
+
+
+@router.get("/{stock_id}/traditional/forest")
+def traditional_forest(
+    stock_id: str, timeframe: str = "daily", conn: Any = Depends(db_conn),
+):
+    """traditional_core forest 完整 passthrough(獨立 vertical;latest per (stock, timeframe))。
+
+    讀自有表 traditional_snapshots(非 structural_snapshots);與 /neely/forest 並排不整合。
+    """
+    text = pt.fetch_traditional_forest_text(conn, stock_id=stock_id, timeframe=timeframe)
+    return pt.raw_json_response(text)
+
+
+@router.get("/{stock_id}/waves")
+def waves(
+    stock_id: str, as_of: date, timeframe: str = "daily", conn: Any = Depends(db_conn),
+):
+    """邊緣組裝:`{ neely, traditional }` 並排呈現(**不合併、無 consensus**)。
+
+    neely 取 as_of <= 最新 structural_snapshots;traditional 取 latest traditional_snapshots
+    (該表無 snapshot_date,as_of 僅作用於 neely 側)。
+    """
+    neely_text = pt.fetch_snapshot_text(
+        conn, stock_id=stock_id, as_of=as_of, core_name="neely_core", timeframe=timeframe,
+    )
+    trad_text = pt.fetch_traditional_forest_text(conn, stock_id=stock_id, timeframe=timeframe)
+    return pt.compose_waves(neely_text, trad_text)
