@@ -13,10 +13,15 @@
 #                                               (-SkipMaterialize 可跳;MCP 本就 compute-fallback)
 #
 # 手動 / 週排程:
-#   .\scripts\recalibrate_kalman.ps1                       # 全市場,--since 2022-01-01
+#   .\scripts\recalibrate_kalman.ps1                       # 全市場,--since 2022-01-01,每批 200 檔
 #   .\scripts\recalibrate_kalman.ps1 -Stocks '2330,2603'   # 限縮
 #   .\scripts\recalibrate_kalman.ps1 -Since 2023-01-01     # 縮窗加速
+#   .\scripts\recalibrate_kalman.ps1 -BatchSize 100        # 記憶體更省(機器 RAM 小時調小)
 #   .\scripts\recalibrate_kalman.ps1 -SkipMaterialize      # 只校準,不重物化 resonance
+#
+# ⚠️ 分批(-BatchSize,預設 200):每批跑完整 backtest→settle→conformalize→settle 才換下一批,
+#    per-batch 記憶體峰值 = BatchSize 檔(非全市場一次載 → 避免 conformalize 吃爆 8GB+ RAM)。
+#    某批失敗不中斷後批(summary 列哪批 exit=N,單獨補該批 -Stocks 即可)。
 #
 # ─── 為什麼是「週排程」不是 daily(前因後果)──────────────────────────────────
 # 前因:resonance track2 讀 forecast_log 的統計軌 band(kalman_cqr 等),這些來自
@@ -36,6 +41,7 @@ param(
     [string]$Stocks = '',
     [string]$Since = '2022-01-01',
     [int]$Concurrency = 8,
+    [int]$BatchSize = 200,
     [switch]$SkipMaterialize
 )
 
@@ -92,12 +98,15 @@ if ($idCount -eq 0) {
 }
 
 $TwCores = Join-Path $ProjectRoot 'rust_compute\target\release\tw_cores.exe'
+if (-not (Test-Path $TwCores)) {
+    Write-Host "[recal] ERROR: tw_cores binary 不存在 ($TwCores) — 先 cargo build --release -p tw_cores,中止"
+    exit 1
+}
 $StepResults = @()
-$TotalSteps = if ($SkipMaterialize) { 4 } else { 5 }
 
 function Invoke-Step {
-    param([int]$Idx, [string]$Label, [scriptblock]$Action)
-    $banner = "[recal] Step $Idx/${TotalSteps}: $Label  ($(Get-Date -Format 'HH:mm:ss'))"
+    param([string]$Label, [scriptblock]$Action)
+    $banner = "[recal] $Label  ($(Get-Date -Format 'HH:mm:ss'))"
     Write-Host ('=' * 70); Write-Host $banner; Write-Host ('=' * 70)
     Add-Content -Path $LogFile -Value $banner
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -106,40 +115,38 @@ function Invoke-Step {
     $code = $LASTEXITCODE
     $secs = [int]$sw.Elapsed.TotalSeconds
     $status = if ($code -eq 0 -or $null -eq $code) { 'ok' } else { "exit=$code" }
-    Write-Host "[recal] Step $Idx/$TotalSteps done: $status, elapsed=${secs}s"
+    Write-Host "[recal] done: $Label -> $status, elapsed=${secs}s"
     $script:StepResults += [PSCustomObject]@{ Step = $Label; Status = $status; Secs = $secs }
 }
 
-Write-Host "[recal] start $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); stocks=$idCount since=$Since concurrency=$Concurrency"
+# ── 分批切 stock 清單(避免 conformalize 一次載全市場 → 記憶體爆 8GB)──
+$idArray = $ids -split ','
+$batches = @()
+for ($i = 0; $i -lt $idArray.Count; $i += $BatchSize) {
+    $end = [Math]::Min($i + $BatchSize - 1, $idArray.Count - 1)
+    $batches += ,($idArray[$i..$end] -join ',')
+}
+$nBatch = $batches.Count
+
+Write-Host "[recal] start $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); stocks=$idCount since=$Since concurrency=$Concurrency batchSize=$BatchSize batches=$nBatch"
 $runStart = [System.Diagnostics.Stopwatch]::StartNew()
 
-# Step 1: Kalman run-backtest(Rust,全市場 + 並行)
-if (-not (Test-Path $TwCores)) {
-    Write-Host "[recal] ERROR: tw_cores binary 不存在 ($TwCores) — 先 cargo build --release -p tw_cores,中止"
-    exit 1
-}
-Invoke-Step 1 'Kalman run-backtest (Rust)' {
-    & $TwCores run-backtest --stocks $ids --start $Since --core kalman_forecast_core --write --concurrency $Concurrency
-}
-
-# Step 2: settle raw
-Invoke-Step 2 'settle kalman_forecast_core' {
-    python src/main.py forecast settle --core kalman_forecast_core
-}
-
-# Step 3: conformalize → kalman_cqr(track2 真正讀的校準帶)
-Invoke-Step 3 'conformalize → kalman_cqr' {
-    python src/main.py forecast conformalize --raw-core kalman_forecast_core --target-core kalman_cqr --stocks $ids --since $Since
+# ── 每批跑 backtest → settle → conformalize → settle(per-batch 記憶體峰值 = BatchSize 檔)──
+$bi = 0
+foreach ($batch in $batches) {
+    $bi++
+    $bcount = ($batch -split ',').Count
+    Invoke-Step "Batch $bi/$nBatch (${bcount} 檔): 1.run-backtest 2.settle 3.conformalize 4.settle" {
+        & $TwCores run-backtest --stocks $batch --start $Since --core kalman_forecast_core --write --concurrency $Concurrency
+        python src/main.py forecast settle --core kalman_forecast_core --stocks $batch
+        python src/main.py forecast conformalize --raw-core kalman_forecast_core --target-core kalman_cqr --stocks $batch --since $Since
+        python src/main.py forecast settle --core kalman_cqr --stocks $batch
+    }
 }
 
-# Step 4: settle kalman_cqr
-Invoke-Step 4 'settle kalman_cqr' {
-    python src/main.py forecast settle --core kalman_cqr
-}
-
-# Step 5: 重新物化 resonance(讓 Web API /resonance 服務新鮮 band;MCP 本就 compute-fallback)
+# ── 最後一次性物化 resonance(全市場;讓 Web API /resonance 服務新鮮 band)──
 if (-not $SkipMaterialize) {
-    Invoke-Step 5 'golden fusion --only resonance (re-materialize)' {
+    Invoke-Step 'golden fusion --only resonance (re-materialize)' {
         if ($Stocks -ne '') {
             python src/main.py golden fusion --only resonance --stocks $Stocks
         } else {
