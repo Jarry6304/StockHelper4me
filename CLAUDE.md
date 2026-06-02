@@ -338,14 +338,42 @@ cd rust_compute && cargo build -p tw_cores && cd ..
 - `cargo build -p tw_cores` 綠;`tw_cores list-cores` 顯示 `traditional_core v0.1.0 [Wave / P3]`
 - `cargo tree -p traditional_core` 零 `neely_core` / `ohlcv_loader`(解耦不變式)
 
-### Phase 2(過閘後,未動工)
-alembic `traditional_snapshots`(**自有表,非** structural_snapshots)+ tw_cores `dispatch_traditional()`
-+ `write_traditional_snapshot()` + multi-tf loop + FastAPI `/stocks/{id}/traditional/forest` +
-`/stocks/{id}/waves` 邊緣組裝(`{neely, traditional}` 並排不合併)+ MCP `traditional_wave_forest` +
-Streamlit tab(複製 neely zigzag/fib render)。
+### Phase 2 — 全層落地(2026-06-02,user 拍版「直接繼續,爆了再說」跳過產品閘)
+- **2a 儲存**:alembic `j6k7l8m9n0o1` 建 `traditional_snapshots`(**自有表,非** structural_snapshots;
+  PK `(stock_id, timeframe, params_hash)`;`forest`/`diagnostics` JSONB;snapshot 即 read model)
+  + `schema_pg.sql` mirror。alembic head `i5j6k7l8m9n0` → **`j6k7l8m9n0o1`**。
+- **2b 編排**:tw_cores `dispatch_traditional()`(純函式 run() → `write_traditional_snapshot()`
+  ON CONFLICT 覆寫)+ `run_stock_cores` multi-tf loop(daily→daily/weekly/monthly,filter
+  `is_enabled("traditional_core")`)→ `run-all --write` 自動含 traditional(refresh chain 免改)。
+- **2c API**:`/stocks/{id}/traditional/forest`(passthrough)+ `/stocks/{id}/waves` 邊緣組裝
+  (`{neely, traditional}` 並排,字串拼接不 deserialize、無 consensus)。
+- **2d MCP**:`traditional_wave_forest`(**14th tool**)+ `mcp_server/_traditional.py`(forest 摘要,
+  top_scenarios 依 preference_score,不選 primary)。
+- **2e Dashboard**:`dashboards/charts/traditional_wave.py`(複製 neely zigzag/fib render)+
+  aggregation.py「🌲 Traditional Wave」tab(自有 fetch traditional_snapshots,picker by preference_score)。
 
-🟢 風險:Phase 1 純加新 crate + tw_cores 子命令(CLI + 1 harness fn + list-cores 1 行),
-**0 alembic / 0 既有 code 邏輯改 / 0 既有 test 影響**;Rollback 單 commit `git revert`。
+沙箱驗證:`cargo build -p tw_cores` 綠;全 Python `py_compile` 綠;新 tests web_api +4 / mcp_server +2
+(pytest/fastapi/fastmcp 沙箱未裝 → 隨 DB-bound 部分留 user 本機 / CI 跑)。
+
+### user 本機 runbook(下個 session)
+```powershell
+git pull
+alembic upgrade head        # i5j6k7l8m9n0 → j6k7l8m9n0o1(建 traditional_snapshots)
+cd rust_compute; cargo build --release -p tw_cores; cd ..
+.\rust_compute\target\release\tw_cores.exe run-all --write --stocks 3363   # 寫 traditional_snapshots
+psql $env:DATABASE_URL -c "SELECT stock_id,timeframe,jsonb_array_length(forest->'scenario_forest') AS n FROM traditional_snapshots;"
+# API:uvicorn web_api.app:app → curl 'localhost:8000/stocks/3363/traditional/forest?timeframe=daily'
+#                              → curl 'localhost:8000/stocks/3363/waves?as_of=2026-05-30'
+# MCP:traditional_wave_forest('3363')  /  Streamlit「🌲 Traditional Wave」tab
+pytest tests/web_api/test_api.py tests/mcp_server/test_traditional.py
+```
+
+🟡 wall time:`run-all` 每股多跑 traditional × 3 timeframe(與 neely 同量級);若爆 → workflow toml
+關 `traditional_core` 或調 forest_max_size/pivot。🟢 解耦:0 碰 structural_snapshots / neely facts;
+0 既有 code 邏輯改。Rollback:`git revert` + `alembic downgrade -1`。
+
+> **產品閘(spec 待議 #1)未跑**:user 選擇直接續做。forest 可讀性 / 大小(尤其 R6/R7/R8/R11
+> 子浪細分仍 Deferred → 可能 forest 偏碎)待 production verify;爆了回頭調 pivot 或補遞迴分解。
 
 ---
 
