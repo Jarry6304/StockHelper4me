@@ -294,6 +294,51 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## v4.36 — forecast 校準流水線批次優化(conformalize + settle 逐筆 → 批次,2026-06-03)
+
+`recalibrate_kalman.ps1` 每批 100 股 ~1 小時 × 22 批 = ~22 小時。實讀 `src/forecast/`
+確認 Rust run-backtest(~12 min,UNNEST batch + 並行)不是瓶頸;瓶頸在 3 個 Python
+逐筆同步步驟:**A.** `fusion/raw/_db.py:64` `autocommit=True` → 每筆 upsert/update
+各 1 次 commit→fsync(最大隱形殺手);**B.** `conformalize_batch` 逐筆 N+1(每 tuple
+2 SELECT + 1 upsert);**C.** 迭代日曆天非交易日(~30% 空轉);**D.** settle 逐 row PIT
+讀 + 逐筆 UPDATE。`--since 2022` × 3h × 3c × 100 股 × ~1000 交易日 ≈ 90 萬筆逐筆
+round-trip。**校準窗維持 4 年不縮**(user 拍版)。
+
+### 改動(branch `claude/neely-forest-cloud-zigzag-Xv13d`,純 Python `src/forecast/`)
+
+| # | 檔 | 動作 |
+|---|---|---|
+| P3 | `_db.py` | 新增 `upsert_forecast_batch`(UNNEST 13 欄 + 同款 ON CONFLICT 含 B1 logic_version CASE guard,BATCH_SIZE 4000)+ `update_settlement_batch`(`UPDATE ... FROM UNNEST`)。**單筆 `upsert_forecast` / `update_settlement` 原封不動**(contract test 直接斷言其 SQL/payload shape → 不可改;故批次版為 sibling 而非 shim)|
+| P1 | `calibration.py` | 抽純函式 `_build_calibrated_row`(CQR 數學單一真相源,`conformalize_one` 改 delegate)。`conformalize_batch` 重寫:① `_fetch_trading_days`(`trading_date_ref`)只迭代交易日 ② 每 (stock,h,c) 2 次 SELECT 預載 raw + 校準史 → per-asof `bisect_left` 記憶體切片(取代 N+1)③ 每股累積 → `upsert_forecast_batch` + 單一 `conn.transaction()` commit |
+| P2 | `settlement.py` | `resolve_pending` 加 `(stock_id, settle_date)` memo cache(同 settle_date 跨 3 confidence 只讀 1 次 PIT)+ 每股 `update_settlement_batch` + `conn.transaction()`。`_realized_close` PIT 重建邏輯零改 |
+
+### 位元級等價(正確性命門)
+
+`forecast_log` PK `(stock_id, forecast_date, horizon_days, source_core, confidence)` →
+每 (stock,h,c) 下 forecast_date 唯一 → 預載 dict lookup = 逐筆 `LIMIT 1`;記憶體
+`forecast_date < asof` 取最近 window 筆 = SQL `ORDER BY DESC LIMIT`(無 tie 歧義,
+cqr_quantile 對 scores 排序 → 切片集合相同即 q 相同)。`conformalize_one` 與
+`conformalize_batch` 共用 `_build_calibrated_row` → 數學結構性一致。
+
+### 驗證
+
+- 既有 191 forecast tests **0 修改全綠**(`conformalize_one` / `upsert_forecast` 保留)。
+  例外:`test_settlement.py` 3 case 因 settle IO 改批次(patch `update_settlement_batch`
+  + fake conn `transaction()`),**語意斷言(hit/pinball/realized/counts)逐字保留**。
+- 新增 `test_batch_optimization.py` **+9**:批次-vs-逐筆**位元相同** written rows
+  (含 window 切片放大測 + no_raw)/ settle memo dedup(同 settle_date PIT 1 次、
+  不同 horizon 2 次)/ UNNEST SQL 契約。`pytest tests/forecast/` → **200 passed / 2 xfailed**。
+- ⚠️ 不影響正在跑的 22 批(merge 後下次 recalibrate 才用);效能煙霧測
+  `recalibrate_kalman.ps1 -Stocks <30檔> -Since 2022-01-01`(全 4 年窗)計時,DB-bound 由 user 本機驗。
+
+預期:Python 三步 ~48 min → ~5 min,總批 ≈ 12 min Rust + 5 min ≈ **17 min**(12-20×)。
+
+🟢 低-中:演算法零改(只改批次/transaction/交易日迭代);0 alembic / 0 Rust / 0 collector.toml。
+`conn.transaction()` 在 psycopg3 autocommit 下仍發顯式 BEGIN/COMMIT,不動全域 autocommit。
+Rollback:單 commit `git revert`。
+
+---
+
 ## v4.33 — fusion get_connection repo-root `.env` 路徑修復(2026-05-31)
 
 User `streamlit run dashboards/aggregation.py` 乾淨啟動撞「DATABASE_URL 未設定」

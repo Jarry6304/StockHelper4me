@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+
+class _FakeConn:
+    """resolve_pending 批次化後用 `with conn.transaction():` 包每股寫入;
+    測試以 no-op context manager 取代真 PG transaction。"""
+
+    @contextmanager
+    def transaction(self):
+        yield
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SRC_ROOT = _REPO_ROOT / "src"
@@ -53,9 +63,9 @@ class TestResolvePending:
              patch("forecast.settlement.asof_close_series",
                    return_value=[{"date": date(2024, 1, 22),
                                   "asof_adj_close": 100.0}]), \
-             patch("forecast.settlement.update_settlement",
-                   side_effect=lambda conn, **kw: updates.append(kw)):
-            summary = resolve_pending(conn=None, asof=date(2024, 1, 30))
+             patch("forecast.settlement.update_settlement_batch",
+                   side_effect=lambda conn, ups: updates.extend(ups)):
+            summary = resolve_pending(conn=_FakeConn(), asof=date(2024, 1, 30))
 
         assert summary["settled"] == 1
         assert summary["missing_realized"] == 0
@@ -77,9 +87,9 @@ class TestResolvePending:
              patch("forecast.settlement.asof_close_series",
                    return_value=[{"date": date(2024, 1, 22),
                                   "asof_adj_close": 100.0}]), \
-             patch("forecast.settlement.update_settlement",
-                   side_effect=lambda conn, **kw: updates.append(kw)):
-            resolve_pending(conn=None, asof=date(2024, 1, 30))
+             patch("forecast.settlement.update_settlement_batch",
+                   side_effect=lambda conn, ups: updates.extend(ups)):
+            resolve_pending(conn=_FakeConn(), asof=date(2024, 1, 30))
 
         assert updates[0]["hit"] is False
 
@@ -89,8 +99,8 @@ class TestResolvePending:
                                 horizon=21, lower=90, upper=110)]
         with patch("forecast.settlement.fetch_unresolved", return_value=pending), \
              patch("forecast.settlement.asof_close_series", return_value=[]), \
-             patch("forecast.settlement.update_settlement") as upd:
-            summary = resolve_pending(conn=None, asof=date(2024, 1, 30))
+             patch("forecast.settlement.update_settlement_batch") as upd:
+            summary = resolve_pending(conn=_FakeConn(), asof=date(2024, 1, 30))
         assert summary["settled"] == 0
         assert summary["missing_realized"] == 1
         upd.assert_not_called()
