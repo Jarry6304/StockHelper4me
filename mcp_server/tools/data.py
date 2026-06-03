@@ -33,6 +33,21 @@ def _parse_date(value: str | Date) -> Date:
 # ────────────────────────────────────────────────────────────
 
 
+def traditional_wave_forest(stock_id: str, timeframe: str = "daily") -> dict[str, Any]:
+    """傳統派(Frost & Prechter EWP)波浪 forest — 與 Neely **並排、不整合**。
+
+    讀 traditional_snapshots(獨立 vertical 自有表),回 forest 摘要:
+    `top_scenarios`(依 preference_score 降序,**forest 不選 primary**)+ diagnostics + caveat。
+
+    Args:
+        stock_id: 股票代號(例 "3363")
+        timeframe: "daily" / "weekly" / "monthly"(預設 daily;該表為 latest-per-(stock,tf))
+    """
+    from mcp_server._traditional import compute_traditional_forest
+
+    return compute_traditional_forest(stock_id, timeframe)
+
+
 def as_of_snapshot(
     stock_id: str,
     date: str,

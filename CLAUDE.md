@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.33,最新 2026-05-31;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.35 + Traditional Core v2/v3,最新 2026-06-02;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
@@ -11,16 +11,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `tw-stock-collector` — 台股資料蒐集 + 計算 pipeline。FinMind API → Postgres 17。
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
-Python 3.11+ + Rust workspace **39 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾)。
+Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾 + **traditional_core 獨立波浪 vertical**)。
+**v4.32 後升 6 層**(加 Golden L3 fusion 物化 + 唯讀 Web API)。
+**Traditional Core(2026-06-02 / PR #123 merged)**:第 2 個波浪 vertical(Frost & Prechter EWP),與 Neely **完全解耦、並排不整合**;由下而上多度數 fractal 引擎(子浪細分 R6/R7/R8/R11 = 建構約束);自有 `traditional_snapshots` + `/traditional/forest` + `/waves` + MCP `traditional_wave_forest` + Streamlit「🌲 Traditional Wave」。詳見下方 §「Traditional Core v2 / v3」。
 
-- **alembic head**:`h4i5j6k7l8m9`(v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
-- **開發分支**:`claude/sweet-carson-96j9D`(v4.32 Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen,7 commits;v4.30/v4.31 已 merge main)
+- **alembic head**:`j6k7l8m9n0o1`(PR #123 Traditional Core `traditional_snapshots` 自有表;i5j6k7l8m9n0 v4.35 magic_formula `is_top_30`→`is_top_n` rename;h4i5j6k7l8m9 v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
+- **開發分支(近期)**:`claude/neely-forest-cloud-zigzag-Xv13d`(v4.32.1 tpex 解鎖 + NeelyWave 複合雲圖 + v4.33 fusion `.env` 路徑修復,皆已 merge main);`claude/sweet-carson-96j9D`(v4.32 Golden L3 物化 + 唯讀 Web API + TS codegen,已 merge)
+- **main HEAD**:`11299d2`(PR #123 Traditional Core v2+v3 merge,2026-06-02;17b87c2 v4.33 後;PR #110~#122 全 merge)
 - **collector.toml**:**39 entries**(v3.20 加 5 sponsor datasets;v3.23 price_limit all_market;gov_bank 需 sponsor tier)
-- **Rust tests**:39 crates / **607 passed / 0 failed**(Fusion Layer 後;v4.11 baseline 596 → +11 severity/flat_fib/env-core tests)
-- **MCP toolkit**:**13 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen;v4.26 加 1)
+- **universe**:`config/stock_list.toml` `market_type = ["twse","tpex"]`(v4.32.1 `otc`→`tpex` 解鎖全部上櫃股;daily refresh 實測 universe ~2172;興櫃 emerging 未納入)
+- **Rust tests**:**40 crates**;`cargo test --workspace` 全綠(neely/fusion 後 607 + **traditional_core 22**)
+- **Python tests**:`tests/fusion/` + `tests/mcp_server/` **476 passed / 1 skipped / 0 failed**(v4.33 後;`test_v3_35_1` pre-existing fail 已於 caveat-wording 對齊修掉)
+- **MCP toolkit**:**14 public tools**(4 個股/跨股 + 4 cross-stock screen + 3 fusion consolidated + 1 dual_track_resonance + 1 wave_impulse_screen + **1 traditional_wave_forest**;PR #123 加 1)
 - **cross_cores Phase 8 builders**:**12**(magic_formula + v3.32 10 + v4.26 wave_impulse_screen)
 - **測試流水線**:`scripts/test_pipeline.ps1` / `scripts/test_pipeline.sh`(v4.4 加)5 phase 流水線(Environment / Sandbox / Schema / Production / MCP)
-- **Production state**:1266 stocks × **36 cores** / wall time ~12.3 min / facts ~5.1M(VACUUM 後);Round 7 + Round 8 + **Round 9** calibration **完整結算**
+- **Production state**(v4.32.1 tpex 解鎖後):~2172 stocks × **41 cores** dispatch / M3 `run-all` wall ~37 min(tpex universe + golden + forecast)/ facts daily ~78k new rows;Round 7 + Round 8 + **Round 9** calibration **完整結算**
+- **Golden L3 + Web API(v4.32)**:`golden fusion` 物化 levels/resonance/climate → `structural_snapshots`;唯讀 FastAPI(`uvicorn web_api.app:app`);Phase 3b Kalman 全市場校準週排程(`recalibrate_kalman.ps1`,production verify 2603 `single_track=False` / 30 findings ✅)
 - **v4.0 → v4.4 完整收尾**(2026-05-19):Neely M3SPEC alignment 15 真闕漏 P1.1-P1.4 全部 dispatch — 9 commits / 9 new modules / ~5,500 LoC / Advisory mode 對齊 NEoWave 原作精神
 - **v4.5 → v4.9**(2026-05-19):M3SPEC 闕漏補完 8 sub-PR + Out-of-Scope backlog Items 1+2+3 完整收尾 ☕☕☕ — Group 2(4 sub-PR)+ Group 3(Monowave bar_indices)+ Group 1(3 sub-PR polywave 嵌套依賴鏈)+ v4.8(Construction axis 5-variant + Round 2 boundary partial rerun)+ v4.9(WaveNode.label 嵌入結構標籤 hint,深層 nested 透過 Compaction clone 自動傳遞);全市場 1266 stocks G1 P0 Gate **全綠**(max=196 / p95=28 / overflow=0)
 - **v4.10**(2026-05-20)☕:Out-of-Scope **Item 4 Pre-Constructive 2-pass diagnostics union** 完整收尾 — `pre_constructive::run_pass2` 新函式回傳 `HashMap<classified_idx, Vec<StructureLabelCandidate>>` Pass 1-only diff(label 比對);`MonowaveStructureLabels` 加 `classified_index` + `pass1_only_labels` 兩欄;lib.rs Stage 8.5 refill loop 把 Pass 2 result + diff 寫回 forest 每個 scenario;**Out-of-Scope backlog 全部清空**
@@ -339,6 +345,200 @@ Rollback:單 commit `git revert`。
 
 ---
 
+## Traditional Core v2 — Phase 1:獨立引擎 + 產品閘(2026-06-02)
+
+User 直送 Traditional Core v2 spec(與 Neely **完全解耦、並排不整合**的傳統派 Frost & Prechter
+EWP 波浪引擎)。規則層 `m3Spec/traditional_rules.md`(R1–R13 + 9 級 Degree + §A–D)。Phase 1 落地
+**引擎 + 產品閘 harness**,過閘(forest 可讀性)再做 Phase 2 plumbing。分支 `claude/gracious-mendel-QeG15`。
+
+### 鎖定設計(對齊 v2,推翻 r1「共用 WaveCore + structural_snapshots」)
+- 新 crate `rust_compute/cores/wave/traditional_core/`(workspace 39 → **40 crates**)
+- entry = **純函式** `traditional_core::run(series, config)`,**不 impl `WaveCore`**(不走 trait dispatch)
+- **不 dep `neely_core` / `ohlcv_loader`**(後者 re-export neely `OhlcvSeries` 會耦合)→ 自帶
+  `loader.rs` 直讀 Silver `price_*_fwd`;`cargo tree -p traditional_core | grep neely` = **空** ✅
+- 僅 reuse `fact_schema::Timeframe` + `core_registry`(平台 util,皆無 neely dep,非 wave 型別)
+- forest **不選 primary**;無 confidence/composite_score;`preference_score = guidelines + qualifiers`
+
+### 8-stage pipeline(對齊 v2 `references/engine.md`)
+pivot(ATR×k)→ candidates(+形態假設 HypoKind)→ 硬 Validator → classifier → guidelines → fibonacci → triggers → degree+forest。
+- **硬規則(淘汰,pivot-level 可評估)**:R1 / R3 / R4(Impulse+Diagonal)、R5(僅 Impulse)、R9(僅 Diagonal)。
+- **Deferred(不淘汰,v1 honest scoping)**:R2 `[待查證]`;**R6/R7/R8/R11 子浪細分需遞迴子浪分解 = v2 深度**
+  ← 正是產品閘要揭露的引擎深度問題之一。
+- R5/R9 分流(關鍵):浪 4 重疊浪 1 → Impulse 被 R5 淘汰、**同幾何 Diagonal 合法**(對齊 R8 rev2 擴張引導對角)。
+- Fib 永不淘汰(僅計指引 + 出 `expected_fib_zones`,從正統終點量起)。
+
+### 產品閘 harness(`tw_cores` 子命令,不寫 DB)
+```powershell
+git pull
+cd rust_compute && cargo build -p tw_cores && cd ..
+.\rust_compute\target\debug\tw_cores.exe traditional-debug --stock-id 3363   # 或 release build
+```
+印 forest summary(pivots / candidates / pass-rej / forest size + overflow / 每 scenario
+`structure_label` + degree + `preference_score` + invalidation + fib zones)。**user 本機對手標股
+(3363 + 補充清單)目測 forest 是否 ≤ forest_max_size(200)且人能讀、pivot(`swing_atr_multiplier=3.0`)
+是否合理 → 決定引擎是否做完 / 調 pivot。過閘才進 Phase 2。**
+
+### 沙箱驗證
+- `cargo test -p traditional_core` **14 passed / 0 failed / 0 warning**(R1/R3/R4/R5/R9 各 1 +
+  R5-impulse-vs-diagonal 分流 + pivot/candidates/degree/config + run() smoke + insufficient + overflow)
+- `cargo build -p tw_cores` 綠;`tw_cores list-cores` 顯示 `traditional_core v0.1.0 [Wave / P3]`
+- `cargo tree -p traditional_core` 零 `neely_core` / `ohlcv_loader`(解耦不變式)
+
+### Phase 2 — 全層落地(2026-06-02,user 拍版「直接繼續,爆了再說」跳過產品閘)
+- **2a 儲存**:alembic `j6k7l8m9n0o1` 建 `traditional_snapshots`(**自有表,非** structural_snapshots;
+  PK `(stock_id, timeframe, params_hash)`;`forest`/`diagnostics` JSONB;snapshot 即 read model)
+  + `schema_pg.sql` mirror。alembic head `i5j6k7l8m9n0` → **`j6k7l8m9n0o1`**。
+- **2b 編排**:tw_cores `dispatch_traditional()`(純函式 run() → `write_traditional_snapshot()`
+  ON CONFLICT 覆寫)+ `run_stock_cores` multi-tf loop(daily→daily/weekly/monthly,filter
+  `is_enabled("traditional_core")`)→ `run-all --write` 自動含 traditional(refresh chain 免改)。
+- **2c API**:`/stocks/{id}/traditional/forest`(passthrough)+ `/stocks/{id}/waves` 邊緣組裝
+  (`{neely, traditional}` 並排,字串拼接不 deserialize、無 consensus)。
+- **2d MCP**:`traditional_wave_forest`(**14th tool**)+ `mcp_server/_traditional.py`(forest 摘要,
+  top_scenarios 依 preference_score,不選 primary)。
+- **2e Dashboard**:`dashboards/charts/traditional_wave.py`(複製 neely zigzag/fib render)+
+  aggregation.py「🌲 Traditional Wave」tab(自有 fetch traditional_snapshots,picker by preference_score)。
+
+沙箱驗證:`cargo build -p tw_cores` 綠;全 Python `py_compile` 綠;新 tests web_api +4 / mcp_server +2
+(pytest/fastapi/fastmcp 沙箱未裝 → 隨 DB-bound 部分留 user 本機 / CI 跑)。
+
+### user 本機 runbook(下個 session)
+```powershell
+git pull
+alembic upgrade head        # i5j6k7l8m9n0 → j6k7l8m9n0o1(建 traditional_snapshots)
+cd rust_compute; cargo build --release -p tw_cores; cd ..
+.\rust_compute\target\release\tw_cores.exe run-all --write --stocks 3363   # 寫 traditional_snapshots
+psql $env:DATABASE_URL -c "SELECT stock_id,timeframe,jsonb_array_length(forest->'scenario_forest') AS n FROM traditional_snapshots;"
+# API:uvicorn web_api.app:app → curl 'localhost:8000/stocks/3363/traditional/forest?timeframe=daily'
+#                              → curl 'localhost:8000/stocks/3363/waves?as_of=2026-05-30'
+# MCP:traditional_wave_forest('3363')  /  Streamlit「🌲 Traditional Wave」tab
+pytest tests/web_api/test_api.py tests/mcp_server/test_traditional.py
+```
+
+🟡 wall time:`run-all` 每股多跑 traditional × 3 timeframe(與 neely 同量級);若爆 → workflow toml
+關 `traditional_core` 或調 forest_max_size/pivot。🟢 解耦:0 碰 structural_snapshots / neely facts;
+0 既有 code 邏輯改。Rollback:`git revert` + `alembic downgrade -1`。
+
+> **產品閘(spec 待議 #1)未跑**:user 選擇直接續做。forest 可讀性 / 大小(尤其 R6/R7/R8/R11
+> 子浪細分仍 Deferred → 可能 forest 偏碎)待 production verify;爆了回頭調 pivot 或補遞迴分解。
+
+### v3 — 忠於原書多度數 fractal 引擎(2026-06-02,user 拍版「做到完、忠於原書」)
+
+User 推翻 v1「R6/R7/R8/R11 標 Deferred + 單股判 forest」框法:**子浪細分要真執行(忠於原書)、
+驗收看多股分布(非單股)**。引擎核心重做為**由下而上逐度數 compaction**,子浪細分 = 建構約束。
+
+- **核心**:degree-N 形態的 children mode 必須符合(Impulse 5-3-5-3-5 / Zigzag 5-3-5 / Ending 對角全3…)。
+  遞迴在資料解析度觸底(monowave 就是線,degree 0→1 子浪不可見 → R6 進 deferred;degree≥2 → **HARD 淘汰**)。
+- **L9 骨幹**:actionary ≠ 永遠是 5(Ending 對角浪 1/3/5 雖 actionary 卻細分為 3)。
+- **新模組**(M1 `75513b9` + M2):monowave / mode(L9 表)/ node(EngineNode)/ rules(R1/R3/R4/R5/R9 幾何)/
+  patterns/{impulse,diagonal,zigzag,flat,triangle,**combination**} / compaction(round+beam+dedup+degree ceiling)/ scenario。
+  `lib.rs::run` 重接 monowave→compaction→scenario;**output.rs wire contract 0 改**(WaveNode.children 已遞迴)
+  → Phase 2 plumbing(table/API/MCP/dashboard)全沿用。M2 combination = Double/Triple Three + Double/Triple Zigzag + R12。
+- **沙箱驗證**:`cargo test -p traditional_core` **29 passed**(headline:degree≥2 子浪模式錯/浪3 非 Impulse → 硬淘汰;
+  degree-0 → R6 deferred;R12 三角僅最終組件);`cargo build -p tw_cores` 綠;`cargo tree` 零 neely。
+- **⚠️ 待 user P0-Gate 校準**:monowave 不過濾(faithful)→ 長序列 base 多 → compaction beam/clone 成本高。
+  production `run-all` 前/後看 forest p50/p95/max + elapsed_ms,**`monowave_epsilon` 調大**(去雜訊)/ `round_beam_size`
+  / `max_degree_levels` 調控(對齊 neely P0-Gate 1264-stock 慣例)。forest 仍不選 primary、cap 只當安全網。
+  v1 模組(pivot/candidates/validator/classifier)superseded、暫留(geometry test 覆蓋),後續 cleanup PR 移除。
+
+---
+
+## v4.35 — magic_formula `is_top_30` → `is_top_n` schema 對齊(2026-06-01)
+
+`magic_formula_ranked_derived`(2026-05-15 最早建)是唯一用 `is_top_30` 欄名的
+cross-stock ranked 表;v3.32(d9e0f1g2h3i4)10 表 + v4.26(g3h4i5j6k7l8)wave_impulse
+全部 canonical `is_top_n`。本版把 magic_formula 對齊,令 **12 個 ranked 表 schema 統一**。
+
+### ⚠️ 兩種 `is_top_30` 嚴格分清(下個 session 動 API 務必牢記)
+
+| | 意義 | 位置 | v4.35 |
+|---|---|---|---|
+| **A. 實體欄位** | `magic_formula_ranked_derived` 儲存欄 | `schema_pg.sql` / `idx_mf_top30` / `magic_formula.py` writer dict key | ✅ 改名 `is_top_n` |
+| **B. 語意旗標** | resonance「cross-stock 旁路升振」概念 | `_shared.py::DualTrackResult.is_top_30/_source/_date` + `.to_dict()` 輸出 / `resonance.py::fetch_is_top_30` **函式名** / 前端契約(`web_api/contracts.py` → `fusion.ts`)| ⛔ **全凍**(改 = breaking API)|
+
+耦合點:`fetch_is_top_30()` SELECT 的是 A 欄、輸出的是 B 名。故 A 改名後只翻它的
+**讀欄預設** `is_top_col`,函式名 / 輸出欄 / DualTrackResult / 前端契約一律不動。
+
+### 改動(1 migration + 6 檔,同一 commit `1054c97` 同次部署)
+
+| # | 檔 | 動作 |
+|---|---|---|
+| 1 | `alembic/.../i5j6k7l8m9n0` 新 migration | `RENAME COLUMN is_top_30 → is_top_n` + DROP `idx_mf_top30` + CREATE `idx_mf_topn`;downgrade 對稱可逆 |
+| 2 | `src/schema_pg.sql` | fresh-install 欄名 + index 同步 |
+| 3 | `src/cross_cores/magic_formula.py` | writer dict key 兩處 `is_top_30` → `is_top_n`(`upsert_silver` 靠 dict key 當欄名)|
+| 4 | `src/fusion/raw/_db.py` | `fetch_cross_stock_ranked` 讀欄預設 `is_top_col` → `is_top_n` |
+| 5 | `src/fusion/dual_track/resonance.py` | `fetch_is_top_30` 讀欄預設 → `is_top_n`(**僅讀欄;函式名/輸出/narrative 不動**)|
+| 6 | `mcp_server/_magic_formula.py` | **顯式** `is_top_col="is_top_30"` → `is_top_n`(原 plan 漏列;不改會炸 magic_formula 端口)|
+| 7 | `tests/cross_cores/test_magic_formula.py` | 7 斷言 `r["is_top_30"]` → `r["is_top_n"]` |
+
+`web_api/routers/screens.py` 吃 `fetch_cross_stock_ranked` 新預設 → **零改動**自動一致。
+
+### ⚠️ 部署順序雷
+
+migration(#1)+ 寫入端 dict key(#3)+ MCP 顯式參數(#6)**同一 commit 同次部署**。
+中間若只上 migration、refresh 還在寫 `is_top_30` → `upsert_silver` 找不到欄炸;反之亦然。
+一個 commit 一起上 + 一次 `alembic upgrade head`,無中間態。
+
+### 驗證
+
+沙箱:magic_formula 11 + resonance/track1 72 + 全套 fusion+mcp_server+cross_cores
+**593 passed / 1 skipped / 0 failed**;A 側 0 殘留 `is_top_30`(僅 migration RENAME SQL),
+B 側 `_shared`(7)/`resonance`(23)語意引用全凍。
+
+user 本機(DB-bound,沙箱無法跑):
+```powershell
+git pull
+alembic upgrade head        # h4i5j6k7l8m9 → i5j6k7l8m9n0
+python src/main.py cross_cores phase 8 --builder magic_formula --full-rebuild   # 驗 #3 寫入
+# 驗 10 個 /screens/{toolkit} 全 200(尤其 magic_formula 走 #6 改後路徑)
+# 驗 dual_track_resonance('2330',...) 輸出 is_top_30 欄仍在(B 側未波及)
+```
+
+🟡 中:schema rename(destructive 但 downgrade 對稱)。0 前端契約改動(B 側全凍)。
+Rollback:`git revert 1054c97` + `alembic downgrade -1`。
+
+---
+
+## v4.34 — dashboard chart x 軸欄位對齊真實序列化 shape(2026-05-31)
+
+User 逐 tab 逐欄位審計 dashboard chart(23 Rust core × 8 chart 檔),揭露 **3 個
+「靜默空圖」bug** —— monthly/quarterly core 的 `Point` struct 用
+`period`/`fact_date`/`report_date` 而非 `date`(因非日頻),但對應 chart 仍讀
+`p["date"]` 的 `if "date" in p` → 永遠 False → 圖空白(不 crash,比 crash 更難察覺)。
+
+### Root cause(同一病灶,3 個 core 中招)
+
+| Core | 頻率 | chart fn | 序列化欄位 | 舊讀 key |
+|---|---|---|---|---|
+| `revenue_core` | 月 | `build_revenue_chart` | `period`/`fact_date`/`report_date`(無 date)| `p["date"]` ❌ |
+| `financial_statement_core` | 季 | `build_financial_statement_view` | 同上 | `p["date"]` ❌ |
+| `business_indicator_core` | 月 | `build_business_indicator_matrix` | 同上 | `p["date"]` ❌ |
+
+日頻 core(chip 5 / indicator 6 / taiex / us_market / exchange_rate / fear_greed /
+market_margin / valuation / shareholder)序列化都有 `date` 欄,key 全部吻合,**無 bug**。
+
+### 修法(2 檔 + 1 test / 0 Rust / 0 schema)
+
+- `dashboards/charts/fundamental.py`:`build_revenue_chart` + `build_financial_statement_view`
+  x 軸 + 各 trace 改以 `fact_date` 過濾;financial table_rows 改 `period`/`fact_date` 領頭。
+- `dashboards/charts/environment.py`:`build_business_indicator_matrix` 同款改 `fact_date`。
+- `tests/dashboards/test_fundamental_charts.py`(新):3 regression(真實 production shape
+  fixture,驗 x 軸不再空);`plotly` importorskip。
+
+### 兩處對齊 audit 報告的修正
+
+- **business_indicator**:audit 報告原標 ✅,但 `BusinessIndicatorPoint` struct 證明
+  無 `date` 欄 → 實為 bug(本版修)。
+- **taiex RSI**:audit 報告標 🔴 bug(稱 `TaiexPoint` 無 rsi),但 struct line 92
+  確有 `pub rsi: f64`,`p.get("rsi")` 合法 → **非 bug,不動**(避免把正常功能改壞)。
+
+### 驗證
+
+`pytest tests/dashboards/test_fundamental_charts.py` → 3 passed;
+`tests/fusion/ tests/mcp_server/ tests/dashboards/` → **498 passed / 1 skipped / 0 failed**。
+🟢 純 dashboard read-site;revenue/financial/景氣指標三圖原本空白,修後有資料。
+
+---
+
 ## v4.33 — fusion get_connection repo-root `.env` 路徑修復(2026-05-31)
 
 User `streamlit run dashboards/aggregation.py` 乾淨啟動撞「DATABASE_URL 未設定」
@@ -376,10 +576,23 @@ env var 永遠最優先:`$env:DATABASE_URL = "..."` 再跑 streamlit。
 
 ### 驗證
 
-`pytest tests/fusion/ tests/mcp_server/`(--ignore render_tools)→ **475 passed /
-1 skipped / 1 pre-existing fail**(`test_v3_35_1` 與本 PR 無關),0 regression。
+`pytest tests/fusion/ tests/mcp_server/`(--ignore render_tools)→ 本 PR 當下 **475
+passed / 1 skipped / 1 pre-existing fail**(`test_v3_35_1` 與本 PR 無關),0 regression。
+該 pre-existing fail 已於 v4.33.1 修掉(見下),現全套 **476 passed / 1 skipped / 0 failed**。
 
 🟢 極低風險:1 檔 + 1 test。Rollback:單 commit `git revert`。
+
+### v4.33.1 — 修掉 v3.35.1 caveat test 的 stale 斷言(2026-05-31)
+
+`test_v3_35_1_quality_caveat_fib_decoupled_from_price` 自 **v4.22** 起一直 pre-existing
+fail:test 斷言舊警告字串「不適用當前 price level」,但 v4.22 刻意把 fib 脫節警告改成
+spec-grounded 文字(「Neely 引擎對近期結構無有效 scenario…forecasts 區間請忽略」,對齊
+neely_core spec §7.2「合法的『Neely 對現況無解』」)。**code 行為正確且刻意,只是 test
+斷言沒同步**。
+
+修法(`17b87c2`):改 test 斷言對齊 v4.22 新文字 + 驗 `current_price=395` 出現在警告中
+(保留原意「警告含 price 數字」)。**0 code 改動**,只動 `tests/mcp_server/test_toolkit_v2.py`
+(+7/-2)。全套 fusion + mcp_server **476 passed / 1 skipped / 0 failed**。
 
 ---
 

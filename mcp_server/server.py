@@ -4,7 +4,7 @@
 (`/root/.claude/plans/hashed-foraging-pixel.md`)+ v1.0 雙軌共振決策層
 (m3Spec/dual_track_resonance.md)。
 
-**Public toolkit(v4.25:11 + 1 dual_track + 1 wave_impulse = 13 tools)**:
+**Public toolkit(v4.25:11 + 1 dual_track + 1 wave_impulse + 1 traditional = 14 tools)**:
 - `neely_forecast`:Neely NEoWave 預測(Tool 1)
 - `kalman_trend`:個股 1-D Kalman trend + 5-class regime(Tool 2)
 - `magic_formula_screen`:Greenblatt 2005 跨股篩選(Tool 3,cross-stock)
@@ -21,6 +21,8 @@
   cross_stock 旁路升振 + T1/T2 時間反向標註)
 - `scan_wave_impulse`:Wave Impulse 跨股掃選 — neely_core forest 雙軸驗證
   W3 主升段候選 + cross_tf_aligned hint(plan wave-impulse-cross-stock-virtual-papert.md)
+- `traditional_wave_forest`:傳統派(Frost & Prechter EWP)波浪 forest(讀
+  traditional_snapshots,與 Neely 並排、不整合;forest 不選 primary)
 
 **Hidden tools(v3.31 從 MCP 隱藏 — 仍可從 Python 直接呼叫供 dashboard 用)**:
 - stock_health / market_context / loan_collateral_snapshot /
@@ -97,6 +99,11 @@ mcp = FastMCP(
         "對照)+ R/R 1.5 + bullish direction gate + cross_tf_aligned 軟對齊。"
         "Output top_stocks(W2_DONE/W3_ONGOING)+ observe_stocks(W4/W5)+ caveat"
         "(W3 進場偏晚 / W5 observe only / spec r1 thresholds calibrate)。\n\n"
+        "**Traditional Core(Frost & Prechter EWP)獨立 vertical**:\n"
+        "  14. `traditional_wave_forest(stock_id, timeframe='daily')` — 傳統派波浪 "
+        "forest(讀 traditional_snapshots,與 Neely **並排、不整合、無共識比對**)。"
+        "forest 不選 primary;top_scenarios 依 preference_score(指引+限定語客觀計數)降序。"
+        "v1:R6/R7/R8/R11 子浪細分標 Deferred(需遞迴分解);degree 為 bar 跨度相對啟發。\n\n"
         "設計約束:\n"
         "- 所有 tool 強制 as_of date(回測 / 即時同介面)\n"
         "- facts 已過 look-ahead bias 防衛\n"
@@ -133,6 +140,9 @@ mcp.tool(_data_tools.dual_track_resonance)        # 軌道一(結構)× 軌道�
 
 # Wave Impulse Cross-Stock Screen(plan wave-impulse-cross-stock-virtual-papert.md)
 mcp.tool(_data_tools.scan_wave_impulse)           # 跨股 W3 主升段掃選(雙軸驗證 + R/R + cross-tf)
+
+# Traditional Core(Frost & Prechter EWP)獨立 vertical — 與 Neely 並排、不整合、無共識比對
+mcp.tool(_data_tools.traditional_wave_forest)     # 傳統派波浪 forest(不選 primary;preference_score 排序)
 
 # v4.19:以下 10 個 fusion tool function 仍留 mcp_server.tools.data(dashboard /
 # direct python 用),但不再透過 MCP 註冊 — 整併進上方 3 個 consolidated 入口:

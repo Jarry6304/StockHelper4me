@@ -98,7 +98,7 @@ class TestBuildRankRowsForDate:
     """單一 date 的跨股 ranking 邏輯。"""
 
     def test_top_30_selected_correctly(self):
-        """排前 30 的 stocks 標 is_top_30=True。"""
+        """排前 30 的 stocks 標 is_top_n=True。"""
         from cross_cores.magic_formula import _build_rank_rows_for_date
 
         # 40 個 eligible stocks,各自不同 EY / ROIC,top 30 應被標
@@ -121,19 +121,19 @@ class TestBuildRankRowsForDate:
         )
         # 40 rows
         assert len(rows) == 40
-        # 排序按 combined_rank,前 30 應 is_top_30=True
+        # 排序按 combined_rank,前 30 應 is_top_n=True
         eligible = [r for r in rows if r["excluded_reason"] is None]
         assert len(eligible) == 40
         eligible.sort(key=lambda r: r["combined_rank"])
         for r in eligible[:30]:
-            assert r["is_top_30"] is True
+            assert r["is_top_n"] is True
         for r in eligible[30:]:
-            assert r["is_top_30"] is False
+            assert r["is_top_n"] is False
         # universe_size 都應該是 40
         assert all(r["universe_size"] == 40 for r in eligible)
 
     def test_excluded_industry_no_rank(self):
-        """金融股 row 寫入但 rank / metrics 都 NULL,is_top_30=False。"""
+        """金融股 row 寫入但 rank / metrics 都 NULL,is_top_n=False。"""
         from cross_cores.magic_formula import _build_rank_rows_for_date
 
         universe_filter = {
@@ -151,10 +151,10 @@ class TestBuildRankRowsForDate:
         by_sid = {r["stock_id"]: r for r in rows}
         assert by_sid["2880"]["excluded_reason"] == "financial"
         assert by_sid["2880"]["ey_rank"] is None
-        assert by_sid["2880"]["is_top_30"] is False
+        assert by_sid["2880"]["is_top_n"] is False
         assert by_sid["2330"]["excluded_reason"] is None
         assert by_sid["2330"]["ey_rank"] == 1   # 唯一 eligible
-        assert by_sid["2330"]["is_top_30"] is True
+        assert by_sid["2330"]["is_top_n"] is True
         assert by_sid["2330"]["universe_size"] == 1
 
     def test_negative_ebit_disqualified(self):

@@ -65,6 +65,10 @@ async fn main() -> Result<()> {
             timeframe,
             write,
         } => run_neely_single(&stock_id, &timeframe, write).await,
+        Command::TraditionalDebug {
+            stock_id,
+            timeframe,
+        } => run_traditional_debug(&stock_id, &timeframe).await,
         Command::RunBacktest {
             stocks,
             start,
@@ -118,6 +122,7 @@ fn list_cores() -> Result<()> {
 
     // 確保 dep crate 的 inventory::submit! 不被 dead-code 剃掉
     let _ = neely_core::NeelyCore::new();
+    let _ = traditional_core::TraditionalCore::new();
     let _ = macd_core::MacdCore::new();
     let _ = rsi_core::RsiCore::new();
     let _ = kd_core::KdCore::new();
@@ -162,6 +167,87 @@ fn list_cores() -> Result<()> {
     println!();
     println!("Stage 1-10 + Facts + PG IO + Inventory + run-all dispatch ✅(M3 PR-9a + v3.21 4 new)");
     println!("(對齊 m3Spec/cores_overview.md §五 + neely_core_architecture.md §七)");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// traditional-debug(產品閘 harness — 獨立 vertical,純函式 run(),不寫 DB)
+// ---------------------------------------------------------------------------
+
+async fn run_traditional_debug(stock_id: &str, timeframe: &str) -> Result<()> {
+    let tf = parse_timeframe(timeframe)?;
+    let pool = connect_pg(2).await?;
+
+    let cfg = traditional_core::TraditionalEngineConfig {
+        timeframe: tf,
+        ..Default::default()
+    };
+    let series = traditional_core::loader::load_for_timeframe(&pool, stock_id, &cfg).await?;
+    tracing::info!(
+        stock_id,
+        bars = series.bars.len(),
+        "loaded OHLCV from Silver price_*_fwd (traditional vertical)"
+    );
+
+    let out = traditional_core::run(&series, &cfg)?;
+    let d = &out.diagnostics;
+
+    println!();
+    println!("== Traditional Core forest summary(獨立 vertical;不寫 DB)==");
+    println!("stock_id:            {}", stock_id);
+    println!("timeframe:           {:?}", tf);
+    println!("bars loaded:         {}", series.bars.len());
+    println!("pivots:              {}", d.pivot_count);
+    println!("candidates:          {}", d.candidate_count);
+    println!(
+        "validator pass/rej:  {}/{}",
+        d.validator_pass_count, d.validator_reject_count
+    );
+    println!(
+        "forest size:         {}{}",
+        out.scenario_forest.len(),
+        if d.forest_overflow_triggered {
+            "  (OVERFLOW — beam capped)"
+        } else {
+            ""
+        }
+    );
+    println!("insufficient_data:   {}", d.insufficient_data);
+    println!("elapsed_ms:          {}", d.elapsed_ms);
+
+    let show = out.scenario_forest.len().min(15);
+    println!();
+    println!("-- top {show} scenarios(by preference_score;forest 不選 primary)--");
+    for s in out.scenario_forest.iter().take(show) {
+        let wt = &s.wave_tree;
+        let inval = s
+            .invalidation_triggers
+            .first()
+            .map(|t| format!("{:.2}", t.price))
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  [{:<8}] {:<52} | degree={:?} pref={} (g{} q{}) | {}→{} | px {:.2}→{:.2} | inval {} | fib {}",
+            s.id,
+            s.structure_label,
+            s.degree,
+            s.preference_score,
+            s.guidelines_satisfied.len(),
+            s.qualifiers_met.len(),
+            wt.start,
+            wt.end,
+            wt.start_price,
+            wt.end_price,
+            inval,
+            s.expected_fib_zones.len(),
+        );
+    }
+
+    println!();
+    println!("note: v3 多度數引擎 — 子浪細分 R6/R7/R8/R11 於 degree≥2 真執行(degree-0 monowave 為線、deferred);");
+    println!(
+        "      forest_max_size={} / monowave_epsilon={} / round_beam_size={} — forest 過大或慢 → P0-Gate 調這些。",
+        cfg.forest_max_size, cfg.monowave_epsilon, cfg.round_beam_size
+    );
     Ok(())
 }
 

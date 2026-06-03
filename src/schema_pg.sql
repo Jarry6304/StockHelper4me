@@ -1224,7 +1224,7 @@ CREATE TABLE IF NOT EXISTS magic_formula_ranked_derived (
     roic_rank         INTEGER,
     combined_rank     INTEGER,
     universe_size     INTEGER,
-    is_top_30         BOOLEAN NOT NULL DEFAULT FALSE,
+    is_top_n          BOOLEAN NOT NULL DEFAULT FALSE,
     excluded_reason   TEXT,
     detail            JSONB,
     is_dirty          BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1232,9 +1232,9 @@ CREATE TABLE IF NOT EXISTS magic_formula_ranked_derived (
     PRIMARY KEY (market, stock_id, date)
 );
 
-CREATE INDEX IF NOT EXISTS idx_mf_top30
+CREATE INDEX IF NOT EXISTS idx_mf_topn
     ON magic_formula_ranked_derived (market, date, combined_rank)
-    WHERE is_top_30 = TRUE;
+    WHERE is_top_n = TRUE;
 
 CREATE INDEX IF NOT EXISTS idx_mf_dirty
     ON magic_formula_ranked_derived (market, stock_id)
@@ -1465,6 +1465,22 @@ CREATE INDEX IF NOT EXISTS idx_structural_snapshots_stock_date_desc
     ON structural_snapshots(stock_id, snapshot_date DESC);
 CREATE INDEX IF NOT EXISTS idx_structural_snapshots_core
     ON structural_snapshots(core_name, snapshot_date DESC);
+
+
+-- Traditional Core(Frost & Prechter EWP)獨立 vertical 自有表(alembic j6k7l8m9n0o1)
+-- 對齊 Traditional Core v2 storage-and-io.md;**不**復用 structural_snapshots(無 core_name / 無 FK)。
+CREATE TABLE IF NOT EXISTS traditional_snapshots (
+    stock_id     TEXT        NOT NULL,
+    timeframe    TEXT        NOT NULL,
+    forest       JSONB       NOT NULL,
+    diagnostics  JSONB       NOT NULL,
+    params_hash  TEXT        NOT NULL,
+    data_range   TSTZRANGE,
+    computed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (stock_id, timeframe, params_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_traditional_snapshots_stock_tf
+    ON traditional_snapshots(stock_id, timeframe);
 
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -1704,6 +1720,45 @@ CREATE INDEX IF NOT EXISTS idx_monthly_trigger_date
     ON monthly_trigger_signals_derived (market, date, trigger_type);
 
 
+-- v4.26 wave_impulse_screen(cross_cores Phase 8 第 12 builder)原只在 migration
+-- g3h4i5j6k7l8 建,fresh-init schema 漏掉 → 此處補回(對齊 verbatim DDL)。
+CREATE TABLE IF NOT EXISTS wave_impulse_screen_derived (
+    market             TEXT      NOT NULL,
+    stock_id           TEXT      NOT NULL,
+    date               DATE      NOT NULL,
+    timeframe          TEXT      NOT NULL,
+    -- Wave position(雙軸驗證結果)
+    phase              TEXT,
+    wave_number        INTEGER,
+    pattern_kind       TEXT,
+    direction          TEXT,
+    effective_degree   TEXT,
+    structure_label    TEXT,
+    confidence_level   TEXT      NOT NULL,
+    -- R/R metrics
+    entry_price        NUMERIC(18, 4),
+    target_price       NUMERIC(18, 4),
+    invalidation_price NUMERIC(18, 4),
+    rr_ratio           NUMERIC(10, 4),
+    -- Cross-TF 軟對齊 hint
+    cross_tf_aligned   BOOLEAN   NOT NULL DEFAULT FALSE,
+    -- Ranking
+    impulse_rank       INTEGER,
+    universe_size      INTEGER,
+    is_candidate       BOOLEAN   NOT NULL DEFAULT FALSE,
+    -- Base tail(對齊 _BASE_TAIL,PK 含 timeframe)
+    is_top_n           BOOLEAN   NOT NULL DEFAULT FALSE,
+    excluded_reason    TEXT,
+    detail             JSONB,
+    is_dirty           BOOLEAN   NOT NULL DEFAULT FALSE,
+    dirty_at           TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date, timeframe)
+);
+CREATE INDEX IF NOT EXISTS idx_wave_impulse_top
+    ON wave_impulse_screen_derived (market, date, timeframe, impulse_rank)
+    WHERE is_top_n = TRUE;
+
+
 -- =============================================================================
 -- Interval-forecast spine(v0.3 spec,2026-05-23,branch
 -- claude/stockhelper-interval-forecast-spine-j9xJt)
@@ -1733,6 +1788,7 @@ CREATE TABLE IF NOT EXISTS forecast_log (
     source_core     TEXT NOT NULL,
     regime_tag      TEXT,
     params_hash     TEXT,
+    logic_version   TEXT NOT NULL DEFAULT 'pre_b1',
     resolved_date   DATE,
     realized_price  NUMERIC(15, 4),
     hit             BOOLEAN,

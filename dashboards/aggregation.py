@@ -42,6 +42,7 @@ from dashboards.charts import (  # noqa: E402
     indicators,
     neely_wave,
     overlays,
+    traditional_wave,
 )
 
 
@@ -136,12 +137,13 @@ c5.metric("Market facts", sum(len(v) for v in market_dict.values()))
 # Tabs
 # ────────────────────────────────────────────────────────────
 
-tab_kline, tab_chip, tab_fund, tab_env, tab_neely, tab_facts = st.tabs([
+tab_kline, tab_chip, tab_fund, tab_env, tab_neely, tab_trad, tab_facts = st.tabs([
     "📈 K-line",
     "💰 Chip",
     "📊 Fundamental",
     "🌐 Environment",
     "🌳 Neely Wave",
+    "🌲 Traditional Wave",
     "⭐ Facts 散點雲",
 ])
 
@@ -359,6 +361,41 @@ with tab_neely:
         with st.expander("🔧 Diagnostics", expanded=False):
             diag = neely_wave.render_diagnostics(structural_neely)
             st.json(diag, expanded=True)
+
+with tab_trad:
+    st.caption(
+        "傳統派(Frost & Prechter EWP)獨立引擎 · 與 Neely 並排、不整合 · forest 不選 primary"
+    )
+    if not ohlc:
+        st.warning(f"price_daily_fwd 無 {stock_id} 資料")
+    else:
+        try:
+            trad_forest = traditional_wave.fetch_traditional_forest(stock_id, "daily")
+        except Exception as e:  # traditional_snapshots 缺 / 連線失敗 → graceful
+            trad_forest = None
+            st.caption(f"（讀 traditional_snapshots 失敗:{e}）")
+        trad_scenarios = traditional_wave.list_scenarios(trad_forest)
+        if not trad_scenarios:
+            st.warning(
+                f"無 traditional_snapshots for {stock_id} — 先跑 "
+                "`tw_cores run-all --write`(或 `traditional-debug` 驗)寫入。"
+            )
+        else:
+            t_labels = [
+                f"#{s['idx']} · {s['structure_label']} · pref={s['preference_score']} · {s['degree']}"
+                for s in trad_scenarios
+            ]
+            t_sel = st.selectbox(
+                "選 scenario(依 preference_score 降序)", options=t_labels, index=0
+            )
+            t_idx = trad_scenarios[t_labels.index(t_sel)]["idx"]
+            t_show_fib = st.checkbox("顯示 Fibonacci zones", value=True, key="trad_fib")
+            t_fig = traditional_wave.build_traditional_deep_dive(
+                ohlc, trad_forest, scenario_idx=t_idx, show_fib_zones=t_show_fib,
+            )
+            st.plotly_chart(t_fig, use_container_width=True)
+            with st.expander("🔧 forest diagnostics", expanded=False):
+                st.json((trad_forest or {}).get("diagnostics", {}), expanded=True)
 
 with tab_facts:
     if not facts_list:

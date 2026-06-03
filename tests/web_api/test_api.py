@@ -129,3 +129,33 @@ def test_screens_unknown_toolkit_404():
     r = c.get("/screens/bogus?date=2026-05-28")
     assert r.status_code == 404
     assert "unknown screen toolkit" in r.json()["detail"]
+
+
+# ── Traditional Core(獨立 vertical)forest passthrough + /waves 邊緣組裝 ──────
+def test_traditional_forest_passthrough_ok():
+    c = _client([{"j": '{"scenario_forest": [], "stock_id": "3363"}'}])
+    r = c.get("/stocks/3363/traditional/forest?timeframe=daily")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json() == {"scenario_forest": [], "stock_id": "3363"}
+
+
+def test_traditional_forest_404_when_missing():
+    c = _client([])
+    r = c.get("/stocks/3363/traditional/forest")
+    assert r.status_code == 404
+
+
+def test_waves_composes_neely_and_traditional():
+    # FakeConn 對 neely + traditional 兩個 query 都回同一 canned row(key "j")
+    c = _client([{"j": '{"k": 1}'}])
+    r = c.get("/stocks/3363/waves?as_of=2026-05-28")
+    assert r.status_code == 200
+    assert r.json() == {"neely": {"k": 1}, "traditional": {"k": 1}}  # 並排,不合併
+
+
+def test_waves_both_null_when_missing():
+    c = _client([])
+    r = c.get("/stocks/9999/waves?as_of=2026-05-28")
+    assert r.status_code == 200
+    assert r.json() == {"neely": None, "traditional": None}

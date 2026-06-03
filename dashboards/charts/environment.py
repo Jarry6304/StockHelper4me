@@ -318,12 +318,14 @@ def build_business_indicator_matrix(bi_indicator: dict[str, Any] | None) -> go.F
         fig.update_layout(height=400, title="景氣指標")
         return fig
 
-    dates = [coerce_date(p["date"]) for p in series if "date" in p]
-    leading = [p.get("leading_indicator") for p in series if "date" in p]
-    coincident = [p.get("coincident_indicator") for p in series if "date" in p]
-    lagging = [p.get("lagging_indicator") for p in series if "date" in p]
-    monitoring = [p.get("monitoring") for p in series if "date" in p]
-    colors = [p.get("monitoring_color") for p in series if "date" in p]
+    # v4.34:BusinessIndicatorPoint 序列化無 `date` 欄(只有 period / fact_date /
+    # report_date)→ 舊讀 p["date"] 永遠 False,景氣指標矩陣靜默空白。改讀 fact_date(月底日)。
+    dates = [coerce_date(p["fact_date"]) for p in series if "fact_date" in p]
+    leading = [p.get("leading_indicator") for p in series if "fact_date" in p]
+    coincident = [p.get("coincident_indicator") for p in series if "fact_date" in p]
+    lagging = [p.get("lagging_indicator") for p in series if "fact_date" in p]
+    monitoring = [p.get("monitoring") for p in series if "fact_date" in p]
+    colors = [p.get("monitoring_color") for p in series if "fact_date" in p]
 
     fig.add_trace(go.Scatter(x=dates, y=leading, name="領先", mode="lines+markers",
                              line=dict(color="#1976D2", width=1.5)),
