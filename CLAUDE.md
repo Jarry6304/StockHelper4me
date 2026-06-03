@@ -343,6 +343,51 @@ cqr_quantile 對 scores 排序 → 切片集合相同即 q 相同)。`conformali
 `conn.transaction()` 在 psycopg3 autocommit 下仍發顯式 BEGIN/COMMIT,不動全域 autocommit。
 Rollback:單 commit `git revert`。
 
+### 待辦 backlog(2026-06-03 拍版)
+
+**① API — 待做**:對外 API 擴充列為待做(等 user 給範圍/端點規格)。現況 `src/web_api/`
+(v4.32 唯讀 FastAPI passthrough)已有 `neely/forest` / `levels` / `resonance` /
+`snapshot/{core}` / `market/climate` / `ohlc` / `kalman/series` / `screens/{toolkit}` +
+PR #123 加的 `traditional/forest` / `waves`。動工前 user 給 scope。
+
+**② Traditional Wave 整批驗證 — 待驗**(DB-bound,沙箱跑不了;下方 runbook user 本機跑):
+
+```powershell
+git pull
+alembic upgrade head        # → j6k7l8m9n0o1(traditional_snapshots 已建)
+cd rust_compute; cargo build --release -p tw_cores; cd ..
+
+# 1. 整批寫入(全 universe × daily/weekly/monthly;run-all 自動含 traditional_core)
+.\rust_compute\target\release\tw_cores.exe run-all --write
+#    ⚠️ 看 elapsed:每股多跑 traditional × 3 tf(與 neely 同量級);爆 → workflow toml
+#       關 traditional_core 或調 forest_max_size / pivot
+
+# 2. P0-Gate forest size 分布(對齊 neely 1264-stock 慣例)
+psql $env:DATABASE_URL -c "
+SELECT timeframe, COUNT(*) AS stocks,
+       PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(forest->'scenario_forest')) AS p50,
+       PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(forest->'scenario_forest')) AS p95,
+       MAX(jsonb_array_length(forest->'scenario_forest')) AS max_n
+  FROM traditional_snapshots GROUP BY timeframe ORDER BY timeframe;"
+#    驗收:max ≤ forest_max_size(200 cap);p95 不過碎。爆/過碎 → monowave_epsilon 調大
+#    (去雜訊)/ round_beam_size / max_degree_levels 調控(v3 §「待 user P0-Gate 校準」)
+
+# 3. 整批覆蓋率(每 tf 是否每股都有 row)
+psql $env:DATABASE_URL -c "
+SELECT timeframe, COUNT(DISTINCT stock_id) AS n_stocks
+  FROM traditional_snapshots GROUP BY timeframe ORDER BY timeframe;"
+
+# 4. 端口 spot-check
+#    API : uvicorn web_api.app:app
+#          → curl 'localhost:8000/stocks/3363/traditional/forest?timeframe=daily'
+#          → curl 'localhost:8000/stocks/3363/waves?as_of=<date>'
+#    MCP : traditional_wave_forest('3363')
+#    Streamlit:「🌲 Traditional Wave」tab(picker by preference_score)
+
+# 5. 沙箱已綠、DB-bound 留本機
+pytest tests/web_api/test_api.py tests/mcp_server/test_traditional.py
+```
+
 ---
 
 ## Traditional Core v2 — Phase 1:獨立引擎 + 產品閘(2026-06-02)
