@@ -12,10 +12,13 @@
 #   5. golden fusion --only resonance         — 重新物化 resonance(讓 Web API /resonance 也服務)
 #                                               (-SkipMaterialize 可跳;MCP 本就 compute-fallback)
 #
-# 手動 / 週排程:
+# 一次性 seed(全量,~32h;校準歷史首次建):
 #   .\scripts\recalibrate_kalman.ps1                       # 全市場,--since 2022-01-01,每批 200 檔
+# 週排程(增量,~2h;校準歷史已在 DB,只刷最近窗 → install_recalibrate_task.ps1 預設走這個):
+#   .\scripts\recalibrate_kalman.ps1 -Incremental          # --since = 今天-45 天
+#   .\scripts\recalibrate_kalman.ps1 -Incremental -LookbackDays 60
+# 其他:
 #   .\scripts\recalibrate_kalman.ps1 -Stocks '2330,2603'   # 限縮
-#   .\scripts\recalibrate_kalman.ps1 -Since 2023-01-01     # 縮窗加速
 #   .\scripts\recalibrate_kalman.ps1 -BatchSize 100        # 記憶體更省(機器 RAM 小時調小)
 #   .\scripts\recalibrate_kalman.ps1 -SkipMaterialize      # 只校準,不重物化 resonance
 #
@@ -32,9 +35,9 @@
 #       對「一鍵每日」過重 → 決議**不放 daily**,獨立成本腳本走週排程。
 # 取捨:兩次週跑之間 track2 band 最多 stale ~7 天。resonance 是「結構軌 × 統計軌」confluence,
 #       horizon 為 21/63/126 天,數天漂移對判定影響小 → 可接受。
-# 未來若要 daily:需把 run-backtest 改「**增量 latest-only**」(只算最新 1 日 forward +
-#       conformalize latest,校準窗 history 已在 DB)→ 估 ~2-5 min,才適合併進 refresh Step7。
-#       目前 run-backtest 走 [start, today] 全區間,故先週排程。
+# 週排程用 `-Incremental`(--since 今天-45 天):只刷最近窗的 forward forecast + conformalize
+#       (2022 校準歷史已在 DB)→ ~2h 而非全量 seed 的 ~32h。一次性 seed 才跑全量(不帶 -Incremental)。
+# 未來若要 daily:把 LookbackDays 縮到 ~7 + 併進 refresh Step7(估 ~10-20 min);目前先週排程。
 # ──────────────────────────────────────────────────────────────
 
 param(
@@ -42,8 +45,17 @@ param(
     [string]$Since = '2022-01-01',
     [int]$Concurrency = 8,
     [int]$BatchSize = 200,
+    [switch]$Incremental,
+    [int]$LookbackDays = 45,
     [switch]$SkipMaterialize
 )
+
+# -Incremental(週排程用):--since = 今天 - LookbackDays(只刷最近窗的 forward forecast;
+# 2022 校準歷史已在 DB,conformalize 的 500-day 校準窗照樣用得到)→ ~2h 而非全量 ~32h。
+# 不帶 -Incremental = 全量 seed(--since 2022,一次性);-Since 顯式給則永遠優先。
+if ($Incremental -and -not $PSBoundParameters.ContainsKey('Since')) {
+    $Since = (Get-Date).AddDays(-$LookbackDays).ToString('yyyy-MM-dd')
+}
 
 $ErrorActionPreference = 'Continue'
 

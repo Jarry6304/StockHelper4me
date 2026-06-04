@@ -755,6 +755,16 @@ production verify(user 查 3537「有籌碼估值、無行情」)揭露既有(pr
 重算 → golden 物化 + recalibrate),之後 universe ~2360 檔、daily refresh 變重。emerging(興櫃 368)
 未納入(user 未選)。type 分布:twse 1539 / tpex 1107 / emerging 368。
 
+**✅ Production done(2026-06-03/04,user 本機)**:DELETE price_daily/institutional_daily sync
+progress → `backfill --phases 3,5` 重抓全 universe → `refresh_full` → `golden fusion` →
+`recalibrate_kalman.ps1`(分批 22×100,**~32h** seed @ 2171 檔)。驗:`stock_snapshot('3537')`
+current_price **73.9**(原 0);resonance 物化 **6513** 列(2171×3tf);3537 從「有籌碼無行情」→ 完整。
+
+**週排程改增量(避免 32h 撞排程時限)**:`recalibrate_kalman.ps1` 加 `-Incremental`(--since
+今天-LookbackDays,只刷最近窗,~2h;2022 校準歷史已在 DB)+ `-FullSeed` 才全量;
+`install_recalibrate_task.ps1` 預設註冊 `-Incremental` + ExecutionTimeLimit 3h→6h。
+**全量 seed 是一次性手動(已做),週排程走增量。**
+
 ---
 
 ## v4.30 — dirty queue 設計修法:refresh Silver 7c 強制 full-rebuild(Option B,2026-05-29)
@@ -7941,8 +7951,8 @@ cd ..
 | `scripts/test_pipeline.sh` 🆕 v4.4 | 完整測試流水線(Unix Bash 版,對齊 .ps1);環境變數 `SKIP_PHASES` / `ONLY_PHASES` / `DRY_RUN=1` 控制 | `./scripts/test_pipeline.sh` |
 | `scripts/verify_mcp_toolkit_v4_29.py` 🆕 v4.29 | **全覆蓋 13 個 public MCP tool 健康度檢查**。Per-stock(6 tool)+ market-level(7 tool)各跑一次,report status / elapsed / payload_kb / per-tool summary。Payload soft `> 50KB` WARN / hard `> 1MB` FAIL。退碼 0/1 | `python scripts/verify_mcp_toolkit_v4_29.py --stocks 2330,3030 --verbose` |
 | `scripts/verify_golden_l3_v4_32.ps1` 🆕 v4.32 | **Golden L3 production verify 流水線**(PowerShell)— 5 步:(opt)裝 `.[web]`+codegen 依賴 / `golden fusion` 物化(預設小股集 2330,3030,1101)/ SQL spot-check(*_fusion row count + levels/climate 取樣)/ MCP serving-from-materialized smoke(stock_levels/dual_track_resonance/market_context)/(印)Web API uvicorn+curl + codegen tsc 手動指令。前置:已跑過 refresh(上游 cores 在) | `.\scripts\verify_golden_l3_v4_32.ps1` |
-| `scripts/recalibrate_kalman.ps1` 🆕 v4.32 | **Phase 3b Kalman 全市場校準週排程**(PowerShell,對齊 refresh_full.ps1)— 5 步:Kalman `run-backtest`(Rust 全市場並行)/ settle / conformalize→kalman_cqr / settle / `golden fusion --only resonance` 重物化。讓 resonance track2 全市場非 single_track(kalman_cqr 是 source 偏好 #2,單跑即足)。**不放 daily**(~35 min,header 詳述前因後果);`-Stocks` / `-Since` / `-SkipMaterialize` | `.\scripts\recalibrate_kalman.ps1` |
-| `scripts/install_recalibrate_task.ps1` 🆕 v4.32 | 註冊 Windows Task Scheduler **每週**跑 recalibrate_kalman.ps1(對齊 install_refresh_task.ps1)。預設週日 02:00;`-At` / `-DayOfWeek` / `-Since` / `-Stocks` / `-SkipMaterialize` | `.\scripts\install_recalibrate_task.ps1` |
+| `scripts/recalibrate_kalman.ps1` 🆕 v4.32 | **Phase 3b Kalman 校準**(PowerShell,分批 `-BatchSize` 預設 200 避記憶體爆)— per-batch:Kalman `run-backtest`(Rust)/ settle / conformalize→kalman_cqr / settle;末尾 `golden fusion --only resonance`。讓 resonance track2 非 single_track(kalman_cqr source 偏好 #2,單跑即足)。**全量 seed**(--since 2022,一次性 ~32h @ 2171 檔)vs **`-Incremental`**(--since 今天-LookbackDays,週用 ~2h,校準歷史已在 DB)。`-Stocks` / `-SkipMaterialize` | `.\scripts\recalibrate_kalman.ps1 -Incremental` |
+| `scripts/install_recalibrate_task.ps1` 🆕 v4.32 | 註冊 Windows Task Scheduler **每週增量**跑 recalibrate_kalman.ps1 `-Incremental`(~2h;**非**全量 seed,避免 32h 撞排程時限)。預設週日 02:00、ExecutionTimeLimit 6h;`-At` / `-DayOfWeek` / `-LookbackDays`(45)/ `-FullSeed`(罕用)/ `-Stocks` / `-SkipMaterialize` | `.\scripts\install_recalibrate_task.ps1` |
 
 ---
 
