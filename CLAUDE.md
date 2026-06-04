@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.35 + Traditional Core v2/v3,最新 2026-06-02;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → **v4.36** + Traditional Core v2/v3,最新 2026-06-04;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
@@ -300,48 +300,16 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
-## v4.36 — forecast 校準流水線批次優化(conformalize + settle 逐筆 → 批次,2026-06-03)
+## 待辦 backlog + schema drift 修(2026-06-04)
 
-`recalibrate_kalman.ps1` 每批 100 股 ~1 小時 × 22 批 = ~22 小時。實讀 `src/forecast/`
-確認 Rust run-backtest(~12 min,UNNEST batch + 並行)不是瓶頸;瓶頸在 3 個 Python
-逐筆同步步驟:**A.** `fusion/raw/_db.py:64` `autocommit=True` → 每筆 upsert/update
-各 1 次 commit→fsync(最大隱形殺手);**B.** `conformalize_batch` 逐筆 N+1(每 tuple
-2 SELECT + 1 upsert);**C.** 迭代日曆天非交易日(~30% 空轉);**D.** settle 逐 row PIT
-讀 + 逐筆 UPDATE。`--since 2022` × 3h × 3c × 100 股 × ~1000 交易日 ≈ 90 萬筆逐筆
-round-trip。**校準窗維持 4 年不縮**(user 拍版)。
+> forecast 校準批次優化(我 2026-06-03 的 conformalize/settle 批次化)與 main v4.36
+> 「DB sync 全面並行化」**撞同一個 `conformalize_batch`**;user 拍版**取 main 並行版、
+> 捨我的批次版**(merge 時 forecast code 全回 main)。本分支只留:① schema fresh-init
+> drift 修 ② 下列 backlog。
 
-### 改動(branch `claude/neely-forest-cloud-zigzag-Xv13d`,純 Python `src/forecast/`)
-
-| # | 檔 | 動作 |
-|---|---|---|
-| P3 | `_db.py` | 新增 `upsert_forecast_batch`(UNNEST 13 欄 + 同款 ON CONFLICT 含 B1 logic_version CASE guard,BATCH_SIZE 4000)+ `update_settlement_batch`(`UPDATE ... FROM UNNEST`)。**單筆 `upsert_forecast` / `update_settlement` 原封不動**(contract test 直接斷言其 SQL/payload shape → 不可改;故批次版為 sibling 而非 shim)|
-| P1 | `calibration.py` | 抽純函式 `_build_calibrated_row`(CQR 數學單一真相源,`conformalize_one` 改 delegate)。`conformalize_batch` 重寫:① `_fetch_trading_days`(`trading_date_ref`)只迭代交易日 ② 每 (stock,h,c) 2 次 SELECT 預載 raw + 校準史 → per-asof `bisect_left` 記憶體切片(取代 N+1)③ 每股累積 → `upsert_forecast_batch` + 單一 `conn.transaction()` commit |
-| P2 | `settlement.py` | `resolve_pending` 加 `(stock_id, settle_date)` memo cache(同 settle_date 跨 3 confidence 只讀 1 次 PIT)+ 每股 `update_settlement_batch` + `conn.transaction()`。`_realized_close` PIT 重建邏輯零改 |
-
-### 位元級等價(正確性命門)
-
-`forecast_log` PK `(stock_id, forecast_date, horizon_days, source_core, confidence)` →
-每 (stock,h,c) 下 forecast_date 唯一 → 預載 dict lookup = 逐筆 `LIMIT 1`;記憶體
-`forecast_date < asof` 取最近 window 筆 = SQL `ORDER BY DESC LIMIT`(無 tie 歧義,
-cqr_quantile 對 scores 排序 → 切片集合相同即 q 相同)。`conformalize_one` 與
-`conformalize_batch` 共用 `_build_calibrated_row` → 數學結構性一致。
-
-### 驗證
-
-- 既有 191 forecast tests **0 修改全綠**(`conformalize_one` / `upsert_forecast` 保留)。
-  例外:`test_settlement.py` 3 case 因 settle IO 改批次(patch `update_settlement_batch`
-  + fake conn `transaction()`),**語意斷言(hit/pinball/realized/counts)逐字保留**。
-- 新增 `test_batch_optimization.py` **+9**:批次-vs-逐筆**位元相同** written rows
-  (含 window 切片放大測 + no_raw)/ settle memo dedup(同 settle_date PIT 1 次、
-  不同 horizon 2 次)/ UNNEST SQL 契約。`pytest tests/forecast/` → **200 passed / 2 xfailed**。
-- ⚠️ 不影響正在跑的 22 批(merge 後下次 recalibrate 才用);效能煙霧測
-  `recalibrate_kalman.ps1 -Stocks <30檔> -Since 2022-01-01`(全 4 年窗)計時,DB-bound 由 user 本機驗。
-
-預期:Python 三步 ~48 min → ~5 min,總批 ≈ 12 min Rust + 5 min ≈ **17 min**(12-20×)。
-
-🟢 低-中:演算法零改(只改批次/transaction/交易日迭代);0 alembic / 0 Rust / 0 collector.toml。
-`conn.transaction()` 在 psycopg3 autocommit 下仍發顯式 BEGIN/COMMIT,不動全域 autocommit。
-Rollback:單 commit `git revert`。
+**schema 修(已落地本分支)**:`wave_impulse_screen_derived`(table + index,v4.26
+migration `g3h4i5j6k7l8` 建)原 `schema_pg.sql` 漏(連 main 都缺)→ 補回 verbatim
+DDL,令純檔案 fresh-init(`psql -f schema_pg.sql`)不再漏表。alembic head `j6k7l8m9n0o1`。
 
 ### 待辦 backlog(2026-06-03 拍版)
 
@@ -487,7 +455,135 @@ User 推翻 v1「R6/R7/R8/R11 標 Deferred + 單股判 forest」框法:**子浪�
 
 ---
 
-## v4.35 — magic_formula `is_top_30` → `is_top_n` schema 對齊(2026-06-01)
+## v4.36 — DB sync 單緒寫入全面並行化:Bronze + Silver + Cross-stock + Golden + Forecast 五層(2026-06-04)
+
+User 觀察既有 pipeline 多處「明明 `PostgresWriter` 已升 ConnectionPool(v3.3
+pool min=2/max=8)但 caller path 仍是 sync 串列」,要求一次補完。Audit 後鎖定
+5 條真實 sync DB 寫入路徑,分兩個 commit 收尾。**0 alembic / 0 collector.toml /
+0 Rust 改動,純 Python 並行重塑**。
+
+### 動工:5 條路徑
+
+| 層 | 串列瓶頸 | 修法 | 並行度 |
+|---|---|---|---|
+| 1. Bronze `segment_runner._write` / `_merge_delist_date` | 已 in `asyncio.gather` 12 concurrent task,但 sync `db.upsert` 封住 event loop → pool 多 conn 沒用上 | 改 async + `asyncio.to_thread(self.db.upsert, ...)`;`_merge_delist_date_sync` 抽 sync helper,wrapper 走 to_thread | `BRONZE_CONCURRENCY=12` 真實生效 |
+| 2. Silver `SilverOrchestrator._run_builders`(Phase 7a / 7b) | for-loop seq 跑 15 個 builder | `asyncio.gather + asyncio.to_thread + Semaphore`;`_run_7a_incremental` 同步改 async,window globals 在 gather 邊界 set/clear 無 race | `max(1, pool.max_size - 1)` ≈ 7 |
+| 3. Cross-stock `CrossStockOrchestrator.run`(Phase 8) | for-loop seq 跑 12 個 builder(wave_impulse_screen 單一 ~21s 擋路)| 同 #2 pattern | 同上 |
+| 4. Golden `run_fusion_materialize` universe loop | 2171 stocks × (1 levels + 3 resonance) seq + 共用單一 psycopg.connect | 拆兩階段:metadata 階段共用 meta_conn(latest date / universe / lag warning),per-stock 階段 `ThreadPoolExecutor + 每 worker get_connection()`(psycopg conn **非** thread-safe,不能直接 to_thread 共用)。db.upsert 走 PostgresWriter pool 仍 thread-safe;streaming flush(_BATCH=500)邊 gather 邊 flush | 同上 |
+| 5. Forecast `conformalize_batch` / `fuse_batch` / `backtest`(Kalman 週排程主力)| 共用單一 conn × (stock × date × horizon × confidence) 4 層 nested | 加 `parallelism` 參數;**across-stock** 並行(同股內 date×h×c 仍 seq,避 forecast_log unique key 從屬冲突);每 worker `get_connection()` 自開;`parallelism=1` + caller's conn → 原單緒 path(backward-compat,既有 tests 不破);main.py CLI 加 `--parallelism N`(0=auto) | 同上 |
+
+`climate fusion` 是 marketwide 1 筆 fan-in,無 per-stock loop,**不需動**。
+
+### 設計決策
+
+- **並行度 = `max(1, DB_POOL_SIZE - 1)`**:對齊 PostgresWriter pool max_size,留 1 conn
+  給 query 路徑(MCP / dashboards / refresh chain 其他 SQL 同時用)。預設 pool=8 → 並行 7。
+- **Bronze 改 async/to_thread**(已 in asyncio):psycopg conn 走 PostgresWriter pool,
+  thread-safe;db.upsert 內部 `with self.pool.connection()` 每呼叫取 conn,沒共用。
+- **Silver / Cross-stock 走 asyncio.gather + to_thread**:既有 orchestrator entry 是
+  async,延用 asyncio 邊界;Semaphore 限縮並發 = pool size - 1。
+- **Golden / Forecast 走 ThreadPoolExecutor**:這兩個 caller 是 sync(main.py CLI
+  + `_run_refresh`),不引入 asyncio.run 跳轉;同款 worker 自開 conn pattern。
+- **Per-worker `get_connection()`**:`fusion.raw._db.get_connection()` 是 `psycopg.connect()`
+  直開(非 pool);每 worker 自開 own conn,~1ms TCP overhead,可接受。
+- **Backward compat**:forecast 兩 batch 函式 `parallelism=1` + 傳 conn 仍走原單緒
+  path(既有測試 `tests/forecast/test_calibration.py` 0 改動仍綠);`parallelism=None`
+  → 走 env auto。`fusion_stage` 同款 `parallelism=1` 退單緒 path(test fixture 友善)。
+
+### 範圍(2 commits / branch `claude/confident-rubin-InOSj`)
+
+| Commit | 範圍 |
+|---|---|
+| `05b5655` | Bronze segment_runner + Silver orchestrator + Cross-stock orchestrator(asyncio path)|
+| `f167627` | Golden fusion materialize + Forecast conformalize/fuse + main.py CLI `--parallelism`(sync ThreadPool path) |
+
+### Tests(+45 new across 5 modules,既有 0 regression)
+
+| 模組 | 新 tests | 重點 |
+|---|---|---|
+| `tests/bronze/test_segment_runner_async_write.py` | 8 | `_write` async signature / db.upsert 走 to_thread / **event loop 不被封**(40ms sync sleep × 4 concurrent < 130ms wall,sync 路徑會 ≥ 160ms)/ worker thread id ≠ main |
+| `tests/silver/test_orchestrator_parallel.py` | 10 | `_parallelism_limit` 對 pool max_size / wall-time-vs-sum 並行驗 / Semaphore 限流(pool=3 對 6 builders × 50ms ≈ 3 波 150ms)/ 失敗隔離 / incremental 路徑同款並行 |
+| `tests/cross_cores/test_orchestrator_parallel.py` | 9 | 同上 pattern + `lookback_days` 傳遞 + 未知 builder early-fail |
+| `tests/fusion/test_materialize_parallel.py` | 8 | `parallelism=1` 退單緒 / `parallelism>1` ThreadPool + worker own conn / per-stock 失敗仍 graceful / `_default_parallelism()` env / empty universe edge |
+| `tests/forecast/test_batch_parallel.py` | 10 | `parallelism=1` + caller conn = backward compat / parallel 模式 each worker own conn(spy `get_connection` 6 次 6 stocks)/ worker crash 計 `worker_error` 不擋其他 / 6 stock × 30ms sleep × parallel 3 < 130ms |
+
+**全套 714 passed / 0 failed / 1 skipped / 2 xfailed**(1 skipped + 2 xfailed 皆 pre-existing,與本 PR 無關)。
+
+### user 本機 verify(下次跑)
+
+```powershell
+git pull
+# Bronze incremental — 看 logs 應出現 "concurrency=12" 跑同時不再卡 DB
+python src/main.py incremental
+
+# Silver 7a 並行 — log 應有 "[silver] 並行 15 builder(concurrency=7)"
+python src/main.py silver phase 7a --full-rebuild
+# 同款 cross_cores Phase 8 — log "[Phase 8] 並行 12 builder(concurrency=7)"
+python src/main.py cross_cores phase 8 --full-rebuild
+
+# Golden fusion — log "[golden.fusion] as_of=... universe=2172 ... parallelism=7"
+python src/main.py golden fusion
+
+# Forecast(Kalman recalibrate 週排程主力)— 新 --parallelism CLI flag
+.\scripts\recalibrate_kalman.ps1 -Incremental
+# 內部 conformalize / fuse 自動 parallelism=auto(env DB_POOL_SIZE-1)
+# 顯式設定:
+python src/main.py forecast conformalize ... --parallelism 7
+python src/main.py forecast fuse ... --parallelism 7
+python src/main.py forecast backtest ... --parallelism 7
+
+# 確認沒爆 PG / pool waitlist 過長:
+psql $env:DATABASE_URL -c "
+SELECT state, COUNT(*) FROM pg_stat_activity
+ WHERE datname='twstock' GROUP BY state;
+"
+# 預期 active 不超過 pool max_size + 一些 idle reserved;若 idle in transaction 累積 → 看是否有 worker 卡住
+```
+
+### 預期效益(粗估)
+
+| 路徑 | 串列 wall | 並行 wall(pool=8 → 7 worker) | 加速 |
+|---|---|---|---|
+| Bronze incremental(daily refresh,DB 寫入部分)| 自然 ~13 min | wall 同~13 min(主要是 FinMind API rate limit,DB 寫入只是順便不擋 fetch)| 0%(fetch 仍是 bottleneck);但**對 batch backfill** event loop 解封後,fetch + write 真實 overlap |
+| Silver 7a `--full-rebuild` | ~80 min | ~15-20 min | **~4×** |
+| Cross-stock Phase 8 | ~3 min(wave_impulse_screen 21s 擋路) | ~1 min | **~3×** |
+| Golden fusion 全市場 | ~30 min | ~5-10 min | **~3-5×** |
+| Forecast conformalize 全市場 | ~2 hr(incremental window)| **~20-30 min** | **~4-6×** |
+
+實測待 user 跑 production 後確認;若 PG contention(idx_facts_* lock / WAL flush)
+變新 bottleneck,可調低 parallelism(`--parallelism 4` 或 env `DB_POOL_SIZE=6`)。
+
+### 風險
+
+🟢 低:
+- 0 schema / 0 Rust / 0 collector.toml 改動
+- backward compat 完整:Silver / Cross-stock 既有測試 fixture(MagicMock no pool 屬性)
+  走 env fallback 至 7 worker;Forecast `parallelism=1` + 傳 conn 走原單緒 path
+- 既有 669 tests + 新 45 tests = **714 passed,0 regression**
+- Rollback:每 commit 獨立 `git revert`(05b5655 / f167627 兩個可分別回退)
+
+🟡 中:
+- **PG contention 風險**:`facts` / `forecast_log` / `structural_snapshots` 三大表
+  unique index ON CONFLICT 對 concurrent writer 仍有 row lock,實際 perf gain 受
+  PG planner / WAL / idx 競爭影響;若爆 → 降 `DB_POOL_SIZE` 或 `--parallelism N`
+- **worker get_connection psycopg.connect overhead**:per-stock 多開 conn ~1-3ms,
+  golden fusion 2171 stocks 共 ~3-6s overhead,被並行收益吸收;若想再優化可
+  改 fusion.raw._db 升 ConnectionPool(V3 backlog)
+
+🔴 高:**無**
+
+### Out of Scope(留 future)
+
+- `fusion.raw._db.get_connection()` 升 `psycopg_pool.ConnectionPool`(取代 per-worker
+  psycopg.connect,~ms 級 perf gain;但需多 env knob 與 writer pool 解耦)
+- Forecast `settle` / `score` 平行化(目前 single-shot,wall time 不痛)
+- climate fusion 並行(marketwide 1 筆,無需)
+- 觀察是否爆 PG `max_connections`(預設 100);production 11 + 12 + 7 + 7 + 7 ≈
+  ~44 connection 高水位,看 user 機器設定
+
+---
+
+
 
 `magic_formula_ranked_derived`(2026-05-15 最早建)是唯一用 `is_top_30` 欄名的
 cross-stock ranked 表;v3.32(d9e0f1g2h3i4)10 表 + v4.26(g3h4i5j6k7l8)wave_impulse
@@ -844,6 +940,16 @@ production verify(user 查 3537「有籌碼估值、無行情」)揭露既有(pr
 ⚠️ user 拍版解鎖上櫃,需一次性大 backfill(price + institutional 重抓 history → Silver/Cross/M3
 重算 → golden 物化 + recalibrate),之後 universe ~2360 檔、daily refresh 變重。emerging(興櫃 368)
 未納入(user 未選)。type 分布:twse 1539 / tpex 1107 / emerging 368。
+
+**✅ Production done(2026-06-03/04,user 本機)**:DELETE price_daily/institutional_daily sync
+progress → `backfill --phases 3,5` 重抓全 universe → `refresh_full` → `golden fusion` →
+`recalibrate_kalman.ps1`(分批 22×100,**~32h** seed @ 2171 檔)。驗:`stock_snapshot('3537')`
+current_price **73.9**(原 0);resonance 物化 **6513** 列(2171×3tf);3537 從「有籌碼無行情」→ 完整。
+
+**週排程改增量(避免 32h 撞排程時限)**:`recalibrate_kalman.ps1` 加 `-Incremental`(--since
+今天-LookbackDays,只刷最近窗,~2h;2022 校準歷史已在 DB)+ `-FullSeed` 才全量;
+`install_recalibrate_task.ps1` 預設註冊 `-Incremental` + ExecutionTimeLimit 3h→6h。
+**全量 seed 是一次性手動(已做),週排程走增量。**
 
 ---
 
@@ -8031,8 +8137,8 @@ cd ..
 | `scripts/test_pipeline.sh` 🆕 v4.4 | 完整測試流水線(Unix Bash 版,對齊 .ps1);環境變數 `SKIP_PHASES` / `ONLY_PHASES` / `DRY_RUN=1` 控制 | `./scripts/test_pipeline.sh` |
 | `scripts/verify_mcp_toolkit_v4_29.py` 🆕 v4.29 | **全覆蓋 13 個 public MCP tool 健康度檢查**。Per-stock(6 tool)+ market-level(7 tool)各跑一次,report status / elapsed / payload_kb / per-tool summary。Payload soft `> 50KB` WARN / hard `> 1MB` FAIL。退碼 0/1 | `python scripts/verify_mcp_toolkit_v4_29.py --stocks 2330,3030 --verbose` |
 | `scripts/verify_golden_l3_v4_32.ps1` 🆕 v4.32 | **Golden L3 production verify 流水線**(PowerShell)— 5 步:(opt)裝 `.[web]`+codegen 依賴 / `golden fusion` 物化(預設小股集 2330,3030,1101)/ SQL spot-check(*_fusion row count + levels/climate 取樣)/ MCP serving-from-materialized smoke(stock_levels/dual_track_resonance/market_context)/(印)Web API uvicorn+curl + codegen tsc 手動指令。前置:已跑過 refresh(上游 cores 在) | `.\scripts\verify_golden_l3_v4_32.ps1` |
-| `scripts/recalibrate_kalman.ps1` 🆕 v4.32 | **Phase 3b Kalman 全市場校準週排程**(PowerShell,對齊 refresh_full.ps1)— 5 步:Kalman `run-backtest`(Rust 全市場並行)/ settle / conformalize→kalman_cqr / settle / `golden fusion --only resonance` 重物化。讓 resonance track2 全市場非 single_track(kalman_cqr 是 source 偏好 #2,單跑即足)。**不放 daily**(~35 min,header 詳述前因後果);`-Stocks` / `-Since` / `-SkipMaterialize` | `.\scripts\recalibrate_kalman.ps1` |
-| `scripts/install_recalibrate_task.ps1` 🆕 v4.32 | 註冊 Windows Task Scheduler **每週**跑 recalibrate_kalman.ps1(對齊 install_refresh_task.ps1)。預設週日 02:00;`-At` / `-DayOfWeek` / `-Since` / `-Stocks` / `-SkipMaterialize` | `.\scripts\install_recalibrate_task.ps1` |
+| `scripts/recalibrate_kalman.ps1` 🆕 v4.32 | **Phase 3b Kalman 校準**(PowerShell,分批 `-BatchSize` 預設 200 避記憶體爆)— per-batch:Kalman `run-backtest`(Rust)/ settle / conformalize→kalman_cqr / settle;末尾 `golden fusion --only resonance`。讓 resonance track2 非 single_track(kalman_cqr source 偏好 #2,單跑即足)。**全量 seed**(--since 2022,一次性 ~32h @ 2171 檔)vs **`-Incremental`**(--since 今天-LookbackDays,週用 ~2h,校準歷史已在 DB)。`-Stocks` / `-SkipMaterialize` | `.\scripts\recalibrate_kalman.ps1 -Incremental` |
+| `scripts/install_recalibrate_task.ps1` 🆕 v4.32 | 註冊 Windows Task Scheduler **每週增量**跑 recalibrate_kalman.ps1 `-Incremental`(~2h;**非**全量 seed,避免 32h 撞排程時限)。預設週日 02:00、ExecutionTimeLimit 6h;`-At` / `-DayOfWeek` / `-LookbackDays`(45)/ `-FullSeed`(罕用)/ `-Stocks` / `-SkipMaterialize` | `.\scripts\install_recalibrate_task.ps1` |
 
 ---
 

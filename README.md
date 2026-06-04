@@ -2,7 +2,7 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **14 tools** + **唯讀 FastAPI Web API** + **Traditional Core 獨立波浪引擎**)。
 
-**版本**:**v4.35**(alembic head `i5j6k7l8m9n0` / 2026-06-01)。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug;**v4.34** 修復 revenue / financial / 景氣指標 3 個 dashboard chart 的 x 軸欄位(月/季頻 core 無 `date` 欄,改讀 `fact_date`);**v4.35** magic_formula `is_top_30`→`is_top_n` schema 對齊(12 個 ranked 表統一欄名;需 `alembic upgrade head` + magic_formula refresh)。皆已 merge main
+**版本**:**v4.36**(alembic head `j6k7l8m9n0o1` / 2026-06-04)。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug;**v4.34** 修復 revenue / financial / 景氣指標 3 個 dashboard chart 的 x 軸欄位;**v4.35** magic_formula `is_top_30`→`is_top_n` schema 對齊;**v4.36** DB sync 單緒寫入**全面並行化**:Bronze segment_runner DB 寫入走 `asyncio.to_thread` 解封 event loop / Silver 7a + Cross-stock Phase 8 builders `asyncio.gather` 並行 / Golden fusion universe loop + Forecast conformalize/fuse/backtest 走 `ThreadPoolExecutor + per-worker get_connection()`(0 alembic / 0 collector.toml / 0 Rust;+45 tests)。皆已 merge main
 **測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)+ Phase 3b `scripts/recalibrate_kalman.ps1`(Kalman 全市場校準 → resonance track2 非 single_track)。完整 verify chain 見 [CLAUDE.md §v4.32/v4.33](CLAUDE.md)
 **狀態**:**v4.32**(2026-05-29 production-verified ☕):原 read-time 的 fusion(levels / resonance / climate)正名 **Golden L3** 並物化進 `structural_snapshots`(新 core_name `*_fusion`),對外只讀;新建**唯讀 FastAPI Web API**(`uvicorn web_api.app:app` — neely forest 完整 passthrough + brotli/gzip 協商 + N>250 保險絲;Windows/Py3.14 每請求 sync conn);**TypeScript 契約 codegen**(Rust ts-rs 63 型別 + Python pydantic2ts → `frontend/src/contracts/`)。Phase 3b Kalman 全市場校準腳本 `scripts/recalibrate_kalman.ps1`(讓 resonance track2 非 single_track)。**累積**:v4.25 dual-track 共振 + v4.26 wave_impulse_screen + v4.28 三 sprint + v4.29 + **v4.30/v4.31 + v4.32**。M3 Cores **39 crates**;Cross-Stock **12 builders**;MCP **13 tools** + Web API;**Rust 607 tests + ts feature 485**;**Python ~865 passed / +34(v4.32);fusion + mcp_server 子集 476 passed / 1 skipped / 0 failed(v4.33.1 後)**;v4.32.1 tpex 解鎖後 universe ~2172 stocks × 41 cores dispatch / facts daily ~78k new rows。
 
@@ -748,6 +748,40 @@ v4.9 (f0a6d10) — Item 3 Classifier 深層 nested label enrichment:
 僅留 V4.x:
 - Item 4 Pre-Constructive Pass 1 vs Pass 2 diagnostics union(需 Scenario struct 加新欄位)
 ```
+
+### v4.36 — DB sync 單緒寫入全面並行化(2026-06-04,2 commits / +45 tests)
+
+User 觀察 `PostgresWriter` 自 v3.3 已升 `psycopg_pool.ConnectionPool`(min=2/max=8)
+但 caller path 仍 sync 串列,要求一次補完 5 條路徑。0 alembic / 0 collector.toml /
+0 Rust,純 Python 並行重塑。
+
+| 層 | 串列瓶頸 | 修法 | 並行度 |
+|---|---|---|---|
+| Bronze `segment_runner._write` / `_merge_delist_date` | 已 in `asyncio.gather` 12 task,但 sync `db.upsert` 封住 event loop | `asyncio.to_thread(self.db.upsert, ...)` | `BRONZE_CONCURRENCY=12` 真實生效 |
+| Silver `_run_builders`(Phase 7a / 7b) | for-loop seq 15 builder | `asyncio.gather + to_thread + Semaphore` | `max(1, pool.max_size - 1)` ≈ 7 |
+| Cross-stock Phase 8 `orchestrator.run` | for-loop seq 12 builder | 同上 | 同上 |
+| Golden `run_fusion_materialize` universe loop | 2171 stocks × 4 ops seq + 共用單 conn | `ThreadPoolExecutor + 每 worker get_connection()` + streaming flush | 同上 |
+| Forecast `conformalize_batch` / `fuse_batch` / `backtest`(Kalman recalibrate 主力)| 共用單 conn × (stock × date × h × c) 4 層 nested | across-stock 並行(同股內 seq 避 forecast_log unique key 從屬冲突);CLI `--parallelism N`(0=auto) | 同上 |
+
+`climate fusion` marketwide 1 筆 fan-in,無 per-stock loop,不需動。
+
+並行度 = `max(1, DB_POOL_SIZE - 1)` 留 1 conn 給 MCP / dashboards / refresh chain
+同時用。Bronze/Silver/Cross-stock 既有為 async entry,延用 asyncio + to_thread;
+Golden/Forecast 為 sync caller(main.py CLI),走 ThreadPoolExecutor 避免引入
+asyncio.run 跳轉。Per-worker `get_connection()` ~1-3ms TCP overhead 被並行收益吸收。
+
+預期效益:Silver 7a `--full-rebuild` ~80 min → ~15-20 min;Golden fusion 全市場
+~30 min → ~5-10 min;Forecast conformalize ~2 hr → ~20-30 min;Kalman recalibrate
+週排程整鏈受惠最大。
+
+驗證:
+- Bronze 8 + Silver 10 + Cross-stock 9 + Golden 8 + Forecast 10 = **+45 new tests**
+- 全套 **714 passed / 0 failed**(669 既有 0 regression)
+- 含 wall-time-vs-sum 並行驗、worker thread id ≠ main、event-loop-not-blocked
+  (40ms sync sleep × 4 concurrent < 130ms wall,sync 路徑會 ≥ 160ms)、Semaphore
+  限流、worker 失敗隔離、`--parallelism=1` backward-compat 路徑
+
+完整 spec + per-path 修法細節 + 風險見 `CLAUDE.md §v4.36`。
 
 ---
 
