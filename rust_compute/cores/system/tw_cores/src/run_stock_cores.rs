@@ -72,10 +72,11 @@ pub async fn run_stock_cores(
             vec![tf]
         };
         for nt in trad_tfs {
-            let cfg = traditional_core::TraditionalEngineConfig {
+            let mut cfg = traditional_core::TraditionalEngineConfig {
                 timeframe: nt,
                 ..Default::default()
             };
+            crate::helpers::apply_traditional_env_overrides(&mut cfg);
             match traditional_core::loader::load_for_timeframe(pool, stock_id, &cfg).await {
                 Ok(series) => summary.push(
                     crate::dispatcher::dispatch_traditional(pool, stock_id, &series, cfg, write).await,

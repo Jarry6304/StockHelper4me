@@ -178,10 +178,11 @@ async fn run_traditional_debug(stock_id: &str, timeframe: &str) -> Result<()> {
     let tf = parse_timeframe(timeframe)?;
     let pool = connect_pg(2).await?;
 
-    let cfg = traditional_core::TraditionalEngineConfig {
+    let mut cfg = traditional_core::TraditionalEngineConfig {
         timeframe: tf,
         ..Default::default()
     };
+    crate::helpers::apply_traditional_env_overrides(&mut cfg);
     let series = traditional_core::loader::load_for_timeframe(&pool, stock_id, &cfg).await?;
     tracing::info!(
         stock_id,

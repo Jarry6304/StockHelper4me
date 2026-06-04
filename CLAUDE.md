@@ -320,13 +320,27 @@ PR #123 加的 `traditional/forest` / `waves`。動工前 user 給 scope。
 
 **② Traditional Wave 整批驗證 — 待驗**(DB-bound,沙箱跑不了;下方 runbook user 本機跑):
 
+> **⚠️ P0-Gate 校準(2026-06-04 production 揭露)**:`monowave_epsilon` 預設 0.0
+> (不過濾)→ 單股 traditional-debug 實測 **135s**(neely ~0.5s,慢 ~270×)→ 全市場
+> run-all 連線池餓死(`pool timed out` / `LIMIT 51` 查詢 2344s)。修法:**預設改 0.03**
+> (3% 反轉雜訊門檻,把 base 砍到 neely 量級)+ 4 旋鈕 env 覆寫(免重編 sweep):
+> `TRAD_MONOWAVE_EPSILON` / `TRAD_ROUND_BEAM_SIZE` / `TRAD_MAX_DEGREE_LEVELS` /
+> `TRAD_FOREST_MAX_SIZE`。先單股 sweep 定 epsilon 再跑全市場(且 `--concurrency 6~8`)。
+
 ```powershell
 git pull
 alembic upgrade head        # → j6k7l8m9n0o1(traditional_snapshots 已建)
 cd rust_compute; cargo build --release -p tw_cores; cd ..
 
+# 0. P0-Gate epsilon sweep(單股計時 + forest summary;目標 ~1-2s/股、forest ≤ 200 不過併)
+Measure-Command { .\rust_compute\target\release\tw_cores.exe traditional-debug --stock-id 3363 }   # 預設 0.03
+$env:TRAD_MONOWAVE_EPSILON='0.02'; .\rust_compute\target\release\tw_cores.exe traditional-debug --stock-id 3363
+$env:TRAD_MONOWAVE_EPSILON='0.05'; .\rust_compute\target\release\tw_cores.exe traditional-debug --stock-id 3363
+Remove-Item Env:\TRAD_MONOWAVE_EPSILON   # 定好值後清掉(或 set 成選定值再跑 run-all)
+
 # 1. 整批寫入(全 universe × daily/weekly/monthly;run-all 自動含 traditional_core)
-.\rust_compute\target\release\tw_cores.exe run-all --write
+#    ⚠️ 降並行避免連線池餓死(pool = concurrency+4):
+.\rust_compute\target\release\tw_cores.exe run-all --write --concurrency 8
 #    ⚠️ 看 elapsed:每股多跑 traditional × 3 tf(與 neely 同量級);爆 → workflow toml
 #       關 traditional_core 或調 forest_max_size / pivot
 
