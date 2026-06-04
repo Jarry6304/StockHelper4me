@@ -335,7 +335,7 @@ def fuse_one(
 
 
 def fuse_batch(
-    conn,
+    conn=None,
     *,
     stock_ids: list[str],
     forecast_dates: list[date],
@@ -343,24 +343,90 @@ def fuse_batch(
     confidences: list[float] | None = None,
     eligibility_window: int = _DEFAULT_ELIGIBILITY_WINDOW,
     min_samples: int = 30,
+    parallelism: int | None = None,
 ) -> dict[str, int]:
-    """Cartesian fuse over (stock × forecast_date × horizon × confidence)."""
+    """Cartesian fuse over (stock × forecast_date × horizon × confidence).
+
+    v4.36 並行:
+      parallelism=None → 走 env DB_POOL_SIZE-1(預設 7)across-stock 並行。
+      parallelism=1   → 單緒原行為(用 caller's conn,若 None 則自開一次)。
+      parallel > 1    → 每 worker 自開 psycopg conn,跨股並行。同股內部
+                        (date × horizon × confidence)仍 seq。
+    """
     horizons = horizons or [21, 63, 126]
     confidences = confidences or [0.50, 0.80, 0.95]
     from collections import defaultdict
+    import logging as _logging
+    import os as _os
+    from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
+
+    if not stock_ids:
+        return {}
+
+    def _default_par() -> int:
+        try:
+            return max(1, int(_os.getenv("DB_POOL_SIZE", "8")) - 1)
+        except ValueError:
+            return 7
+
+    _logger = _logging.getLogger("forecast.fusion")
+    n_workers = max(1, min(parallelism or _default_par(), len(stock_ids)))
+
+    def _seq(conn_, stock_ids_):
+        totals_local: dict[str, int] = defaultdict(int)
+        for sid in stock_ids_:
+            for fd in forecast_dates:
+                for h in horizons:
+                    for c in confidences:
+                        res = fuse_one(
+                            conn_,
+                            stock_id=sid,
+                            forecast_date=fd,
+                            horizon_days=h,
+                            confidence=c,
+                            eligibility_window=eligibility_window,
+                            min_samples=min_samples,
+                        )
+                        totals_local[res["status"]] += 1
+        return totals_local
+
+    # ── 單緒(backward-compat / tests)──────────────────────────────────
+    if n_workers == 1:
+        own_conn = conn is None
+        if own_conn:
+            from forecast._db import get_connection
+            conn = get_connection()
+        try:
+            return dict(_seq(conn, stock_ids))
+        finally:
+            if own_conn:
+                conn.close()
+
+    # ── 並行(across stocks,each worker own conn)──────────────────────
+    from forecast._db import get_connection
+
+    def _worker(sid: str) -> dict[str, int]:
+        wconn = get_connection()
+        try:
+            return _seq(wconn, [sid])
+        finally:
+            wconn.close()
+
+    _logger.info(
+        f"[fuse] stocks={len(stock_ids)} dates=[{forecast_dates[0]}, {forecast_dates[-1]}] "
+        f"parallelism={n_workers}"
+    )
     totals: dict[str, int] = defaultdict(int)
-    for sid in stock_ids:
-        for fd in forecast_dates:
-            for h in horizons:
-                for c in confidences:
-                    res = fuse_one(
-                        conn,
-                        stock_id=sid,
-                        forecast_date=fd,
-                        horizon_days=h,
-                        confidence=c,
-                        eligibility_window=eligibility_window,
-                        min_samples=min_samples,
-                    )
-                    totals[res["status"]] += 1
+    with _TPE(max_workers=n_workers, thread_name_prefix="fuse") as ex:
+        future_to_sid = {ex.submit(_worker, sid): sid for sid in stock_ids}
+        for fut in _ac(future_to_sid):
+            sid = future_to_sid[fut]
+            try:
+                local = fut.result()
+            except Exception as e:
+                _logger.warning(f"[fuse] worker {sid} crashed: {e}")
+                totals["worker_error"] += 1
+                continue
+            for k, v in local.items():
+                totals[k] += v
     return dict(totals)

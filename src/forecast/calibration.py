@@ -24,8 +24,11 @@ ACI(Adaptive Conformal Inference):
 
 from __future__ import annotations
 
+import logging
 import math
+import os
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import Any
 
@@ -33,6 +36,17 @@ from forecast._db import upsert_forecast
 
 
 __all__ = ["nonconformity_score", "cqr_quantile", "conformalize_one", "conformalize_batch"]
+
+
+_logger = logging.getLogger("forecast.calibration")
+
+
+def _default_parallelism() -> int:
+    """並行 worker 上限 = max(1, DB_POOL_SIZE - 1)。"""
+    try:
+        return max(1, int(os.getenv("DB_POOL_SIZE", "8")) - 1)
+    except ValueError:
+        return 7
 
 
 # ─── Core CQR math ───────────────────────────────────────────────────────────
@@ -212,7 +226,7 @@ def conformalize_one(
 
 
 def conformalize_batch(
-    conn,
+    conn=None,
     *,
     raw_core: str = "kalman_forecast_core",
     target_core: str = "kalman_cqr",
@@ -223,16 +237,99 @@ def conformalize_batch(
     confidences: list[float] | None = None,
     calibration_window: int = 500,
     min_calibration_size: int = 30,
+    parallelism: int | None = None,
 ) -> dict[str, int]:
     """For each (stock × trading day T × horizon × confidence) in range, run
     conformalize_one.  Returns summary counts.
 
     Note: this iterates over CALENDAR days, not trading days.  For dense
     backfill use the trading_date_ref-aware wrapper in CLI.
+
+    v4.36 並行:
+      parallelism=None → 走 env DB_POOL_SIZE-1(預設 7)across-stock 並行。
+      parallelism=1   → 單緒原行為(用 caller's conn,若 conn=None 則自開一次)。
+      parallel > 1    → 每 worker 自開 psycopg conn,跨股並行。同股內部
+                        (date × horizon × confidence)仍 seq,避免單股 forecast_log
+                        unique key 從屬冲突。
     """
     horizons = horizons or [21, 63, 126]
     confidences = confidences or [0.50, 0.80, 0.95]
 
+    if not stock_ids:
+        return {}
+
+    n_workers = max(1, min(parallelism or _default_parallelism(), len(stock_ids)))
+
+    # ── 單緒路徑(backward-compat:tests / 不開 pool 環境) ────────────────
+    if n_workers == 1:
+        own_conn = conn is None
+        if own_conn:
+            from forecast._db import get_connection
+            conn = get_connection()
+        try:
+            return _conformalize_stocks_seq(
+                conn, stock_ids=stock_ids, raw_core=raw_core, target_core=target_core,
+                start=start, end=end, horizons=horizons, confidences=confidences,
+                calibration_window=calibration_window,
+                min_calibration_size=min_calibration_size,
+            )
+        finally:
+            if own_conn:
+                conn.close()
+
+    # ── 並行路徑(across stocks,每 worker own conn)─────────────────────
+    from forecast._db import get_connection
+
+    def _worker(sid: str) -> dict[str, int]:
+        wconn = get_connection()
+        try:
+            return _conformalize_stocks_seq(
+                wconn, stock_ids=[sid], raw_core=raw_core, target_core=target_core,
+                start=start, end=end, horizons=horizons, confidences=confidences,
+                calibration_window=calibration_window,
+                min_calibration_size=min_calibration_size,
+            )
+        finally:
+            wconn.close()
+
+    _logger.info(
+        f"[conformalize] stocks={len(stock_ids)} raw={raw_core} target={target_core} "
+        f"window=[{start}, {end}] parallelism={n_workers}"
+    )
+    totals: dict[str, int] = defaultdict(int)
+    with ThreadPoolExecutor(max_workers=n_workers,
+                            thread_name_prefix="conformalize") as ex:
+        future_to_sid = {ex.submit(_worker, sid): sid for sid in stock_ids}
+        for fut in as_completed(future_to_sid):
+            sid = future_to_sid[fut]
+            try:
+                local = fut.result()
+            except Exception as e:
+                _logger.warning(f"[conformalize] worker {sid} crashed: {e}")
+                totals["worker_error"] += 1
+                continue
+            for k, v in local.items():
+                totals[k] += v
+    return dict(totals)
+
+
+def _conformalize_stocks_seq(
+    conn,
+    *,
+    stock_ids: list[str],
+    raw_core: str,
+    target_core: str,
+    start: date,
+    end: date,
+    horizons: list[int],
+    confidences: list[float],
+    calibration_window: int,
+    min_calibration_size: int,
+) -> dict[str, int]:
+    """單一 conn 跑指定 stocks × dates × horizons × confidences,回 status counter。
+
+    抽出讓並行 worker(單股)與單緒模式(全股)共用同一份 inner loop。
+    """
     totals: dict[str, int] = defaultdict(int)
     cur_d = start
     while cur_d <= end:
