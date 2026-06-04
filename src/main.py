@@ -327,6 +327,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="0.50,0.80,0.95",
         help="逗號分隔 confidence(預設 0.50,0.80,0.95)",
     )
+    f_backtest.add_argument(
+        "--parallelism",
+        type=int,
+        default=0,
+        help=(
+            "across-stock 並行 worker 數(0 = 走 DB_POOL_SIZE-1 自動,1 = 單緒"
+            ";v4.36)。每 worker 自開 psycopg conn,同股內部仍 seq。"
+        ),
+    )
 
     # forecast settle [--asof TODAY] [--core baseline]
     f_settle = forecast_subparsers.add_parser(
@@ -429,6 +438,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=30,
         help="最少校準集 size(< 此值不寫 row;預設 30)",
     )
+    f_conf.add_argument(
+        "--parallelism",
+        type=int,
+        default=0,
+        help=(
+            "across-stock 並行 worker 數(0 = 走 DB_POOL_SIZE-1 自動;v4.36)。"
+            "每 worker 自開 psycopg conn,同股內部 date×h×c 仍 seq。"
+        ),
+    )
 
     # forecast fuse --stocks 2330 --since 2022-01-01 [--until TODAY]
     f_fuse = forecast_subparsers.add_parser(
@@ -447,6 +465,13 @@ def build_parser() -> argparse.ArgumentParser:
     f_fuse.add_argument(
         "--min-samples", type=int, default=30,
         help="eligible 比較需最少 settled rows(預設 30)",
+    )
+    f_fuse.add_argument(
+        "--parallelism", type=int, default=0,
+        help=(
+            "across-stock 並行 worker 數(0 = 走 DB_POOL_SIZE-1 自動;v4.36)。"
+            "每 worker 自開 psycopg conn,同股內部 date×h×c 仍 seq。"
+        ),
     )
 
     # forecast score [--core baseline] [--horizon 63] [--group-by source_core]
@@ -1279,16 +1304,27 @@ def _run_forecast(args) -> None:
         horizons = [int(h) for h in args.horizons.split(",") if h.strip()]
         confidences = [float(c) for c in args.confidences.split(",") if c.strip()]
 
-        with get_connection() as conn:
-            total = {"trading_days": 0, "attempted": 0, "written": 0, "skipped": 0}
-            for stock_id in stocks:
+        # v4.36 across-stock 並行(0 = 自動,對齊 DB_POOL_SIZE-1)
+        import os as _os_p
+        cli_p = getattr(args, "parallelism", 0) or 0
+        if cli_p <= 0:
+            try:
+                n_workers = max(1, int(_os_p.getenv("DB_POOL_SIZE", "8")) - 1)
+            except ValueError:
+                n_workers = 7
+        else:
+            n_workers = max(1, cli_p)
+        n_workers = max(1, min(n_workers, len(stocks)))
+
+        def _run_one_stock(stock_id: str) -> dict[str, int]:
+            with get_connection() as wconn:
                 logger.info(
                     "forecast backtest stock=%s core=%s [%s, %s] horizons=%s confs=%s",
                     stock_id, args.core, since, until, horizons, confidences,
                 )
-                stock_fn = fn if factory is None else factory(conn, stock_id)
-                summary = run_backtest(
-                    conn,
+                stock_fn = fn if factory is None else factory(wconn, stock_id)
+                return run_backtest(
+                    wconn,
                     stock_id=stock_id,
                     forecast_fn=stock_fn,
                     source_core=args.core,
@@ -1297,10 +1333,35 @@ def _run_forecast(args) -> None:
                     horizons=horizons,
                     confidences=confidences,
                 )
+
+        total = {"trading_days": 0, "attempted": 0, "written": 0, "skipped": 0}
+        if n_workers == 1:
+            for stock_id in stocks:
+                summary = _run_one_stock(stock_id)
                 for k in total:
                     total[k] += summary[k]
                 print(f"{stock_id}: {summary}")
-            print(f"\ntotal: {total}")
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            logger.info(
+                "forecast backtest parallel: stocks=%d workers=%d",
+                len(stocks), n_workers,
+            )
+            with ThreadPoolExecutor(max_workers=n_workers,
+                                    thread_name_prefix="backtest") as ex:
+                future_to_sid = {ex.submit(_run_one_stock, sid): sid for sid in stocks}
+                for fut in as_completed(future_to_sid):
+                    sid = future_to_sid[fut]
+                    try:
+                        summary = fut.result()
+                    except Exception as e:
+                        logger.warning(f"backtest worker {sid} crashed: {e}")
+                        print(f"{sid}: FAILED {e}")
+                        continue
+                    for k in total:
+                        total[k] += summary[k]
+                    print(f"{sid}: {summary}")
+        print(f"\ntotal: {total}")
 
     elif sub == "settle":
         from forecast.settlement import resolve_pending
@@ -1388,17 +1449,22 @@ def _run_forecast(args) -> None:
             dates.append(d)
             d += _td(days=1)
 
-        with get_connection() as conn:
-            summary = fuse_batch(
-                conn,
-                stock_ids=stocks,
-                forecast_dates=dates,
-                horizons=horizons,
-                confidences=confidences,
-                eligibility_window=args.eligibility_window,
-                min_samples=args.min_samples,
-            )
-            print(f"fuse summary: {summary}")
+        # v4.36:--parallelism 0 = 自動(DB_POOL_SIZE-1);> 1 → workers 自開 conn
+        # 不再事先開 caller conn(parallel 路徑下會被 workers ignore)
+        parallelism = getattr(args, "parallelism", 0) or 0
+        if parallelism <= 0:
+            parallelism = None  # 走 fuse_batch 預設 = DB_POOL_SIZE-1
+        summary = fuse_batch(
+            None,  # parallel 模式 workers 自開;parallelism=1 時 fuse_batch 內部自開一次
+            stock_ids=stocks,
+            forecast_dates=dates,
+            horizons=horizons,
+            confidences=confidences,
+            eligibility_window=args.eligibility_window,
+            min_samples=args.min_samples,
+            parallelism=parallelism,
+        )
+        print(f"fuse summary: {summary}")
 
     elif sub == "conformalize":
         from forecast.calibration import conformalize_batch
@@ -1410,24 +1476,29 @@ def _run_forecast(args) -> None:
         horizons = [int(h) for h in args.horizons.split(",") if h.strip()]
         confidences = [float(c) for c in args.confidences.split(",") if c.strip()]
 
-        with get_connection() as conn:
-            logger.info(
-                "forecast conformalize stocks=%s raw=%s target=%s [%s, %s] horizons=%s confs=%s",
-                stocks, args.raw_core, args.target_core, since, until, horizons, confidences,
-            )
-            summary = conformalize_batch(
-                conn,
-                raw_core=args.raw_core,
-                target_core=args.target_core,
-                stock_ids=stocks,
-                start=since,
-                end=until,
-                horizons=horizons,
-                confidences=confidences,
-                calibration_window=args.calibration_window,
-                min_calibration_size=args.min_calibration_size,
-            )
-            print(f"conformalize summary: {summary}")
+        # v4.36:--parallelism 0 = 自動(DB_POOL_SIZE-1);workers 自開 conn
+        parallelism = getattr(args, "parallelism", 0) or 0
+        if parallelism <= 0:
+            parallelism = None
+        logger.info(
+            "forecast conformalize stocks=%s raw=%s target=%s [%s, %s] horizons=%s confs=%s parallelism=%s",
+            stocks, args.raw_core, args.target_core, since, until,
+            horizons, confidences, parallelism,
+        )
+        summary = conformalize_batch(
+            None,
+            raw_core=args.raw_core,
+            target_core=args.target_core,
+            stock_ids=stocks,
+            start=since,
+            end=until,
+            horizons=horizons,
+            confidences=confidences,
+            calibration_window=args.calibration_window,
+            min_calibration_size=args.min_calibration_size,
+            parallelism=parallelism,
+        )
+        print(f"conformalize summary: {summary}")
 
     elif sub == "score":
         from forecast.scorer import score
