@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → v4.35 + Traditional Core v2/v3,最新 2026-06-02;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → **v4.36** + Traditional Core v2/v3,最新 2026-06-04;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
@@ -397,7 +397,135 @@ User 推翻 v1「R6/R7/R8/R11 標 Deferred + 單股判 forest」框法:**子浪�
 
 ---
 
-## v4.35 — magic_formula `is_top_30` → `is_top_n` schema 對齊(2026-06-01)
+## v4.36 — DB sync 單緒寫入全面並行化:Bronze + Silver + Cross-stock + Golden + Forecast 五層(2026-06-04)
+
+User 觀察既有 pipeline 多處「明明 `PostgresWriter` 已升 ConnectionPool(v3.3
+pool min=2/max=8)但 caller path 仍是 sync 串列」,要求一次補完。Audit 後鎖定
+5 條真實 sync DB 寫入路徑,分兩個 commit 收尾。**0 alembic / 0 collector.toml /
+0 Rust 改動,純 Python 並行重塑**。
+
+### 動工:5 條路徑
+
+| 層 | 串列瓶頸 | 修法 | 並行度 |
+|---|---|---|---|
+| 1. Bronze `segment_runner._write` / `_merge_delist_date` | 已 in `asyncio.gather` 12 concurrent task,但 sync `db.upsert` 封住 event loop → pool 多 conn 沒用上 | 改 async + `asyncio.to_thread(self.db.upsert, ...)`;`_merge_delist_date_sync` 抽 sync helper,wrapper 走 to_thread | `BRONZE_CONCURRENCY=12` 真實生效 |
+| 2. Silver `SilverOrchestrator._run_builders`(Phase 7a / 7b) | for-loop seq 跑 15 個 builder | `asyncio.gather + asyncio.to_thread + Semaphore`;`_run_7a_incremental` 同步改 async,window globals 在 gather 邊界 set/clear 無 race | `max(1, pool.max_size - 1)` ≈ 7 |
+| 3. Cross-stock `CrossStockOrchestrator.run`(Phase 8) | for-loop seq 跑 12 個 builder(wave_impulse_screen 單一 ~21s 擋路)| 同 #2 pattern | 同上 |
+| 4. Golden `run_fusion_materialize` universe loop | 2171 stocks × (1 levels + 3 resonance) seq + 共用單一 psycopg.connect | 拆兩階段:metadata 階段共用 meta_conn(latest date / universe / lag warning),per-stock 階段 `ThreadPoolExecutor + 每 worker get_connection()`(psycopg conn **非** thread-safe,不能直接 to_thread 共用)。db.upsert 走 PostgresWriter pool 仍 thread-safe;streaming flush(_BATCH=500)邊 gather 邊 flush | 同上 |
+| 5. Forecast `conformalize_batch` / `fuse_batch` / `backtest`(Kalman 週排程主力)| 共用單一 conn × (stock × date × horizon × confidence) 4 層 nested | 加 `parallelism` 參數;**across-stock** 並行(同股內 date×h×c 仍 seq,避 forecast_log unique key 從屬冲突);每 worker `get_connection()` 自開;`parallelism=1` + caller's conn → 原單緒 path(backward-compat,既有 tests 不破);main.py CLI 加 `--parallelism N`(0=auto) | 同上 |
+
+`climate fusion` 是 marketwide 1 筆 fan-in,無 per-stock loop,**不需動**。
+
+### 設計決策
+
+- **並行度 = `max(1, DB_POOL_SIZE - 1)`**:對齊 PostgresWriter pool max_size,留 1 conn
+  給 query 路徑(MCP / dashboards / refresh chain 其他 SQL 同時用)。預設 pool=8 → 並行 7。
+- **Bronze 改 async/to_thread**(已 in asyncio):psycopg conn 走 PostgresWriter pool,
+  thread-safe;db.upsert 內部 `with self.pool.connection()` 每呼叫取 conn,沒共用。
+- **Silver / Cross-stock 走 asyncio.gather + to_thread**:既有 orchestrator entry 是
+  async,延用 asyncio 邊界;Semaphore 限縮並發 = pool size - 1。
+- **Golden / Forecast 走 ThreadPoolExecutor**:這兩個 caller 是 sync(main.py CLI
+  + `_run_refresh`),不引入 asyncio.run 跳轉;同款 worker 自開 conn pattern。
+- **Per-worker `get_connection()`**:`fusion.raw._db.get_connection()` 是 `psycopg.connect()`
+  直開(非 pool);每 worker 自開 own conn,~1ms TCP overhead,可接受。
+- **Backward compat**:forecast 兩 batch 函式 `parallelism=1` + 傳 conn 仍走原單緒
+  path(既有測試 `tests/forecast/test_calibration.py` 0 改動仍綠);`parallelism=None`
+  → 走 env auto。`fusion_stage` 同款 `parallelism=1` 退單緒 path(test fixture 友善)。
+
+### 範圍(2 commits / branch `claude/confident-rubin-InOSj`)
+
+| Commit | 範圍 |
+|---|---|
+| `05b5655` | Bronze segment_runner + Silver orchestrator + Cross-stock orchestrator(asyncio path)|
+| `f167627` | Golden fusion materialize + Forecast conformalize/fuse + main.py CLI `--parallelism`(sync ThreadPool path) |
+
+### Tests(+45 new across 5 modules,既有 0 regression)
+
+| 模組 | 新 tests | 重點 |
+|---|---|---|
+| `tests/bronze/test_segment_runner_async_write.py` | 8 | `_write` async signature / db.upsert 走 to_thread / **event loop 不被封**(40ms sync sleep × 4 concurrent < 130ms wall,sync 路徑會 ≥ 160ms)/ worker thread id ≠ main |
+| `tests/silver/test_orchestrator_parallel.py` | 10 | `_parallelism_limit` 對 pool max_size / wall-time-vs-sum 並行驗 / Semaphore 限流(pool=3 對 6 builders × 50ms ≈ 3 波 150ms)/ 失敗隔離 / incremental 路徑同款並行 |
+| `tests/cross_cores/test_orchestrator_parallel.py` | 9 | 同上 pattern + `lookback_days` 傳遞 + 未知 builder early-fail |
+| `tests/fusion/test_materialize_parallel.py` | 8 | `parallelism=1` 退單緒 / `parallelism>1` ThreadPool + worker own conn / per-stock 失敗仍 graceful / `_default_parallelism()` env / empty universe edge |
+| `tests/forecast/test_batch_parallel.py` | 10 | `parallelism=1` + caller conn = backward compat / parallel 模式 each worker own conn(spy `get_connection` 6 次 6 stocks)/ worker crash 計 `worker_error` 不擋其他 / 6 stock × 30ms sleep × parallel 3 < 130ms |
+
+**全套 714 passed / 0 failed / 1 skipped / 2 xfailed**(1 skipped + 2 xfailed 皆 pre-existing,與本 PR 無關)。
+
+### user 本機 verify(下次跑)
+
+```powershell
+git pull
+# Bronze incremental — 看 logs 應出現 "concurrency=12" 跑同時不再卡 DB
+python src/main.py incremental
+
+# Silver 7a 並行 — log 應有 "[silver] 並行 15 builder(concurrency=7)"
+python src/main.py silver phase 7a --full-rebuild
+# 同款 cross_cores Phase 8 — log "[Phase 8] 並行 12 builder(concurrency=7)"
+python src/main.py cross_cores phase 8 --full-rebuild
+
+# Golden fusion — log "[golden.fusion] as_of=... universe=2172 ... parallelism=7"
+python src/main.py golden fusion
+
+# Forecast(Kalman recalibrate 週排程主力)— 新 --parallelism CLI flag
+.\scripts\recalibrate_kalman.ps1 -Incremental
+# 內部 conformalize / fuse 自動 parallelism=auto(env DB_POOL_SIZE-1)
+# 顯式設定:
+python src/main.py forecast conformalize ... --parallelism 7
+python src/main.py forecast fuse ... --parallelism 7
+python src/main.py forecast backtest ... --parallelism 7
+
+# 確認沒爆 PG / pool waitlist 過長:
+psql $env:DATABASE_URL -c "
+SELECT state, COUNT(*) FROM pg_stat_activity
+ WHERE datname='twstock' GROUP BY state;
+"
+# 預期 active 不超過 pool max_size + 一些 idle reserved;若 idle in transaction 累積 → 看是否有 worker 卡住
+```
+
+### 預期效益(粗估)
+
+| 路徑 | 串列 wall | 並行 wall(pool=8 → 7 worker) | 加速 |
+|---|---|---|---|
+| Bronze incremental(daily refresh,DB 寫入部分)| 自然 ~13 min | wall 同~13 min(主要是 FinMind API rate limit,DB 寫入只是順便不擋 fetch)| 0%(fetch 仍是 bottleneck);但**對 batch backfill** event loop 解封後,fetch + write 真實 overlap |
+| Silver 7a `--full-rebuild` | ~80 min | ~15-20 min | **~4×** |
+| Cross-stock Phase 8 | ~3 min(wave_impulse_screen 21s 擋路) | ~1 min | **~3×** |
+| Golden fusion 全市場 | ~30 min | ~5-10 min | **~3-5×** |
+| Forecast conformalize 全市場 | ~2 hr(incremental window)| **~20-30 min** | **~4-6×** |
+
+實測待 user 跑 production 後確認;若 PG contention(idx_facts_* lock / WAL flush)
+變新 bottleneck,可調低 parallelism(`--parallelism 4` 或 env `DB_POOL_SIZE=6`)。
+
+### 風險
+
+🟢 低:
+- 0 schema / 0 Rust / 0 collector.toml 改動
+- backward compat 完整:Silver / Cross-stock 既有測試 fixture(MagicMock no pool 屬性)
+  走 env fallback 至 7 worker;Forecast `parallelism=1` + 傳 conn 走原單緒 path
+- 既有 669 tests + 新 45 tests = **714 passed,0 regression**
+- Rollback:每 commit 獨立 `git revert`(05b5655 / f167627 兩個可分別回退)
+
+🟡 中:
+- **PG contention 風險**:`facts` / `forecast_log` / `structural_snapshots` 三大表
+  unique index ON CONFLICT 對 concurrent writer 仍有 row lock,實際 perf gain 受
+  PG planner / WAL / idx 競爭影響;若爆 → 降 `DB_POOL_SIZE` 或 `--parallelism N`
+- **worker get_connection psycopg.connect overhead**:per-stock 多開 conn ~1-3ms,
+  golden fusion 2171 stocks 共 ~3-6s overhead,被並行收益吸收;若想再優化可
+  改 fusion.raw._db 升 ConnectionPool(V3 backlog)
+
+🔴 高:**無**
+
+### Out of Scope(留 future)
+
+- `fusion.raw._db.get_connection()` 升 `psycopg_pool.ConnectionPool`(取代 per-worker
+  psycopg.connect,~ms 級 perf gain;但需多 env knob 與 writer pool 解耦)
+- Forecast `settle` / `score` 平行化(目前 single-shot,wall time 不痛)
+- climate fusion 並行(marketwide 1 筆,無需)
+- 觀察是否爆 PG `max_connections`(預設 100);production 11 + 12 + 7 + 7 + 7 ≈
+  ~44 connection 高水位,看 user 機器設定
+
+---
+
+
 
 `magic_formula_ranked_derived`(2026-05-15 最早建)是唯一用 `is_top_30` 欄名的
 cross-stock ranked 表;v3.32(d9e0f1g2h3i4)10 表 + v4.26(g3h4i5j6k7l8)wave_impulse
