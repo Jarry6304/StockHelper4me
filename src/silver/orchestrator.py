@@ -9,12 +9,14 @@ PR #19c 落地:
   - 7b 跑 financial_statement(依賴 monthly_revenue;monthly_revenue PR 動工後接)
   - 7c 派 rust_bridge.run_phase4 給 tw_market_core 系列(price_*_fwd + 漲跌停 merge)
 
-為什麼是串列(不是 asyncio.gather):
-  PostgresWriter 持單一 connection(非 pool),concurrent thread access 會踩
-  psycopg 的 thread-safety 限制(connection 不是 thread-safe by 預設)。要平行
-  跑 builder 需先升級 db 層為 connection pool 或 wrap 每個 builder 用 own conn。
-  追求平行的 perf gain 在這層實際很小(每個 builder 是 SELECT *  + batch UPSERT,
-  ~ms 量級),先求正確,平行優化留後續 PR(blueprint §三 後續迭代)。
+並行(v4.36):
+  v3.3 起 PostgresWriter 已升 psycopg_pool.ConnectionPool,每 db.upsert / query
+  call 都 `with self.pool.connection()` 取連線,thread-safe。v4.36 把 `_run_builders`
+  改 `asyncio.gather + asyncio.to_thread + Semaphore`,builder 之間真正並行;
+  並行度 = max(1, pool.max_size - 1)(留 1 conn 給 MCP / dashboards / refresh
+  chain 的 query 路徑同時用)。incremental 窗口 `_READ_SINCE / _WRITE_SINCE`
+  是 module global,所有 worker thread 讀同一值;orchestrator 在 gather 前
+  set、gather 後 clear,沒有 race。
 
 stub builder 處理(防衛性 — 13 個 builder PR #19a-c 全實作完成,但 catch
 NotImplementedError 防將來新加 stub):
@@ -31,7 +33,9 @@ NotImplementedError 防將來新加 stub):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 from datetime import date, timedelta
 from typing import Any
@@ -153,11 +157,11 @@ class SilverOrchestrator:
                 phase_builders = self._filter_builders(phase, builders)
                 if phase == "7a" and not full_rebuild:
                     # v4.15:7a 非 full_rebuild 走 incremental 窗口(不再全量重算)
-                    results[phase] = self._run_7a_incremental(
+                    results[phase] = await self._run_7a_incremental(
                         stock_ids=stock_ids, builders=phase_builders,
                     )
                 else:
-                    results[phase] = self._run_builders(
+                    results[phase] = await self._run_builders(
                         phase_builders,
                         stock_ids=stock_ids,
                         full_rebuild=full_rebuild,
@@ -209,7 +213,7 @@ class SilverOrchestrator:
     _INCR_READ_LOOKBACK_DAYS = 180
     _INCR_WRITE_LOOKBACK_DAYS = 30
 
-    def _run_7a_incremental(
+    async def _run_7a_incremental(
         self, *, stock_ids: list[str] | None,
         builders: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
@@ -221,6 +225,9 @@ class SilverOrchestrator:
 
         builders:None = PHASE_GROUPS["7a"] 全跑;否則跑指定子集(已由
         `_filter_builders` 校驗過 + 重排序)。
+
+        v4.36:`_run_builders` 已並行;這裡 set/clear window 在 gather 邊界外,
+        所有 worker thread 在 gather 期間讀同一 window value,沒有 race。
         """
         today = date.today()
         read_since  = today - timedelta(days=self._INCR_READ_LOOKBACK_DAYS)
@@ -230,47 +237,82 @@ class SilverOrchestrator:
         )
         set_incremental_window(read_since, write_since)
         try:
-            return self._run_builders(
+            return await self._run_builders(
                 builders or PHASE_GROUPS["7a"],
                 stock_ids=stock_ids, full_rebuild=False,
             )
         finally:
             clear_incremental_window()
 
+    # ------------------------------------------------------------ parallelism
+    def _parallelism_limit(self) -> int:
+        """並行 builder 上限 = max(1, DB pool max_size - 1)。
+
+        留 1 conn 給 query 路徑(MCP / dashboards / refresh chain 其他 SQL 同時用)。
+        PostgresWriter `self.db.pool.max_size`(v3.3 ConnectionPool)為主來源;
+        若 db 是 MagicMock(test fixtures)或沒有 pool 屬性 → 走 env DB_POOL_SIZE
+        fallback,失敗 → 7(對齊 db.py 預設 pool=8)。
+        """
+        pool = getattr(self.db, "pool", None)
+        max_size = getattr(pool, "max_size", None)
+        if isinstance(max_size, int) and max_size > 0:
+            return max(1, max_size - 1)
+        try:
+            return max(1, int(os.getenv("DB_POOL_SIZE", "8")) - 1)
+        except ValueError:
+            return 7
+
     # --------------------------------------------------------------- private
-    def _run_builders(
+    async def _run_builders(
         self,
         names: list[str],
         *,
         stock_ids: list[str] | None,
         full_rebuild: bool,
     ) -> dict[str, dict[str, Any]]:
-        """串列跑一組 builder。NotImplementedError → skipped(不中斷整個 phase)。"""
-        out: dict[str, dict[str, Any]] = {}
-        for name in names:
+        """並行跑一組 builder(v4.36)。NotImplementedError → skipped(不中斷整個 phase)。
+
+        - 每個 builder 走 `asyncio.to_thread(module.run, ...)`(builder 內部 db
+          操作仍是同步,但 thread 不擋 event loop)
+        - Semaphore = `_parallelism_limit()`,對齊 PostgresWriter pool max_size - 1
+        - `asyncio.gather` 保留 names 順序回 result tuple,再組成 dict(對齊既有
+          ordered log + tests `set(keys) == ...` 預期)
+        - builder 失敗不中斷其他;對齊 cores_overview §7.5 dirty 契約。
+        """
+        if not names:
+            return {}
+
+        limit = self._parallelism_limit()
+        sem = asyncio.Semaphore(limit)
+        logger.info(
+            f"  [silver] 並行 {len(names)} builder(concurrency={limit})"
+        )
+
+        async def _run_one(name: str) -> tuple[str, dict[str, Any]]:
             module = BUILDERS.get(name)
             if module is None:
                 logger.error(f"  [{name}] 不在 BUILDERS 註冊表,跳過")
-                out[name] = {"name": name, "status": "missing"}
-                continue
+                return name, {"name": name, "status": "missing"}
 
-            try:
-                result = module.run(
-                    self.db,
-                    stock_ids=stock_ids,
-                    full_rebuild=full_rebuild,
-                )
-                result["status"] = "ok"
-                out[name] = result
-            except NotImplementedError as e:
-                logger.warning(f"  [{name}] skipped(stub): {e}")
-                out[name] = {"name": name, "status": "skipped", "reason": str(e)}
-            except Exception as e:
-                logger.error(f"  [{name}] FAILED: {e}", exc_info=True)
-                out[name] = {"name": name, "status": "failed", "reason": str(e)}
-                # 失敗不中斷其他 builder;對齊 cores_overview §7.5 dirty 契約:
-                # 失敗的 builder 不 reset is_dirty,下次 phase 再被選中重試。
-        return out
+            async with sem:
+                try:
+                    result = await asyncio.to_thread(
+                        module.run,
+                        self.db,
+                        stock_ids=stock_ids,
+                        full_rebuild=full_rebuild,
+                    )
+                    result["status"] = "ok"
+                    return name, result
+                except NotImplementedError as e:
+                    logger.warning(f"  [{name}] skipped(stub): {e}")
+                    return name, {"name": name, "status": "skipped", "reason": str(e)}
+                except Exception as e:
+                    logger.error(f"  [{name}] FAILED: {e}", exc_info=True)
+                    return name, {"name": name, "status": "failed", "reason": str(e)}
+
+        result_pairs = await asyncio.gather(*(_run_one(n) for n in names))
+        return {name: result for name, result in result_pairs}
 
     async def _run_7c(
         self, *, stock_ids: list[str] | None, full_rebuild: bool,

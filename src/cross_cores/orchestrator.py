@@ -14,7 +14,9 @@ silver/orchestrator 但語意更簡單。
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -65,10 +67,32 @@ class CrossStockOrchestrator:
 
     Args:
         db: DBWriter
+
+    v4.36 並行:
+      v3.3 PostgresWriter 已 ConnectionPool。builder 之間互不依賴(各寫自己的
+      `*_ranked_derived`),改 `asyncio.gather + asyncio.to_thread + Semaphore`
+      平行跑;並行度 = max(1, pool.max_size - 1)(留 1 conn 給 query 路徑)。
+      原本 12 builder 串列(總和 ~30-60s,wave_impulse_screen 單一 ~21s)→
+      並行下整體 ≈ 最慢 builder + 排隊時間。
     """
 
     def __init__(self, db: Any):
         self.db = db
+
+    def _parallelism_limit(self) -> int:
+        """並行 builder 上限 = max(1, DB pool max_size - 1)。
+
+        留 1 conn 給其他 query 路徑(MCP / dashboards / refresh chain 同時用)。
+        MagicMock / 無 pool 屬性 fixture → 走 env DB_POOL_SIZE fallback。
+        """
+        pool = getattr(self.db, "pool", None)
+        max_size = getattr(pool, "max_size", None)
+        if isinstance(max_size, int) and max_size > 0:
+            return max(1, max_size - 1)
+        try:
+            return max(1, int(os.getenv("DB_POOL_SIZE", "8")) - 1)
+        except ValueError:
+            return 7
 
     async def run(
         self,
@@ -79,6 +103,9 @@ class CrossStockOrchestrator:
         lookback_days: int | None = None,
     ) -> dict[str, Any]:
         """跑指定的 cross-stock builders(預設全跑)。
+
+        v4.36:builder 之間 asyncio.gather 並行,各自走 asyncio.to_thread
+        把同步 module.run() 派給 worker thread,event loop 不被 sync DB 操作擋。
 
         Args:
             builders:      None = 全跑;否則只跑指定 names
@@ -101,25 +128,34 @@ class CrossStockOrchestrator:
                 "(magic_formula 走 latest N dates),忽略。"
             )
 
-        results: dict[str, Any] = {}
-        for name in names:
+        limit = self._parallelism_limit()
+        sem = asyncio.Semaphore(limit)
+        logger.info(
+            f"[Phase 8] 並行 {len(names)} builder(concurrency={limit})"
+        )
+
+        async def _run_one(name: str) -> tuple[str, dict[str, Any]]:
             module = BUILDERS[name]
             logger.info(f"[Phase 8][{name}] start")
-            try:
-                kwargs: dict[str, Any] = {"full_rebuild": full_rebuild}
-                if lookback_days is not None:
-                    kwargs["lookback_days"] = lookback_days
-                result = module.run(self.db, **kwargs)
-                result["status"] = "ok"
-                results[name] = result
-                logger.info(
-                    f"[Phase 8][{name}] done "
-                    f"rows={result.get('rows_written', 0)} "
-                    f"elapsed={result.get('elapsed_ms', 0)}ms"
-                )
-            except Exception as e:
-                logger.error(f"[Phase 8][{name}] FAILED: {e}", exc_info=True)
-                results[name] = {"name": name, "status": "failed", "reason": str(e)}
+            async with sem:
+                try:
+                    kwargs: dict[str, Any] = {"full_rebuild": full_rebuild}
+                    if lookback_days is not None:
+                        kwargs["lookback_days"] = lookback_days
+                    result = await asyncio.to_thread(module.run, self.db, **kwargs)
+                    result["status"] = "ok"
+                    logger.info(
+                        f"[Phase 8][{name}] done "
+                        f"rows={result.get('rows_written', 0)} "
+                        f"elapsed={result.get('elapsed_ms', 0)}ms"
+                    )
+                    return name, result
+                except Exception as e:
+                    logger.error(f"[Phase 8][{name}] FAILED: {e}", exc_info=True)
+                    return name, {"name": name, "status": "failed", "reason": str(e)}
+
+        result_pairs = await asyncio.gather(*(_run_one(n) for n in names))
+        results: dict[str, Any] = {name: result for name, result in result_pairs}
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return {

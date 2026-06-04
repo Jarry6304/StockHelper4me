@@ -101,7 +101,7 @@ class _SegmentRunner:
             if rows is None:
                 return  # aggregation 失敗已 mark_failed
 
-            if not self._write(stock_id, seg_start, seg_end, rows):
+            if not await self._write(stock_id, seg_start, seg_end, rows):
                 return  # DB write 失敗已 mark_failed
 
             # 更新進度
@@ -211,21 +211,28 @@ class _SegmentRunner:
 
         return rows
 
-    def _write(
+    async def _write(
         self,
         stock_id: str,
         seg_start: str,
         seg_end: str,
         rows: list[dict],
     ) -> bool:
-        """DB 寫入(含 merge_strategy 特殊處理)。回 False 表寫入失敗已 mark。"""
+        """DB 寫入(含 merge_strategy 特殊處理)。回 False 表寫入失敗已 mark。
+
+        v4.36:db.upsert / db.update 走 asyncio.to_thread,以免 sync 路徑封住
+        asyncio event loop(_run_api 用 asyncio.gather 並發 12 個 task,先前
+        所有 task 在 fetch 完都同步搶 DB → pool 連線多但 event loop 仍序列化)。
+        """
         api_config = self.api_config
         try:
             if api_config.merge_strategy == "update_delist_date":
-                self._merge_delist_date(rows)
+                await asyncio.to_thread(self._merge_delist_date_sync, rows)
             elif rows:
                 pks = self.db._table_pks(api_config.target_table)
-                self.db.upsert(api_config.target_table, rows, primary_keys=pks)
+                await asyncio.to_thread(
+                    self.db.upsert, api_config.target_table, rows, pks
+                )
         except Exception as e:
             logger.error(
                 f"[{api_config.name}] DB 寫入失敗 stock={stock_id} "
@@ -237,11 +244,12 @@ class _SegmentRunner:
             return False
         return True
 
-    def _merge_delist_date(self, rows: list[dict]) -> None:
+    def _merge_delist_date_sync(self, rows: list[dict]) -> None:
         """特殊合併策略:只更新 stock_info_ref 表的 delisting_date 欄位。
 
         用於 TaiwanStockDelisting 的資料處理。
         v3.2 R-2:stock_info → stock_info_ref;delist_date → delisting_date。
+        v4.36:同步 helper,由 `_write` 走 asyncio.to_thread 呼叫。
         """
         for row in rows:
             stock_id = row.get("stock_id")
