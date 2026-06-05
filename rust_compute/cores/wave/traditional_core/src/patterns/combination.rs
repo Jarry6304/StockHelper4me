@@ -11,10 +11,11 @@
 use super::build_parent;
 use crate::mode::{Mode, PatternKind};
 use crate::node::EngineNode;
+use std::rc::Rc;
 use crate::output::TradRuleId;
 use crate::rules::alternates;
 
-pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
+pub fn group(w: &[Rc<EngineNode>]) -> Vec<Rc<EngineNode>> {
     let n = w.len();
     if (n != 3 && n != 5) || !alternates(w) {
         return Vec::new();
@@ -61,14 +62,14 @@ pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
         )
     };
 
-    vec![build_parent(
+    vec![Rc::new(build_parent(
         PatternKind::Combination,
         w.to_vec(),
         passed,
         Vec::new(),
         None,
         Some(variant),
-    )]
+    ))]
 }
 
 #[cfg(test)]
@@ -77,9 +78,9 @@ mod tests {
     use crate::output::Direction;
     use chrono::NaiveDate;
 
-    fn comp(kind: PatternKind, sp: f64, ep: f64, sb: usize, eb: usize) -> EngineNode {
+    fn comp(kind: PatternKind, sp: f64, ep: f64, sb: usize, eb: usize) -> Rc<EngineNode> {
         let dir = if ep >= sp { Direction::Up } else { Direction::Down };
-        EngineNode {
+        Rc::new(EngineNode {
             kind,
             mode: Mode::Corrective,
             direction: dir,
@@ -95,11 +96,11 @@ mod tests {
             children: Vec::new(),
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
-        }
+        })
     }
 
     // W=flat(↓) X=zigzag(↑) Y=flat(↓) → Double Three,R12 passed
-    fn wxy(k0: PatternKind, k1: PatternKind, k2: PatternKind) -> Vec<EngineNode> {
+    fn wxy(k0: PatternKind, k1: PatternKind, k2: PatternKind) -> Vec<Rc<EngineNode>> {
         vec![
             comp(k0, 20.0, 17.0, 0, 3),
             comp(k1, 17.0, 19.0, 3, 6),
@@ -142,6 +143,7 @@ mod tests {
         // degree-0 / Unknown → 不成組合
         let mut w = wxy(PatternKind::Flat, PatternKind::Zigzag, PatternKind::Flat);
         for c in &mut w {
+            let c = Rc::make_mut(c);
             c.degree_level = 0;
             c.mode = Mode::Unknown;
             c.kind = PatternKind::Monowave;

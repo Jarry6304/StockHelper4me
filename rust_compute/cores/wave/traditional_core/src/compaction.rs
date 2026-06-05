@@ -10,15 +10,18 @@ use crate::config::TraditionalEngineConfig;
 use crate::node::EngineNode;
 use crate::patterns::try_all;
 use std::collections::HashSet;
+use std::rc::Rc;
 
-pub fn compact(base: Vec<EngineNode>, config: &TraditionalEngineConfig) -> Vec<EngineNode> {
+pub fn compact(base: Vec<EngineNode>, config: &TraditionalEngineConfig) -> Vec<Rc<EngineNode>> {
     if base.len() < 3 {
         return Vec::new();
     }
-    let mut scenarios: Vec<Vec<EngineNode>> = vec![base];
+    // v3 perf:base monowaves 包成 Rc → 之後 compaction clone tiling 只 bump 指標。
+    let base: Vec<Rc<EngineNode>> = base.into_iter().map(Rc::new).collect();
+    let mut scenarios: Vec<Vec<Rc<EngineNode>>> = vec![base];
 
     for _ in 0..config.max_degree_levels {
-        let mut next: Vec<Vec<EngineNode>> = Vec::new();
+        let mut next: Vec<Vec<Rc<EngineNode>>> = Vec::new();
         let mut any_aggregated = false;
         for sc in &scenarios {
             let aggs = aggregate_one(sc);
@@ -42,7 +45,7 @@ pub fn compact(base: Vec<EngineNode>, config: &TraditionalEngineConfig) -> Vec<E
 }
 
 /// 對一個 tiling,枚舉所有「替換一個連續視窗為其 parent」的新 tiling。
-fn aggregate_one(sc: &[EngineNode]) -> Vec<Vec<EngineNode>> {
+fn aggregate_one(sc: &[Rc<EngineNode>]) -> Vec<Vec<Rc<EngineNode>>> {
     let mut out = Vec::new();
     let n = sc.len();
     for &wlen in &[3usize, 5usize] {
@@ -52,7 +55,7 @@ fn aggregate_one(sc: &[EngineNode]) -> Vec<Vec<EngineNode>> {
         for start in 0..=(n - wlen) {
             let window = &sc[start..start + wlen];
             for parent in try_all(window) {
-                let mut ns: Vec<EngineNode> = Vec::with_capacity(n - wlen + 1);
+                let mut ns: Vec<Rc<EngineNode>> = Vec::with_capacity(n - wlen + 1);
                 ns.extend_from_slice(&sc[..start]);
                 ns.push(parent);
                 ns.extend_from_slice(&sc[start + wlen..]);
@@ -63,24 +66,24 @@ fn aggregate_one(sc: &[EngineNode]) -> Vec<Vec<EngineNode>> {
     out
 }
 
-fn scenario_key(sc: &[EngineNode]) -> String {
+fn scenario_key(sc: &[Rc<EngineNode>]) -> String {
     sc.iter()
         .map(|n| n.canonical_key())
         .collect::<Vec<_>>()
         .join(";")
 }
 
-fn dedup_scenarios(scs: &mut Vec<Vec<EngineNode>>) {
+fn dedup_scenarios(scs: &mut Vec<Vec<Rc<EngineNode>>>) {
     let mut seen = HashSet::new();
     scs.retain(|sc| seen.insert(scenario_key(sc)));
 }
 
 /// 聚合度評分(top 節點 degree_level 總和;愈高 = 愈多度數結構)。beam 偏好深樹。
-fn scenario_score(sc: &[EngineNode]) -> usize {
+fn scenario_score(sc: &[Rc<EngineNode>]) -> usize {
     sc.iter().map(|n| n.degree_level).sum()
 }
 
-fn beam_cap(scs: &mut Vec<Vec<EngineNode>>, beam: usize) {
+fn beam_cap(scs: &mut Vec<Vec<Rc<EngineNode>>>, beam: usize) {
     if scs.len() <= beam {
         return;
     }
@@ -89,7 +92,7 @@ fn beam_cap(scs: &mut Vec<Vec<EngineNode>>, beam: usize) {
 }
 
 /// 收 forest:各最終 tiling 的 top-level degree≥1 節點(pattern,非裸 monowave),去重。
-fn collect_top_nodes(scenarios: &[Vec<EngineNode>]) -> Vec<EngineNode> {
+fn collect_top_nodes(scenarios: &[Vec<Rc<EngineNode>>]) -> Vec<Rc<EngineNode>> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for sc in scenarios {

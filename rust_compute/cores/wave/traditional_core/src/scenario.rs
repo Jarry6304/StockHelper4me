@@ -10,8 +10,9 @@ use crate::mode::PatternKind;
 use crate::node::EngineNode;
 use crate::output::{Direction, Pivot, PivotKind, TraditionalScenario};
 use crate::{fibonacci, guidelines, triggers};
+use std::rc::Rc;
 
-pub fn assemble(top_nodes: &[EngineNode], config: &TraditionalEngineConfig) -> Vec<TraditionalScenario> {
+pub fn assemble(top_nodes: &[Rc<EngineNode>], config: &TraditionalEngineConfig) -> Vec<TraditionalScenario> {
     top_nodes.iter().map(|n| assemble_one(n, config)).collect()
 }
 

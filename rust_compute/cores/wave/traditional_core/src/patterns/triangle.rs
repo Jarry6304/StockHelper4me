@@ -5,10 +5,11 @@
 use super::{build_parent, enforce};
 use crate::mode::{Mode, PatternKind};
 use crate::node::EngineNode;
+use std::rc::Rc;
 use crate::output::TradRuleId;
 use crate::rules::alternates;
 
-pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
+pub fn group(w: &[Rc<EngineNode>]) -> Vec<Rc<EngineNode>> {
     if w.len() != 5 || !alternates(w) {
         return Vec::new();
     }
@@ -28,12 +29,12 @@ pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
         passed.push(TradRuleId::R11CorrectiveSubdivision);
     }
     let variant = if contracting { "contracting" } else { "expanding" }.to_string();
-    vec![build_parent(
+    vec![Rc::new(build_parent(
         PatternKind::Triangle,
         w.to_vec(),
         passed,
         deferred,
         None,
         Some(variant),
-    )]
+    ))]
 }

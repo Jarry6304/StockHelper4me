@@ -4,10 +4,11 @@
 use super::{build_parent, enforce};
 use crate::mode::{Mode, PatternKind};
 use crate::node::EngineNode;
+use std::rc::Rc;
 use crate::output::TradRuleId;
 use crate::rules::{alternates, r1_ok, r3_ok, r4_ok, r5_no_overlap, window_up};
 
-pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
+pub fn group(w: &[Rc<EngineNode>]) -> Vec<Rc<EngineNode>> {
     if w.len() != 5 || !alternates(w) {
         return Vec::new();
     }
@@ -47,7 +48,7 @@ pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
     }
     deferred.push(TradRuleId::R2Wave4Retracement); // [待查證] 永 deferred
     deferred.dedup();
-    vec![build_parent(PatternKind::Impulse, w.to_vec(), passed, deferred, None, None)]
+    vec![Rc::new(build_parent(PatternKind::Impulse, w.to_vec(), passed, deferred, None, None))]
 }
 
 #[cfg(test)]
@@ -57,9 +58,9 @@ mod tests {
     use chrono::NaiveDate;
 
     // 乾淨上行衝擊浪幾何:10→15→12→22→18→28
-    fn child(kind: PatternKind, mode: Mode, deg: usize, sp: f64, ep: f64, sb: usize, eb: usize) -> EngineNode {
+    fn child(kind: PatternKind, mode: Mode, deg: usize, sp: f64, ep: f64, sb: usize, eb: usize) -> Rc<EngineNode> {
         let dir = if ep >= sp { Direction::Up } else { Direction::Down };
-        EngineNode {
+        Rc::new(EngineNode {
             kind,
             mode,
             direction: dir,
@@ -75,10 +76,10 @@ mod tests {
             children: Vec::new(),
             passed_rules: Vec::new(),
             deferred_rules: Vec::new(),
-        }
+        })
     }
 
-    fn impulse_geometry(kinds_modes: [(PatternKind, Mode); 5], deg: usize) -> Vec<EngineNode> {
+    fn impulse_geometry(kinds_modes: [(PatternKind, Mode); 5], deg: usize) -> Vec<Rc<EngineNode>> {
         let prices = [(10.0, 15.0), (15.0, 12.0), (12.0, 22.0), (22.0, 18.0), (18.0, 28.0)];
         kinds_modes
             .iter()
