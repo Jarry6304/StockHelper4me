@@ -9,6 +9,8 @@ import {
   extractTradInvalidationLines,
   flattenTradWaveTree,
   sortTradScenarios,
+  tradRecencyDays,
+  tradRecencyTier,
   type TradPivot,
   type TradWaveNode
 } from './traditional-build';
@@ -199,27 +201,171 @@ describe('buildTradLayout', () => {
   });
 });
 
+describe('tradRecencyTier', () => {
+  it('tier 階梯化', () => {
+    expect(tradRecencyTier(0)).toBe(3);
+    expect(tradRecencyTier(60)).toBe(3);
+    expect(tradRecencyTier(61)).toBe(2);
+    expect(tradRecencyTier(180)).toBe(2);
+    expect(tradRecencyTier(181)).toBe(1);
+    expect(tradRecencyTier(365)).toBe(1);
+    expect(tradRecencyTier(366)).toBe(0);
+    expect(tradRecencyTier(1320)).toBe(0);
+  });
+});
+
+describe('tradRecencyDays', () => {
+  it('end > asOf 算負', () => {
+    const s = mkTradScenario({ wave_tree: { end: '2026-06-15' } as TradWaveNode });
+    expect(tradRecencyDays(s, '2026-06-06')).toBeLessThan(0);
+  });
+
+  it('end < asOf 算正', () => {
+    const s = mkTradScenario({ wave_tree: { end: '2022-10-25' } as TradWaveNode });
+    expect(tradRecencyDays(s, '2026-06-06')).toBeGreaterThan(1300);
+  });
+
+  it('無 asOf → Infinity', () => {
+    const s = mkTradScenario({ wave_tree: { end: '2026-06-15' } as TradWaveNode });
+    expect(tradRecencyDays(s, null)).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
 describe('sortTradScenarios', () => {
-  it('按 preference_score DESC 排,同分按 wave_tree.end DESC', () => {
+  it('tier 優先(近期 tier 1+ 勝過歷史 tier 0,即使 pref 較低)', () => {
+    const list = [
+      mkTradScenario({
+        id: 'OLD_HIGH_PREF',
+        preference_score: 1,
+        wave_tree: { end: '2023-08-24' } as TradWaveNode // ~1018d 前 → tier 0
+      }),
+      mkTradScenario({
+        id: 'NEW_LOW_PREF',
+        preference_score: 0,
+        wave_tree: { end: '2026-05-15' } as TradWaveNode // ~22d 前 → tier 3
+      })
+    ];
+    const sorted = sortTradScenarios(list, '2026-06-06');
+    expect(sorted[0].id).toBe('NEW_LOW_PREF');
+  });
+
+  it('同 tier 內按 preference_score DESC + end DESC', () => {
     const list = [
       mkTradScenario({
         id: 'A',
-        preference_score: 1,
-        wave_tree: { end: '2025-06-13' } as TradWaveNode
+        preference_score: 0,
+        wave_tree: { end: '2026-05-01' } as TradWaveNode
       }),
       mkTradScenario({
         id: 'B',
-        preference_score: 0,
-        wave_tree: { end: '2026-03-01' } as TradWaveNode
+        preference_score: 1,
+        wave_tree: { end: '2026-04-15' } as TradWaveNode
       }),
       mkTradScenario({
         id: 'C',
         preference_score: 1,
+        wave_tree: { end: '2026-05-15' } as TradWaveNode
+      })
+    ];
+    const sorted = sortTradScenarios(list, '2026-06-06');
+    expect(sorted.map((s) => s.id)).toEqual(['C', 'B', 'A']);
+  });
+
+  it('全部 tier 0 仍按 preference + end 排序(graceful)', () => {
+    const list = [
+      mkTradScenario({
+        id: 'A',
+        preference_score: 1,
+        wave_tree: { end: '2023-07-10' } as TradWaveNode
+      }),
+      mkTradScenario({
+        id: 'B',
+        preference_score: 1,
+        wave_tree: { end: '2023-08-24' } as TradWaveNode
+      })
+    ];
+    const sorted = sortTradScenarios(list, '2026-06-06');
+    expect(sorted[0].id).toBe('B'); // 較新
+  });
+
+  it('asOf=null 退回 pref + end sort', () => {
+    const list = [
+      mkTradScenario({
+        id: 'OLD_HIGH',
+        preference_score: 1,
+        wave_tree: { end: '2023-01-01' } as TradWaveNode
+      }),
+      mkTradScenario({
+        id: 'NEW_LOW',
+        preference_score: 0,
         wave_tree: { end: '2026-05-01' } as TradWaveNode
       })
     ];
-    const sorted = sortTradScenarios(list);
-    expect(sorted.map((s) => s.id)).toEqual(['C', 'A', 'B']);
+    const sorted = sortTradScenarios(list, null);
+    expect(sorted[0].id).toBe('OLD_HIGH'); // pref 勝(無 tier 化)
+  });
+
+  it('regression: 2330 case — 全 tier 0,T1 為 pref=1+最新 end', () => {
+    const list = [
+      mkTradScenario({
+        id: 'Flat-291-323',
+        preference_score: 1,
+        wave_tree: { end: '2023-08-24' } as TradWaveNode
+      }),
+      mkTradScenario({
+        id: 'Flat-221-291',
+        preference_score: 1,
+        wave_tree: { end: '2023-07-10' } as TradWaveNode
+      }),
+      mkTradScenario({
+        id: 'Zigzag-537-546',
+        preference_score: 0,
+        wave_tree: { end: '2024-07-26' } as TradWaveNode
+      })
+    ];
+    const sorted = sortTradScenarios(list, '2026-06-06');
+    expect(sorted[0].id).toBe('Flat-291-323');
+    expect(sorted[1].id).toBe('Flat-221-291');
+    expect(sorted[2].id).toBe('Zigzag-537-546');
+  });
+});
+
+describe('computeTradXRange auto-expand to selectedScenario', () => {
+  it('selectedScenario.wave_tree 在預設窗外 → x-range 擴展包含 wave', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 365,
+      xRangeDaysForward: 90,
+      selectedScenario: mkTradScenario({
+        wave_tree: { start: '2023-03-24', end: '2023-08-24' } as TradWaveNode
+      })
+    });
+    // from 應該擴展到 2023-03-24 - 30d ≈ 2023-02-22(早於預設的 2025-06-06)
+    expect(range?.[0].startsWith('2023-02')).toBe(true);
+  });
+
+  it('selectedScenario 在預設窗內 → 保留預設範圍', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 365,
+      xRangeDaysForward: 90,
+      selectedScenario: mkTradScenario({
+        wave_tree: { start: '2026-04-01', end: '2026-05-01' } as TradWaveNode
+      })
+    });
+    expect(range?.[0].startsWith('2025-06')).toBe(true);
+    expect(range?.[1].startsWith('2026-09')).toBe(true);
+  });
+
+  it('無 selectedScenario → 純 asOf-anchored', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      selectedScenario: null
+    });
+    expect(range?.[0].startsWith('2025-06')).toBe(true);
   });
 });
 

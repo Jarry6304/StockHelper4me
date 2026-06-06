@@ -66,10 +66,22 @@ export function computeTradXRange(opts: TradBuildOptions): [string, string] | nu
   if (Number.isNaN(t)) return null;
   const back = opts.xRangeDaysBack ?? 365;
   const forward = opts.xRangeDaysForward ?? 90;
-  return [
-    isoDate(new Date(t - back * 86400000)),
-    isoDate(new Date(t + forward * 86400000))
-  ];
+  let fromMs = t - back * 86400000;
+  let toMs = t + forward * 86400000;
+
+  // 自動擴展:若 selectedScenario.wave_tree 在預設窗外,把窗口擴大包含整個 wave_tree
+  // (對齊 user「選了老的看不見」場景 — traditional 引擎可能只產 1-2 年前的形態)
+  const tree = opts.selectedScenario?.wave_tree as TradWaveNode | undefined;
+  if (tree?.start) {
+    const ws = Date.parse(tree.start);
+    if (!Number.isNaN(ws) && ws < fromMs) fromMs = ws - 30 * 86400000;
+  }
+  if (tree?.end) {
+    const we = Date.parse(tree.end);
+    if (!Number.isNaN(we) && we > toMs) toMs = we + 30 * 86400000;
+  }
+
+  return [isoDate(new Date(fromMs)), isoDate(new Date(toMs))];
 }
 
 export function computeTradFibProjectionRange(
@@ -330,9 +342,48 @@ export function buildTradLayout(opts: TradBuildOptions): PlotlyLayout {
   };
 }
 
-/** 排序 traditional scenarios:preference_score DESC + recency DESC。 */
-export function sortTradScenarios<T extends TraditionalScenario>(scenarios: T[]): T[] {
+/** 算 scenario 結尾距 asOf 天數;無資料 → Infinity。 */
+export function tradRecencyDays(
+  scenario: TraditionalScenario,
+  asOf: string | null
+): number {
+  if (!asOf) return Number.POSITIVE_INFINITY;
+  const tree = scenario.wave_tree as TradWaveNode | undefined;
+  if (!tree?.end) return Number.POSITIVE_INFINITY;
+  const t = Date.parse(tree.end);
+  const a = Date.parse(asOf);
+  if (Number.isNaN(t) || Number.isNaN(a)) return Number.POSITIVE_INFINITY;
+  return (a - t) / 86400000;
+}
+
+/** Recency tier 階梯化(對齊 Neely 的 power.ts recencyTier):3=≤60d / 2=≤180d / 1=≤365d / 0=>365d。 */
+export function tradRecencyTier(days: number): number {
+  if (!Number.isFinite(days)) return 0;
+  if (days <= 60) return 3;
+  if (days <= 180) return 2;
+  if (days <= 365) return 1;
+  return 0;
+}
+
+/**
+ * 排序 traditional scenarios:
+ *   1. recency tier DESC(近期優先;asOf=null 時跳過 tier 排序)
+ *   2. preference_score DESC
+ *   3. wave_tree.end DESC(同 tier+同分時取最新)
+ *
+ * 對齊 user 反饋「為什麼不是近一年內到現在」— 把近期形態頂到前面;若全 forest
+ * 都是歷史形態(tier 0),仍按 preference_score 排,但呼叫端應顯示「近期無形態」警示。
+ */
+export function sortTradScenarios<T extends TraditionalScenario>(
+  scenarios: T[],
+  asOf: string | null = null
+): T[] {
   return [...scenarios].sort((a, b) => {
+    if (asOf) {
+      const ta = tradRecencyTier(tradRecencyDays(a, asOf));
+      const tb = tradRecencyTier(tradRecencyDays(b, asOf));
+      if (ta !== tb) return tb - ta;
+    }
     const pa = typeof a.preference_score === 'number' ? a.preference_score : 0;
     const pb = typeof b.preference_score === 'number' ? b.preference_score : 0;
     if (pa !== pb) return pb - pa;

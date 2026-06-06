@@ -3,6 +3,8 @@
   import {
     extractTradInvalidationLines,
     sortTradScenarios,
+    tradRecencyDays,
+    tradRecencyTier,
     type TradPivot,
     type TradWaveNode
   } from '$lib/wave/traditional-build';
@@ -13,16 +15,39 @@
 
   let selectedId: string | null = null;
   let layers = { fib: true, waveMarkers: true, invalidation: true };
+  /** 預設過濾 365d 外的歷史形態;user 拍版可切「顯示全部」看舊形態。 */
+  let showAll = false;
 
   $: scenarios = (traditional.scenario_forest ?? []) as TraditionalScenario[];
   $: pivots = ((traditional as unknown as { pivot_series?: TradPivot[] }).pivot_series ?? []);
-  $: sorted = sortTradScenarios(scenarios);
-  $: defaultSelected = sorted[0]?.id ?? null;
+  $: allSorted = sortTradScenarios(scenarios, asOf);
+
+  // 分流 recent(tier ≥ 1,即 ≤ 365d)vs old(tier 0)
+  $: recentSorted = allSorted.filter(
+    (s) => tradRecencyTier(tradRecencyDays(s, asOf)) >= 1
+  );
+  $: hasRecent = recentSorted.length > 0;
+  $: visibleSorted = showAll || !hasRecent ? allSorted : recentSorted;
+
+  // 若全部都是 tier 0(老化形態),記錄最新一條的日期 + 距今天數給警示用
+  $: newestStale = !hasRecent && allSorted.length > 0 ? (() => {
+    const top = allSorted[0];
+    const tree = top.wave_tree as TradWaveNode | undefined;
+    const end = tree?.end ?? null;
+    if (!end) return null;
+    const days = Math.round(tradRecencyDays(top, asOf));
+    return { end, days };
+  })() : null;
+
+  $: defaultSelected = visibleSorted[0]?.id ?? null;
   $: effectiveSelected = selectedId ?? defaultSelected;
   $: selectedScenario =
-    sorted.find((s) => s.id === effectiveSelected) ?? sorted[0] ?? null;
+    visibleSorted.find((s) => s.id === effectiveSelected) ??
+    visibleSorted[0] ??
+    allSorted[0] ??
+    null;
   $: invalidationLines = extractTradInvalidationLines(selectedScenario);
-  $: displayMap = new Map(sorted.map((s, i) => [s.id, `T${i + 1}`]));
+  $: displayMap = new Map(visibleSorted.map((s, i) => [s.id, `T${i + 1}`]));
   $: selectedDisplay = effectiveSelected ? displayMap.get(effectiveSelected) ?? null : null;
 
   interface AugmentedRow {
@@ -76,7 +101,7 @@
     };
   }
 
-  $: sortedAugmented = sorted.map(augment);
+  $: sortedAugmented = visibleSorted.map(augment);
 
   function selectScenario(id: string) {
     selectedId = id;
@@ -92,9 +117,37 @@
 
 <section class="trad" aria-label="傳統波浪(Frost & Prechter EWP)">
   <div class="hint">
-    傳統(Frost & Prechter EWP)forest:**{scenarios.length}** 個 scenarios — 與 Neely
-    並排,**不合成**。<code>as_of</code> 僅作用於 Neely 側,傳統永遠取 latest computed。
+    傳統(Frost & Prechter EWP)forest:<b>{scenarios.length}</b> 個 scenarios — 與 Neely
+    並排,<b>不合成</b>。<code>as_of</code> 僅作用於 Neely 側,傳統永遠取 latest computed。
   </div>
+
+  {#if newestStale}
+    <div class="stale-banner" role="alert">
+      ⚠ <b>傳統波浪近 1 年無有效形態</b> · 最新一條結尾 <code>{newestStale.end}</code>
+      ({newestStale.days}d 前)。
+      <div class="stale-detail">
+        上游 <code>traditional_core</code> 引擎需要 corrective patterns
+        (Flat / Zigzag / Triangle / Combination 的 3-pivot A-B-C 序列)才產 scenario。
+        當前 2330 從 2024 Q3 起為連續上升走勢,corrective 形態套不上 → 引擎輸出僅含歷史片段。
+        全部 <b>{allSorted.length}</b> 條形態均 > 365d,以下列出按 preference + 結尾日排序。
+      </div>
+    </div>
+  {:else if !showAll && allSorted.length > visibleSorted.length}
+    <div class="filter-banner">
+      顯示近期(≤ 365d)<b>{visibleSorted.length}</b> 條,
+      隱藏歷史 <b>{allSorted.length - visibleSorted.length}</b> 條。
+      <button type="button" class="toggle-btn" on:click={() => (showAll = true)}>
+        顯示全部 →
+      </button>
+    </div>
+  {:else if showAll && hasRecent}
+    <div class="filter-banner">
+      顯示全部 <b>{allSorted.length}</b> 條(含歷史)。
+      <button type="button" class="toggle-btn" on:click={() => (showAll = false)}>
+        ← 只看近期
+      </button>
+    </div>
+  {/if}
 
   <div class="body">
     <div class="chart-pane">
@@ -143,7 +196,10 @@
         </div>
       {/each}
 
-      <div class="footer">… 共 {scenarios.length} 條(無 primary 旗標 · 並排不整合 Neely)</div>
+      <div class="footer">
+        … {visibleSorted.length}{#if visibleSorted.length !== allSorted.length} / {allSorted.length}{/if}
+        條(無 primary 旗標 · 並排不整合 Neely)
+      </div>
     </div>
   </div>
 
@@ -180,6 +236,66 @@
     background: var(--tag-bg);
     padding: 0 4px;
     border-radius: 3px;
+  }
+
+  .stale-banner {
+    padding: 10px 14px;
+    background: #1c160a;
+    border-bottom: 1px solid var(--line);
+    border-top: 1px dashed #5a4a2a;
+    font-size: 12px;
+    color: var(--fib);
+    line-height: 1.5;
+  }
+
+  .stale-banner b {
+    color: #ffd28a;
+  }
+
+  .stale-banner code {
+    color: #ffd28a;
+    background: #2a1f07;
+    padding: 0 4px;
+    border-radius: 3px;
+  }
+
+  .stale-detail {
+    margin-top: 6px;
+    color: var(--ink-faint);
+    font-size: 11.5px;
+  }
+
+  .filter-banner {
+    padding: 8px 14px;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-dim);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .filter-banner b {
+    color: var(--ink);
+  }
+
+  .toggle-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--wave);
+    background: var(--tag-bg);
+    border: 1px solid #21466a;
+    border-radius: 6px;
+    padding: 3px 10px;
+    cursor: pointer;
+    margin-left: auto;
+  }
+
+  .toggle-btn:hover {
+    background: #0c2030;
   }
 
   .body {
