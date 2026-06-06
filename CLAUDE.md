@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → **v4.36** + Traditional Core v2/v3,最新 2026-06-04;
+> 本文件下方版本章節是跨 session 銜接的歷程紀錄(v3.5 → **v4.38** + Traditional Core v2/v3 + **Web 前端原型**,最新 2026-06-06;
 > v1.5 ~ v1.34 已歸檔 [`docs/claude_history.md`](docs/claude_history.md))。動工前先讀本段 Quick Reference,然後依任務性質往下讀對應 v3.X / v4.X 段落。
 
 ---
@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾 + **traditional_core 獨立波浪 vertical**)。
 **v4.32 後升 6 層**(加 Golden L3 fusion 物化 + 唯讀 Web API)。
+**v4.38(2026-06-06)Web 前端原型上線**:`frontend/` SvelteKit + Vite + TypeScript + Plotly.js,2 視圖(`/stocks/[id]` V1 個股 WAVE 卡 + `/screens/[toolkit]` V2 跨股因子排行);消費既有 Golden L3 唯讀 API,**前端零 compute**;後端加 `CORSMiddleware`(`WEB_API_CORS_ORIGINS` env 覆寫);WAVE 欄原型 placeholder(對齊 spec D2 / CL4 fake data),真實端點留 production 階段拍版(a)/(b)/(c)三選一。詳見 §v4.38。
 **Traditional Core(2026-06-02 / PR #123 merged)**:第 2 個波浪 vertical(Frost & Prechter EWP),與 Neely **完全解耦、並排不整合**;由下而上多度數 fractal 引擎(子浪細分 R6/R7/R8/R11 = 建構約束);自有 `traditional_snapshots` + `/traditional/forest` + `/waves` + MCP `traditional_wave_forest` + Streamlit「🌲 Traditional Wave」。**v4.37 全市場 production-verified**(compaction 改 `Rc` 共享子樹殺深拷貝 → 單股 135-250s → **7.7s**;P0-Gate forest max 69/70/58 ≪ 200;`monowave_epsilon` 預設 0.03 + 4 旋鈕 env;run-all 預設 concurrency 8)。詳見下方 §v4.37 + §「Traditional Core v2 / v3」。
 
 - **alembic head**:`j6k7l8m9n0o1`(PR #123 Traditional Core `traditional_snapshots` 自有表;i5j6k7l8m9n0 v4.35 magic_formula `is_top_30`→`is_top_n` rename;h4i5j6k7l8m9 v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
@@ -300,7 +301,125 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
-## v4.37 — Traditional Core 全市場可行化(compaction Rc 深拷貝修)+ merge main 同步(2026-06-06)
+## v4.38 — Web 前端原型(Svelte + Plotly):個股 WAVE 卡 + 跨股篩選表(2026-06-06)
+
+User 直送 2 個 wireframe(個股 WAVE 卡 + 跨股篩選表)+ 既有 spec(plan
+`/root/.claude/plans/stockhelper4me-web-recursive-adleman.md`)動工 web 前端
+初版原型。消費既有 Golden L3 唯讀 FastAPI + `frontend/src/contracts/`(ts-rs +
+pydantic2ts 自動生成 63 個 neely .ts + fusion.ts)。
+
+**目標**:在 `frontend/` 加 SvelteKit 鷹架,實作 V1 個股 wave 卡 + V2 跨股因子排行
+兩視圖,純消費 API,**前端零 compute**,行為對齊 spec L1–L8 / CL1–CL6 鐵則
+(無 primary / 無 % / Neely∥傳統不合併 / 無料顯式無法判斷)。
+
+### 動工拍版(2026-06-06,plan 核准)
+
+| 項 | 拍版 |
+|---|---|
+| Chart library | **Plotly.js**(`plotly.js-dist-min` ~3.4 MB raw / ~1 MB gzip)— 視覺對齊既有 `dashboards/charts/neely_wave.py`,wave 標 / fib bands / Track2 帶 / 失效線全 native |
+| 框架 | SvelteKit 2 + Vite 5 + TypeScript;adapter-static SPA(對齊「唯讀單人原型」)|
+| V2 WAVE 欄資料源 | **placeholder generator**(deterministic djb2 + LCG seed)— 對應 spec CL4 「原型用 fake」+ D2「等決定後再上(a)/(b)/(c)」決議 |
+| 後端 CORS | `WEB_API_CORS_ORIGINS` env 覆寫,預設 `http://localhost:5173`(Vite dev origin)|
+
+### 範圍(7 commits / branch `claude/quirky-hypatia-8y92o`)
+
+| Phase | Commit | 範圍 |
+|---|---|---|
+| **0** 後端 CORS | `7102e39` | `src/web_api/cors.py` `add_cors()` helper + `app.py` 內在 brotli 壓縮前先 add;`tests/web_api/test_cors.py` +6 case(dev origin / preflight / unknown origin / env 覆寫 / 多 origin 逗號)→ 24/24 web_api tests 全綠 |
+| **1** Frontend 鷹架 | `4f634d3` | `package.json` + `svelte.config.js`(adapter-static)+ `vite.config.ts`(`/api/*` → `:8000` dev proxy)+ `tsconfig.json` 改 extend `.svelte-kit`;`src/app.html`(預載 Noto Sans TC + IBM Plex Mono)+ `src/app.css`(全域 CSS variables 完整對映兩份 wireframe — `--bg / --wave / --fib / --inval / --track2 / --basic / --new`)+ `+layout.svelte` 頁頂 + WIREFRAME 印章 + 兩視圖入口連結 + landing 首頁 |
+| **2** API client | `bb02305` | `frontend/src/lib/api/` 11 個檔:`client.ts` 含 `apiGet` + 4 個 error class(`ApiError` / `ScenarioForestOverflowError`(422 forest > 250)/ `NotFoundError` / `NetworkError`)+ 9 個 endpoint wrapper(`waves` / `neely` / `traditional` / `resonance` / `levels` / `ohlc` / `screens` / `climate` / `health`)+ 19 vitest 全綠;`VITE_API_BASE_URL` env 覆寫,預設 `/api`(vite proxy);0 商業邏輯,只 URL 組裝 / fetch / parse / 錯誤分類 |
+| **3** V1 個股 WAVE 卡 | `066d883` | 13 個 component + 3 wave helper + 2 個 route(`/stocks/[id]`):`WaveCard.svelte` 狀態機(State 1 總覽 ↔ State 2 詳情 ↔ State 1b 無法判斷)+ `TopBar`(時框 pills + Neely∥傳統 toggle + layer pills)+ `DegreeBar`(degree 受 `degree_ceiling` 壓制)+ `Overview` + `Detail`(grid 1fr/296px,< 780px 折回單欄 RWD)+ `InsufficientDataView`(amber 虛線框,3 種 reason)+ `PlotlyWaveChart`(動態 import + ResizeObserver 響應式)+ `ScenarioList` + `ScenarioCard`(Certainty + Power + structure_label + counts)+ `InvalidationBar`;helper `wave/power.ts`(sortScenarios + topNScenarios)+ `wave/coords.ts`(flattenWaveTree + directionColor)+ `wave/plotly-build.ts`(buildTraces / buildShapes / buildAnnotations / buildLayout 純函式)+ 18 vitest 全綠 |
+| **4** V2 跨股篩選表 | `4a3a0d5` | 9 個 component + 2 screener helper + 2 個 route(`/screens/[toolkit]`):`Screener.svelte` 容器 + `ToolkitTabs`(7 active + 1 disabled `wave_impulse` 顯示 MCP-only 角標 + click toast)+ `ControlsBar`(date picker + top_n stepper)+ `ColumnGroupBanner`(3 段 A/B/C grid,C 段 amber)+ `ScreenerTable`(min-width 920px overflow-x;row click → `/stocks/[id]?state=detail`)+ `WaveCell`(sparkline + label + DirectionArrow + count + Certainty;insufficient → 「— 無法判斷」)+ `Sparkline.svelte`(純 inline SVG 46×16,不用 Plotly)+ `DirectionArrow`(↑/↓/→/↘ 4 色)+ `ResonanceBadge`(強紅 / 基本橙 / 背離灰 / —);helper `placeholder.ts`(`getWaveDigest(stockId)` djb2 + LCG 產 deterministic fake — ~5% insufficient / sparkline 6-10 點 / 4 enum 加權抽 Certainty)+ `factors.ts`(`TOOLKIT_FACTORS` 10 toolkit 因子定義 + `formatFactor` int/decimal/percent + detail JSONB fallback)+ 16 vitest 全綠 |
+| **5/6** error + build | `7319fe2` | 根 `+error.svelte`(SvelteKit framework 層錯誤頁,對 unknown toolkit 404 等);`npm run build` adapter-static 21s 出 `build/` SPA + fallback `index.html`(主要 `_app/immutable/chunks/*.js` ~4.6 MB = Plotly bundle,prod 階段可 swap basic-dist 留 future)|
+| **chore** | `2fd0e1f` | root `.gitignore` 加 `node_modules/`(防 vitest 在錯誤 CWD 跑時建 root-level cache 被 stop hook 攔)|
+
+### 設計鐵則落地(V1 L1–L8 / V2 CL1–CL6)
+
+**V1 個股 WAVE 卡**:
+- L1 forest 無 primary:`ScenarioList` 平權渲染,無「主要 / 推薦」視覺標記,僅按 `sortScenarios` 排序
+- L2 無 %:`PowerBadge`(Strong/Avg/Weak)+ `CountsBadge`(N 整數)全 enum / 整數,**畫面無百分比字串**
+- L3 Neely∥傳統不合:`TopBar.toggle` 切換時 `WaveCard` 內部 path 分離,UI 不宣稱兩派同 `as_of`
+- L4 Track2 獨立軌:`PlotlyWaveChart` Track2 shape 走右側 `xref=paper x=0.78-1.0` 獨立 domain,**不混入 scenario_forest scatter**
+- L5 degree 受 ceiling 壓:`DegreeBar` 顯示 `degree_ceiling.max_reachable_degree`
+- L6 顯式無法判斷:`WaveCard` 看到 `insufficient_data || compaction_timeout || scenario_forest.length=0` → mount `InsufficientDataView`,**不 mount PlotlyWaveChart**
+- L7 y 座標 join OHLC:`flattenWaveTree(wave_tree, monowave_series)` 從 monowave 取 price
+- L8 wave-as-chart:本 route 永遠 chart 視圖(V2 跨股表 wave 欄是 status,見 Phase 4)
+
+**V2 跨股篩選表**:
+- CL1 表 + 下鑽:無逐列 Plotly chart(只 inline SVG sparkline)
+- CL2 表身吃 /screens:A + B 欄全來自 `/screens/{toolkit}.rows[]`
+- CL3 wave_impulse 不在:`ToolkitTabs` 顯示但 disabled + MCP-only 角標 + click toast「需新增 HTTP 端點(CL3)」
+- CL4 wave 欄原型 fake:placeholder generator + dev mode `PH` 角標(`?debug=1` 或 `import.meta.env.DEV`)
+- CL5 summary-only:無 forest 圖 / 無 %,僅 label + 方向 + count + Certainty
+- CL6 共振三色 badge:`strong`(`#ff6a7a`)/ `basic`(`#f59e3c`)/ `divergence`(`#9aa9bf`)+ `none`(faint)
+
+### 沙箱驗證
+
+- `pytest tests/web_api/` ✅ **24 passed**(18 既有 + 6 新 CORS 整合測;0 regression)
+- `cd frontend && npm install` ✅(SvelteKit 2.x + Svelte 4.x + Plotly.js 全套 lockfile committed)
+- `npx svelte-check` ✅ **0 errors / 0 warnings**
+- `npx vitest run` ✅ **53 passed**(6 test files:client 9 / endpoints 10 / wave power 9 / wave plotly-build 9 / placeholder 8 / factors 8)
+- `npm run build` ✅ adapter-static 21s 出 `build/`(SPA + index.html fallback)
+- `vite dev`:`/` / `/stocks/2330` / `/stocks/3030?state=detail` / `/screens/magic_formula` / `/screens/f_score` 全 200
+
+### user 本機 runbook(下次 session 起點)
+
+```powershell
+git pull
+cd frontend
+npm install                                # ~1 min(SvelteKit + Plotly 全套)
+npm run dev                                # 起 :5173
+
+# 另一個 terminal:啟後端
+cd ..
+uvicorn web_api.app:app                    # :8000
+
+# 開瀏覽器
+#   http://localhost:5173/                 → landing
+#   http://localhost:5173/stocks/2330      → V1 State 1 總覽
+#   http://localhost:5173/stocks/2330?state=detail   → V1 State 2 詳情
+#   http://localhost:5173/screens/magic_formula      → V2 跨股表
+#   http://localhost:5173/screens/magic_formula?debug=1   → V2 顯示 PH 角標
+```
+
+### 待議(留 future,對齊 plan「待議」段 + V2 wireframe decision box)
+
+對映 V2 wireframe decision box(CL4):WAVE / 共振欄資料源三選一(本原型不選,
+留 production hardening):
+
+| 選項 | 範圍 | 優劣 |
+|---|---|---|
+| (a) ★ | 新增 `POST /waves/summary { stock_ids[] }` 批次端點,回 `[{ stock_id, top_label, power, direction, certainty, resonance_level }]` | 表一次撈完,最乾淨;需後端新 router + 聚合 query |
+| (b) ★ | wave digest 物化進 `*_ranked_derived`,/screens 直接帶 | 零額外請求,但綁定 cross_cores Phase 8 排程,加重 wall time |
+| (c) | Lazy:row hover/expand 才抓單檔 `/neely/forest` | 省端點,但每檔有延遲、無法整表排序 wave |
+
+接真實端點時**只動 `getWaveDigest()` 1 個 module**(對齊 plan D2 取捨)。
+
+其他 future 議題:
+- 連線池(`psycopg_pool`)/ auth / 個股聚合 `/overview` 端點(對外 prod 多人前)
+- prod 托管:`StaticFiles` 同源 vs 前後端分離 / Plotly bundle 優化(swap basic-dist)
+- 雙來源一致性測試(Streamlit 即時 `fusion.raw` vs API 物化 snapshot 對齊)
+- V1 SSR(目前 adapter-static SPA;若要 SSR 需切 adapter-node + lifespan pool)
+
+### 風險
+
+🟢 低:
+- 0 alembic / 0 collector.toml / 0 Rust 改動
+- 後端只加 `src/web_api/cors.py` 1 個檔 + `app.py` 1 行 wire;既有 endpoint 行為 0 改動
+- contracts 已備齊(63 neely + fusion),型別不需手動維護
+- 既有 web_api 18 tests + 6 新 CORS tests = 24/24 全綠
+- Rollback:每 phase 獨立 commit,Phase 0 後端可單獨 `git revert 7102e39`,frontend 直接 `rm -rf frontend/src/{lib,routes,app.*,plotly.d.ts}`
+
+🟡 中:
+- Plotly bundle ~4.6 MB(原型階段可接受;production 行動裝置體驗待 swap basic-dist)
+- V2 WAVE 欄是 placeholder,真實上線前須拍版 (a)/(b)/(c) 並接真實端點
+- wave_impulse / monthly_trigger MCP-only,V2 完整對齊 spec CL3 需後端補 HTTP 端點
+
+🔴 高:**無**
+
+---
+
+
 
 本 session 在 `claude/neely-forest-cloud-zigzag-Xv13d` 一路 production-debug 收尾。
 **整批全市場 production-verified ☕**。

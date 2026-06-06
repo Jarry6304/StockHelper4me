@@ -2,7 +2,7 @@
 
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **14 tools** + **唯讀 FastAPI Web API** + **Traditional Core 獨立波浪引擎**)。
 
-**版本**:**v4.37**(alembic head `j6k7l8m9n0o1` / 2026-06-06)。**v4.37** Traditional Core **全市場 production-verified ☕**:compaction 改 `EngineNode.children: Vec<Rc<EngineNode>>` 共享子樹殺深拷貝(原 `Vec<EngineNode>` 深樹 derive(Clone) 每 round 拷貝整棵 → swap)→ 單股 **135-250s → 7.7s(~20-30×)**;全 universe 2171 stocks × 40 cores `run-all` ~2.5h,P0-Gate forest max 69/70/58 ≪ 200;`monowave_epsilon` 預設 0.0→0.03 + 4 旋鈕 env 覆寫(`TRAD_*`);`run-all` 預設 `--concurrency` 32→8;順帶修 magic_formula_core Rust `is_top_30`→`is_top_n`(v4.35 漏改 Rust 端)+ `wave_impulse_screen_derived` fresh-init schema drift;新 `scripts/verify_traditional_forest.py` + `workflows/magic_formula_only.toml`。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug;**v4.34** 修復 revenue / financial / 景氣指標 3 個 dashboard chart 的 x 軸欄位;**v4.35** magic_formula `is_top_30`→`is_top_n` schema 對齊;**v4.36** DB sync 單緒寫入**全面並行化**:Bronze segment_runner DB 寫入走 `asyncio.to_thread` 解封 event loop / Silver 7a + Cross-stock Phase 8 builders `asyncio.gather` 並行 / Golden fusion universe loop + Forecast conformalize/fuse/backtest 走 `ThreadPoolExecutor + per-worker get_connection()`(0 alembic / 0 collector.toml / 0 Rust;+45 tests)。皆已 merge main
+**版本**:**v4.38**(alembic head `j6k7l8m9n0o1` / 2026-06-06)。**v4.38** Web 前端原型上線:`frontend/` SvelteKit + Vite + TypeScript + Plotly.js,2 視圖(V1 個股 WAVE 卡 + V2 跨股因子排行)消費既有 Golden L3 唯讀 API;後端加 `CORSMiddleware`(`WEB_API_CORS_ORIGINS` env 覆寫,預設 `:5173`);0 Python(除 CORS 1 檔)/ 0 alembic / 0 Rust 改動;53 vitest passed + 24 web_api pytest passed。詳見 §「Web 前端原型(v4.38)」。**v4.37** Traditional Core **全市場 production-verified ☕**:compaction 改 `EngineNode.children: Vec<Rc<EngineNode>>` 共享子樹殺深拷貝(原 `Vec<EngineNode>` 深樹 derive(Clone) 每 round 拷貝整棵 → swap)→ 單股 **135-250s → 7.7s(~20-30×)**;全 universe 2171 stocks × 40 cores `run-all` ~2.5h,P0-Gate forest max 69/70/58 ≪ 200;`monowave_epsilon` 預設 0.0→0.03 + 4 旋鈕 env 覆寫(`TRAD_*`);`run-all` 預設 `--concurrency` 32→8;順帶修 magic_formula_core Rust `is_top_30`→`is_top_n`(v4.35 漏改 Rust 端)+ `wave_impulse_screen_derived` fresh-init schema drift;新 `scripts/verify_traditional_forest.py` + `workflows/magic_formula_only.toml`。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug;**v4.34** 修復 revenue / financial / 景氣指標 3 個 dashboard chart 的 x 軸欄位;**v4.35** magic_formula `is_top_30`→`is_top_n` schema 對齊;**v4.36** DB sync 單緒寫入**全面並行化**:Bronze segment_runner DB 寫入走 `asyncio.to_thread` 解封 event loop / Silver 7a + Cross-stock Phase 8 builders `asyncio.gather` 並行 / Golden fusion universe loop + Forecast conformalize/fuse/backtest 走 `ThreadPoolExecutor + per-worker get_connection()`(0 alembic / 0 collector.toml / 0 Rust;+45 tests)。皆已 merge main
 **測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)+ Phase 3b `scripts/recalibrate_kalman.ps1`(Kalman 全市場校準 → resonance track2 非 single_track)。完整 verify chain 見 [CLAUDE.md §v4.32/v4.33](CLAUDE.md)
 **狀態**:**v4.32**(2026-05-29 production-verified ☕):原 read-time 的 fusion(levels / resonance / climate)正名 **Golden L3** 並物化進 `structural_snapshots`(新 core_name `*_fusion`),對外只讀;新建**唯讀 FastAPI Web API**(`uvicorn web_api.app:app` — neely forest 完整 passthrough + brotli/gzip 協商 + N>250 保險絲;Windows/Py3.14 每請求 sync conn);**TypeScript 契約 codegen**(Rust ts-rs 63 型別 + Python pydantic2ts → `frontend/src/contracts/`)。Phase 3b Kalman 全市場校準腳本 `scripts/recalibrate_kalman.ps1`(讓 resonance track2 非 single_track)。**累積**:v4.25 dual-track 共振 + v4.26 wave_impulse_screen + v4.28 三 sprint + v4.29 + **v4.30/v4.31 + v4.32**。M3 Cores **39 crates**;Cross-Stock **12 builders**;MCP **13 tools** + Web API;**Rust 607 tests + ts feature 485**;**Python ~865 passed / +34(v4.32);fusion + mcp_server 子集 476 passed / 1 skipped / 0 failed(v4.33.1 後)**;v4.32.1 tpex 解鎖後 universe ~2172 stocks × 41 cores dispatch / facts daily ~78k new rows。
 
@@ -285,6 +285,48 @@ uvicorn web_api.app:app                                 # GET /stocks/{id}/{leve
 # 5. TS 契約 codegen(Rust 加欄位後重生,drift 被抓)
 bash codegen/generate.sh && (cd frontend && "$(npm root -g)/typescript/bin/tsc" --noEmit -p tsconfig.json)
 ```
+
+### 4.9.1 Web 前端原型(v4.38,SvelteKit + Plotly)
+
+`frontend/` 是消費 Golden L3 唯讀 API 的 SPA 原型,SvelteKit 2 + Vite 5 +
+TypeScript + Plotly.js,2 視圖:
+
+| 路徑 | 視圖 |
+|---|---|
+| `/` | landing(導引到 V1 / V2) |
+| `/stocks/[id]` | **V1 個股 WAVE 卡** — Neely ∥ 傳統 forest 並排,State 1 總覽 / State 2 詳情 / State 1b 無法判斷;3 種狀態切換 + 平權 scenario list + Plotly 主圖 + Track2 統計帶 + 失效線 |
+| `/stocks/[id]?state=detail` | V1 直接開到詳情態 |
+| `/screens/[toolkit]` | **V2 跨股因子排行** — 7 active toolkit(`magic_formula` / `f_score` / `low_volatility` / `mom_12_1` / `dividend_yield` / `revenue_momentum` / `industry_adj_gp` / `persistent_momentum` / `institutional_concert` / `long_term_low_vol`) + 1 disabled(`wave_impulse`,MCP-only)|
+| `?debug=1` | 全站開關:V2 WAVE 欄顯示 placeholder 角標 |
+
+跑法(本機):
+
+```powershell
+# 後端(repo root)
+uvicorn web_api.app:app                                 # :8000(已內建 CORSMiddleware)
+
+# 前端(另 terminal)
+cd frontend
+npm install                                             # ~1 min
+npm run dev                                             # :5173
+
+# build / preview / test
+npm run build                                           # adapter-static → build/(SPA + index.html fallback)
+npm run preview                                         # 預覽 build
+npm test                                                # vitest(53 cases / 6 files)
+npx svelte-check                                        # type-check(0 err / 0 warn)
+```
+
+設計鐵則(spec L1–L8 + CL1–CL6 全落地):
+- L1 forest 無 primary / L2 無百分比 / L3 Neely∥傳統不合 / L4 Track2 獨立軌
+- L5 degree 受 ceiling 壓 / L6 顯式無法判斷 / L7 y 座標 join OHLC / L8 個股 chart 跨股 status
+- CL1 表 + 下鑽 / CL3 wave_impulse MCP-only / CL5 summary-only 無 forest / CL6 共振三色 badge
+
+WAVE 欄原型走 `placeholder.ts`(deterministic djb2 + LCG 產 fake digest),真實
+端點留 production hardening 拍版 (a) 新批次 `/waves/summary` / (b) 物化進
+`*_ranked_derived` / (c) lazy 單檔。對齊 spec 「待議」。
+
+詳見 §v4.38 + plan `/root/.claude/plans/stockhelper4me-web-recursive-adleman.md`。
 
 ### 4.10 排程與任務總覽(一次看懂要跑什麼)
 
