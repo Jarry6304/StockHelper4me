@@ -242,3 +242,8 @@ scripts/test_28_apis_result.json
 # 目錄,但 unanchored 會誤殺 SvelteKit $lib alias 目錄)。
 !frontend/src/lib/
 !frontend/src/lib/**
+
+# node tooling artifacts(repo root level — frontend 內部的 node_modules 已被
+# frontend/.gitignore 處理;此處攔截 vitest / vite 等若在錯誤 CWD 跑時意外建立
+# 的 root-level cache 目錄)
+node_modules/
