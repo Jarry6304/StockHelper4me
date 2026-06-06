@@ -9,6 +9,7 @@
   import Overview from './Overview.svelte';
   import Detail from './Detail.svelte';
   import InsufficientDataView from './InsufficientDataView.svelte';
+  import TraditionalView from './TraditionalView.svelte';
 
   export let stockId: string;
   export let stockName: string | null = null;
@@ -151,31 +152,13 @@
       </div>
     {/if}
   {:else if waveSource === 'traditional'}
-    <!-- Traditional 路徑(原型階段簡化) -->
     {#if !activeTraditional || traditionalScenarios.length === 0}
       <InsufficientDataView
         reason="empty_forest"
         detail="傳統 (Frost & Prechter EWP) 無 forest;此 vertical 與 Neely 並排不合併。"
       />
     {:else}
-      <div class="traditional-placeholder">
-        <p>傳統(Frost & Prechter EWP)forest:{traditionalScenarios.length} 條情境</p>
-        <p class="muted">
-          ⚠ 原型階段 traditional vertical 走簡化顯示;UI 不宣稱兩派同 as_of —
-          /waves 端點上 as_of 僅作用於 Neely 側,traditional 永遠取 latest computed_at。
-        </p>
-        <ul class="trad-list">
-          {#each traditionalScenarios.slice(0, 10) as s, i}
-            <li>
-              <span class="mono">T{i + 1}</span>
-              <span class="lbl">{s.structure_label ?? '(無 structure_label)'}</span>
-              {#if typeof s.preference_score === 'number'}
-                <span class="mono pref">pref {s.preference_score.toFixed(2)}</span>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      </div>
+      <TraditionalView traditional={activeTraditional} {asOf} />
     {/if}
   {:else}
     <InsufficientDataView reason="empty_forest" detail="API 未回 wave 資料" />
@@ -220,44 +203,5 @@
     border-color: var(--ink-dim);
   }
 
-  .traditional-placeholder {
-    padding: 20px;
-    color: var(--ink-dim);
-    font-size: 13px;
-  }
-
-  .traditional-placeholder .muted {
-    color: var(--ink-faint);
-    font-size: 12px;
-    margin-top: 8px;
-  }
-
-  .trad-list {
-    list-style: none;
-    padding: 0;
-    margin: 16px 0 0;
-  }
-
-  .trad-list li {
-    display: flex;
-    gap: 10px;
-    align-items: baseline;
-    padding: 6px 0;
-    border-top: 1px dashed var(--line);
-  }
-
-  .mono {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--wave);
-  }
-
-  .lbl {
-    flex: 1;
-    color: var(--ink-dim);
-  }
-
-  .pref {
-    color: var(--ink-faint);
-  }
+  /* TraditionalView 取代了舊 placeholder,其樣式內含 */
 </style>

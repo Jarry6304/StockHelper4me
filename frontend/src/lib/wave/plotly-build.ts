@@ -82,6 +82,8 @@ export interface PlotlyAnnotation {
   y: string | number;
   xref?: string;
   yref?: string;
+  xanchor?: 'left' | 'center' | 'right';
+  yanchor?: 'top' | 'middle' | 'bottom';
   text: string;
   showarrow?: boolean;
   font?: Record<string, unknown>;
@@ -180,39 +182,116 @@ function addWaveMarkers(traces: PlotlyTrace[], points: WavePoint[]): void {
   });
 }
 
+/**
+ * Fib 投影區域 — 從 wave_tree.end(或 monowave_series 末)往未來投影到 asOf+xRangeDaysForward。
+ *
+ * 修正 user 反饋「fib 帶應該畫在未來」:expected_fib_zones / flat_fib_zones 本質是
+ * **forward projection**,不該往過去畫滿整個 chart。返回 null 時 fallback 走 paper-anchored
+ * (相容無 asOf / 無 monowaves 退化場景)。
+ */
+export function computeFibProjectionRange(opts: BuildOptions): [string, string] | null {
+  // start:優先 selected scenario 的 wave_tree.end(投影起點對齊形態結尾);否則 monowave 末筆
+  let startDate: string | null = null;
+  if (opts.selectedScenario?.wave_tree?.end) {
+    startDate = opts.selectedScenario.wave_tree.end;
+  } else if (opts.monowaves.length > 0) {
+    startDate = opts.monowaves[opts.monowaves.length - 1].end_date;
+  }
+  if (!startDate) return null;
+
+  // end:asOf + forward days(預設 90)
+  let endDate: string | null = null;
+  const forward = opts.xRangeDaysForward ?? 90;
+  const anchorIso = opts.asOf ?? (opts.monowaves.length > 0
+    ? opts.monowaves[opts.monowaves.length - 1].end_date
+    : null);
+  if (anchorIso) {
+    const t = Date.parse(anchorIso);
+    if (!Number.isNaN(t)) {
+      const d = new Date(t + forward * 86400000);
+      endDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    }
+  }
+  if (!endDate) return null;
+
+  // 防呆:end > start
+  if (Date.parse(endDate) <= Date.parse(startDate)) return null;
+  return [startDate, endDate];
+}
+
 export function buildShapes(opts: BuildOptions): PlotlyShape[] {
   const layers = opts.layers ?? DEFAULT_LAYERS;
   const shapes: PlotlyShape[] = [];
 
-  // Fib 水平虛線(xref=paper 跨整個 plot)
+  // Fib 投影 — 從 wave_tree.end 往未來畫(對齊 user 反饋:fib 是 forward projection)
   if (layers.fib) {
+    const fibRange = computeFibProjectionRange(opts);
     for (const fz of opts.fibZones) {
       const mid = (fz.low + fz.high) / 2;
-      shapes.push({
-        type: 'line',
-        xref: 'paper',
-        x0: 0,
-        x1: 1,
-        y0: mid,
-        y1: mid,
-        line: { color: COL_FIB, width: 1, dash: 'dash' },
-        opacity: 0.55
-      });
-      // 若 fib zone 有寬度,加 rect 半透明
-      if (Math.abs(fz.high - fz.low) > 0.001) {
+      if (fibRange) {
         shapes.push({
-          type: 'rect',
+          type: 'line',
+          x0: fibRange[0],
+          x1: fibRange[1],
+          y0: mid,
+          y1: mid,
+          line: { color: COL_FIB, width: 1, dash: 'dash' },
+          opacity: 0.55
+        });
+        if (Math.abs(fz.high - fz.low) > 0.001) {
+          shapes.push({
+            type: 'rect',
+            x0: fibRange[0],
+            x1: fibRange[1],
+            y0: fz.low,
+            y1: fz.high,
+            fillcolor: COL_FIB,
+            opacity: 0.05,
+            line: { width: 0 },
+            layer: 'below'
+          });
+        }
+      } else {
+        // legacy fallback:無 asOf / 無 monowaves 退化用全寬 paper-anchored
+        shapes.push({
+          type: 'line',
           xref: 'paper',
           x0: 0,
           x1: 1,
-          y0: fz.low,
-          y1: fz.high,
-          fillcolor: COL_FIB,
-          opacity: 0.05,
-          line: { width: 0 },
-          layer: 'below'
+          y0: mid,
+          y1: mid,
+          line: { color: COL_FIB, width: 1, dash: 'dash' },
+          opacity: 0.55
         });
+        if (Math.abs(fz.high - fz.low) > 0.001) {
+          shapes.push({
+            type: 'rect',
+            xref: 'paper',
+            x0: 0,
+            x1: 1,
+            y0: fz.low,
+            y1: fz.high,
+            fillcolor: COL_FIB,
+            opacity: 0.05,
+            line: { width: 0 },
+            layer: 'below'
+          });
+        }
       }
+    }
+
+    // 在投影起點畫一條垂直虛線標示「投影從這裡開始」(視覺分界)
+    if (fibRange && opts.fibZones.length > 0) {
+      shapes.push({
+        type: 'line',
+        yref: 'paper',
+        x0: fibRange[0],
+        x1: fibRange[0],
+        y0: 0,
+        y1: 1,
+        line: { color: COL_FIB, width: 1, dash: 'dot' },
+        opacity: 0.4
+      });
     }
   }
 
@@ -279,17 +358,32 @@ export function buildAnnotations(opts: BuildOptions): PlotlyAnnotation[] {
   const layers = opts.layers ?? DEFAULT_LAYERS;
 
   if (layers.fib) {
+    const fibRange = computeFibProjectionRange(opts);
     for (const fz of opts.fibZones) {
       const mid = (fz.low + fz.high) / 2;
-      ann.push({
-        x: 0.005,
-        xref: 'paper',
-        y: mid,
-        text: `${fz.label} · ${mid.toFixed(1)}`,
-        showarrow: false,
-        font: { color: COL_FIB, size: 9, family: 'IBM Plex Mono, monospace' },
-        align: 'left'
-      });
+      if (fibRange) {
+        // 將標籤放在投影起點左側(資料軸 anchor=right),讓 fib 線往右投影、標籤往左留位
+        ann.push({
+          x: fibRange[0],
+          xanchor: 'right',
+          y: mid,
+          text: `${fz.label} · ${mid.toFixed(1)}`,
+          showarrow: false,
+          font: { color: COL_FIB, size: 9, family: 'IBM Plex Mono, monospace' },
+          align: 'right'
+        });
+      } else {
+        // legacy paper-anchored
+        ann.push({
+          x: 0.005,
+          xref: 'paper',
+          y: mid,
+          text: `${fz.label} · ${mid.toFixed(1)}`,
+          showarrow: false,
+          font: { color: COL_FIB, size: 9, family: 'IBM Plex Mono, monospace' },
+          align: 'left'
+        });
+      }
     }
   }
 

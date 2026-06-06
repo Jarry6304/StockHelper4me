@@ -6,6 +6,8 @@
 
   export let scenarios: Scenario[];
   export let selectedId: string | null = null;
+  /** 透傳給每張 ScenarioCard,用來算 recency。 */
+  export let asOf: string | null = null;
 
   const dispatch = createEventDispatcher<{ select: { scenarioId: string } }>();
 
@@ -27,6 +29,7 @@
       {scenario}
       selected={selectedId === scenario.id}
       displayId={`S${i + 1}`}
+      {asOf}
       on:select={handleSelect}
     />
   {/each}

@@ -5,7 +5,8 @@ import {
   buildLayout,
   buildShapes,
   buildTraces,
-  computeDefaultXRange
+  computeDefaultXRange,
+  computeFibProjectionRange
 } from './plotly-build';
 
 function mkMonowave(
@@ -171,5 +172,85 @@ describe('computeDefaultXRange', () => {
     expect(
       computeDefaultXRange({ monowaves: [], fibZones: [], asOf: 'not-a-date' })
     ).toBeNull();
+  });
+});
+
+describe('computeFibProjectionRange', () => {
+  it('優先取 selectedScenario.wave_tree.end', () => {
+    const range = computeFibProjectionRange({
+      monowaves: [mkMonowave('2026-06-01', '2026-06-05', 2400, 2425)],
+      fibZones: [],
+      asOf: '2026-06-06',
+      selectedScenario: {
+        wave_tree: { start: '2026-04-01', end: '2026-05-07', children: [], label: '' }
+      } as never
+    });
+    expect(range?.[0]).toBe('2026-05-07');
+    expect(range?.[1]).toMatch(/^2026-09-/);
+  });
+
+  it('無 selectedScenario → fallback 用 monowaves 末筆 end_date', () => {
+    const range = computeFibProjectionRange({
+      monowaves: [mkMonowave('2026-06-01', '2026-06-05', 2400, 2425)],
+      fibZones: [],
+      asOf: '2026-06-06'
+    });
+    expect(range?.[0]).toBe('2026-06-05');
+  });
+
+  it('無 asOf 無 monowaves → null(legacy paper fallback)', () => {
+    expect(
+      computeFibProjectionRange({ monowaves: [], fibZones: [] })
+    ).toBeNull();
+  });
+});
+
+describe('buildShapes fib projection forward', () => {
+  it('Fib 帶現在從 wave_tree.end 投影到 asOf + forward,不是 xref=paper 跨全圖', () => {
+    const shapes = buildShapes({
+      monowaves: [mkMonowave('2026-06-01', '2026-06-05', 2400, 2425)],
+      fibZones: [{ label: '.382', low: 2095, high: 2150, source_ratio: 0.382 }],
+      asOf: '2026-06-06',
+      selectedScenario: {
+        wave_tree: { start: '2026-04-20', end: '2026-05-07', children: [], label: '' }
+      } as never
+    });
+    const fibLine = shapes.find(
+      (s) => s.type === 'line' && typeof s.x0 === 'string' && s.x0 === '2026-05-07'
+    );
+    expect(fibLine).toBeDefined();
+    // 不應再走 xref=paper(舊行為)
+    const paperFib = shapes.filter((s) => s.xref === 'paper' && s.line?.color === '#f3b14e');
+    // 只剩 projection-start 虛線分界(yref=paper),不該有 xref=paper 的 fib 帶
+    expect(paperFib.length).toBe(0);
+  });
+
+  it('Fib 投影起點加一條垂直虛線分界(投影從這裡開始)', () => {
+    const shapes = buildShapes({
+      monowaves: [mkMonowave('2026-06-01', '2026-06-05', 2400, 2425)],
+      fibZones: [{ label: '.382', low: 2095, high: 2150, source_ratio: 0.382 }],
+      asOf: '2026-06-06',
+      selectedScenario: {
+        wave_tree: { start: '2026-04-20', end: '2026-05-07', children: [], label: '' }
+      } as never
+    });
+    const divider = shapes.find(
+      (s) =>
+        s.type === 'line' &&
+        s.yref === 'paper' &&
+        s.x0 === '2026-05-07' &&
+        s.x1 === '2026-05-07' &&
+        s.line?.dash === 'dot'
+    );
+    expect(divider).toBeDefined();
+  });
+
+  it('退化:無 asOf 無 monowaves → fib 走 xref=paper(legacy fallback)', () => {
+    const shapes = buildShapes({
+      monowaves: [],
+      fibZones: [{ label: '.382', low: 95, high: 110, source_ratio: 0.382 }]
+    });
+    const paperFib = shapes.find((s) => s.xref === 'paper' && s.line?.color === '#f3b14e');
+    expect(paperFib).toBeDefined();
   });
 });

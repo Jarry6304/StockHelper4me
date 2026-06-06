@@ -1,19 +1,29 @@
 <script lang="ts">
   import type { Scenario } from '$contracts/neely/Scenario';
   import { createEventDispatcher } from 'svelte';
-  import { powerAbsLevel, powerDirection, scenarioPrimaryCertainty } from '$lib/wave/power';
+  import {
+    powerAbsLevel,
+    powerDirection,
+    scenarioPrimaryCertainty,
+    scenarioRecencyDays
+  } from '$lib/wave/power';
   import CertaintyBadge from './CertaintyBadge.svelte';
 
   export let scenario: Scenario;
   export let selected: boolean = false;
   /** scenario 顯示用 id(若 Scenario.id 太抽象,可外傳「S1 / S2 …」)。 */
   export let displayId: string = scenario.id;
+  /** as_of 用來算 wave_tree.end 距今多少天(stale 警示)。 */
+  export let asOf: string | null = null;
 
   const dispatch = createEventDispatcher<{ select: { scenarioId: string } }>();
 
   $: certainty = scenarioPrimaryCertainty(scenario);
   $: power = scenario.power_rating;
   $: powerDir = powerDirection(power);
+  $: hasDates = !!(scenario.wave_tree?.start && scenario.wave_tree?.end);
+  $: recencyDays = hasDates ? Math.round(scenarioRecencyDays(scenario, asOf)) : null;
+  $: isStale = recencyDays !== null && recencyDays > 365;
 
   function handleClick() {
     dispatch('select', { scenarioId: scenario.id });
@@ -42,6 +52,16 @@
     <span class="pw" data-direction={powerDir}>Power {powerAbsLevel(power)}</span>
   </div>
   <div class="lbl">{scenario.structure_label}</div>
+  {#if hasDates}
+    <div class="time" class:stale={isStale}>
+      <span class="t-date">{scenario.wave_tree.start}</span>
+      <span class="t-arrow">→</span>
+      <span class="t-date">{scenario.wave_tree.end}</span>
+      {#if recencyDays !== null}
+        <span class="t-rec">· {recencyDays}d 前</span>
+      {/if}
+    </div>
+  {/if}
   <div class="cnt">
     passed {scenario.rules_passed_count} · deferred {scenario.deferred_rules_count}
     {#if scenario.complexity_level}
@@ -109,6 +129,37 @@
     color: var(--ink-dim);
     font-family: var(--mono);
     line-height: 1.45;
+  }
+
+  .time {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .time.stale {
+    color: var(--fib);
+  }
+
+  .t-date {
+    color: var(--ink-dim);
+  }
+
+  .time.stale .t-date {
+    color: var(--fib);
+  }
+
+  .t-arrow {
+    color: var(--ink-faint);
+  }
+
+  .t-rec {
+    color: var(--ink-faint);
   }
 
   .cnt {

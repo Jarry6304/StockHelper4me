@@ -92,7 +92,7 @@
     />
   </div>
 
-  <ScenarioList {scenarios} selectedId={effectiveSelected} on:select={handleSelect} />
+  <ScenarioList {scenarios} selectedId={effectiveSelected} {asOf} on:select={handleSelect} />
 </div>
 
 {#if selectedScenario && layers.invalidation}
