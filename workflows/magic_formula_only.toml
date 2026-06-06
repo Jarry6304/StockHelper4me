@@ -1,0 +1,21 @@
+# magic_formula_only.toml — 只跑 magic_formula_core 的 Workflow 子集。
+#
+# 用途:v4.35 is_top_30→is_top_n rename 後,單獨重補 magic_formula facts,
+# 免跑全 2.5h run-all(其他 39 cores 已 ON CONFLICT 寫好)。
+#
+# 用法(repo root,binary 已含 is_top_n 修法):
+#   .\rust_compute\target\release\tw_cores.exe run-all --write `
+#       --workflow workflows/magic_formula_only.toml
+#
+# 機制:CoreFilter 只把 enabled=true 的 core 放進 set;未列出的 core
+# is_enabled()=false → run-all dispatch 全 skip(env Stage A + 其他 stock cores 都跳)。
+
+[workflow]
+name        = "magic_formula_only"
+description = "只跑 magic_formula_core(v4.35 is_top_n 修法後單獨重補)"
+version     = "1.0.0"
+
+[[cores]]
+name     = "magic_formula_core"
+enabled  = true
+priority = "P2"
