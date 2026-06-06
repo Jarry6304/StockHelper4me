@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Monowave } from '$contracts/neely/Monowave';
-import { buildAnnotations, buildLayout, buildShapes, buildTraces } from './plotly-build';
+import {
+  buildAnnotations,
+  buildLayout,
+  buildShapes,
+  buildTraces,
+  computeDefaultXRange
+} from './plotly-build';
 
 function mkMonowave(
   start_date: string,
@@ -117,5 +123,53 @@ describe('buildLayout', () => {
     expect(layout.font.family).toContain('IBM Plex Mono');
     expect(layout.showlegend).toBe(false);
     expect(layout.dragmode).toBe('pan');
+  });
+
+  it('無 asOf → xaxis.range 不設(autorange)', () => {
+    const layout = buildLayout({ monowaves: [], fibZones: [] });
+    expect(layout.xaxis.range).toBeUndefined();
+  });
+
+  it('有 asOf → xaxis.range 設成預設窗口', () => {
+    const layout = buildLayout({ monowaves: [], fibZones: [], asOf: '2026-06-06' });
+    expect(layout.xaxis.range).toBeDefined();
+    const range = layout.xaxis.range as [string, string];
+    // 預設 back=365, forward=90
+    expect(range[0]).toMatch(/^2025-06-/); // ~1 年前
+    expect(range[1]).toMatch(/^2026-09-/); // ~3 個月後投影 buffer
+    expect(layout.xaxis.autorange).toBe(false);
+  });
+
+  it('顯式 xRange 蓋過 asOf 計算', () => {
+    const layout = buildLayout({
+      monowaves: [],
+      fibZones: [],
+      asOf: '2026-06-06',
+      xRange: ['2020-01-01', '2030-01-01']
+    });
+    expect(layout.xaxis.range).toEqual(['2020-01-01', '2030-01-01']);
+  });
+
+  it('xRangeDaysBack 可調', () => {
+    const layout = buildLayout({
+      monowaves: [],
+      fibZones: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 30
+    });
+    const range = layout.xaxis.range as [string, string];
+    expect(range[0]).toMatch(/^2026-05-/); // ~30 天前
+  });
+});
+
+describe('computeDefaultXRange', () => {
+  it('asOf=null → null', () => {
+    expect(computeDefaultXRange({ monowaves: [], fibZones: [] })).toBeNull();
+  });
+
+  it('invalid asOf → null', () => {
+    expect(
+      computeDefaultXRange({ monowaves: [], fibZones: [], asOf: 'not-a-date' })
+    ).toBeNull();
   });
 });

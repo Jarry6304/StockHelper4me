@@ -19,6 +19,11 @@
     invalidation: boolean;
   } = { fib: true, waveMarkers: true, track2: true, invalidation: true };
   export let height: number = 240;
+  /** 顯式覆寫 x 軸範圍(若 null,自動由 asOf + xRangeDaysBack/Forward 算)。 */
+  export let xRange: [string, string] | null = null;
+  /** 預設 12 個月歷史。State 1 總覽建議用此,State 2 詳情可調大。 */
+  export let xRangeDaysBack: number = 365;
+  export let xRangeDaysForward: number = 90;
 
   let container: HTMLDivElement | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -42,7 +47,10 @@
       asOf: asOf ?? undefined,
       invalidationTriggers: invalidationTriggers ?? undefined,
       track2Bands: track2Bands ?? undefined,
-      layers
+      layers,
+      xRange,
+      xRangeDaysBack,
+      xRangeDaysForward
     };
     const traces = buildTraces(opts);
     const layout = buildLayout(opts);
@@ -82,7 +90,18 @@
   }
   // 上行的 reactive triggers:依賴 monowaves / fibZones / selectedScenario / layers
   // 因為 svelte reactive scope 跟著用到的 prop,顯式列以下避免 unused-var lint 與重要訊號被優化掉:
-  $: void [monowaves, fibZones, selectedScenario, asOf, invalidationTriggers, track2Bands, layers];
+  $: void [
+    monowaves,
+    fibZones,
+    selectedScenario,
+    asOf,
+    invalidationTriggers,
+    track2Bands,
+    layers,
+    xRange,
+    xRangeDaysBack,
+    xRangeDaysForward
+  ];
 </script>
 
 <div bind:this={container} class="chart" style="height: {height}px"></div>

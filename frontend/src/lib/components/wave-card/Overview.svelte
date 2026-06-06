@@ -3,7 +3,7 @@
   import type { Monowave } from '$contracts/neely/Monowave';
   import type { Scenario } from '$contracts/neely/Scenario';
   import { createEventDispatcher } from 'svelte';
-  import { sortScenarios } from '$lib/wave/power';
+  import { pickDefaultScenario, scenarioRecencyDays } from '$lib/wave/power';
   import PowerBadge from './PowerBadge.svelte';
   import CountsBadge from './CountsBadge.svelte';
   import PlotlyWaveChart from './PlotlyWaveChart.svelte';
@@ -15,14 +15,16 @@
 
   const dispatch = createEventDispatcher<{ expand: void }>();
 
-  // 取 power 排序首條 scenario 作主結構標題(不是 primary 選定 — 對齊 L1
-  // 「forest 無 primary」設計;這只是顯示用標題,標題下標明「僅作標題,非答案」)
-  $: sorted = sortScenarios(scenarios);
-  $: topScenario = sorted[0] ?? null;
+  // 預設選 recency tier 內最強 scenario(對齊 L1「forest 無 primary」— 此只是 UI
+  // 預設焦點,非答案)。對 production 一次回傳跨年 forest 防護:近 1 年內結尾的
+  // scenario 優先,避免畫面只看到 2022 的舊結構。
+  $: topScenario = pickDefaultScenario(scenarios, asOf);
   $: structureLabel = topScenario?.structure_label ?? null;
   $: powerRating = topScenario?.power_rating ?? null;
   $: rulesPassed = topScenario?.rules_passed_count ?? null;
   $: rulesDeferred = topScenario?.deferred_rules_count ?? null;
+  $: scenarioStaleDays = topScenario ? Math.round(scenarioRecencyDays(topScenario, asOf)) : null;
+  $: isStale = scenarioStaleDays !== null && scenarioStaleDays > 365;
 </script>
 
 <div class="chartbox">
@@ -37,7 +39,12 @@
 
 <div class="meta">
   {#if structureLabel}
-    <span class="struct">{structureLabel}</span>
+    <span class="struct" class:stale={isStale}>{structureLabel}</span>
+    {#if isStale && scenarioStaleDays !== null}
+      <span class="stale-tag" title="本 scenario 結尾距 as_of 已超過 1 年,可能是 historical anchor">
+        ⚠ 結尾 {scenarioStaleDays}d 前
+      </span>
+    {/if}
   {:else}
     <span class="struct faint">(無 scenario)</span>
   {/if}
@@ -82,6 +89,20 @@
 
   .struct.faint {
     color: var(--ink-faint);
+  }
+
+  .struct.stale {
+    color: var(--fib);
+  }
+
+  .stale-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--fib);
+    background: #1c160a;
+    border: 1px dashed #5a4a2a;
+    border-radius: 4px;
+    padding: 1px 6px;
   }
 
   .spacer {

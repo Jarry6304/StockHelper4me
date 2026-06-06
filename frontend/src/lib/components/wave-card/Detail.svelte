@@ -4,7 +4,7 @@
   import type { ResonanceFusion } from '$contracts/fusion';
   import type { Scenario } from '$contracts/neely/Scenario';
   import { createEventDispatcher } from 'svelte';
-  import { sortScenarios } from '$lib/wave/power';
+  import { pickDefaultScenario, sortScenarios } from '$lib/wave/power';
   import PlotlyWaveChart from './PlotlyWaveChart.svelte';
   import ScenarioList from './ScenarioList.svelte';
   import InvalidationBar from './InvalidationBar.svelte';
@@ -27,11 +27,13 @@
   }>();
 
   $: sorted = sortScenarios(scenarios);
-  // 預設選 power 排序第一條(對映 wireframe State 2 預設選 S1 高亮)
-  $: defaultSelected = sorted[0]?.id ?? null;
+  // 預設選 recency-aware default(對齊 Overview 的 pickDefaultScenario)。
+  // 避免 production 一次回傳跨年 forest 時自動選到 2022 的舊 scenario。
+  $: defaultScenario = pickDefaultScenario(scenarios, asOf);
+  $: defaultSelected = defaultScenario?.id ?? sorted[0]?.id ?? null;
   $: effectiveSelected = selectedScenarioId ?? defaultSelected;
   $: selectedScenario =
-    sorted.find((s) => s.id === effectiveSelected) ?? sorted[0] ?? null;
+    sorted.find((s) => s.id === effectiveSelected) ?? defaultScenario ?? sorted[0] ?? null;
   $: fibZones =
     (selectedScenario?.expected_fib_zones as FibZone[] | undefined) ?? [];
   $: invalidationTriggers = selectedScenario?.invalidation_triggers ?? [];
@@ -80,6 +82,8 @@
       {track2Bands}
       {layers}
       height={270}
+      xRangeDaysBack={540}
+      xRangeDaysForward={120}
     />
   </div>
 

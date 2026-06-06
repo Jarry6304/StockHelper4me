@@ -35,6 +35,15 @@ export interface BuildOptions {
     track2: boolean;
     invalidation: boolean;
   };
+  /**
+   * 預設 x 軸 clip(避免 production 一次回傳跨年 monowave 把 chart 攤成 4 年掃描)。
+   * 若 `asOf` 有給,自動設 `[asOf - xRangeDaysBack, asOf + xRangeDaysForward]`;
+   * user 仍可手動 pan/zoom 看更早歷史(Plotly 預設 dragmode=pan)。
+   * 顯式給 `[from, to]` 蓋過 auto。
+   */
+  xRange?: [string, string] | null;
+  xRangeDaysBack?: number;
+  xRangeDaysForward?: number;
 }
 
 export interface PlotlyTrace {
@@ -299,7 +308,33 @@ export function buildAnnotations(opts: BuildOptions): PlotlyAnnotation[] {
   return ann;
 }
 
+/** 計算預設 x 軸 clip range(對應 BuildOptions.asOf + xRangeDays*)。 */
+export function computeDefaultXRange(opts: BuildOptions): [string, string] | null {
+  if (opts.xRange) return opts.xRange;
+  if (!opts.asOf) return null;
+  const asOfTime = Date.parse(opts.asOf);
+  if (Number.isNaN(asOfTime)) return null;
+  const back = opts.xRangeDaysBack ?? 365; // 預設 12 個月
+  const forward = opts.xRangeDaysForward ?? 90; // 預設 3 個月投影 buffer
+  const from = new Date(asOfTime - back * 86400000);
+  const to = new Date(asOfTime + forward * 86400000);
+  const iso = (d: Date) =>
+    `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  return [iso(from), iso(to)];
+}
+
 export function buildLayout(opts: BuildOptions): PlotlyLayout {
+  const xRange = computeDefaultXRange(opts);
+  const xaxis: Record<string, unknown> = {
+    gridcolor: COL_GRID,
+    zerolinecolor: COL_GRID,
+    tickfont: { color: '#7d92b3' }
+  };
+  if (xRange) {
+    xaxis.range = xRange;
+    xaxis.autorange = false;
+  }
+
   return {
     paper_bgcolor: COL_PANEL,
     plot_bgcolor: COL_BG,
@@ -309,11 +344,7 @@ export function buildLayout(opts: BuildOptions): PlotlyLayout {
     dragmode: 'pan',
     shapes: buildShapes(opts),
     annotations: buildAnnotations(opts),
-    xaxis: {
-      gridcolor: COL_GRID,
-      zerolinecolor: COL_GRID,
-      tickfont: { color: '#7d92b3' }
-    },
+    xaxis,
     yaxis: {
       gridcolor: COL_GRID,
       zerolinecolor: COL_GRID,

@@ -100,3 +100,61 @@ export function scenarioPrimaryCertainty(scenario: Scenario): Certainty | null {
   }
   return best;
 }
+
+/**
+ * scenario 結尾距 as_of 多少天(正值 = 過去,負值 = 未來投影,Infinity = 無 wave_tree)。
+ *
+ * Neely forest 含跨度多年的 historical scenario(e.g. anchor 在 2022 的 5-wave Impulse),
+ * production data 一口氣回傳「最早到最新」會讓畫面只看舊資料 → 用 recency 當 default
+ * selection tier 的第一個鍵。
+ */
+export function scenarioRecencyDays(scenario: Scenario, asOf: string | null): number {
+  if (!asOf) return Number.POSITIVE_INFINITY;
+  const end = scenario.wave_tree?.end;
+  if (!end) return Number.POSITIVE_INFINITY;
+  const t = Date.parse(end);
+  const asOfTime = Date.parse(asOf);
+  if (Number.isNaN(t) || Number.isNaN(asOfTime)) return Number.POSITIVE_INFINITY;
+  return (asOfTime - t) / 86400000;
+}
+
+/**
+ * 選 default 顯示用 scenario(對齊 spec L1「forest 無 primary」— 此非「答案」只是
+ * UI 預設焦點)。排序鍵:
+ *   1. recency tier(wave_tree.end 在 asOf-windowDays 內 = 1,否則 0)
+ *   2. power_rank DESC(對齊 sortScenarios)
+ *   3. passed_count DESC
+ *   4. recency days ASC(同 tier 內取最新)
+ *
+ * 對應 user 反饋:production 一次回傳跨年 scenario,光看 power 會選到 2022 的舊
+ * 結構。本 picker 先把「結尾近期」一族篩進前段,再在族內比 power。
+ */
+export function pickDefaultScenario(
+  scenarios: Scenario[],
+  asOf: string | null,
+  windowDays: number = 365
+): Scenario | null {
+  if (scenarios.length === 0) return null;
+  if (!asOf) return sortScenarios(scenarios)[0] ?? null;
+
+  const annotated = scenarios.map((s) => ({
+    s,
+    days: scenarioRecencyDays(s, asOf)
+  }));
+  annotated.sort((a, b) => {
+    const aRecent = a.days <= windowDays ? 1 : 0;
+    const bRecent = b.days <= windowDays ? 1 : 0;
+    if (aRecent !== bRecent) return bRecent - aRecent;
+
+    const pa = powerRank(a.s.power_rating);
+    const pb = powerRank(b.s.power_rating);
+    if (pa !== pb) return pb - pa;
+
+    if (a.s.rules_passed_count !== b.s.rules_passed_count) {
+      return b.s.rules_passed_count - a.s.rules_passed_count;
+    }
+    return a.days - b.days;
+  });
+
+  return annotated[0]?.s ?? null;
+}
