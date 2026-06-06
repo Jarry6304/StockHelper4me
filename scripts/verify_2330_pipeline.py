@@ -90,7 +90,8 @@ def stage1(cur, stock, daily):
     @check("1", "後復權不變式(fwd vs raw × cumulative)")
     def _():
         # 方向不確定(caf 可能是 raw=fwd×caf 或 fwd=raw×caf)→ 兩向都試,報哪向成立
-        cur.execute("""SELECT f.date, f.close AS fwd, f.caf, r.close AS raw
+        cur.execute("""SELECT f.date, f.close AS fwd,
+                              f.cumulative_adjustment_factor AS caf, r.close AS raw
                          FROM price_daily_fwd f JOIN price_daily r
                            ON f.market=r.market AND f.stock_id=r.stock_id AND f.date=r.date
                         WHERE f.market='TW' AND f.stock_id=%s
