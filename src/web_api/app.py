@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from web_api.compression import add_compression
+from web_api.cors import add_cors
 from web_api.routers import market, screens, series, stocks
 
 
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
         version="4.32.0",
         summary="唯讀 Golden 層:cores + fusion(levels/resonance/climate)passthrough + 切片",
     )
+    add_cors(app)
     add_compression(app)
 
     @app.get("/health", tags=["meta"])
