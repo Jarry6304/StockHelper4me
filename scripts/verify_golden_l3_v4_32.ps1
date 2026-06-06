@@ -147,6 +147,9 @@ curl 'http://localhost:8000/stocks/$FirstStock/levels?as_of=$(Get-Date -Format y
 curl 'http://localhost:8000/market/climate?as_of=$(Get-Date -Format yyyy-MM-dd)'
 curl -w '%{http_code}\n' -o NUL "http://localhost:8000/stocks/$FirstStock/neely/forest?as_of=$(Get-Date -Format yyyy-MM-dd)&timeframe=daily"
 curl -s -H 'Accept-Encoding: br' -D - -o NUL "http://localhost:8000/stocks/$FirstStock/neely/forest?as_of=$(Get-Date -Format yyyy-MM-dd)" | Select-String -Pattern 'content-encoding'
+# Traditional Core 端點(PR #123;v4.32 後加,單元測走 FakeConn 抓不到 forest::text 欄名/JSON 形狀 → 至少對真 PG smoke 一次)
+curl -w '%{http_code}\n' -o NUL "http://localhost:8000/stocks/$FirstStock/traditional/forest?timeframe=daily"
+curl -w '%{http_code}\n' -o NUL "http://localhost:8000/stocks/$FirstStock/waves?as_of=$(Get-Date -Format yyyy-MM-dd)"
 
 # ── TS 契約 codegen(Rust 加欄位後重生)──
 bash codegen/generate.sh
