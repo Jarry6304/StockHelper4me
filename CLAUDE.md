@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **5 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / MCP API,v3.5 R3 後)。
 Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores 全市場全核 dispatch + v3.21 4 new cores + v4.0-v4.4 Neely M3SPEC alignment + v4.5+v4.6 M3SPEC 闕漏補完 Group 2+3 + v4.10 Item 4 收尾 + **traditional_core 獨立波浪 vertical**)。
 **v4.32 後升 6 層**(加 Golden L3 fusion 物化 + 唯讀 Web API)。
-**Traditional Core(2026-06-02 / PR #123 merged)**:第 2 個波浪 vertical(Frost & Prechter EWP),與 Neely **完全解耦、並排不整合**;由下而上多度數 fractal 引擎(子浪細分 R6/R7/R8/R11 = 建構約束);自有 `traditional_snapshots` + `/traditional/forest` + `/waves` + MCP `traditional_wave_forest` + Streamlit「🌲 Traditional Wave」。詳見下方 §「Traditional Core v2 / v3」。
+**Traditional Core(2026-06-02 / PR #123 merged)**:第 2 個波浪 vertical(Frost & Prechter EWP),與 Neely **完全解耦、並排不整合**;由下而上多度數 fractal 引擎(子浪細分 R6/R7/R8/R11 = 建構約束);自有 `traditional_snapshots` + `/traditional/forest` + `/waves` + MCP `traditional_wave_forest` + Streamlit「🌲 Traditional Wave」。**v4.37 全市場 production-verified**(compaction 改 `Rc` 共享子樹殺深拷貝 → 單股 135-250s → **7.7s**;P0-Gate forest max 69/70/58 ≪ 200;`monowave_epsilon` 預設 0.03 + 4 旋鈕 env;run-all 預設 concurrency 8)。詳見下方 §v4.37 + §「Traditional Core v2 / v3」。
 
 - **alembic head**:`j6k7l8m9n0o1`(PR #123 Traditional Core `traditional_snapshots` 自有表;i5j6k7l8m9n0 v4.35 magic_formula `is_top_30`→`is_top_n` rename;h4i5j6k7l8m9 v4.28 B1 `forecast_log.logic_version`;g3h4i5j6k7l8 v4.26 wave_impulse_screen_derived 表;f2g3h4i5j6k7 v4.25 雙軌共振 forecast_log.internal_only;e1f2g3h4i5j6 fusion eligible v2 partial index;d0e1f2g3h4i5 whitelist 加 3 non-price cores;v4.17 DROP 5 張 v2.0 orphan 表;Fusion Layer P0.2 加 `facts.severity`)
 - **開發分支(近期)**:`claude/neely-forest-cloud-zigzag-Xv13d`(v4.32.1 tpex 解鎖 + NeelyWave 複合雲圖 + v4.33 fusion `.env` 路徑修復,皆已 merge main);`claude/sweet-carson-96j9D`(v4.32 Golden L3 物化 + 唯讀 Web API + TS codegen,已 merge)
@@ -297,6 +297,70 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 | `docs/MILESTONE_1_HANDOVER.md` | M1 milestone handover |
 
 當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。
+
+---
+
+## v4.37 — Traditional Core 全市場可行化(compaction Rc 深拷貝修)+ merge main 同步(2026-06-06)
+
+本 session 在 `claude/neely-forest-cloud-zigzag-Xv13d` 一路 production-debug 收尾。
+**整批全市場 production-verified ☕**。
+
+### 主軸:Traditional Core 從「跑不動」到「全市場 ~2.5h 可行」
+
+production 全市場 `run-all` 揭露 traditional_core v3「忠於原書、monowave 不過濾」單股
+**~135-250s**(neely ~0.5s,慢 ~270×)→ concurrency=32 連線池餓死(`pool timed out` /
+`LIMIT 51` weekly 查詢 elapsed 2344s)。三層根因 + 修:
+
+1. **compaction 深拷貝(真元兇)**:`EngineNode { children: Vec<EngineNode> }` 是遞迴深樹 +
+   `derive(Clone)`,compaction `aggregate_one` 每 window 每 pattern 把整條 tiling 深拷貝
+   (連子浪樹)→ 成本 `levels × beam × n² × 樹深` → 暫時記憶體暴增 → swap(98s↔250s 的 2.5×
+   變異就是換頁)。修:**`children: Vec<Rc<EngineNode>>` 全程共享**(node / patterns 6 groupers /
+   rules / compaction / scenario;build_parent 等 body 靠 deref 透明),clone tiling = bump 指標。
+   **單股 135-250s → 7.7s(~20-30×)、變異消失**;forest 結果不變(`cargo test -p traditional_core`
+   22 passed)、品質反升(出現 deg6 Minor / Minuette 多度數結構,非全 Subminuette)。
+   Rc 安全:`run()` 純同步、Rc 不跨 `.await`、output(WaveNode owned tree)無 Rc。
+2. **`monowave_epsilon` 預設 0.0 → 0.03**(3% 反轉雜訊門檻)+ **4 旋鈕 env 覆寫**
+   (`TRAD_MONOWAVE_EPSILON` / `TRAD_ROUND_BEAM_SIZE` / `TRAD_MAX_DEGREE_LEVELS` /
+   `TRAD_FOREST_MAX_SIZE`,免重編 sweep;`helpers.rs::apply_traditional_env_overrides` 套
+   run-all dispatch + traditional-debug)。
+3. **`run-all` 預設 `--concurrency` 32 → 8**(pool=concurrency+4;universe 翻倍 + traditional 後
+   40-core 全市場寫入在 32 把單機 PG I/O 打滿 → acquire 排隊 ~12s)。
+
+### 全市場整批驗證 ✅ P0-Gate 通過(2026-06-06,user 本機)
+
+`run-all --write` 全 universe 2171 stocks × 40 cores / **8953s(~2.5h)** / 84676 rows。
+traditional_core **6477 ok / 36 err**(全是無 Silver 資料的 ETF empty-series,graceful)。
+P0-Gate(`scripts/verify_traditional_forest.py`,免 psql):
+- forest size:daily p50/p95/max = 65/67/**69**;weekly 65/67/**70**;monthly 34/41/**58**
+  — **全 ≪ 200 cap、p50≈p95(極穩、不爆碎)**。
+- 覆蓋:daily 2135(= 2171 − 36 empty ETF)/ weekly 2171 / monthly 2171。
+- 殘留清理:早期 epsilon=0 melt 的 stale params_hash row 用「留最新 computed_at」DELETE 清 136 列。
+
+### 順帶修(merge + 兩個 bug)
+
+- **merge origin/main**(本分支落後 21 commit):logic_version schema 修 / is_top_n /
+  Traditional Core v2/v3 / 正確 alembic head `j6k7l8m9n0o1` / **main v4.36 DB sync 並行化**
+  全部同步。**forecast 校準批次優化(我 2026-06-03 conformalize/settle 批次)與 main v4.36
+  並行化撞同一個 `conformalize_batch`;user 拍版取 main 並行版、捨我的批次版**(merge 時
+  `src/forecast` 全回 main,刪 `test_batch_optimization.py`)。
+- **schema fresh-init drift 修**:`wave_impulse_screen_derived`(table+index,v4.26 migration
+  `g3h4i5j6k7l8` 建,`schema_pg.sql` 連 main 都漏)→ verbatim 補回。
+- **magic_formula_core Rust `is_top_30` → `is_top_n`**:全市場 run-all 揭露 magic_formula 全
+  2171 檔 `column "is_top_30" does not exist`(v4.35 rename 漏改 Rust `fundamental_loader`)→
+  SQL 讀 `is_top_n AS is_top_30`(語意名 EnteredTop30/ExitedTop30 凍結,同 Python
+  `fetch_is_top_30` convention)。`workflows/magic_formula_only.toml` 單獨重補
+  (`--workflow` 只開 1 core / 7.8s / 2171 ok / 94 facts)。
+
+### 新工具
+
+- `scripts/verify_traditional_forest.py`:免 psql 的 P0-Gate forest 分布 + 覆蓋驗收(走 repo get_connection)。
+- `workflows/magic_formula_only.toml`:`--workflow` 單跑 magic_formula_core(其他 39 cores skip)。
+
+### 驗證 / 風險
+
+`cargo test -p traditional_core` 22 passed;`cargo check -p tw_cores` 綠 0 warning;
+`pytest tests/forecast/` 201 passed(main 並行版)。0 alembic / 0 Python 邏輯改(forecast 全回 main)。
+🟢 整批 production-verified。各 commit 獨立 `git revert`。
 
 ---
 
