@@ -237,3 +237,8 @@ scripts/test_28_apis_result.json
 /test_ratelimit.py
 # 以後想丟個人探索檔，建議放 scratch/ 統一忽略：
 /scratch/
+
+# frontend SvelteKit src/lib/(對抗上方 Python `lib/` 規則 — 該規則是 Python 發佈
+# 目錄,但 unanchored 會誤殺 SvelteKit $lib alias 目錄)。
+!frontend/src/lib/
+!frontend/src/lib/**
