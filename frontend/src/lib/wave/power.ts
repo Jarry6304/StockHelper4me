@@ -8,6 +8,7 @@
  */
 
 import type { Certainty } from '$contracts/neely/Certainty';
+import type { Monowave } from '$contracts/neely/Monowave';
 import type { PowerRating } from '$contracts/neely/PowerRating';
 import type { Scenario } from '$contracts/neely/Scenario';
 
@@ -119,32 +120,120 @@ export function scenarioRecencyDays(scenario: Scenario, asOf: string | null): nu
 }
 
 /**
- * 選 default 顯示用 scenario(對齊 spec L1「forest 無 primary」— 此非「答案」只是
- * UI 預設焦點)。排序鍵:
- *   1. recency tier(wave_tree.end 在 asOf-windowDays 內 = 1,否則 0)
- *   2. power_rank DESC(對齊 sortScenarios)
- *   3. passed_count DESC
- *   4. recency days ASC(同 tier 內取最新)
+ * 從 monowave_series 取最後一筆 end_price 作為「最新觀察價」(對齊 neely_core 的
+ * data_range.end)— 用來判 scenario 是否已觸發 invalidation。
+ */
+export function extractCurrentPriceFromMonowaves(monowaves: Monowave[]): number | null {
+  if (!monowaves || monowaves.length === 0) return null;
+  const last = monowaves[monowaves.length - 1];
+  if (!last || typeof last.end_price !== 'number') return null;
+  return last.end_price;
+}
+
+/**
+ * 判斷 scenario 是否已被當前價格觸發 invalidation。
  *
- * 對應 user 反饋:production 一次回傳跨年 scenario,光看 power 會選到 2022 的舊
- * 結構。本 picker 先把「結尾近期」一族篩進前段,再在族內比 power。
+ * 對齊 spec § Invalidation Triggers:
+ *   - `PriceBreakBelow X` + currentPrice < X → invalidated
+ *   - `PriceBreakAbove X` + currentPrice > X → invalidated
+ *   - 只看 `on_trigger === 'InvalidateScenario'` 的 trigger
+ *     (WeakenScenario / PromoteAlternative 不算)
+ *   - trigger 價格 = 0 視為 spec placeholder 忽略(Compaction Combination
+ *     scenarios 常出現)
+ */
+export function isScenarioInvalidated(
+  scenario: Scenario,
+  currentPrice: number | null
+): boolean {
+  if (currentPrice === null || !Number.isFinite(currentPrice)) return false;
+  for (const trigger of scenario.invalidation_triggers) {
+    if (trigger.on_trigger !== 'InvalidateScenario') continue;
+    const tt = trigger.trigger_type;
+    if (typeof tt !== 'object' || tt === null) continue;
+    if ('PriceBreakBelow' in tt && typeof tt.PriceBreakBelow === 'number') {
+      if (tt.PriceBreakBelow > 0 && currentPrice < tt.PriceBreakBelow) return true;
+    }
+    if ('PriceBreakAbove' in tt && typeof tt.PriceBreakAbove === 'number') {
+      if (tt.PriceBreakAbove > 0 && currentPrice > tt.PriceBreakAbove) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Recency tier 階梯化(對齊 user「我要看現在」的 UX 預期):
+ *   - tier 3:≤ 60 天 → very recent,最即時
+ *   - tier 2:61-180 天 → recent,仍 actionable
+ *   - tier 1:181-365 天 → moderate,結構意義仍在
+ *   - tier 0:> 365 天 → old,通常是 historical anchor
+ *
+ * tier 3 內最弱的 Neutral 仍會勝過 tier 2 內最強的 StrongBullish — 因為「現在發生的事」
+ * 優先於「半年前的強訊號」對 UI default focus 而言。user 想看舊強訊號可手動點選 list。
+ */
+export function recencyTier(days: number): number {
+  if (!Number.isFinite(days)) return 0;
+  if (days <= 60) return 3;
+  if (days <= 180) return 2;
+  if (days <= 365) return 1;
+  return 0;
+}
+
+export interface PickOptions {
+  /** 退守參數;預設沿用 365 仍接受。tier 化後此值少用,留 backward-compat。 */
+  windowDays?: number;
+  /**
+   * 當前實際價格(用來過濾 invalidation triggered scenario)。null = 不過濾。
+   * 通常從 `extractCurrentPriceFromMonowaves(neely.monowave_series)` 取。
+   */
+  currentPrice?: number | null;
+}
+
+/**
+ * 選 default 顯示用 scenario(對齊 spec L1「forest 無 primary」— 此非「答案」只是
+ * UI 預設焦點)。
+ *
+ * 排序鍵(對齊 user 反饋「畫面只顯示舊資料 wave 進入選中」):
+ *   1. 未 invalidated 優先(被當前價格觸發 invalidation 的 scenario 推到最後)
+ *   2. recency tier DESC(very recent > recent > moderate > old)
+ *   3. power_rank DESC(同 tier 內偏好強訊號)
+ *   4. rules_passed_count DESC
+ *   5. days ASC(最後 tiebreaker,取最新)
+ *
+ * 2330 2026-06 production case 對比:
+ *   舊版(只看 recency+power)→ c5-mw194-mw198 StrongBullish 2025-Q3(fib 早穿過)
+ *   新版(invalidation 過濾 + tier 化)→ c3-mw236-mw238 Zigzag Up 2026-05(fib 真實對應現價)
  */
 export function pickDefaultScenario(
   scenarios: Scenario[],
   asOf: string | null,
-  windowDays: number = 365
+  optionsOrWindowDays: PickOptions | number = {}
 ): Scenario | null {
   if (scenarios.length === 0) return null;
-  if (!asOf) return sortScenarios(scenarios)[0] ?? null;
+
+  // backward-compat:第 3 參數舊版用 number windowDays
+  const options: PickOptions =
+    typeof optionsOrWindowDays === 'number'
+      ? { windowDays: optionsOrWindowDays }
+      : optionsOrWindowDays;
+  const windowDays = options.windowDays ?? 365;
+  const currentPrice = options.currentPrice ?? null;
+
+  if (!asOf && currentPrice === null) {
+    return sortScenarios(scenarios)[0] ?? null;
+  }
 
   const annotated = scenarios.map((s) => ({
     s,
+    invalidated: isScenarioInvalidated(s, currentPrice),
     days: scenarioRecencyDays(s, asOf)
   }));
+
   annotated.sort((a, b) => {
-    const aRecent = a.days <= windowDays ? 1 : 0;
-    const bRecent = b.days <= windowDays ? 1 : 0;
-    if (aRecent !== bRecent) return bRecent - aRecent;
+    if (a.invalidated !== b.invalidated) return a.invalidated ? 1 : -1;
+
+    const ta = recencyTier(a.days);
+    const tb = recencyTier(b.days);
+    if (ta !== tb) return tb - ta;
 
     const pa = powerRank(a.s.power_rating);
     const pb = powerRank(b.s.power_rating);
@@ -155,6 +244,9 @@ export function pickDefaultScenario(
     }
     return a.days - b.days;
   });
+
+  // windowDays 仍接受但不主導(對 < windowDays 的 scenario 給輕微 bonus 透過 tier 已覆蓋)
+  void windowDays;
 
   return annotated[0]?.s ?? null;
 }

@@ -1,18 +1,29 @@
 import { describe, expect, it } from 'vitest';
+import type { Monowave } from '$contracts/neely/Monowave';
 import type { Scenario } from '$contracts/neely/Scenario';
+import type { Trigger } from '$contracts/neely/Trigger';
 import {
+  extractCurrentPriceFromMonowaves,
+  isScenarioInvalidated,
   pickDefaultScenario,
   powerAbsLevel,
   powerDirection,
   powerLabel,
   powerRank,
+  recencyTier,
   scenarioPrimaryCertainty,
   scenarioRecencyDays,
   sortScenarios,
   topNScenarios
 } from './power';
 
-function mkScenario(p: Partial<Scenario> & { waveEnd?: string; waveStart?: string } = {}): Scenario {
+function mkScenario(
+  p: Partial<Scenario> & {
+    waveEnd?: string;
+    waveStart?: string;
+    invalidationTriggers?: Trigger[];
+  } = {}
+): Scenario {
   return {
     id: p.id ?? 'S1',
     wave_tree: {
@@ -33,7 +44,7 @@ function mkScenario(p: Partial<Scenario> & { waveEnd?: string; waveStart?: strin
     deferred_rules: [],
     rules_passed_count: p.rules_passed_count ?? 0,
     deferred_rules_count: p.deferred_rules_count ?? 0,
-    invalidation_triggers: [],
+    invalidation_triggers: p.invalidationTriggers ?? p.invalidation_triggers ?? [],
     expected_fib_zones: [],
     structural_facts: {} as never,
     advisory_findings: [],
@@ -43,6 +54,26 @@ function mkScenario(p: Partial<Scenario> & { waveEnd?: string; waveStart?: strin
     round_state: 'Round1' as never,
     pattern_isolation_anchors: [],
     triplexity_detected: false
+  };
+}
+
+function mkTrigger(kind: 'PriceBreakBelow' | 'PriceBreakAbove', price: number): Trigger {
+  return {
+    trigger_type: { [kind]: price } as never,
+    on_trigger: 'InvalidateScenario',
+    rule_reference: { Ch5_Essential: 3 } as never,
+    neely_page: 'test'
+  };
+}
+
+function mkMonowave(end_date: string, end_price: number): Monowave {
+  return {
+    start_date: '2020-01-01',
+    end_date,
+    start_price: 0,
+    end_price,
+    direction: 'Up',
+    bar_indices: [0, 0]
   };
 }
 
@@ -183,6 +214,215 @@ describe('pickDefaultScenario', () => {
       mkScenario({ id: 'M3', power_rating: 'SlightBearish', waveEnd: '2026-03-01' }) // 3 個月前 → tier-in
     ];
     expect(pickDefaultScenario(list, '2026-06-06', 180)?.id).toBe('M3');
+  });
+});
+
+describe('extractCurrentPriceFromMonowaves', () => {
+  it('回最後一筆 end_price', () => {
+    const mws = [mkMonowave('2026-06-01', 2400), mkMonowave('2026-06-05', 2425)];
+    expect(extractCurrentPriceFromMonowaves(mws)).toBe(2425);
+  });
+
+  it('空陣列 → null', () => {
+    expect(extractCurrentPriceFromMonowaves([])).toBeNull();
+  });
+});
+
+describe('isScenarioInvalidated', () => {
+  it('PriceBreakBelow + current < trigger → true', () => {
+    const s = mkScenario({
+      invalidationTriggers: [mkTrigger('PriceBreakBelow', 1000)]
+    });
+    expect(isScenarioInvalidated(s, 900)).toBe(true);
+  });
+
+  it('PriceBreakBelow + current > trigger → false', () => {
+    const s = mkScenario({
+      invalidationTriggers: [mkTrigger('PriceBreakBelow', 1000)]
+    });
+    expect(isScenarioInvalidated(s, 1100)).toBe(false);
+  });
+
+  it('PriceBreakAbove + current > trigger → true', () => {
+    const s = mkScenario({
+      invalidationTriggers: [mkTrigger('PriceBreakAbove', 2327.5)]
+    });
+    expect(isScenarioInvalidated(s, 2425)).toBe(true);
+  });
+
+  it('PriceBreakAbove + current < trigger → false', () => {
+    const s = mkScenario({
+      invalidationTriggers: [mkTrigger('PriceBreakAbove', 2327.5)]
+    });
+    expect(isScenarioInvalidated(s, 2300)).toBe(false);
+  });
+
+  it('trigger price=0 視為 placeholder,不算 invalidated', () => {
+    const s = mkScenario({
+      invalidationTriggers: [mkTrigger('PriceBreakBelow', 0)]
+    });
+    expect(isScenarioInvalidated(s, 100)).toBe(false);
+  });
+
+  it('current=null → 不過濾', () => {
+    const s = mkScenario({
+      invalidationTriggers: [mkTrigger('PriceBreakBelow', 1000)]
+    });
+    expect(isScenarioInvalidated(s, null)).toBe(false);
+  });
+
+  it('WeakenScenario trigger 不算 invalidation', () => {
+    const t: Trigger = {
+      trigger_type: { PriceBreakBelow: 1000 } as never,
+      on_trigger: 'WeakenScenario',
+      rule_reference: { Ch5_Essential: 3 } as never,
+      neely_page: 'test'
+    };
+    const s = mkScenario({ invalidationTriggers: [t] });
+    expect(isScenarioInvalidated(s, 900)).toBe(false);
+  });
+});
+
+describe('recencyTier', () => {
+  it('tier 3:≤ 60 天', () => {
+    expect(recencyTier(0)).toBe(3);
+    expect(recencyTier(30)).toBe(3);
+    expect(recencyTier(60)).toBe(3);
+  });
+
+  it('tier 2:61-180 天', () => {
+    expect(recencyTier(61)).toBe(2);
+    expect(recencyTier(100)).toBe(2);
+    expect(recencyTier(180)).toBe(2);
+  });
+
+  it('tier 1:181-365 天', () => {
+    expect(recencyTier(181)).toBe(1);
+    expect(recencyTier(242)).toBe(1);
+    expect(recencyTier(365)).toBe(1);
+  });
+
+  it('tier 0:> 365 天', () => {
+    expect(recencyTier(366)).toBe(0);
+    expect(recencyTier(1320)).toBe(0);
+  });
+});
+
+describe('pickDefaultScenario invalidation filter + tier', () => {
+  it('invalidated scenario 推到後面(即使最近)', () => {
+    const list = [
+      mkScenario({
+        id: 'BROKEN_RECENT',
+        waveEnd: '2026-05-20',
+        power_rating: 'Bullish',
+        invalidationTriggers: [mkTrigger('PriceBreakAbove', 2327.5)]
+      }),
+      mkScenario({
+        id: 'VALID_RECENT',
+        waveEnd: '2026-05-07',
+        power_rating: 'Neutral',
+        invalidationTriggers: [mkTrigger('PriceBreakBelow', 2040)]
+      })
+    ];
+    const picked = pickDefaultScenario(list, '2026-06-06', { currentPrice: 2425 });
+    expect(picked?.id).toBe('VALID_RECENT');
+  });
+
+  it('tier 化:tier 3 Neutral 勝過 tier 1 StrongBullish', () => {
+    const list = [
+      mkScenario({
+        id: 'OLD_STRONG',
+        waveEnd: '2025-10-07',
+        power_rating: 'StrongBullish',
+        invalidationTriggers: [mkTrigger('PriceBreakBelow', 1100)]
+      }),
+      mkScenario({
+        id: 'NEW_WEAK',
+        waveEnd: '2026-05-07',
+        power_rating: 'Neutral',
+        invalidationTriggers: [mkTrigger('PriceBreakBelow', 2000)]
+      })
+    ];
+    const picked = pickDefaultScenario(list, '2026-06-06', { currentPrice: 2425 });
+    expect(picked?.id).toBe('NEW_WEAK');
+  });
+
+  it('regression: 2330 2026-06 production case — 應選 c3-mw236-mw238(30d valid Neutral)而非 c5-mw194-mw198(242d valid StrongBullish)', () => {
+    const c5mw194 = mkScenario({
+      id: 'c5-mw194-mw198',
+      waveEnd: '2025-10-07',
+      power_rating: 'StrongBullish',
+      invalidationTriggers: [mkTrigger('PriceBreakBelow', 1157.195)]
+    });
+    const c3mw236 = mkScenario({
+      id: 'c3-mw236-mw238',
+      waveEnd: '2026-05-07',
+      power_rating: 'Neutral',
+      invalidationTriggers: [mkTrigger('PriceBreakBelow', 2040)]
+    });
+    const c5mw29 = mkScenario({
+      id: 'c5-mw29-mw33',
+      waveEnd: '2022-10-26',
+      power_rating: 'StrongBearish',
+      invalidationTriggers: [mkTrigger('PriceBreakAbove', 528.03)] // 2425 ≫ 528 → invalidated
+    });
+    const c3mw239 = mkScenario({
+      id: 'c3-mw239-mw241',
+      waveEnd: '2026-05-20',
+      power_rating: 'Neutral',
+      invalidationTriggers: [mkTrigger('PriceBreakAbove', 2327.5)] // 2425 > 2327 → invalidated
+    });
+
+    const picked = pickDefaultScenario(
+      [c5mw194, c3mw236, c5mw29, c3mw239],
+      '2026-06-06',
+      { currentPrice: 2425 }
+    );
+    expect(picked?.id).toBe('c3-mw236-mw238');
+  });
+
+  it('全部 invalidated → 仍按 tier+power 排,取最強', () => {
+    const list = [
+      mkScenario({
+        id: 'A',
+        waveEnd: '2026-05-20',
+        power_rating: 'Bullish',
+        invalidationTriggers: [mkTrigger('PriceBreakAbove', 2000)]
+      }),
+      mkScenario({
+        id: 'B',
+        waveEnd: '2026-05-25',
+        power_rating: 'StrongBullish',
+        invalidationTriggers: [mkTrigger('PriceBreakAbove', 2100)]
+      })
+    ];
+    const picked = pickDefaultScenario(list, '2026-06-06', { currentPrice: 2425 });
+    expect(picked?.id).toBe('B'); // StrongBullish 勝
+  });
+
+  it('currentPrice=null → 不過濾,退回 tier+power sort', () => {
+    const list = [
+      mkScenario({
+        id: 'OLD_STRONG',
+        waveEnd: '2025-10-07',
+        power_rating: 'StrongBullish'
+      }),
+      mkScenario({
+        id: 'NEW_WEAK',
+        waveEnd: '2026-05-07',
+        power_rating: 'Neutral'
+      })
+    ];
+    const picked = pickDefaultScenario(list, '2026-06-06', { currentPrice: null });
+    expect(picked?.id).toBe('NEW_WEAK'); // tier 3 vs tier 1,tier 勝
+  });
+
+  it('backward compat:第 3 參數可是 number windowDays', () => {
+    const list = [
+      mkScenario({ id: 'A', waveEnd: '2026-05-07', power_rating: 'Neutral' })
+    ];
+    const picked = pickDefaultScenario(list, '2026-06-06', 365);
+    expect(picked?.id).toBe('A');
   });
 });
 

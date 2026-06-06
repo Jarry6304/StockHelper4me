@@ -3,7 +3,12 @@
   import type { Monowave } from '$contracts/neely/Monowave';
   import type { Scenario } from '$contracts/neely/Scenario';
   import { createEventDispatcher } from 'svelte';
-  import { pickDefaultScenario, scenarioRecencyDays } from '$lib/wave/power';
+  import {
+    extractCurrentPriceFromMonowaves,
+    isScenarioInvalidated,
+    pickDefaultScenario,
+    scenarioRecencyDays
+  } from '$lib/wave/power';
   import PowerBadge from './PowerBadge.svelte';
   import CountsBadge from './CountsBadge.svelte';
   import PlotlyWaveChart from './PlotlyWaveChart.svelte';
@@ -15,16 +20,22 @@
 
   const dispatch = createEventDispatcher<{ expand: void }>();
 
-  // 預設選 recency tier 內最強 scenario(對齊 L1「forest 無 primary」— 此只是 UI
-  // 預設焦點,非答案)。對 production 一次回傳跨年 forest 防護:近 1 年內結尾的
-  // scenario 優先,避免畫面只看到 2022 的舊結構。
-  $: topScenario = pickDefaultScenario(scenarios, asOf);
+  // 預設選 invalidation-filter + tier-by-recency + within-tier-by-power(對齊 spec L1
+  // 「forest 無 primary」— 此只是 UI 預設焦點,非答案)。
+  //
+  // 2 層防護(production 1 次回傳跨年 forest):
+  //   (1) currentPrice 過濾已 invalidated scenario(triggers vs current_price)
+  //   (2) tier 化 recency(≤60d / ≤180d / ≤365d / >365d)— 即時優先於強訊號
+  // 詳見 power.ts §pickDefaultScenario rationale。
+  $: currentPrice = extractCurrentPriceFromMonowaves(monowaves);
+  $: topScenario = pickDefaultScenario(scenarios, asOf, { currentPrice });
   $: structureLabel = topScenario?.structure_label ?? null;
   $: powerRating = topScenario?.power_rating ?? null;
   $: rulesPassed = topScenario?.rules_passed_count ?? null;
   $: rulesDeferred = topScenario?.deferred_rules_count ?? null;
   $: scenarioStaleDays = topScenario ? Math.round(scenarioRecencyDays(topScenario, asOf)) : null;
   $: isStale = scenarioStaleDays !== null && scenarioStaleDays > 365;
+  $: topInvalidated = topScenario ? isScenarioInvalidated(topScenario, currentPrice) : false;
 </script>
 
 <div class="chartbox">
@@ -43,6 +54,11 @@
     {#if isStale && scenarioStaleDays !== null}
       <span class="stale-tag" title="本 scenario 結尾距 as_of 已超過 1 年,可能是 historical anchor">
         ⚠ 結尾 {scenarioStaleDays}d 前
+      </span>
+    {/if}
+    {#if topInvalidated}
+      <span class="stale-tag inval-tag" title="當前價格已觸發本 scenario 的 InvalidateScenario trigger,理論上已失效">
+        ⚠ 已 invalidated
       </span>
     {/if}
   {:else}
@@ -103,6 +119,12 @@
     border: 1px dashed #5a4a2a;
     border-radius: 4px;
     padding: 1px 6px;
+  }
+
+  .stale-tag.inval-tag {
+    color: var(--inval);
+    background: #1c0f14;
+    border-color: #5a3340;
   }
 
   .spacer {
