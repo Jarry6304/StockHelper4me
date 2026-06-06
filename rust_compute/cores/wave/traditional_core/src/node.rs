@@ -6,6 +6,7 @@ use crate::output::{
     DiagonalKind, DiagonalShape, DiagonalSub, Direction, TradRuleId, TraditionalPatternType, WaveNode,
 };
 use chrono::NaiveDate;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct EngineNode {
@@ -25,7 +26,9 @@ pub struct EngineNode {
     pub diag: Option<(DiagonalKind, DiagonalShape, DiagonalSub)>,
     /// flat regular/expanded/running、triangle contracting/expanding 等顯示用子分類
     pub variant: Option<String>,
-    pub children: Vec<EngineNode>,
+    /// v3 perf:子樹用 `Rc` 共享 — compaction 反覆 clone tiling 時只 bump 指標,
+    /// 不深拷貝整棵樹(原 `Vec<EngineNode>` 深拷貝是 ~100s/股 + swap 的元兇)。
+    pub children: Vec<Rc<EngineNode>>,
     pub passed_rules: Vec<TradRuleId>,
     pub deferred_rules: Vec<TradRuleId>,
 }

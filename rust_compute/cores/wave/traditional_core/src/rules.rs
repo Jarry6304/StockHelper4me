@@ -4,24 +4,25 @@
 // **orthodox 端點紀律**:一律讀 node.start_price/end_price,不讀 intrabar 極值。
 
 use crate::node::EngineNode;
+use std::rc::Rc;
 
 /// 方向是否嚴格交替(impulse/zigzag/flat/diagonal/triangle 的結構前提)。
-pub fn alternates(w: &[EngineNode]) -> bool {
+pub fn alternates(w: &[Rc<EngineNode>]) -> bool {
     w.windows(2).all(|p| p[0].direction != p[1].direction)
 }
 
 /// 視窗淨方向是否向上(以首節點起點 → 末節點終點)。
-pub fn window_up(w: &[EngineNode]) -> bool {
+pub fn window_up(w: &[Rc<EngineNode>]) -> bool {
     w.last().map(|l| l.end_price).unwrap_or(0.0) >= w[0].start_price
 }
 
 /// R1:浪 2 回撤 ≤ 浪 1 之 100%。
-pub fn r1_ok(w: &[EngineNode]) -> bool {
+pub fn r1_ok(w: &[Rc<EngineNode>]) -> bool {
     w[1].amp() <= w[0].amp()
 }
 
 /// R3:浪 3 端點超越浪 1 端點(方向感知)。
-pub fn r3_ok(w: &[EngineNode], up: bool) -> bool {
+pub fn r3_ok(w: &[Rc<EngineNode>], up: bool) -> bool {
     if up {
         w[2].end_price > w[0].end_price
     } else {
@@ -30,17 +31,17 @@ pub fn r3_ok(w: &[EngineNode], up: bool) -> bool {
 }
 
 /// 浪 3 在 1/3/5 中最短(百分比)。
-pub fn wave3_shortest(w: &[EngineNode]) -> bool {
+pub fn wave3_shortest(w: &[Rc<EngineNode>]) -> bool {
     w[2].pct() < w[0].pct() && w[2].pct() < w[4].pct()
 }
 
 /// R4:浪 3 永不最短。
-pub fn r4_ok(w: &[EngineNode]) -> bool {
+pub fn r4_ok(w: &[Rc<EngineNode>]) -> bool {
     !wave3_shortest(w)
 }
 
 /// R5(衝擊浪)浪 4 不重疊浪 1(方向感知;up: 浪4 端點 > 浪1 端點)。
-pub fn r5_no_overlap(w: &[EngineNode], up: bool) -> bool {
+pub fn r5_no_overlap(w: &[Rc<EngineNode>], up: bool) -> bool {
     if up {
         w[3].end_price > w[0].end_price
     } else {
@@ -49,6 +50,6 @@ pub fn r5_no_overlap(w: &[EngineNode], up: bool) -> bool {
 }
 
 /// R9(對角)反向子浪不完全回撤前行動子浪(strict)+ 浪 3 永不最短。
-pub fn r9_ok(w: &[EngineNode]) -> bool {
+pub fn r9_ok(w: &[Rc<EngineNode>]) -> bool {
     w[1].amp() < w[0].amp() && w[3].amp() < w[2].amp() && !wave3_shortest(w)
 }

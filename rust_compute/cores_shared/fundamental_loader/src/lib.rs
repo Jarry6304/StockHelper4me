@@ -113,6 +113,8 @@ pub async fn load_valuation_daily(
 // Silver builder 已對全市場跨股 cross-rank;Rust core 純讀 per-stock 序列,
 // 比 (i, i-1) 兩日 is_top_30 變化 → produce EnteredTop30 / ExitedTop30 facts。
 // 對齊 v3.4 plan §Phase A + B(2026-05-15)。
+// v4.35:實體欄 is_top_30 → is_top_n rename(Python 已改,Rust 漏);SQL 讀
+// `is_top_n AS is_top_30` 對齊重命名,Rust 語意名(EnteredTop30 等)凍結不動。
 //
 // Reference:
 //   Greenblatt, J. (2005). *The Little Book That Beats the Market*. Wiley.
@@ -150,7 +152,7 @@ pub async fn load_magic_formula_series(
                roic_rank,
                combined_rank,
                universe_size,
-               is_top_30,
+               is_top_n AS is_top_30,
                excluded_reason
         FROM magic_formula_ranked_derived
         WHERE market = 'TW' AND stock_id = $1

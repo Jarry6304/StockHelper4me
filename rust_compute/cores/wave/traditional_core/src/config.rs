@@ -28,7 +28,10 @@ impl Default for TraditionalEngineConfig {
             timeframe: Timeframe::Daily,
             fib_tolerance: 0.04,
             forest_max_size: 200,
-            monowave_epsilon: 0.0,
+            // P0-Gate 校準(2026-06-04):全市場 run-all 在 epsilon=0.0 時每股 ~135s
+            // (monowave 不過濾 → base 爆炸 → compaction O(beam×clone) 爆)。0.03 = 3%
+            // 反轉雜訊門檻,把 base 砍到 neely 量級。可 env `TRAD_MONOWAVE_EPSILON` 覆寫 sweep。
+            monowave_epsilon: 0.03,
             round_beam_size: 64,
             max_degree_levels: 8,
         }

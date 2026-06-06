@@ -4,10 +4,11 @@
 use super::{build_parent, enforce};
 use crate::mode::{Mode, PatternKind};
 use crate::node::EngineNode;
+use std::rc::Rc;
 use crate::output::TradRuleId;
 use crate::rules::alternates;
 
-pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
+pub fn group(w: &[Rc<EngineNode>]) -> Vec<Rc<EngineNode>> {
     if w.len() != 3 || !alternates(w) {
         return Vec::new();
     }
@@ -29,5 +30,5 @@ pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
     if deferred.is_empty() {
         passed.push(TradRuleId::R11CorrectiveSubdivision);
     }
-    vec![build_parent(PatternKind::Zigzag, w.to_vec(), passed, deferred, None, None)]
+    vec![Rc::new(build_parent(PatternKind::Zigzag, w.to_vec(), passed, deferred, None, None))]
 }

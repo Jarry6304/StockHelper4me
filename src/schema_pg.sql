@@ -1720,6 +1720,45 @@ CREATE INDEX IF NOT EXISTS idx_monthly_trigger_date
     ON monthly_trigger_signals_derived (market, date, trigger_type);
 
 
+-- v4.26 wave_impulse_screen(cross_cores Phase 8 第 12 builder)原只在 migration
+-- g3h4i5j6k7l8 建,fresh-init schema 漏掉 → 此處補回(對齊 verbatim DDL)。
+CREATE TABLE IF NOT EXISTS wave_impulse_screen_derived (
+    market             TEXT      NOT NULL,
+    stock_id           TEXT      NOT NULL,
+    date               DATE      NOT NULL,
+    timeframe          TEXT      NOT NULL,
+    -- Wave position(雙軸驗證結果)
+    phase              TEXT,
+    wave_number        INTEGER,
+    pattern_kind       TEXT,
+    direction          TEXT,
+    effective_degree   TEXT,
+    structure_label    TEXT,
+    confidence_level   TEXT      NOT NULL,
+    -- R/R metrics
+    entry_price        NUMERIC(18, 4),
+    target_price       NUMERIC(18, 4),
+    invalidation_price NUMERIC(18, 4),
+    rr_ratio           NUMERIC(10, 4),
+    -- Cross-TF 軟對齊 hint
+    cross_tf_aligned   BOOLEAN   NOT NULL DEFAULT FALSE,
+    -- Ranking
+    impulse_rank       INTEGER,
+    universe_size      INTEGER,
+    is_candidate       BOOLEAN   NOT NULL DEFAULT FALSE,
+    -- Base tail(對齊 _BASE_TAIL,PK 含 timeframe)
+    is_top_n           BOOLEAN   NOT NULL DEFAULT FALSE,
+    excluded_reason    TEXT,
+    detail             JSONB,
+    is_dirty           BOOLEAN   NOT NULL DEFAULT FALSE,
+    dirty_at           TIMESTAMPTZ,
+    PRIMARY KEY (market, stock_id, date, timeframe)
+);
+CREATE INDEX IF NOT EXISTS idx_wave_impulse_top
+    ON wave_impulse_screen_derived (market, date, timeframe, impulse_rank)
+    WHERE is_top_n = TRUE;
+
+
 -- =============================================================================
 -- Interval-forecast spine(v0.3 spec,2026-05-23,branch
 -- claude/stockhelper-interval-forecast-spine-j9xJt)

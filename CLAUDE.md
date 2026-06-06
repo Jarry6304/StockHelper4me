@@ -300,6 +300,78 @@ Phase 8  cross_cores builders        — 跨股 ranking / 分群 / 相關性(全
 
 ---
 
+## 待辦 backlog + schema drift 修(2026-06-04)
+
+> forecast 校準批次優化(我 2026-06-03 的 conformalize/settle 批次化)與 main v4.36
+> 「DB sync 全面並行化」**撞同一個 `conformalize_batch`**;user 拍版**取 main 並行版、
+> 捨我的批次版**(merge 時 forecast code 全回 main)。本分支只留:① schema fresh-init
+> drift 修 ② 下列 backlog。
+
+**schema 修(已落地本分支)**:`wave_impulse_screen_derived`(table + index,v4.26
+migration `g3h4i5j6k7l8` 建)原 `schema_pg.sql` 漏(連 main 都缺)→ 補回 verbatim
+DDL,令純檔案 fresh-init(`psql -f schema_pg.sql`)不再漏表。alembic head `j6k7l8m9n0o1`。
+
+### 待辦 backlog(2026-06-03 拍版)
+
+**① API — 待做**:對外 API 擴充列為待做(等 user 給範圍/端點規格)。現況 `src/web_api/`
+(v4.32 唯讀 FastAPI passthrough)已有 `neely/forest` / `levels` / `resonance` /
+`snapshot/{core}` / `market/climate` / `ohlc` / `kalman/series` / `screens/{toolkit}` +
+PR #123 加的 `traditional/forest` / `waves`。動工前 user 給 scope。
+
+**② Traditional Wave 整批驗證 — 待驗**(DB-bound,沙箱跑不了;下方 runbook user 本機跑):
+
+> **⚠️ P0-Gate 校準(2026-06-04 production 揭露)**:`monowave_epsilon` 預設 0.0
+> (不過濾)→ 單股 traditional-debug 實測 **135s**(neely ~0.5s,慢 ~270×)→ 全市場
+> run-all 連線池餓死(`pool timed out` / `LIMIT 51` 查詢 2344s)。修法:**預設改 0.03**
+> (3% 反轉雜訊門檻,把 base 砍到 neely 量級)+ 4 旋鈕 env 覆寫(免重編 sweep):
+> `TRAD_MONOWAVE_EPSILON` / `TRAD_ROUND_BEAM_SIZE` / `TRAD_MAX_DEGREE_LEVELS` /
+> `TRAD_FOREST_MAX_SIZE`。先單股 sweep 定 epsilon 再跑全市場(且 `--concurrency 6~8`)。
+
+```powershell
+git pull
+alembic upgrade head        # → j6k7l8m9n0o1(traditional_snapshots 已建)
+cd rust_compute; cargo build --release -p tw_cores; cd ..
+
+# 0. P0-Gate epsilon sweep(單股計時 + forest summary;目標 ~1-2s/股、forest ≤ 200 不過併)
+Measure-Command { .\rust_compute\target\release\tw_cores.exe traditional-debug --stock-id 3363 }   # 預設 0.03
+$env:TRAD_MONOWAVE_EPSILON='0.02'; .\rust_compute\target\release\tw_cores.exe traditional-debug --stock-id 3363
+$env:TRAD_MONOWAVE_EPSILON='0.05'; .\rust_compute\target\release\tw_cores.exe traditional-debug --stock-id 3363
+Remove-Item Env:\TRAD_MONOWAVE_EPSILON   # 定好值後清掉(或 set 成選定值再跑 run-all)
+
+# 1. 整批寫入(全 universe × daily/weekly/monthly;run-all 自動含 traditional_core)
+#    ⚠️ 降並行避免連線池餓死(pool = concurrency+4):
+.\rust_compute\target\release\tw_cores.exe run-all --write --concurrency 8
+#    ⚠️ 看 elapsed:每股多跑 traditional × 3 tf(與 neely 同量級);爆 → workflow toml
+#       關 traditional_core 或調 forest_max_size / pivot
+
+# 2. P0-Gate forest size 分布(對齊 neely 1264-stock 慣例)
+psql $env:DATABASE_URL -c "
+SELECT timeframe, COUNT(*) AS stocks,
+       PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY jsonb_array_length(forest->'scenario_forest')) AS p50,
+       PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY jsonb_array_length(forest->'scenario_forest')) AS p95,
+       MAX(jsonb_array_length(forest->'scenario_forest')) AS max_n
+  FROM traditional_snapshots GROUP BY timeframe ORDER BY timeframe;"
+#    驗收:max ≤ forest_max_size(200 cap);p95 不過碎。爆/過碎 → monowave_epsilon 調大
+#    (去雜訊)/ round_beam_size / max_degree_levels 調控(v3 §「待 user P0-Gate 校準」)
+
+# 3. 整批覆蓋率(每 tf 是否每股都有 row)
+psql $env:DATABASE_URL -c "
+SELECT timeframe, COUNT(DISTINCT stock_id) AS n_stocks
+  FROM traditional_snapshots GROUP BY timeframe ORDER BY timeframe;"
+
+# 4. 端口 spot-check
+#    API : uvicorn web_api.app:app
+#          → curl 'localhost:8000/stocks/3363/traditional/forest?timeframe=daily'
+#          → curl 'localhost:8000/stocks/3363/waves?as_of=<date>'
+#    MCP : traditional_wave_forest('3363')
+#    Streamlit:「🌲 Traditional Wave」tab(picker by preference_score)
+
+# 5. 沙箱已綠、DB-bound 留本機
+pytest tests/web_api/test_api.py tests/mcp_server/test_traditional.py
+```
+
+---
+
 ## Traditional Core v2 — Phase 1:獨立引擎 + 產品閘(2026-06-02)
 
 User 直送 Traditional Core v2 spec(與 Neely **完全解耦、並排不整合**的傳統派 Frost & Prechter

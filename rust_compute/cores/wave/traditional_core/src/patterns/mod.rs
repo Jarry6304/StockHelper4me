@@ -14,9 +14,10 @@ pub mod zigzag;
 use crate::mode::{Mode, PatternKind};
 use crate::node::EngineNode;
 use crate::output::{DiagonalKind, DiagonalShape, DiagonalSub, Direction, TradRuleId};
+use std::rc::Rc;
 
 /// 對一個 window 試所有適用 grouper,回所有合法 parent 候選。
-pub fn try_all(w: &[EngineNode]) -> Vec<EngineNode> {
+pub fn try_all(w: &[Rc<EngineNode>]) -> Vec<Rc<EngineNode>> {
     let mut out = Vec::new();
     match w.len() {
         3 => {
@@ -39,7 +40,7 @@ pub fn try_all(w: &[EngineNode]) -> Vec<EngineNode> {
 /// - `Some(deferred)`:合法。deferred 含 rule(若有 degree-0 child 無法檢查)。
 /// - `None`:degree≥1 child mode 與要求不符 → 硬違反。
 pub(crate) fn enforce(
-    children: &[EngineNode],
+    children: &[Rc<EngineNode>],
     slot_modes: &[Mode],
     rule: TradRuleId,
 ) -> Option<Vec<TradRuleId>> {
@@ -61,7 +62,7 @@ pub(crate) fn enforce(
 /// 以 children 建 parent 節點(degree_level = max(child)+1,span/方向自動推)。
 pub(crate) fn build_parent(
     kind: PatternKind,
-    children: Vec<EngineNode>,
+    children: Vec<Rc<EngineNode>>,
     passed: Vec<TradRuleId>,
     deferred: Vec<TradRuleId>,
     diag: Option<(DiagonalKind, DiagonalShape, DiagonalSub)>,

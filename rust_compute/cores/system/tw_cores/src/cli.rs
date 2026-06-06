@@ -90,8 +90,10 @@ pub enum Command {
         /// 寫入 PG(indicator_values + structural_snapshots + facts)— 不指定僅 dry-run
         #[arg(long, default_value_t = false)]
         write: bool,
-        /// Stage B per-stock 並行度(預設 32,需 ≤ PG max_connections - 4 buffer)
-        #[arg(long, default_value_t = 32)]
+        /// Stage B per-stock 並行度(pool = concurrency+4)。預設 8:universe ~2172
+        /// (tpex 解鎖)+ traditional_core 後,40-core 全市場寫入在 32 會把單機 PG I/O
+        /// 打滿 → pool acquire 排隊數秒。輕量純 neely 場景可顯式拉高 `--concurrency`。
+        #[arg(long, default_value_t = 8)]
         concurrency: usize,
         /// 只跑 dirty queue(對齊 silver/orchestrator.py:_fetch_dirty_fwd_stocks pattern)。
         /// 與 --stocks 互斥;與 --limit 可疊加

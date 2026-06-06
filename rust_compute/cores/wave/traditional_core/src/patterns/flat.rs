@@ -5,10 +5,11 @@
 use super::{build_parent, enforce};
 use crate::mode::{Mode, PatternKind};
 use crate::node::EngineNode;
+use std::rc::Rc;
 use crate::output::{Direction, TradRuleId};
 use crate::rules::alternates;
 
-pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
+pub fn group(w: &[Rc<EngineNode>]) -> Vec<Rc<EngineNode>> {
     if w.len() != 3 || !alternates(w) {
         return Vec::new();
     }
@@ -27,17 +28,17 @@ pub fn group(w: &[EngineNode]) -> Vec<EngineNode> {
         passed.push(TradRuleId::R11CorrectiveSubdivision);
     }
     let variant = flat_variant(w);
-    vec![build_parent(
+    vec![Rc::new(build_parent(
         PatternKind::Flat,
         w.to_vec(),
         passed,
         deferred,
         None,
         Some(variant),
-    )]
+    ))]
 }
 
-fn flat_variant(w: &[EngineNode]) -> String {
+fn flat_variant(w: &[Rc<EngineNode>]) -> String {
     let b_exceeds_a_start = w[1].amp() > w[0].amp(); // B 超越 A 起點
     let a_up = matches!(w[0].direction, Direction::Up);
     let c_past_a_end = if a_up {

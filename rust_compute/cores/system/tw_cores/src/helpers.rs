@@ -3,6 +3,34 @@
 use anyhow::Result;
 use chrono::{NaiveDate, Utc};
 use fact_schema::Timeframe;
+use traditional_core::TraditionalEngineConfig;
+
+/// 讀環境變數覆寫 traditional 引擎 4 個 P0-Gate 校準旋鈕(免重編即可 sweep epsilon 等):
+///   `TRAD_MONOWAVE_EPSILON`(f64,反轉雜訊門檻)/ `TRAD_ROUND_BEAM_SIZE`(usize)/
+///   `TRAD_MAX_DEGREE_LEVELS`(usize)/ `TRAD_FOREST_MAX_SIZE`(usize)。
+/// 未設或 parse 失敗則沿用 cfg 既有值(Default)。run-all dispatch + traditional-debug 共用。
+pub fn apply_traditional_env_overrides(cfg: &mut TraditionalEngineConfig) {
+    if let Ok(v) = std::env::var("TRAD_MONOWAVE_EPSILON") {
+        if let Ok(f) = v.trim().parse::<f64>() {
+            cfg.monowave_epsilon = f;
+        }
+    }
+    if let Ok(v) = std::env::var("TRAD_ROUND_BEAM_SIZE") {
+        if let Ok(n) = v.trim().parse::<usize>() {
+            cfg.round_beam_size = n;
+        }
+    }
+    if let Ok(v) = std::env::var("TRAD_MAX_DEGREE_LEVELS") {
+        if let Ok(n) = v.trim().parse::<usize>() {
+            cfg.max_degree_levels = n;
+        }
+    }
+    if let Ok(v) = std::env::var("TRAD_FOREST_MAX_SIZE") {
+        if let Ok(n) = v.trim().parse::<usize>() {
+            cfg.forest_max_size = n;
+        }
+    }
+}
 
 pub fn parse_timeframe(s: &str) -> Result<Timeframe> {
     match s.to_lowercase().as_str() {
