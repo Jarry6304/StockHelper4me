@@ -163,7 +163,7 @@ def compute_market_context(
 
     own_conn = conn is None
     if own_conn:
-        conn = get_connection(database_url)
+        conn = get_connection(database_url, statement_timeout_ms=30_000)  # runaway query 安全網
     try:
         # Step 1:撈 5 保留字的 market facts(內建 look-ahead filter)
         grouped = fetch_market_facts(

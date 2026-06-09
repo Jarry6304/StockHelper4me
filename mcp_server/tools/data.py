@@ -28,6 +28,19 @@ def _parse_date(value: str | Date) -> Date:
     return Date.fromisoformat(value)
 
 
+def _clamp(value: int, lo: int, hi: int) -> int:
+    """夾 value 到 [lo, hi]。MCP 工具入口防 LLM 傳極端 top_n / lookback_days 觸發
+    runaway query(API 唯讀無 auth;clamp 把查詢成本上界釘死)。"""
+    return max(lo, min(int(value), hi))
+
+
+# MCP 工具參數安全上界(防 runaway query;合法呼叫遠在界內)
+_MAX_TOP_N = 500
+_MAX_LOOKBACK_DAYS = 365
+# 重工具讀連線的 runaway 安全網(毫秒);clamp 已釘死成本,此為非預期慢查詢 backstop
+_READ_TIMEOUT_MS = 30_000
+
+
 # ────────────────────────────────────────────────────────────
 # Data tools
 # ────────────────────────────────────────────────────────────
@@ -291,7 +304,7 @@ def magic_formula_screen(
     """
     from mcp_server._magic_formula import compute_magic_formula_screen
 
-    return compute_magic_formula_screen(_parse_date(date), top_n=top_n)
+    return compute_magic_formula_screen(_parse_date(date), top_n=_clamp(top_n, 1, _MAX_TOP_N))
 
 
 def kalman_trend(
@@ -331,7 +344,9 @@ def kalman_trend(
     """
     from mcp_server._kalman import compute_kalman_trend
 
-    return compute_kalman_trend(stock_id, _parse_date(date), lookback_days=lookback_days)
+    return compute_kalman_trend(
+        stock_id, _parse_date(date), lookback_days=_clamp(lookback_days, 1, _MAX_LOOKBACK_DAYS),
+    )
 
 
 def _read_materialized_snapshot(
@@ -608,7 +623,7 @@ def monthly_screen(
     """
     from mcp_server._screens import compute_monthly_screen
 
-    return compute_monthly_screen(_parse_date(date), top_n=top_n,
+    return compute_monthly_screen(_parse_date(date), top_n=_clamp(top_n, 1, _MAX_TOP_N),
                                    database_url=database_url)
 
 
@@ -630,7 +645,7 @@ def quarterly_screen(
     """
     from mcp_server._screens import compute_quarterly_screen
 
-    return compute_quarterly_screen(_parse_date(date), top_n=top_n,
+    return compute_quarterly_screen(_parse_date(date), top_n=_clamp(top_n, 1, _MAX_TOP_N),
                                      database_url=database_url)
 
 
@@ -653,7 +668,7 @@ def annual_low_risk_screen(
     """
     from mcp_server._screens import compute_annual_low_risk_screen
 
-    return compute_annual_low_risk_screen(_parse_date(date), top_n=top_n,
+    return compute_annual_low_risk_screen(_parse_date(date), top_n=_clamp(top_n, 1, _MAX_TOP_N),
                                           database_url=database_url)
 
 
@@ -686,7 +701,7 @@ def monthly_trigger_scan(
 
     return compute_monthly_trigger_scan(
         _parse_date(date),
-        stock_id=stock_id, top_n_per_type=top_n_per_type,
+        stock_id=stock_id, top_n_per_type=_clamp(top_n_per_type, 1, _MAX_TOP_N),
         database_url=database_url,
     )
 
@@ -746,7 +761,7 @@ def scan_wave_impulse(
 
     return compute_wave_impulse_scan(
         _parse_date(date),
-        timeframe=timeframe, top_n=top_n,
+        timeframe=timeframe, top_n=_clamp(top_n, 1, _MAX_TOP_N),
         include_observe=include_observe,
         database_url=database_url,
     )
@@ -1012,7 +1027,7 @@ def market_overview(
 
     try:
         from fusion.market_events import market_events as _me
-        start = as_of - timedelta(days=max(1, events_lookback_days))
+        start = as_of - timedelta(days=_clamp(events_lookback_days, 1, _MAX_LOOKBACK_DAYS))
         out["events"] = _me(start, as_of, severity_min=severity_min,
                             database_url=database_url)
     except Exception as e:  # noqa: BLE001
@@ -1134,7 +1149,7 @@ def indicators(
 
     result = assemble_indicators(
         stock_id, as_of, selected,
-        lookback_days=lookback_days, database_url=database_url,
+        lookback_days=_clamp(lookback_days, 1, _MAX_LOOKBACK_DAYS), database_url=database_url,
     )
     result["selection"] = selection
     return result
@@ -1256,9 +1271,19 @@ def dual_track_resonance(
         - 現價跌破 invalidation_price → single_track_mode=True,共振判定跳過
     """
     from fusion.dual_track import resonance as _dual_resonance
-    from fusion.raw._db import get_connection
+    from fusion.raw._db import ALLOWED_RANKED_TABLES, get_connection
 
     as_of = _parse_date(date)
+    # SQL identifier 注入防護:cross_stock_table 由 caller(LLM)控,非白名單表名
+    # 早擋回 graceful error(library 層 fetch_is_top_30 也會 raise,此處讓 LLM 拿
+    # 乾淨訊息而非 500/propagated ValueError)。
+    if cross_stock_table not in ALLOWED_RANKED_TABLES:
+        return {
+            "stock_id": stock_id,
+            "as_of": as_of.isoformat(),
+            "error": f"cross_stock_table {cross_stock_table!r} 不在白名單",
+            "allowed": sorted(ALLOWED_RANKED_TABLES),
+        }
     # v4.32 Golden L3:預設參數 → 讀物化 resonance_fusion(daily);非預設 → compute fallback。
     # 物化 row = resonance().to_dict() 全量,讀到即直接回(免 30s timeout / fib cap 路徑)。
     if (

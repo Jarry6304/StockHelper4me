@@ -7,8 +7,64 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
+
+# ─── Cross-stock ranked 表 / 欄白名單(SQL identifier 注入防護)──────────────────
+# fetch_cross_stock_ranked / fetch_is_top_30 用 f-string 拼 table / column 名(SQL
+# identifier 無法 bind 參數化)。source_table 可從 MCP 工具 dual_track_resonance
+# (cross_stock_table=...)由 LLM 控制 → 集中在 library 層擋,覆蓋所有 caller。
+# 這 10 張是 (date, market, stock_id, <rank_col>, is_top_n) 標準 schema 的 ranked
+# 表(wave_impulse_screen / monthly_trigger schema 不同,各有專屬工具,不在此)。
+ALLOWED_RANKED_TABLES: frozenset[str] = frozenset({
+    "magic_formula_ranked_derived",
+    "persistent_momentum_ranked_derived",
+    "revenue_momentum_ranked_derived",
+    "institutional_concert_ranked_derived",
+    "f_score_ranked_derived",
+    "low_volatility_ranked_derived",
+    "industry_adj_gp_ranked_derived",
+    "long_term_low_vol_ranked_derived",
+    "dividend_yield_ranked_derived",
+    "mom_12_1_ranked_derived",
+})
+# 各 builder 寫入的 rank 欄名(對齊 cross_cores/*.py assign_ranks rank_col)。
+ALLOWED_RANK_COLS: frozenset[str] = frozenset({
+    "combined_rank", "momentum_rank", "revenue_rank", "concert_rank",
+    "score_rank", "vol_rank", "gp_rank", "yield_rank", "mom_rank",
+})
+ALLOWED_FLAG_COLS: frozenset[str] = frozenset({"is_top_n"})
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def ensure_safe_ranked_identifiers(
+    *,
+    source_table: str,
+    rank_col: str | None = None,
+    is_top_col: str | None = None,
+    extra_cols: list[str] | None = None,
+) -> None:
+    """擋下不在白名單的 cross-stock ranked table / column 名(防 SQL identifier 注入)。
+
+    在任何把 source_table / rank_col / is_top_col / extra_cols 拼進 SQL 的查詢前呼叫。
+    Raises:
+        ValueError: 任一 identifier 不在白名單(或 extra_cols 含非法字元)。
+    """
+    if source_table not in ALLOWED_RANKED_TABLES:
+        raise ValueError(
+            f"source_table {source_table!r} 不在 ranked 表白名單;"
+            f"allowed={sorted(ALLOWED_RANKED_TABLES)}"
+        )
+    if rank_col is not None and rank_col not in ALLOWED_RANK_COLS:
+        raise ValueError(f"rank_col {rank_col!r} 不在白名單;allowed={sorted(ALLOWED_RANK_COLS)}")
+    if is_top_col is not None and is_top_col not in ALLOWED_FLAG_COLS:
+        raise ValueError(f"is_top_col {is_top_col!r} 不在白名單;allowed={sorted(ALLOWED_FLAG_COLS)}")
+    if extra_cols:
+        for c in extra_cols:
+            if not _IDENT_RE.match(c):
+                raise ValueError(f"extra_cols 欄名 {c!r} 非合法 SQL identifier")
 
 
 def _repo_root_env_path() -> Path:
@@ -21,7 +77,7 @@ def _repo_root_env_path() -> Path:
     return Path(__file__).resolve().parents[3] / ".env"
 
 
-def get_connection(database_url: str | None = None):
+def get_connection(database_url: str | None = None, *, statement_timeout_ms: int | None = None):
     """回傳 psycopg.Connection(read-only,autocommit=True,row_factory=dict_row)。
 
     優先序:
@@ -31,6 +87,9 @@ def get_connection(database_url: str | None = None):
 
     Args:
         database_url: 可選的連線字串。
+        statement_timeout_ms: 可選。> 0 時對本連線設 session 級 statement_timeout
+            (毫秒)作為 runaway query 安全網。預設 None = 不設(既有 caller /
+            dashboards / tests 行為不變)。MCP 重工具 opt-in 傳入即可。
 
     Raises:
         RuntimeError: 無法解出 connection string
@@ -61,7 +120,12 @@ def get_connection(database_url: str | None = None):
             "  1. export DATABASE_URL=postgresql://twstock:twstock@localhost:5432/twstock\n"
             "  2. 在 .env 檔設定 DATABASE_URL"
         )
-    return psycopg.connect(url, row_factory=dict_row, autocommit=True)
+    conn = psycopg.connect(url, row_factory=dict_row, autocommit=True)
+    if statement_timeout_ms is not None and statement_timeout_ms > 0:
+        # int-cast → 注入安全(SET 不接 bind 參數)。autocommit 下即 session 級。
+        with conn.cursor() as cur:
+            cur.execute(f"SET statement_timeout = {int(statement_timeout_ms)}")
+    return conn
 
 
 def fetch_facts(
@@ -241,7 +305,14 @@ def fetch_cross_stock_ranked(
 
     Returns:
         (ranking_date, rows):若無資料則 (None, [])
+
+    Raises:
+        ValueError: source_table / rank_col / is_top_col / extra_cols 不在白名單。
     """
+    ensure_safe_ranked_identifiers(
+        source_table=source_table, rank_col=rank_col,
+        is_top_col=is_top_col, extra_cols=extra_cols,
+    )
     # 1. latest ranking_date ≤ as_of
     sql_date = f"""
         SELECT MAX(date) AS d FROM {source_table}

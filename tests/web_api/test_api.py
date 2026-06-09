@@ -131,6 +131,27 @@ def test_screens_unknown_toolkit_404():
     assert "unknown screen toolkit" in r.json()["detail"]
 
 
+def test_screens_top_n_over_limit_422():
+    """top_n 超上界 → FastAPI Query(le=500) 驗證 422(防 LIMIT 百萬 DoS)。"""
+    c = _client([])
+    r = c.get("/screens/magic_formula?date=2026-05-28&top_n=999999")
+    assert r.status_code == 422
+
+
+def test_screens_offset_negative_422():
+    c = _client([])
+    r = c.get("/screens/magic_formula?date=2026-05-28&offset=-1")
+    assert r.status_code == 422
+
+
+def test_screens_valid_top_n_ok():
+    """合法 top_n 仍正常(MAX(date) 回 None → 空結果 200)。"""
+    c = _client([{"d": None}])
+    r = c.get("/screens/magic_formula?date=2026-05-28&top_n=30")
+    assert r.status_code == 200
+    assert r.json()["rows"] == []
+
+
 # ── Traditional Core(獨立 vertical)forest passthrough + /waves 邊緣組裝 ──────
 def test_traditional_forest_passthrough_ok():
     c = _client([{"j": '{"scenario_forest": [], "stock_id": "3363"}'}])

@@ -45,7 +45,15 @@ class RateLimiter:
             calls_per_hour:      每小時允許的最大呼叫次數(帳號級別)
             burst_size:          啟動時初始 token 數(允許連續快速發送的上限)
             cooldown_on_429_sec: 收到 HTTP 429 時的冷卻秒數(預設 120 秒)
+
+        Raises:
+            ValueError: calls_per_hour <= 0(refill_rate=0 會在 acquire 除以零 +
+                while 迴圈永不前進)或 burst_size <= 0。
         """
+        if calls_per_hour <= 0:
+            raise ValueError(f"calls_per_hour 必須 > 0(got {calls_per_hour})")
+        if burst_size <= 0:
+            raise ValueError(f"burst_size 必須 > 0(got {burst_size})")
         self.capacity            = burst_size
         self.tokens              = float(burst_size)
         self.refill_rate         = calls_per_hour / 3600.0  # tokens per second

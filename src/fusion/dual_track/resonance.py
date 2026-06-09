@@ -24,6 +24,7 @@ from datetime import date
 from typing import Any
 
 from fusion.raw._db import (
+    ensure_safe_ranked_identifiers,
     fetch_cross_stock_ranked,
     fetch_latest_close,
     get_connection,
@@ -187,7 +188,11 @@ def fetch_is_top_30(
 
     Returns:
         (is_top, ranking_date) — 無資料時 (False, None)
+
+    Raises:
+        ValueError: source_table / is_top_col 不在白名單(防 SQL identifier 注入)。
     """
+    ensure_safe_ranked_identifiers(source_table=source_table, is_top_col=is_top_col)
     # 1. latest ranking_date ≤ as_of
     sql_date = f"""
         SELECT MAX(date) AS d FROM {source_table}
