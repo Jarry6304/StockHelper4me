@@ -275,6 +275,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="跳過 Bronze incremental(只跑 Silver + Cores,若已單獨跑過 incremental)",
     )
+    refresh_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="強制執行(忽略 15:30 盤後 gate);ad-hoc 補資料 / debug / 假日重跑用",
+    )
 
     # ── forecast 子命令(區間預測 spine,v0.3 spec)
     forecast_parser = subparsers.add_parser(
@@ -1001,6 +1006,28 @@ def _run_refresh_forecast(stocks, config) -> None:
             logger.error(f"[Refresh.forecast] fuse 失敗: {e}")
 
 
+_MARKET_CLOSE_HOUR = 15
+_MARKET_CLOSE_MINUTE = 30
+
+
+def _is_before_market_close(now=None) -> bool:
+    """判斷當下 Asia/Taipei 時間是否在台股盤後資料釋出前(< 15:30)。
+
+    台股 13:30 收盤,法人 / 借券 / 處置等 chip dataset 通常 15:00 後才陸續釋出
+    上 FinMind。15:30 為 refresh chain 的 safety cutoff — 之前跑 Bronze
+    incremental 拿不到當日新資料,後續 Silver/Cross/Cores/Golden 全部白跑。
+
+    `now` 注入點供 test 用;production 走 zoneinfo Asia/Taipei。
+    """
+    if now is None:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+    cutoff_minutes = _MARKET_CLOSE_HOUR * 60 + _MARKET_CLOSE_MINUTE
+    now_minutes = now.hour * 60 + now.minute
+    return now_minutes < cutoff_minutes
+
+
 async def _run_refresh(args, config, stock_list_cfg) -> None:
     """一鍵更新最新:Bronze incremental → Silver 7c/7a/7b → Cross 8 → M3 cores --dirty。
 
@@ -1019,6 +1046,21 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
     import os
     import subprocess
     from pathlib import Path
+
+    # 15:30 盤後 gate:之前 FinMind 還沒新資料 → 整條 chain 白跑(對齊
+    # `_is_before_market_close` docstring)。`--force` 繞過供 ad-hoc 補資料用。
+    if not getattr(args, "force", False) and _is_before_market_close():
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now_tp = datetime.now(ZoneInfo("Asia/Taipei"))
+        logger.info("=" * 60)
+        logger.info(
+            f"[Refresh] 當下 {now_tp:%Y-%m-%d %H:%M} (Asia/Taipei) < 15:30,"
+            f"FinMind 當日盤後資料尚未釋出 → skip 完整 chain。"
+        )
+        logger.info("[Refresh] 如需 ad-hoc 重跑(例假日補資料 / debug),加 --force")
+        logger.info("=" * 60)
+        return
 
     start_time = time.monotonic()
     stocks = args.stocks
