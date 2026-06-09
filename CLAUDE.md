@@ -648,7 +648,9 @@ User 推翻 v1「R6/R7/R8/R11 標 Deferred + 單股判 forest」框法:**子浪�
 - **⚠️ 待 user P0-Gate 校準**:monowave 不過濾(faithful)→ 長序列 base 多 → compaction beam/clone 成本高。
   production `run-all` 前/後看 forest p50/p95/max + elapsed_ms,**`monowave_epsilon` 調大**(去雜訊)/ `round_beam_size`
   / `max_degree_levels` 調控(對齊 neely P0-Gate 1264-stock 慣例)。forest 仍不選 primary、cap 只當安全網。
-  v1 模組(pivot/candidates/validator/classifier)superseded、暫留(geometry test 覆蓋),後續 cleanup PR 移除。
+  v1 模組現況(2026-06 audit 覆核):`pivot.rs` / `validator/` / `classifier/` 已從 disk 刪除;
+  `candidates` / `guidelines` / `fibonacci` / `triggers` / `degree` / `scenario` 已被 v3 `scenario::assemble`
+  吸收、全 reachable(`lib.rs::run` Stage 5-8),**非死碼**,無待清 cleanup。
 
 ---
 

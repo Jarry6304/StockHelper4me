@@ -14,11 +14,10 @@ Transport: stdio(本機 process)。Phase 2 再 lift 同套 tools 到 HTTP transp
 - `stock_health(stock_id, date)` — 個股 4 維健康度評分 + top 5 訊號
 - `market_context(date)` — 大盤環境綜合判讀 + systemic risks
 
-**Render tools(視覺輸出 PNG)**:render_kline / render_chip / render_fundamental
-/ render_environment / render_neely / render_facts_cloud。
-
 **Hidden / backward-compat**:as_of_snapshot / find_facts / list_cores / fetch_ohlc
 (function 留在 `mcp_server.tools.data`,LLM 不可見)。
+
+(Render PNG tools 自 v3.30 停用、2026-06 移除;前端改 web-native Plotly。)
 """
 
 # v3.5 R5 C12:連線 single entry 全走 fusion.raw._db.get_connection,DELETE mcp_server/_conn.py
