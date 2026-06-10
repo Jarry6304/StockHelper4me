@@ -16,18 +16,34 @@ import type { Scenario } from '$contracts/neely/Scenario';
 import type { Trigger } from '$contracts/neely/Trigger';
 import { directionColor, flattenWaveTree, shortLabel, type WavePoint } from './coords';
 
-/** 收盤背景線最小點型(OhlcRow 結構性相容,只需 date + close)。 */
-export interface ClosePoint {
+/** K 棒背景最小點型(OhlcRow 結構性相容;volume 不需要)。 */
+export interface OhlcPoint {
   date: string;
+  open: number;
+  high: number;
+  low: number;
   close: number;
+}
+
+/**
+ * K 棒列防衛過濾:OHLC 任一非有限數或 ≤ 0 的列丟棄。
+ * (FinMind 無成交日有 0 值列;後端 /ohlc 已濾,這層防舊版後端 / dirty 資料。)
+ */
+export function sanitizeOhlc(rows?: OhlcPoint[] | null): OhlcPoint[] {
+  if (!rows) return [];
+  return rows.filter((r) =>
+    [r.open, r.high, r.low, r.close].every(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v > 0
+    )
+  );
 }
 
 export interface BuildOptions {
   monowaves: Monowave[];
   /** State 1 用 live-only 聯集(collectLiveFibZones),State 2 用 selected scenario.expected_fib_zones。 */
   fibZones: FibZone[];
-  /** 後復權收盤序列(/stocks/{id}/ohlc)— 淡色時間背景線;未給 → 不畫。 */
-  closeSeries?: ClosePoint[];
+  /** 後復權 OHLCV(/stocks/{id}/ohlc)— K 棒時間背景;未給 → 不畫。 */
+  ohlcSeries?: OhlcPoint[];
   /** State 2 用 — 選中 scenario(若有)。 */
   selectedScenario?: Scenario | null;
   /** as_of(垂直虛線)。 */
@@ -58,7 +74,14 @@ export interface PlotlyTrace {
   type: string;
   mode?: string;
   x: (string | number)[];
-  y: number[];
+  /** scatter 用;candlestick 走 open/high/low/close。 */
+  y?: number[];
+  open?: number[];
+  high?: number[];
+  low?: number[];
+  close?: number[];
+  increasing?: Record<string, unknown>;
+  decreasing?: Record<string, unknown>;
   text?: string[];
   textposition?: string;
   hoverinfo?: string;
@@ -131,18 +154,22 @@ export function buildTraces(opts: BuildOptions): PlotlyTrace[] {
   const layers = opts.layers ?? DEFAULT_LAYERS;
   const traces: PlotlyTrace[] = [];
 
-  // 0. 收盤背景線(最底層)— 真實日線時間密度,給 monowave 折線「時間軸感」。
-  //    與引擎同源(後復權),價位才對齊 monowave/fib;hover 交給 monowave 線。
-  if (opts.closeSeries && opts.closeSeries.length > 0) {
+  // 0. K 棒背景(最底層)— 真實日線時間密度,給 monowave 折線「時間軸感」。
+  //    與引擎同源(後復權),價位才對齊 monowave/fib;台股慣例紅漲綠跌、調暗
+  //    讓波浪線維持主視覺。缺列日不畫(不像折線會直接連到數月後)。
+  const candles = sanitizeOhlc(opts.ohlcSeries);
+  if (candles.length > 0) {
     traces.push({
-      type: 'scatter',
-      mode: 'lines',
-      x: opts.closeSeries.map((p) => p.date),
-      y: opts.closeSeries.map((p) => p.close),
-      name: '收盤(後復權)',
-      line: { color: '#8aa0bf', width: 1 },
-      opacity: 0.35,
-      hoverinfo: 'skip',
+      type: 'candlestick',
+      x: candles.map((r) => r.date),
+      open: candles.map((r) => r.open),
+      high: candles.map((r) => r.high),
+      low: candles.map((r) => r.low),
+      close: candles.map((r) => r.close),
+      name: 'K棒(後復權)',
+      increasing: { line: { color: '#b8636f', width: 1 }, fillcolor: '#b8636f55' },
+      decreasing: { line: { color: '#3f8f6b', width: 1 }, fillcolor: '#3f8f6b55' },
+      opacity: 0.6,
       showlegend: false
     });
   }
@@ -445,7 +472,7 @@ export function computeDefaultXRange(opts: BuildOptions): [string, string] | nul
  * 計算可視 x 窗內的 y 軸範圍(Plotly autorange 看「全部資料」不看 x 裁窗 —
  * 收盤背景線一次塞 6 年後,y 軸會被歷史低價撐到數千跨度、把窗內折線壓扁)。
  *
- * 候選點:closeSeries / monowave 端點(窗內)+ 選中 scenario 波標(窗內)
+ * 候選點:ohlcSeries 的 low/high / monowave 端點(窗內)+ 選中 scenario 波標(窗內)
  * + fib 帶(投影範圍與窗重疊時)+ 失效線 / Track2 帶(貼近現價的水平要素)。
  * 候選不足 → null(退回 autorange)。
  */
@@ -457,8 +484,11 @@ export function computeYRange(
   const inWindow = (d: string) => !xRange || (d >= xRange[0] && d <= xRange[1]);
   const ys: number[] = [];
 
-  for (const p of opts.closeSeries ?? []) {
-    if (inWindow(p.date)) ys.push(p.close);
+  for (const r of sanitizeOhlc(opts.ohlcSeries)) {
+    if (inWindow(r.date)) {
+      ys.push(r.low);
+      ys.push(r.high);
+    }
   }
   for (const mw of opts.monowaves) {
     if (inWindow(mw.start_date)) ys.push(mw.start_price);
@@ -509,7 +539,9 @@ export function buildLayout(opts: BuildOptions): PlotlyLayout {
   const xaxis: Record<string, unknown> = {
     gridcolor: COL_GRID,
     zerolinecolor: COL_GRID,
-    tickfont: { color: '#7d92b3' }
+    tickfont: { color: '#7d92b3' },
+    // candlestick trace 會讓 Plotly 自動長出 rangeslider — 顯式關閉
+    rangeslider: { visible: false }
   };
   if (xRange) {
     xaxis.range = xRange;

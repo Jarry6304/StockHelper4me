@@ -3,7 +3,7 @@
   import type { ResonanceFusion } from '$contracts/fusion';
   import type { TraditionalForestOutput } from '$lib/api/traditional';
   import type { Timeframe } from '$lib/api/neely';
-  import type { ClosePoint } from '$lib/wave/plotly-build';
+  import type { OhlcPoint } from '$lib/wave/plotly-build';
   import { createEventDispatcher } from 'svelte';
   import TopBar from './TopBar.svelte';
   import DegreeBar from './DegreeBar.svelte';
@@ -24,8 +24,8 @@
   export let traditional: TraditionalForestOutput | null = null;
   /** Track2 統計帶來源(可選)。 */
   export let resonance: ResonanceFusion | null = null;
-  /** 後復權收盤序列(/stocks/{id}/ohlc)— 兩張波浪圖的淡色時間背景線(可選)。 */
-  export let closeSeries: ClosePoint[] | null = null;
+  /** 後復權 OHLCV(/stocks/{id}/ohlc)— 兩張波浪圖的 K 棒時間背景(可選)。 */
+  export let ohlcSeries: OhlcPoint[] | null = null;
 
   /** 初始狀態 — 由 URL ?state=detail / overview 控制。 */
   export let initialState: 'overview' | 'detail' = 'overview';
@@ -136,7 +136,7 @@
         monowaves={neelyMonowaves}
         scenarios={neelyScenarios}
         {asOf}
-        {closeSeries}
+        {ohlcSeries}
         on:expand={toDetail}
       />
     {:else}
@@ -144,7 +144,7 @@
         monowaves={neelyMonowaves}
         scenarios={neelyScenarios}
         {asOf}
-        {closeSeries}
+        {ohlcSeries}
         {selectedScenarioId}
         {resonance}
         {layers}
@@ -163,7 +163,7 @@
         detail="傳統 (Frost & Prechter EWP) 無 forest;此 vertical 與 Neely 並排不合併。"
       />
     {:else}
-      <TraditionalView traditional={activeTraditional} {asOf} {closeSeries} />
+      <TraditionalView traditional={activeTraditional} {asOf} {ohlcSeries} />
     {/if}
   {:else}
     <InsufficientDataView reason="empty_forest" detail="API 未回 wave 資料" />

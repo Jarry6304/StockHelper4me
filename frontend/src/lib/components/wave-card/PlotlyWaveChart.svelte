@@ -4,11 +4,11 @@
   import type { Scenario } from '$contracts/neely/Scenario';
   import type { Trigger } from '$contracts/neely/Trigger';
   import { onMount, onDestroy } from 'svelte';
-  import { buildLayout, buildTraces, type ClosePoint } from '$lib/wave/plotly-build';
+  import { buildLayout, buildTraces, type OhlcPoint } from '$lib/wave/plotly-build';
 
   export let monowaves: Monowave[];
   export let fibZones: FibZone[];
-  export let closeSeries: ClosePoint[] | null = null;
+  export let ohlcSeries: OhlcPoint[] | null = null;
   export let selectedScenario: Scenario | null = null;
   export let asOf: string | null = null;
   export let invalidationTriggers: Trigger[] | null = null;
@@ -44,7 +44,7 @@
     const opts = {
       monowaves,
       fibZones,
-      closeSeries: closeSeries ?? undefined,
+      ohlcSeries: ohlcSeries ?? undefined,
       selectedScenario,
       asOf: asOf ?? undefined,
       invalidationTriggers: invalidationTriggers ?? undefined,
@@ -95,7 +95,7 @@
   $: void [
     monowaves,
     fibZones,
-    closeSeries,
+    ohlcSeries,
     selectedScenario,
     asOf,
     invalidationTriggers,

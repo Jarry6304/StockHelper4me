@@ -41,24 +41,36 @@ describe('buildTraces', () => {
     expect(traces[0].y).toEqual([]);
   });
 
-  it('closeSeries 給定 → 最底層多一條淡色收盤背景線(hover skip)', () => {
-    const mws = [mkMonowave('2026-01-01', '2026-01-05', 100, 110, 'Up')];
-    const closeSeries = [
-      { date: '2026-01-01', close: 99.5 },
-      { date: '2026-01-02', close: 101.2 },
-      { date: '2026-01-03', close: 103.8 }
-    ];
-    const traces = buildTraces({ monowaves: mws, fibZones: [], closeSeries });
-    expect(traces[0].name).toBe('收盤(後復權)');
-    expect(traces[0].y).toEqual([99.5, 101.2, 103.8]);
-    expect(traces[0].hoverinfo).toBe('skip'); // hover 交給 monowave 線
-    expect(traces[1].y).toEqual([100, 110]); // monowave 線維持其後
+  it('ohlcSeries → 最底層 K 棒背景(零值/異常列防衛過濾)', () => {
+    const mws = [mkMonowave('2026-01-02', '2026-01-06', 100, 104, 'Up')];
+    const traces = buildTraces({
+      monowaves: mws,
+      fibZones: [],
+      ohlcSeries: [
+        { date: '2026-01-02', open: 100, high: 103, low: 99, close: 102 },
+        { date: '2026-01-03', open: 0, high: 0, low: 0, close: 0 }, // FinMind 無成交 0 值列 → 濾掉
+        { date: '2026-01-06', open: 102, high: 105, low: 101, close: 104 }
+      ]
+    });
+    expect(traces[0].type).toBe('candlestick');
+    expect(traces[0].x).toEqual(['2026-01-02', '2026-01-06']); // 0 值列不畫(也不會連線跳月)
+    expect(traces[0].close).toEqual([102, 104]);
+    expect(traces[1].y).toEqual([100, 104]); // monowave 線維持其後(主視覺在上層)
   });
 
-  it('closeSeries 空陣列 → 不畫背景線(trace 數不變)', () => {
-    const traces = buildTraces({ monowaves: [], fibZones: [], closeSeries: [] });
+  it('ohlcSeries 空陣列 → 不畫 K 棒(trace 數不變)', () => {
+    const traces = buildTraces({ monowaves: [], fibZones: [], ohlcSeries: [] });
     expect(traces).toHaveLength(1);
     expect(traces[0].name).toBe('價格');
+  });
+
+  it('candlestick 存在 → layout 關閉 Plotly 自動 rangeslider', () => {
+    const layout = buildLayout({
+      monowaves: [],
+      fibZones: [],
+      ohlcSeries: [{ date: '2026-01-02', open: 100, high: 103, low: 99, close: 102 }]
+    });
+    expect((layout.xaxis.rangeslider as { visible: boolean }).visible).toBe(false);
   });
 });
 
@@ -185,14 +197,18 @@ describe('buildLayout', () => {
 });
 
 describe('computeYRange / buildLayout y 裁窗', () => {
-  it('y 軸只就可視 x 窗內的點計算 — 6 年背景線的歷史低價不再撐爆 y 軸', () => {
-    const closeSeries = [
-      { date: '2020-06-01', close: 100 }, // 窗外歷史低價(撐爆 y 軸的元兇)
-      { date: '2026-05-01', close: 2400 },
-      { date: '2026-06-01', close: 2500 }
+  function mkOhlc(date: string, close: number) {
+    return { date, open: close * 0.995, high: close * 1.01, low: close * 0.985, close };
+  }
+
+  it('y 軸只就可視 x 窗內的點計算 — 6 年背景 K 棒的歷史低價不再撐爆 y 軸', () => {
+    const ohlcSeries = [
+      mkOhlc('2020-06-01', 100), // 窗外歷史低價(撐爆 y 軸的元兇)
+      mkOhlc('2026-05-01', 2400),
+      mkOhlc('2026-06-01', 2500)
     ];
     const mws = [mkMonowave('2026-05-01', '2026-06-01', 2400, 2500)];
-    const layout = buildLayout({ monowaves: mws, fibZones: [], closeSeries, asOf: '2026-06-06' });
+    const layout = buildLayout({ monowaves: mws, fibZones: [], ohlcSeries, asOf: '2026-06-06' });
     expect(layout.yaxis.range).toBeDefined();
     const [lo, hi] = layout.yaxis.range as [number, number];
     expect(lo).toBeGreaterThan(1000); // 100 被排除在窗外
@@ -201,11 +217,8 @@ describe('computeYRange / buildLayout y 裁窗', () => {
   });
 
   it('無 xRange(無 asOf)→ 全資料計算', () => {
-    const closeSeries = [
-      { date: '2020-06-01', close: 100 },
-      { date: '2026-06-01', close: 2500 }
-    ];
-    const r = computeYRange({ monowaves: [], fibZones: [], closeSeries }, null);
+    const ohlcSeries = [mkOhlc('2020-06-01', 100), mkOhlc('2026-06-01', 2500)];
+    const r = computeYRange({ monowaves: [], fibZones: [], ohlcSeries }, null);
     expect(r?.[0]).toBeLessThan(100);
     expect(r?.[1]).toBeGreaterThan(2500);
   });

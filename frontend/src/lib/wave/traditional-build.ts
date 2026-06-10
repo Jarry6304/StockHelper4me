@@ -11,12 +11,13 @@
 
 import type { FibZone } from '$contracts/neely/FibZone';
 import type { TraditionalForestOutput, TraditionalScenario } from '$lib/api/traditional';
-import type {
-  ClosePoint,
-  PlotlyAnnotation,
-  PlotlyLayout,
-  PlotlyShape,
-  PlotlyTrace
+import {
+  sanitizeOhlc,
+  type OhlcPoint,
+  type PlotlyAnnotation,
+  type PlotlyLayout,
+  type PlotlyShape,
+  type PlotlyTrace
 } from './plotly-build';
 
 export interface TradPivot {
@@ -53,8 +54,8 @@ export interface TradBuildOptions {
   forceAutorange?: boolean;
   /** user 點了顯式範圍 preset → 純 asOf 錨定窗,不做形態擴窗/錨定。 */
   explicitRange?: boolean;
-  /** 後復權收盤序列 — 淡色時間背景線(pivot 折線太稀疏,單獨看沒有時間感)。 */
-  closeSeries?: ClosePoint[];
+  /** 後復權 OHLCV — K 棒時間背景(pivot 折線太稀疏,單獨看沒有時間感)。 */
+  ohlcSeries?: OhlcPoint[];
 }
 
 const COL_BG = '#0d1626';
@@ -151,17 +152,21 @@ export function buildTradTraces(opts: TradBuildOptions): PlotlyTrace[] {
   const layers = opts.layers ?? DEFAULT_LAYERS;
   const traces: PlotlyTrace[] = [];
 
-  // 收盤背景線(最底層)— 同 Neely 圖,真實日線密度給 pivot zigzag 時間軸感
-  if (opts.closeSeries && opts.closeSeries.length > 0) {
+  // K 棒背景(最底層)— 同 Neely 圖:真實日線密度、紅漲綠跌、調暗;
+  // 缺列日不畫(折線會把缺漏直接連到數月後 — user 實踩)
+  const candles = sanitizeOhlc(opts.ohlcSeries);
+  if (candles.length > 0) {
     traces.push({
-      type: 'scatter',
-      mode: 'lines',
-      x: opts.closeSeries.map((p) => p.date),
-      y: opts.closeSeries.map((p) => p.close),
-      name: '收盤(後復權)',
-      line: { color: '#8aa0bf', width: 1 },
-      opacity: 0.35,
-      hoverinfo: 'skip',
+      type: 'candlestick',
+      x: candles.map((r) => r.date),
+      open: candles.map((r) => r.open),
+      high: candles.map((r) => r.high),
+      low: candles.map((r) => r.low),
+      close: candles.map((r) => r.close),
+      name: 'K棒(後復權)',
+      increasing: { line: { color: '#b8636f', width: 1 }, fillcolor: '#b8636f55' },
+      decreasing: { line: { color: '#3f8f6b', width: 1 }, fillcolor: '#3f8f6b55' },
+      opacity: 0.6,
       showlegend: false
     });
   }
@@ -355,7 +360,7 @@ export function buildTradAnnotations(opts: TradBuildOptions): PlotlyAnnotation[]
  * 可視 x 窗內的 y 軸範圍(同 plotly-build.ts::computeYRange 的理由:Plotly autorange
  * 看全部資料 — 6 年收盤背景線/pivot 會把 y 軸撐到數千跨度,窗內折線壓扁)。
  *
- * 候選:closeSeries / pivot(窗內)+ 選中 wave_tree 點(窗內)+ fib 帶(投影與窗
+ * 候選:ohlcSeries 的 low/high / pivot(窗內)+ 選中 wave_tree 點(窗內)+ fib 帶(投影與窗
  * 重疊時)+ 失效線(price > 0)。候選不足 → null(退回 autorange)。
  */
 export function computeTradYRange(
@@ -366,8 +371,11 @@ export function computeTradYRange(
   const inWindow = (d: string) => !xRange || (d >= xRange[0] && d <= xRange[1]);
   const ys: number[] = [];
 
-  for (const p of opts.closeSeries ?? []) {
-    if (inWindow(p.date)) ys.push(p.close);
+  for (const r of sanitizeOhlc(opts.ohlcSeries)) {
+    if (inWindow(r.date)) {
+      ys.push(r.low);
+      ys.push(r.high);
+    }
   }
   for (const pv of opts.pivots) {
     if (inWindow(pv.date)) ys.push(pv.price);
@@ -406,7 +414,9 @@ export function buildTradLayout(opts: TradBuildOptions): PlotlyLayout {
   const xaxis: Record<string, unknown> = {
     gridcolor: COL_GRID,
     zerolinecolor: COL_GRID,
-    tickfont: { color: '#7d92b3' }
+    tickfont: { color: '#7d92b3' },
+    // candlestick trace 會讓 Plotly 自動長出 rangeslider — 顯式關閉
+    rangeslider: { visible: false }
   };
   if (xRange) {
     xaxis.range = xRange;

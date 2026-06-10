@@ -123,18 +123,19 @@ describe('buildTradTraces', () => {
     expect(traces[0].y).toEqual([100, 120, 110]);
   });
 
-  it('closeSeries 給定 → 最底層多一條淡色收盤背景線', () => {
+  it('ohlcSeries 給定 → 最底層 K 棒背景(零值列過濾)', () => {
     const traces = buildTradTraces({
       pivots: [mkPivot('2026-01-01', 100, 'Low')],
       selectedScenario: null,
-      closeSeries: [
-        { date: '2026-01-01', close: 99.5 },
-        { date: '2026-01-02', close: 101.2 }
+      ohlcSeries: [
+        { date: '2026-01-01', open: 99, high: 101, low: 98.5, close: 100.2 },
+        { date: '2026-01-02', open: 0, high: 0, low: 0, close: 0 }, // 0 值列 → 濾掉
+        { date: '2026-01-03', open: 100, high: 102, low: 99.5, close: 101.5 }
       ]
     });
     expect(traces).toHaveLength(2);
-    expect(traces[0].name).toBe('收盤(後復權)');
-    expect(traces[0].hoverinfo).toBe('skip');
+    expect(traces[0].type).toBe('candlestick');
+    expect(traces[0].x).toEqual(['2026-01-01', '2026-01-03']);
     expect(traces[1].name).toBe('pivot 序列');
   });
 
@@ -239,9 +240,9 @@ describe('computeTradYRange / buildTradLayout y 裁窗', () => {
           ]
         } as TradWaveNode
       }),
-      closeSeries: [
-        { date: '2023-04-01', close: 500 },
-        { date: '2026-06-01', close: 2400 } // 窗外
+      ohlcSeries: [
+        { date: '2023-04-01', open: 498, high: 505, low: 492, close: 500 },
+        { date: '2026-06-01', open: 2380, high: 2420, low: 2360, close: 2400 } // 窗外
       ]
     });
     expect(layout.yaxis.range).toBeDefined();

@@ -8,12 +8,12 @@
     type TradPivot,
     type TradWaveNode
   } from '$lib/wave/traditional-build';
-  import type { ClosePoint } from '$lib/wave/plotly-build';
+  import type { OhlcPoint } from '$lib/wave/plotly-build';
   import TraditionalChart from './TraditionalChart.svelte';
 
   export let traditional: TraditionalForestOutput;
   export let asOf: string | null = null;
-  export let closeSeries: ClosePoint[] | null = null;
+  export let ohlcSeries: OhlcPoint[] | null = null;
 
   let selectedId: string | null = null;
   let layers = { fib: true, waveMarkers: true, invalidation: true };
@@ -184,7 +184,7 @@
       </div>
       <TraditionalChart
         {pivots}
-        {closeSeries}
+        {ohlcSeries}
         {selectedScenario}
         {asOf}
         {layers}
