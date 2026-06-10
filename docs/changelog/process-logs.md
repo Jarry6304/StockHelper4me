@@ -86,6 +86,12 @@ SELECT timeframe, COUNT(DISTINCT stock_id) AS n_stocks
 pytest tests/web_api/test_api.py tests/mcp_server/test_traditional.py
 ```
 
+**③ 漸進收攏(progressive settlement)spec 拍版 — 待拍(2026-06-11 加)**:
+波浪引擎「歷史段定型 + candidate 尾端錨定」討論稿已出
+(`m3Spec/proposal_progressive_settlement.md`,開放問題見其 §5);拍版前不動 Rust。
+表現層止血(雲層 live-only / stale 窗錨定 / 收盤背景線 / scenario_age_days)已落地,
+見 `docs/changelog/wave-view-tuning.md`。
+
 ---
 
 ## Backlog triage — gov_bank / FastAPI 砍除 + 2A/2B 依賴更正(2026-05-27,planning only)
