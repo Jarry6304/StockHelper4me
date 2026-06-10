@@ -6,7 +6,8 @@ import {
   buildShapes,
   buildTraces,
   computeDefaultXRange,
-  computeFibProjectionRange
+  computeFibProjectionRange,
+  computeYRange
 } from './plotly-build';
 
 function mkMonowave(
@@ -180,6 +181,52 @@ describe('buildLayout', () => {
     });
     const range = layout.xaxis.range as [string, string];
     expect(range[0]).toMatch(/^2026-05-/); // ~30 天前
+  });
+});
+
+describe('computeYRange / buildLayout y 裁窗', () => {
+  it('y 軸只就可視 x 窗內的點計算 — 6 年背景線的歷史低價不再撐爆 y 軸', () => {
+    const closeSeries = [
+      { date: '2020-06-01', close: 100 }, // 窗外歷史低價(撐爆 y 軸的元兇)
+      { date: '2026-05-01', close: 2400 },
+      { date: '2026-06-01', close: 2500 }
+    ];
+    const mws = [mkMonowave('2026-05-01', '2026-06-01', 2400, 2500)];
+    const layout = buildLayout({ monowaves: mws, fibZones: [], closeSeries, asOf: '2026-06-06' });
+    expect(layout.yaxis.range).toBeDefined();
+    const [lo, hi] = layout.yaxis.range as [number, number];
+    expect(lo).toBeGreaterThan(1000); // 100 被排除在窗外
+    expect(hi).toBeLessThan(3000);
+    expect(layout.yaxis.autorange).toBe(false);
+  });
+
+  it('無 xRange(無 asOf)→ 全資料計算', () => {
+    const closeSeries = [
+      { date: '2020-06-01', close: 100 },
+      { date: '2026-06-01', close: 2500 }
+    ];
+    const r = computeYRange({ monowaves: [], fibZones: [], closeSeries }, null);
+    expect(r?.[0]).toBeLessThan(100);
+    expect(r?.[1]).toBeGreaterThan(2500);
+  });
+
+  it('fib 帶投影與窗重疊 → 帶的 low/high 納入 y(帶不被裁掉)', () => {
+    const mws = [mkMonowave('2026-05-01', '2026-06-01', 2400, 2500)];
+    const r = computeYRange(
+      {
+        monowaves: mws,
+        fibZones: [{ label: '.382', low: 2100, high: 2150, source_ratio: 0.382 }],
+        asOf: '2026-06-06'
+      },
+      ['2025-06-06', '2026-09-04']
+    );
+    expect(r?.[0]).toBeLessThan(2100);
+  });
+
+  it('候選不足 → null(退回 autorange)', () => {
+    expect(computeYRange({ monowaves: [], fibZones: [] }, null)).toBeNull();
+    const layout = buildLayout({ monowaves: [], fibZones: [] });
+    expect(layout.yaxis.range).toBeUndefined();
   });
 });
 

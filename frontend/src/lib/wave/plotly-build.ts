@@ -441,6 +441,69 @@ export function computeDefaultXRange(opts: BuildOptions): [string, string] | nul
   return [iso(from), iso(to)];
 }
 
+/**
+ * 計算可視 x 窗內的 y 軸範圍(Plotly autorange 看「全部資料」不看 x 裁窗 —
+ * 收盤背景線一次塞 6 年後,y 軸會被歷史低價撐到數千跨度、把窗內折線壓扁)。
+ *
+ * 候選點:closeSeries / monowave 端點(窗內)+ 選中 scenario 波標(窗內)
+ * + fib 帶(投影範圍與窗重疊時)+ 失效線 / Track2 帶(貼近現價的水平要素)。
+ * 候選不足 → null(退回 autorange)。
+ */
+export function computeYRange(
+  opts: BuildOptions,
+  xRange: [string, string] | null
+): [number, number] | null {
+  const layers = opts.layers ?? DEFAULT_LAYERS;
+  const inWindow = (d: string) => !xRange || (d >= xRange[0] && d <= xRange[1]);
+  const ys: number[] = [];
+
+  for (const p of opts.closeSeries ?? []) {
+    if (inWindow(p.date)) ys.push(p.close);
+  }
+  for (const mw of opts.monowaves) {
+    if (inWindow(mw.start_date)) ys.push(mw.start_price);
+    if (inWindow(mw.end_date)) ys.push(mw.end_price);
+  }
+  if (layers.waveMarkers && opts.selectedScenario) {
+    for (const pt of flattenWaveTree(opts.selectedScenario.wave_tree, opts.monowaves)) {
+      if (inWindow(pt.date)) ys.push(pt.price);
+    }
+  }
+  if (layers.fib && opts.fibZones.length > 0) {
+    const fr = computeFibProjectionRange(opts);
+    const overlaps = !xRange || !fr || (fr[0] <= xRange[1] && fr[1] >= xRange[0]);
+    if (overlaps) {
+      for (const fz of opts.fibZones) {
+        ys.push(fz.low);
+        ys.push(fz.high);
+      }
+    }
+  }
+  if (layers.invalidation && opts.invalidationTriggers) {
+    for (const t of opts.invalidationTriggers) {
+      const tt = t.trigger_type;
+      if (typeof tt === 'object' && tt !== null) {
+        const price = 'PriceBreakBelow' in tt ? tt.PriceBreakBelow
+          : 'PriceBreakAbove' in tt ? tt.PriceBreakAbove : null;
+        if (typeof price === 'number' && price > 0) ys.push(price);
+      }
+    }
+  }
+  if (layers.track2 && opts.track2Bands) {
+    for (const b of opts.track2Bands) {
+      ys.push(b.low);
+      ys.push(b.high);
+    }
+  }
+
+  if (ys.length < 2) return null;
+  const lo = Math.min(...ys);
+  const hi = Math.max(...ys);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
+  const pad = hi > lo ? (hi - lo) * 0.06 : Math.max(1, lo * 0.01);
+  return [lo - pad, hi + pad];
+}
+
 export function buildLayout(opts: BuildOptions): PlotlyLayout {
   const xRange = computeDefaultXRange(opts);
   const xaxis: Record<string, unknown> = {
@@ -453,6 +516,17 @@ export function buildLayout(opts: BuildOptions): PlotlyLayout {
     xaxis.autorange = false;
   }
 
+  const yaxis: Record<string, unknown> = {
+    gridcolor: COL_GRID,
+    zerolinecolor: COL_GRID,
+    tickfont: { color: '#7d92b3' }
+  };
+  const yRange = computeYRange(opts, xRange);
+  if (yRange) {
+    yaxis.range = yRange;
+    yaxis.autorange = false;
+  }
+
   return {
     paper_bgcolor: COL_PANEL,
     plot_bgcolor: COL_BG,
@@ -463,11 +537,7 @@ export function buildLayout(opts: BuildOptions): PlotlyLayout {
     shapes: buildShapes(opts),
     annotations: buildAnnotations(opts),
     xaxis,
-    yaxis: {
-      gridcolor: COL_GRID,
-      zerolinecolor: COL_GRID,
-      tickfont: { color: '#7d92b3' }
-    },
+    yaxis,
     showlegend: false
   };
 }

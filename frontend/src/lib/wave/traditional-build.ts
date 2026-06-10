@@ -348,6 +348,56 @@ export function buildTradAnnotations(opts: TradBuildOptions): PlotlyAnnotation[]
   return ann;
 }
 
+/**
+ * 可視 x 窗內的 y 軸範圍(同 plotly-build.ts::computeYRange 的理由:Plotly autorange
+ * 看全部資料 — 6 年收盤背景線/pivot 會把 y 軸撐到數千跨度,窗內折線壓扁)。
+ *
+ * 候選:closeSeries / pivot(窗內)+ 選中 wave_tree 點(窗內)+ fib 帶(投影與窗
+ * 重疊時)+ 失效線(price > 0)。候選不足 → null(退回 autorange)。
+ */
+export function computeTradYRange(
+  opts: TradBuildOptions,
+  xRange: [string, string] | null
+): [number, number] | null {
+  const layers = opts.layers ?? DEFAULT_LAYERS;
+  const inWindow = (d: string) => !xRange || (d >= xRange[0] && d <= xRange[1]);
+  const ys: number[] = [];
+
+  for (const p of opts.closeSeries ?? []) {
+    if (inWindow(p.date)) ys.push(p.close);
+  }
+  for (const pv of opts.pivots) {
+    if (inWindow(pv.date)) ys.push(pv.price);
+  }
+  if (layers.waveMarkers && opts.selectedScenario?.wave_tree) {
+    for (const pt of flattenTradWaveTree(opts.selectedScenario.wave_tree as TradWaveNode)) {
+      if (inWindow(pt.date)) ys.push(pt.price);
+    }
+  }
+  if (layers.fib && opts.selectedScenario?.expected_fib_zones) {
+    const fr = computeTradFibProjectionRange(opts);
+    const overlaps = !xRange || !fr || (fr[0] <= xRange[1] && fr[1] >= xRange[0]);
+    if (overlaps) {
+      for (const fz of (opts.selectedScenario.expected_fib_zones as FibZone[]) ?? []) {
+        ys.push(fz.low);
+        ys.push(fz.high);
+      }
+    }
+  }
+  if (layers.invalidation) {
+    for (const t of extractTradInvalidationLines(opts.selectedScenario)) {
+      ys.push(t.price);
+    }
+  }
+
+  if (ys.length < 2) return null;
+  const lo = Math.min(...ys);
+  const hi = Math.max(...ys);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
+  const pad = hi > lo ? (hi - lo) * 0.06 : Math.max(1, lo * 0.01);
+  return [lo - pad, hi + pad];
+}
+
 export function buildTradLayout(opts: TradBuildOptions): PlotlyLayout {
   const xRange = computeTradXRange(opts);
   const xaxis: Record<string, unknown> = {
@@ -360,6 +410,17 @@ export function buildTradLayout(opts: TradBuildOptions): PlotlyLayout {
     xaxis.autorange = false;
   }
 
+  const yaxis: Record<string, unknown> = {
+    gridcolor: COL_GRID,
+    zerolinecolor: COL_GRID,
+    tickfont: { color: '#7d92b3' }
+  };
+  const yRange = computeTradYRange(opts, xRange);
+  if (yRange) {
+    yaxis.range = yRange;
+    yaxis.autorange = false;
+  }
+
   return {
     paper_bgcolor: COL_PANEL,
     plot_bgcolor: COL_BG,
@@ -370,11 +431,7 @@ export function buildTradLayout(opts: TradBuildOptions): PlotlyLayout {
     shapes: buildTradShapes(opts),
     annotations: buildTradAnnotations(opts),
     xaxis,
-    yaxis: {
-      gridcolor: COL_GRID,
-      zerolinecolor: COL_GRID,
-      tickfont: { color: '#7d92b3' }
-    },
+    yaxis,
     showlegend: false
   };
 }

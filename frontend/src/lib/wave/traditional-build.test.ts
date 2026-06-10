@@ -216,6 +216,46 @@ describe('buildTradLayout', () => {
   });
 });
 
+describe('computeTradYRange / buildTradLayout y 裁窗', () => {
+  it('形態錨定窗(2023 段):窗外的今日 2400 價位不撐 y 軸', () => {
+    const layout = buildTradLayout({
+      pivots: [
+        mkPivot('2023-05-01', 480, 'Low'),
+        mkPivot('2023-08-01', 560, 'High'),
+        mkPivot('2026-06-01', 2400, 'High') // 窗外
+      ],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 365,
+      xRangeDaysForward: 90,
+      selectedScenario: mkTradScenario({
+        wave_tree: {
+          label: 'Flat',
+          start: '2023-03-24',
+          end: '2023-08-24',
+          children: [
+            { label: 'A', start: '2023-03-24', end: '2023-05-20', start_price: 520, end_price: 470, children: [] },
+            { label: 'B', start: '2023-05-20', end: '2023-07-01', start_price: 470, end_price: 545, children: [] },
+            { label: 'C', start: '2023-07-01', end: '2023-08-24', start_price: 545, end_price: 490, children: [] }
+          ]
+        } as TradWaveNode
+      }),
+      closeSeries: [
+        { date: '2023-04-01', close: 500 },
+        { date: '2026-06-01', close: 2400 } // 窗外
+      ]
+    });
+    expect(layout.yaxis.range).toBeDefined();
+    const [lo, hi] = layout.yaxis.range as [number, number];
+    expect(hi).toBeLessThan(700); // 2400 被排除
+    expect(lo).toBeGreaterThan(400);
+  });
+
+  it('候選不足 → 無顯式 y range(autorange)', () => {
+    const layout = buildTradLayout({ pivots: [], selectedScenario: null, asOf: '2026-06-06' });
+    expect(layout.yaxis.range).toBeUndefined();
+  });
+});
+
 describe('tradRecencyTier', () => {
   it('tier 階梯化', () => {
     expect(tradRecencyTier(0)).toBe(3);
