@@ -98,7 +98,9 @@ class TestWavesSummary:
         assert rows["2330"]["certainty"] == "Primary"
         assert rows["2330"]["resonance"] == "strong"
         assert rows["2330"]["sparkline"] == [0.0, 1.0]
+        assert rows["2330"]["scenario_age_days"] == 10  # wave_tree.end 2026-06-01
         assert rows["9999"]["insufficient"] is True
+        assert rows["9999"]["scenario_age_days"] is None
         # 輸入順序 = 輸出順序
         assert [row["stock_id"] for row in body["rows"]] == ["2330", "9999"]
 

@@ -7,6 +7,9 @@
   export let digest: WaveDigest;
   /** dev / ?debug=1 模式才顯示 placeholder 角標。 */
   export let showPlaceholderBadge: boolean = false;
+
+  // 形態年齡 >365d → stale 變暗(鏡射 V1 卡 stale 視覺;CL5 summary-only 不變)
+  $: stale = digest.scenarioAgeDays !== null && digest.scenarioAgeDays > 365;
 </script>
 
 {#if digest.insufficient}
@@ -14,7 +17,11 @@
 {:else}
   <div class="wv" data-placeholder={digest.isPlaceholder ? 'true' : 'false'}>
     <Sparkline points={digest.sparkline} />
-    <span class="wlabel">{digest.label}</span>
+    <span
+      class="wlabel"
+      class:stale
+      title={stale ? `形態結尾 ${digest.scenarioAgeDays}d 前(> 1y,historical anchor)` : undefined}
+    >{digest.label}</span>
     <DirectionArrow direction={digest.direction} />
     <span class="wcnt">{digest.scenarioCount}</span>
     <CertaintyBadge certainty={digest.certainty} />
@@ -35,6 +42,11 @@
     color: var(--wave);
     font-size: 11px;
     font-family: var(--mono);
+  }
+
+  .wlabel.stale {
+    color: var(--fib);
+    opacity: 0.8;
   }
 
   .wcnt {

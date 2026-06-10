@@ -22,10 +22,19 @@ def ohlc(
     to: date = Query(...),
     conn: Any = Depends(db_conn),
 ):
-    """後復權 OHLCV 切片(price_daily_fwd,ORDER BY date ASC)。"""
+    """後復權 OHLCV 切片(price_daily_fwd,ORDER BY date ASC)。
+
+    過濾條件鏡射引擎 loader(cores_shared/ohlcv_loader::load_daily):
+    is_dirty=FALSE + OHLC 非 NULL,另加 close > 0(FinMind 無成交日的 0 值列,
+    上圖會把線打到 0);不過濾 market(loader 同款 — 等值過濾曾因值域不一致
+    造成切片整段缺列)。
+    """
     sql = (
         "SELECT date, open, high, low, close, volume FROM price_daily_fwd "
-        "WHERE market = 'TW' AND stock_id = %s AND date BETWEEN %s AND %s "
+        "WHERE stock_id = %s AND is_dirty = FALSE "
+        "  AND date BETWEEN %s AND %s "
+        "  AND open IS NOT NULL AND high IS NOT NULL "
+        "  AND low IS NOT NULL AND close IS NOT NULL AND close > 0 "
         "ORDER BY date ASC"
     )
     with conn.cursor() as cur:

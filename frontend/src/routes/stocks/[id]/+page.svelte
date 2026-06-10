@@ -59,6 +59,7 @@
       neely={data.waves?.neely ?? null}
       traditional={data.waves?.traditional ?? null}
       resonance={data.resonance}
+      ohlcSeries={data.ohlc}
       on:timeframe-change={handleTimeframeChange}
       on:state-change={handleStateChange}
     />
@@ -67,7 +68,7 @@
 
 <style>
   .page {
-    max-width: 900px;
+    max-width: 1440px;
     margin: 0 auto;
   }
 

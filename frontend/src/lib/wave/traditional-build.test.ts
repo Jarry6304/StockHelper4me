@@ -123,6 +123,22 @@ describe('buildTradTraces', () => {
     expect(traces[0].y).toEqual([100, 120, 110]);
   });
 
+  it('ohlcSeries 給定 → 最底層 K 棒背景(零值列過濾)', () => {
+    const traces = buildTradTraces({
+      pivots: [mkPivot('2026-01-01', 100, 'Low')],
+      selectedScenario: null,
+      ohlcSeries: [
+        { date: '2026-01-01', open: 99, high: 101, low: 98.5, close: 100.2 },
+        { date: '2026-01-02', open: 0, high: 0, low: 0, close: 0 }, // 0 值列 → 濾掉
+        { date: '2026-01-03', open: 100, high: 102, low: 99.5, close: 101.5 }
+      ]
+    });
+    expect(traces).toHaveLength(2);
+    expect(traces[0].type).toBe('candlestick');
+    expect(traces[0].x).toEqual(['2026-01-01', '2026-01-03']);
+    expect(traces[1].name).toBe('pivot 序列');
+  });
+
   it('selectedScenario 帶 wave_tree → 多 1 條粗線 + markers', () => {
     const traces = buildTradTraces({
       pivots: [mkPivot('2026-01-01', 100)],
@@ -198,6 +214,46 @@ describe('buildTradLayout', () => {
       asOf: '2026-06-06'
     });
     expect(layout.xaxis.range).toBeDefined();
+  });
+});
+
+describe('computeTradYRange / buildTradLayout y 裁窗', () => {
+  it('形態錨定窗(2023 段):窗外的今日 2400 價位不撐 y 軸', () => {
+    const layout = buildTradLayout({
+      pivots: [
+        mkPivot('2023-05-01', 480, 'Low'),
+        mkPivot('2023-08-01', 560, 'High'),
+        mkPivot('2026-06-01', 2400, 'High') // 窗外
+      ],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 365,
+      xRangeDaysForward: 90,
+      selectedScenario: mkTradScenario({
+        wave_tree: {
+          label: 'Flat',
+          start: '2023-03-24',
+          end: '2023-08-24',
+          children: [
+            { label: 'A', start: '2023-03-24', end: '2023-05-20', start_price: 520, end_price: 470, children: [] },
+            { label: 'B', start: '2023-05-20', end: '2023-07-01', start_price: 470, end_price: 545, children: [] },
+            { label: 'C', start: '2023-07-01', end: '2023-08-24', start_price: 545, end_price: 490, children: [] }
+          ]
+        } as TradWaveNode
+      }),
+      ohlcSeries: [
+        { date: '2023-04-01', open: 498, high: 505, low: 492, close: 500 },
+        { date: '2026-06-01', open: 2380, high: 2420, low: 2360, close: 2400 } // 窗外
+      ]
+    });
+    expect(layout.yaxis.range).toBeDefined();
+    const [lo, hi] = layout.yaxis.range as [number, number];
+    expect(hi).toBeLessThan(700); // 2400 被排除
+    expect(lo).toBeGreaterThan(400);
+  });
+
+  it('候選不足 → 無顯式 y range(autorange)', () => {
+    const layout = buildTradLayout({ pivots: [], selectedScenario: null, asOf: '2026-06-06' });
+    expect(layout.yaxis.range).toBeUndefined();
   });
 });
 
@@ -330,8 +386,8 @@ describe('sortTradScenarios', () => {
   });
 });
 
-describe('computeTradXRange auto-expand to selectedScenario', () => {
-  it('selectedScenario.wave_tree 在預設窗外 → x-range 擴展包含 wave', () => {
+describe('computeTradXRange — 形態錨定 / 擴窗 / preset', () => {
+  it('selectedScenario 整段在預設窗外(stale)→ 窗錨定形態本身,不硬拉到 asOf', () => {
     const range = computeTradXRange({
       pivots: [],
       asOf: '2026-06-06',
@@ -341,8 +397,37 @@ describe('computeTradXRange auto-expand to selectedScenario', () => {
         wave_tree: { start: '2023-03-24', end: '2023-08-24' } as TradWaveNode
       })
     });
-    // from 應該擴展到 2023-03-24 - 30d ≈ 2023-02-22(早於預設的 2025-06-06)
-    expect(range?.[0].startsWith('2023-02')).toBe(true);
+    expect(range?.[1]).toBe('2023-11-22'); // end + 90d(不再硬拉到 asOf+90 攤成 3 年)
+    // 形態僅跨 5 個月 → 保底 12 個月跨度(向過去補滿),x 軸不會太短
+    expect(range?.[0]).toBe('2022-11-22');
+  });
+
+  it('stale 長形態(跨度 > 12 個月)→ 維持 start−30d,不再補', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 365,
+      xRangeDaysForward: 90,
+      selectedScenario: mkTradScenario({
+        wave_tree: { start: '2022-01-10', end: '2023-08-24' } as TradWaveNode
+      })
+    });
+    expect(range?.[0]).toBe('2021-12-11'); // start − 30d
+    expect(range?.[1]).toBe('2023-11-22'); // end + 90d
+  });
+
+  it('部分重疊(start 在窗外、end 在窗內)→ 維持擴窗包含整個 wave_tree', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 365,
+      xRangeDaysForward: 90,
+      selectedScenario: mkTradScenario({
+        wave_tree: { start: '2024-12-01', end: '2026-01-15' } as TradWaveNode
+      })
+    });
+    expect(range?.[0]).toBe('2024-11-01'); // start − 30d
+    expect(range?.[1].startsWith('2026-09')).toBe(true); // asOf + 90d 保留
   });
 
   it('selectedScenario 在預設窗內 → 保留預設範圍', () => {
@@ -366,6 +451,32 @@ describe('computeTradXRange auto-expand to selectedScenario', () => {
       selectedScenario: null
     });
     expect(range?.[0].startsWith('2025-06')).toBe(true);
+  });
+
+  it('explicitRange(preset)→ 純 asOf 錨定,stale 形態不影響窗', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 180,
+      xRangeDaysForward: 120,
+      explicitRange: true,
+      selectedScenario: mkTradScenario({
+        wave_tree: { start: '2023-03-24', end: '2023-08-24' } as TradWaveNode
+      })
+    });
+    expect(range?.[0]).toBe('2025-12-08'); // asOf − 180d
+    expect(range?.[1]).toBe('2026-10-04'); // asOf + 120d
+  });
+
+  it('forceAutorange(「全部」preset)→ null(交給 Plotly autorange)', () => {
+    expect(
+      computeTradXRange({
+        pivots: [],
+        asOf: '2026-06-06',
+        forceAutorange: true,
+        selectedScenario: null
+      })
+    ).toBeNull();
   });
 });
 

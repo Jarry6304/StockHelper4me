@@ -6,8 +6,10 @@
     buildTradTraces,
     type TradPivot
   } from '$lib/wave/traditional-build';
+  import type { OhlcPoint } from '$lib/wave/plotly-build';
 
   export let pivots: TradPivot[];
+  export let ohlcSeries: OhlcPoint[] | null = null;
   export let selectedScenario: TraditionalScenario | null = null;
   export let asOf: string | null = null;
   export let layers: { fib: boolean; waveMarkers: boolean; invalidation: boolean } = {
@@ -18,6 +20,8 @@
   export let height: number = 270;
   export let xRangeDaysBack: number = 540;
   export let xRangeDaysForward: number = 120;
+  export let forceAutorange: boolean = false;
+  export let explicitRange: boolean = false;
 
   let container: HTMLDivElement | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,11 +40,14 @@
     const plotly = await loadPlotly();
     const opts = {
       pivots,
+      ohlcSeries: ohlcSeries ?? undefined,
       selectedScenario,
       asOf: asOf ?? undefined,
       layers,
       xRangeDaysBack,
-      xRangeDaysForward
+      xRangeDaysForward,
+      forceAutorange,
+      explicitRange
     };
     const traces = buildTradTraces(opts);
     const layout = buildTradLayout(opts);
@@ -71,7 +78,7 @@
   });
 
   $: if (mounted && container) void render();
-  $: void [pivots, selectedScenario, asOf, layers, xRangeDaysBack, xRangeDaysForward];
+  $: void [pivots, ohlcSeries, selectedScenario, asOf, layers, xRangeDaysBack, xRangeDaysForward, forceAutorange, explicitRange];
 </script>
 
 <div bind:this={container} class="chart" style="height: {height}px"></div>

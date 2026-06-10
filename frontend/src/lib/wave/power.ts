@@ -8,6 +8,7 @@
  */
 
 import type { Certainty } from '$contracts/neely/Certainty';
+import type { FibZone } from '$contracts/neely/FibZone';
 import type { Monowave } from '$contracts/neely/Monowave';
 import type { PowerRating } from '$contracts/neely/PowerRating';
 import type { Scenario } from '$contracts/neely/Scenario';
@@ -176,6 +177,34 @@ export function recencyTier(days: number): number {
   if (days <= 180) return 2;
   if (days <= 365) return 1;
   return 0;
+}
+
+/** 雲層 live 門檻:tier ≥ 2 = 結尾距 as_of ≤ 180d。 */
+export const LIVE_ZONE_MIN_TIER = 2;
+
+/**
+ * State 1 雲層資料源:只聯集「live(結尾距 as_of ≤ 180d)」scenario 的
+ * expected_fib_zones,去重 key = label|low|high(鏡射 Rust `flatten_fib_zones` 語意)。
+ *
+ * 不用 `flat_fib_zones`:那是全 forest 聯集,原始用途是 fusion key_levels 的支撐壓力
+ * 候選 — 直接當前瞻雲層會把 historical anchor(2020-2022 錨定形態)的價位畫進
+ * 「今天的投影窗」(user 回報的雲層失準)。全 stale forest → 空陣列,
+ * 呼叫端隱藏雲層並顯示提示。
+ */
+export function collectLiveFibZones(scenarios: Scenario[], asOf: string | null): FibZone[] {
+  const out: FibZone[] = [];
+  const seen = new Set<string>();
+  for (const s of scenarios) {
+    if (recencyTier(scenarioRecencyDays(s, asOf)) < LIVE_ZONE_MIN_TIER) continue;
+    for (const fz of s.expected_fib_zones ?? []) {
+      const key = `${fz.label}|${fz.low}|${fz.high}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(fz);
+      }
+    }
+  }
+  return out;
 }
 
 export interface PickOptions {

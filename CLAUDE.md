@@ -243,7 +243,9 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 1. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地
    (2026-06-11,`GET /waves/summary`;見 docs/changelog/v2-wave-endpoint.md),
-   production verify 留本機 runbook。
+   production verify 留本機 runbook。③ **漸進收攏 spec 拍版**(波浪引擎歷史段定型 +
+   尾端錨定;討論稿 `m3Spec/proposal_progressive_settlement.md`,拍版前不動 Rust;
+   表現層止血已落地,見 docs/changelog/wave-view-tuning.md)。
 2. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
 3. **wall time / PG contention 觀察**:run-all 全市場 ~37 min(tpex universe 後);爆了先跑
    `scripts/maintain_facts_stats.sql` 再用 `diagnose_slow_tw_cores.sql` 取證

@@ -91,6 +91,7 @@ function realRow(overrides: Partial<WaveSummaryRow> = {}): WaveSummaryRow {
     sparkline: [0, 1, 0.5],
     resonance: 'strong',
     staleness_days: 0,
+    scenario_age_days: 12,
     ...overrides
   };
 }
@@ -107,8 +108,16 @@ describe('digestFromRow(/waves/summary → WaveDigest)', () => {
       certainty: 'Primary',
       sparkline: [0, 1, 0.5],
       resonance: 'strong',
+      scenarioAgeDays: 12,
       isPlaceholder: false
     });
+  });
+
+  it('scenario_age_days 缺值/異常型別 → null(防衛)', () => {
+    const d = digestFromRow(realRow({ scenario_age_days: null }));
+    expect(d.scenarioAgeDays).toBeNull();
+    const d2 = digestFromRow(realRow({ scenario_age_days: 'old' as unknown as number }));
+    expect(d2.scenarioAgeDays).toBeNull();
   });
 
   it('insufficient row → insufficientDigest 退化值', () => {

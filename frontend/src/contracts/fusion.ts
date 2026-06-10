@@ -117,6 +117,7 @@ export interface WaveSummaryRow {
   sparkline: number[];
   resonance: string;
   staleness_days: number | null;
+  scenario_age_days: number | null;
 }
 export interface WavesSummary {
   as_of: string;

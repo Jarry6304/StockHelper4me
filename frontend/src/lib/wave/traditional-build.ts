@@ -11,7 +11,14 @@
 
 import type { FibZone } from '$contracts/neely/FibZone';
 import type { TraditionalForestOutput, TraditionalScenario } from '$lib/api/traditional';
-import type { PlotlyAnnotation, PlotlyLayout, PlotlyShape, PlotlyTrace } from './plotly-build';
+import {
+  sanitizeOhlc,
+  type OhlcPoint,
+  type PlotlyAnnotation,
+  type PlotlyLayout,
+  type PlotlyShape,
+  type PlotlyTrace
+} from './plotly-build';
 
 export interface TradPivot {
   date: string;
@@ -43,6 +50,12 @@ export interface TradBuildOptions {
   layers?: { fib: boolean; waveMarkers: boolean; invalidation: boolean };
   xRangeDaysBack?: number;
   xRangeDaysForward?: number;
+  /** user 點了「全部」preset → autorange(computeTradXRange 回 null)。 */
+  forceAutorange?: boolean;
+  /** user 點了顯式範圍 preset → 純 asOf 錨定窗,不做形態擴窗/錨定。 */
+  explicitRange?: boolean;
+  /** 後復權 OHLCV — K 棒時間背景(pivot 折線太稀疏,單獨看沒有時間感)。 */
+  ohlcSeries?: OhlcPoint[];
 }
 
 const COL_BG = '#0d1626';
@@ -60,6 +73,7 @@ function isoDate(d: Date): string {
 }
 
 export function computeTradXRange(opts: TradBuildOptions): [string, string] | null {
+  if (opts.forceAutorange) return null;
   const anchor = opts.asOf;
   if (!anchor) return null;
   const t = Date.parse(anchor);
@@ -69,17 +83,29 @@ export function computeTradXRange(opts: TradBuildOptions): [string, string] | nu
   let fromMs = t - back * 86400000;
   let toMs = t + forward * 86400000;
 
-  // 自動擴展:若 selectedScenario.wave_tree 在預設窗外,把窗口擴大包含整個 wave_tree
-  // (對齊 user「選了老的看不見」場景 — traditional 引擎可能只產 1-2 年前的形態)
+  // 顯式 preset(user 點了範圍鈕)→ 純 asOf 錨定,不做形態擴窗/錨定
+  if (opts.explicitRange) return [isoDate(new Date(fromMs)), isoDate(new Date(toMs))];
+
   const tree = opts.selectedScenario?.wave_tree as TradWaveNode | undefined;
-  if (tree?.start) {
-    const ws = Date.parse(tree.start);
-    if (!Number.isNaN(ws) && ws < fromMs) fromMs = ws - 30 * 86400000;
+  const ws = tree?.start ? Date.parse(tree.start) : Number.NaN;
+  const we = tree?.end ? Date.parse(tree.end) : Number.NaN;
+
+  // 整段形態都在預設窗外(stale)→ 窗錨定形態本身,不硬拉到 asOf
+  // (老形態 + asOf 同框會把 x 軸攤成 2+ 年、刻度壓扁 — user 回報「沒有時間軸」主因)
+  if (!Number.isNaN(we) && we < fromMs) {
+    const fromAnchor = !Number.isNaN(ws) ? ws : we;
+    let f = fromAnchor - 30 * 86400000;
+    const t2 = we + 90 * 86400000;
+    // corrective 形態常只跨數週 → 錨定窗會剩 3-4 個月(user 回報 x 軸太短);
+    // 保底 12 個月跨度,向過去補滿(形態維持在窗的右半)
+    const MIN_SPAN = 365 * 86400000;
+    if (t2 - f < MIN_SPAN) f = t2 - MIN_SPAN;
+    return [isoDate(new Date(f)), isoDate(new Date(t2))];
   }
-  if (tree?.end) {
-    const we = Date.parse(tree.end);
-    if (!Number.isNaN(we) && we > toMs) toMs = we + 30 * 86400000;
-  }
+
+  // 部分重疊:維持擴窗,把窗口拉大包含整個 wave_tree
+  if (!Number.isNaN(ws) && ws < fromMs) fromMs = ws - 30 * 86400000;
+  if (!Number.isNaN(we) && we > toMs) toMs = we + 30 * 86400000;
 
   return [isoDate(new Date(fromMs)), isoDate(new Date(toMs))];
 }
@@ -125,6 +151,25 @@ export function flattenTradWaveTree(
 export function buildTradTraces(opts: TradBuildOptions): PlotlyTrace[] {
   const layers = opts.layers ?? DEFAULT_LAYERS;
   const traces: PlotlyTrace[] = [];
+
+  // K 棒背景(最底層)— 同 Neely 圖:真實日線密度、紅漲綠跌、調暗;
+  // 缺列日不畫(折線會把缺漏直接連到數月後 — user 實踩)
+  const candles = sanitizeOhlc(opts.ohlcSeries);
+  if (candles.length > 0) {
+    traces.push({
+      type: 'candlestick',
+      x: candles.map((r) => r.date),
+      open: candles.map((r) => r.open),
+      high: candles.map((r) => r.high),
+      low: candles.map((r) => r.low),
+      close: candles.map((r) => r.close),
+      name: 'K棒(後復權)',
+      increasing: { line: { color: '#b8636f', width: 1 }, fillcolor: '#b8636f55' },
+      decreasing: { line: { color: '#3f8f6b', width: 1 }, fillcolor: '#3f8f6b55' },
+      opacity: 0.6,
+      showlegend: false
+    });
+  }
 
   // 主價格線 — 由 pivot_series 連線(High/Low 交替形成 ZigZag-like 路徑)
   if (opts.pivots.length > 0) {
@@ -311,16 +356,82 @@ export function buildTradAnnotations(opts: TradBuildOptions): PlotlyAnnotation[]
   return ann;
 }
 
+/**
+ * 可視 x 窗內的 y 軸範圍(同 plotly-build.ts::computeYRange 的理由:Plotly autorange
+ * 看全部資料 — 6 年收盤背景線/pivot 會把 y 軸撐到數千跨度,窗內折線壓扁)。
+ *
+ * 候選:ohlcSeries 的 low/high / pivot(窗內)+ 選中 wave_tree 點(窗內)+ fib 帶(投影與窗
+ * 重疊時)+ 失效線(price > 0)。候選不足 → null(退回 autorange)。
+ */
+export function computeTradYRange(
+  opts: TradBuildOptions,
+  xRange: [string, string] | null
+): [number, number] | null {
+  const layers = opts.layers ?? DEFAULT_LAYERS;
+  const inWindow = (d: string) => !xRange || (d >= xRange[0] && d <= xRange[1]);
+  const ys: number[] = [];
+
+  for (const r of sanitizeOhlc(opts.ohlcSeries)) {
+    if (inWindow(r.date)) {
+      ys.push(r.low);
+      ys.push(r.high);
+    }
+  }
+  for (const pv of opts.pivots) {
+    if (inWindow(pv.date)) ys.push(pv.price);
+  }
+  if (layers.waveMarkers && opts.selectedScenario?.wave_tree) {
+    for (const pt of flattenTradWaveTree(opts.selectedScenario.wave_tree as TradWaveNode)) {
+      if (inWindow(pt.date)) ys.push(pt.price);
+    }
+  }
+  if (layers.fib && opts.selectedScenario?.expected_fib_zones) {
+    const fr = computeTradFibProjectionRange(opts);
+    const overlaps = !xRange || !fr || (fr[0] <= xRange[1] && fr[1] >= xRange[0]);
+    if (overlaps) {
+      for (const fz of (opts.selectedScenario.expected_fib_zones as FibZone[]) ?? []) {
+        ys.push(fz.low);
+        ys.push(fz.high);
+      }
+    }
+  }
+  if (layers.invalidation) {
+    for (const t of extractTradInvalidationLines(opts.selectedScenario)) {
+      ys.push(t.price);
+    }
+  }
+
+  if (ys.length < 2) return null;
+  const lo = Math.min(...ys);
+  const hi = Math.max(...ys);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
+  const pad = hi > lo ? (hi - lo) * 0.06 : Math.max(1, lo * 0.01);
+  return [lo - pad, hi + pad];
+}
+
 export function buildTradLayout(opts: TradBuildOptions): PlotlyLayout {
   const xRange = computeTradXRange(opts);
   const xaxis: Record<string, unknown> = {
     gridcolor: COL_GRID,
     zerolinecolor: COL_GRID,
-    tickfont: { color: '#7d92b3' }
+    tickfont: { color: '#7d92b3' },
+    // candlestick trace 會讓 Plotly 自動長出 rangeslider — 顯式關閉
+    rangeslider: { visible: false }
   };
   if (xRange) {
     xaxis.range = xRange;
     xaxis.autorange = false;
+  }
+
+  const yaxis: Record<string, unknown> = {
+    gridcolor: COL_GRID,
+    zerolinecolor: COL_GRID,
+    tickfont: { color: '#7d92b3' }
+  };
+  const yRange = computeTradYRange(opts, xRange);
+  if (yRange) {
+    yaxis.range = yRange;
+    yaxis.autorange = false;
   }
 
   return {
@@ -333,11 +444,7 @@ export function buildTradLayout(opts: TradBuildOptions): PlotlyLayout {
     shapes: buildTradShapes(opts),
     annotations: buildTradAnnotations(opts),
     xaxis,
-    yaxis: {
-      gridcolor: COL_GRID,
-      zerolinecolor: COL_GRID,
-      tickfont: { color: '#7d92b3' }
-    },
+    yaxis,
     showlegend: false
   };
 }
