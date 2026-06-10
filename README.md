@@ -1,10 +1,20 @@
 # StockHelper4me — tw-stock-collector
 
-> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **14 tools** + **唯讀 FastAPI Web API** + **Traditional Core 獨立波浪引擎**)。
+> 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **50 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **14 tools** + **唯讀 FastAPI Web API** + **Traditional Core 獨立波浪引擎**)。
 
-**版本**:**v4.38**(alembic head `j6k7l8m9n0o1` / 2026-06-06)。**v4.38** Web 前端原型上線:`frontend/` SvelteKit + Vite + TypeScript + Plotly.js,2 視圖(V1 個股 WAVE 卡 + V2 跨股因子排行)消費既有 Golden L3 唯讀 API;後端加 `CORSMiddleware`(`WEB_API_CORS_ORIGINS` env 覆寫,預設 `:5173`);0 Python(除 CORS 1 檔)/ 0 alembic / 0 Rust 改動;53 vitest passed + 24 web_api pytest passed。詳見 §「Web 前端原型(v4.38)」。**v4.37** Traditional Core **全市場 production-verified ☕**:compaction 改 `EngineNode.children: Vec<Rc<EngineNode>>` 共享子樹殺深拷貝(原 `Vec<EngineNode>` 深樹 derive(Clone) 每 round 拷貝整棵 → swap)→ 單股 **135-250s → 7.7s(~20-30×)**;全 universe 2171 stocks × 40 cores `run-all` ~2.5h,P0-Gate forest max 69/70/58 ≪ 200;`monowave_epsilon` 預設 0.0→0.03 + 4 旋鈕 env 覆寫(`TRAD_*`);`run-all` 預設 `--concurrency` 32→8;順帶修 magic_formula_core Rust `is_top_30`→`is_top_n`(v4.35 漏改 Rust 端)+ `wave_impulse_screen_derived` fresh-init schema drift;新 `scripts/verify_traditional_forest.py` + `workflows/magic_formula_only.toml`。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug;**v4.34** 修復 revenue / financial / 景氣指標 3 個 dashboard chart 的 x 軸欄位;**v4.35** magic_formula `is_top_30`→`is_top_n` schema 對齊;**v4.36** DB sync 單緒寫入**全面並行化**:Bronze segment_runner DB 寫入走 `asyncio.to_thread` 解封 event loop / Silver 7a + Cross-stock Phase 8 builders `asyncio.gather` 並行 / Golden fusion universe loop + Forecast conformalize/fuse/backtest 走 `ThreadPoolExecutor + per-worker get_connection()`(0 alembic / 0 collector.toml / 0 Rust;+45 tests)。皆已 merge main
-**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)+ Phase 3b `scripts/recalibrate_kalman.ps1`(Kalman 全市場校準 → resonance track2 非 single_track)。完整 verify chain 見 [docs/changelog/v4.30-v4.38.md](docs/changelog/v4.30-v4.38.md) §v4.32/v4.33
-**狀態**:**v4.32**(2026-05-29 production-verified ☕):原 read-time 的 fusion(levels / resonance / climate)正名 **Golden L3** 並物化進 `structural_snapshots`(新 core_name `*_fusion`),對外只讀;新建**唯讀 FastAPI Web API**(`uvicorn web_api.app:app` — neely forest 完整 passthrough + brotli/gzip 協商 + N>250 保險絲;Windows/Py3.14 每請求 sync conn);**TypeScript 契約 codegen**(Rust ts-rs 63 型別 + Python pydantic2ts → `frontend/src/contracts/`)。Phase 3b Kalman 全市場校準腳本 `scripts/recalibrate_kalman.ps1`(讓 resonance track2 非 single_track)。**累積**:v4.25 dual-track 共振 + v4.26 wave_impulse_screen + v4.28 三 sprint + v4.29 + **v4.30/v4.31 + v4.32**。M3 Cores **39 crates**;Cross-Stock **12 builders**;MCP **13 tools** + Web API;**Rust 607 tests + ts feature 485**;**Python ~865 passed / +34(v4.32);fusion + mcp_server 子集 476 passed / 1 skipped / 0 failed(v4.33.1 後)**;v4.32.1 tpex 解鎖後 universe ~2172 stocks × 41 cores dispatch / facts daily ~78k new rows。
+**版本**:**v4.38**(2026-06-06,alembic head `j6k7l8m9n0o1`)— Web 前端原型上線:
+`frontend/` SvelteKit 2 視圖(V1 個股 WAVE 卡 + V2 跨股因子排行)消費 Golden L3 唯讀 API,
+前端零 compute;後端僅加 CORS(`WEB_API_CORS_ORIGINS` env 覆寫);0 alembic / 0 Rust 變更。
+
+| 指標 | 值 |
+|---|---|
+| Rust | 50 crates / 647 tests |
+| Python | 973 tests passed |
+| MCP | 14 public tools |
+| Universe | ~2,172 stocks × 41 cores |
+
+歷史版本 → [docs/changelog/INDEX.md](docs/changelog/INDEX.md);
+測試流水線:`scripts/test_pipeline.ps1` / `.sh`(完整 verify chain 見 [docs/changelog/v4.30-v4.38.md](docs/changelog/v4.30-v4.38.md))
 
 ---
 

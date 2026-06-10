@@ -5,7 +5,7 @@ Revises: v1w2x3y4z5a6
 Create Date: 2026-05-09 13:00:00.000000
 
 ==============================================================================
-M3 Cores 層三表落地(對齊 m2Spec/oldm2Spec/cores_overview.md §七 寫入分流):
+M3 Cores 層三表落地(對齊 docs/archive/oldm2Spec/cores_overview.md §七 寫入分流):
 
 | 用途 | 表 | 寫入頻率 |
 |---|---|---|
@@ -39,12 +39,12 @@ M3 Cores 層三表落地(對齊 m2Spec/oldm2Spec/cores_overview.md §七 寫入�
 downgrade DROP 三表(無生產資料 — M3 PR-7 落地時表為空)。
 
 == 對齊 ==
-- m2Spec/oldm2Spec/cores_overview.md §6.2(Fact schema)
-- m2Spec/oldm2Spec/cores_overview.md §6.3(Facts unique constraint)
-- m2Spec/oldm2Spec/cores_overview.md §7.1(三類資料寫入分流)
-- m2Spec/oldm2Spec/cores_overview.md §7.4(params_hash blake3 + canonical JSON 前 16 hex)
-- m2Spec/oldm2Spec/neely_core.md §17(對應資料表)
-- m2Spec/oldm2Spec/neely_core.md §17.1(structural_snapshots JSONB 範例)
+- docs/archive/oldm2Spec/cores_overview.md §6.2(Fact schema)
+- docs/archive/oldm2Spec/cores_overview.md §6.3(Facts unique constraint)
+- docs/archive/oldm2Spec/cores_overview.md §7.1(三類資料寫入分流)
+- docs/archive/oldm2Spec/cores_overview.md §7.4(params_hash blake3 + canonical JSON 前 16 hex)
+- docs/archive/oldm2Spec/neely_core.md §17(對應資料表)
+- docs/archive/oldm2Spec/neely_core.md §17.1(structural_snapshots JSONB 範例)
 ==============================================================================
 """
 from alembic import op

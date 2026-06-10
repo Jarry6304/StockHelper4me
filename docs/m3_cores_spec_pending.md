@@ -457,8 +457,8 @@ regime-switching 短窗 alternation pattern。
 | `rust_compute/cores/{indicator,chip,fundamental,environment}/*/src/lib.rs` | 各 core 實作 + best-guess threshold 註解 |
 | `rust_compute/cores_shared/{ohlcv,chip,fundamental,environment}_loader/` | Silver derived 讀取邏輯 |
 | `rust_compute/cores/system/tw_cores/src/{main,cli,dispatcher,writers,run_environment,run_stock_cores,summary,helpers}.rs` | Monolithic dispatcher 拆 8 module(v3.5 R4 C8;`run-all` subcommand)|
-| `m2Spec/oldm2Spec/cores_overview.md` | 共用設計參考 r2 |
-| `m2Spec/oldm2Spec/{tw_market,traditional,neely,fundamental,chip,environment}_core.md` | 各 core spec r2(待 user 寫定 m3Spec/ 後 deprecate)|
+| `docs/archive/oldm2Spec/cores_overview.md` | 共用設計參考 r2 |
+| `docs/archive/oldm2Spec/{tw_market,traditional,neely,fundamental,chip,environment}_core.md` | 各 core spec r2(待 user 寫定 m3Spec/ 後 deprecate)|
 | `m3Spec/chip_cores.md` | user 既有,部分寫定 |
 
 ---

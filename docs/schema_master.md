@@ -168,8 +168,8 @@ grep "x3y4z5a6b7c8" docs/schema_reference.md   -- 應命中
 | 文件 | 狀態 | 原因 |
 |---|---|---|
 | `docs/collectors.md` | ⚠️ stale | v2.0 / 2026-04-30;以 Phase 1-6 為主軸,R3 升格 / M3 三表 / PR #21-B 全沒收 |
-| `m2Spec/oldm2Spec/collector_schema_consolidated_spec_v3_2.md` | 已歸檔 | v3.2 r1 整合規格,被 `m2Spec/layered_schema_post_refactor.md` 取代 |
-| `m2Spec/oldm2Spec/m2_neo_pipeline_spec_r{1,2,3}.md` | 已歸檔 | r1/r2/r3 設計探索,r4 已被 cores_overview.md 取代 |
+| `docs/archive/oldm2Spec/collector_schema_consolidated_spec_v3_2.md` | 已歸檔 | v3.2 r1 整合規格,被 `m2Spec/layered_schema_post_refactor.md` 取代 |
+| `docs/archive/oldm2Spec/m2_neo_pipeline_spec_r{1,2,3}.md` | 已歸檔 | r1/r2/r3 設計探索,r4 已被 cores_overview.md 取代 |
 | `m2/schema_m2_pg.sql` | 已歸檔 | M2 Aggregation Layer 舊設計 schema,M3 已不走此路 |
 | 舊 `docs/schema_reference.md`(v2.0)| 已被覆寫 | 想看歷史:`git log -- docs/schema_reference.md` |
 

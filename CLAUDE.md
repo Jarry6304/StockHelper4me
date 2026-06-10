@@ -147,6 +147,7 @@ Rust / 計算層:
 | docstring 寫死會漂移的數字(`23 cores`、`13 tools`) | 「以 `list_cores()` / server.py 註冊區為準」 |
 | 註解引用 repo 外路徑(本機 plans 目錄等) | 引 repo 內檔案(規格 / changelog / README) |
 | 註解描述未來計畫(「留 Step 3」) | 完成即刪;未完成寫進「已知陷阱」而非散落 docstring |
+| 引用 `docs/archive/` 內容作為現行規格依據 | 現行規格只認 m2Spec(非 old)/ m3Spec / docs/schema_master.md |
 
 程式(V2 階段,spec 已明文):
 
@@ -234,7 +235,7 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 | collector 程式規格 | `collectorSpec/tw_stock_collector_program_spec_v1.2_p{1,2,3}.md` |
 | 現行 schema 規格 | `m2Spec/layered_schema_post_refactor.md` + `docs/schema_master.md` / `docs/schema_reference.md` |
 | 計算層規格(cores / 波浪 / indicator) | `m3Spec/`(neely / traditional / chip / environment / fusion / dual_track …) |
-| 舊版規格(v3.2 era,僅考古) | `m2Spec/oldm2Spec/`(cores_overview §7.5 dirty 契約 / §10.0 Core 邊界三原則仍常被引用) |
+| 舊版規格(v3.2 era,僅考古,不作現行依據) | `docs/archive/oldm2Spec/`(cores_overview §7.5 dirty 契約 / §10.0 Core 邊界三原則仍常被引用) |
 | M1 handover / collector 細節 | `docs/MILESTONE_1_HANDOVER.md` / `docs/collectors.md` |
 
 ## 下次 session 優先序
