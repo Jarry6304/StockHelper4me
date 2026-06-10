@@ -123,6 +123,21 @@ describe('buildTradTraces', () => {
     expect(traces[0].y).toEqual([100, 120, 110]);
   });
 
+  it('closeSeries 給定 → 最底層多一條淡色收盤背景線', () => {
+    const traces = buildTradTraces({
+      pivots: [mkPivot('2026-01-01', 100, 'Low')],
+      selectedScenario: null,
+      closeSeries: [
+        { date: '2026-01-01', close: 99.5 },
+        { date: '2026-01-02', close: 101.2 }
+      ]
+    });
+    expect(traces).toHaveLength(2);
+    expect(traces[0].name).toBe('收盤(後復權)');
+    expect(traces[0].hoverinfo).toBe('skip');
+    expect(traces[1].name).toBe('pivot 序列');
+  });
+
   it('selectedScenario 帶 wave_tree → 多 1 條粗線 + markers', () => {
     const traces = buildTradTraces({
       pivots: [mkPivot('2026-01-01', 100)],

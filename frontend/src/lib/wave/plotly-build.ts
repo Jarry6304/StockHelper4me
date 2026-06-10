@@ -16,10 +16,18 @@ import type { Scenario } from '$contracts/neely/Scenario';
 import type { Trigger } from '$contracts/neely/Trigger';
 import { directionColor, flattenWaveTree, shortLabel, type WavePoint } from './coords';
 
+/** 收盤背景線最小點型(OhlcRow 結構性相容,只需 date + close)。 */
+export interface ClosePoint {
+  date: string;
+  close: number;
+}
+
 export interface BuildOptions {
   monowaves: Monowave[];
-  /** State 1 用 flat_fib_zones(去重聯集),State 2 用 selected scenario.expected_fib_zones。 */
+  /** State 1 用 live-only 聯集(collectLiveFibZones),State 2 用 selected scenario.expected_fib_zones。 */
   fibZones: FibZone[];
+  /** 後復權收盤序列(/stocks/{id}/ohlc)— 淡色時間背景線;未給 → 不畫。 */
+  closeSeries?: ClosePoint[];
   /** State 2 用 — 選中 scenario(若有)。 */
   selectedScenario?: Scenario | null;
   /** as_of(垂直虛線)。 */
@@ -122,6 +130,22 @@ const DEFAULT_LAYERS = { fib: true, waveMarkers: true, track2: true, invalidatio
 export function buildTraces(opts: BuildOptions): PlotlyTrace[] {
   const layers = opts.layers ?? DEFAULT_LAYERS;
   const traces: PlotlyTrace[] = [];
+
+  // 0. 收盤背景線(最底層)— 真實日線時間密度,給 monowave 折線「時間軸感」。
+  //    與引擎同源(後復權),價位才對齊 monowave/fib;hover 交給 monowave 線。
+  if (opts.closeSeries && opts.closeSeries.length > 0) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines',
+      x: opts.closeSeries.map((p) => p.date),
+      y: opts.closeSeries.map((p) => p.close),
+      name: '收盤(後復權)',
+      line: { color: '#8aa0bf', width: 1 },
+      opacity: 0.35,
+      hoverinfo: 'skip',
+      showlegend: false
+    });
+  }
 
   // 1. 主價格線 — 從 monowave_series 的 (start_date → end_date) 串接 close 推估。
   //    對齊 L7:wave 不帶 y 座標,price 來自 monowave_series。

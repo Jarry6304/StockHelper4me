@@ -6,8 +6,10 @@
     buildTradTraces,
     type TradPivot
   } from '$lib/wave/traditional-build';
+  import type { ClosePoint } from '$lib/wave/plotly-build';
 
   export let pivots: TradPivot[];
+  export let closeSeries: ClosePoint[] | null = null;
   export let selectedScenario: TraditionalScenario | null = null;
   export let asOf: string | null = null;
   export let layers: { fib: boolean; waveMarkers: boolean; invalidation: boolean } = {
@@ -38,6 +40,7 @@
     const plotly = await loadPlotly();
     const opts = {
       pivots,
+      closeSeries: closeSeries ?? undefined,
       selectedScenario,
       asOf: asOf ?? undefined,
       layers,
@@ -75,7 +78,7 @@
   });
 
   $: if (mounted && container) void render();
-  $: void [pivots, selectedScenario, asOf, layers, xRangeDaysBack, xRangeDaysForward, forceAutorange, explicitRange];
+  $: void [pivots, closeSeries, selectedScenario, asOf, layers, xRangeDaysBack, xRangeDaysForward, forceAutorange, explicitRange];
 </script>
 
 <div bind:this={container} class="chart" style="height: {height}px"></div>

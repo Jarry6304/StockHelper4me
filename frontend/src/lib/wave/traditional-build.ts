@@ -11,7 +11,13 @@
 
 import type { FibZone } from '$contracts/neely/FibZone';
 import type { TraditionalForestOutput, TraditionalScenario } from '$lib/api/traditional';
-import type { PlotlyAnnotation, PlotlyLayout, PlotlyShape, PlotlyTrace } from './plotly-build';
+import type {
+  ClosePoint,
+  PlotlyAnnotation,
+  PlotlyLayout,
+  PlotlyShape,
+  PlotlyTrace
+} from './plotly-build';
 
 export interface TradPivot {
   date: string;
@@ -47,6 +53,8 @@ export interface TradBuildOptions {
   forceAutorange?: boolean;
   /** user 點了顯式範圍 preset → 純 asOf 錨定窗,不做形態擴窗/錨定。 */
   explicitRange?: boolean;
+  /** 後復權收盤序列 — 淡色時間背景線(pivot 折線太稀疏,單獨看沒有時間感)。 */
+  closeSeries?: ClosePoint[];
 }
 
 const COL_BG = '#0d1626';
@@ -139,6 +147,21 @@ export function flattenTradWaveTree(
 export function buildTradTraces(opts: TradBuildOptions): PlotlyTrace[] {
   const layers = opts.layers ?? DEFAULT_LAYERS;
   const traces: PlotlyTrace[] = [];
+
+  // 收盤背景線(最底層)— 同 Neely 圖,真實日線密度給 pivot zigzag 時間軸感
+  if (opts.closeSeries && opts.closeSeries.length > 0) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines',
+      x: opts.closeSeries.map((p) => p.date),
+      y: opts.closeSeries.map((p) => p.close),
+      name: '收盤(後復權)',
+      line: { color: '#8aa0bf', width: 1 },
+      opacity: 0.35,
+      hoverinfo: 'skip',
+      showlegend: false
+    });
+  }
 
   // 主價格線 — 由 pivot_series 連線(High/Low 交替形成 ZigZag-like 路徑)
   if (opts.pivots.length > 0) {

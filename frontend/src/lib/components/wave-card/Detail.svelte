@@ -9,6 +9,7 @@
     pickDefaultScenario,
     sortScenarios
   } from '$lib/wave/power';
+  import type { ClosePoint } from '$lib/wave/plotly-build';
   import PlotlyWaveChart from './PlotlyWaveChart.svelte';
   import ScenarioList from './ScenarioList.svelte';
   import InvalidationBar from './InvalidationBar.svelte';
@@ -16,6 +17,7 @@
   export let monowaves: Monowave[];
   export let scenarios: Scenario[];
   export let asOf: string | null = null;
+  export let closeSeries: ClosePoint[] | null = null;
   export let selectedScenarioId: string | null = null;
   export let resonance: ResonanceFusion | null = null;
   export let layers: {
@@ -81,6 +83,7 @@
     <PlotlyWaveChart
       {monowaves}
       {fibZones}
+      {closeSeries}
       {selectedScenario}
       {asOf}
       invalidationTriggers={layers.invalidation ? invalidationTriggers : null}

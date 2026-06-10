@@ -9,6 +9,7 @@
     pickDefaultScenario,
     scenarioRecencyDays
   } from '$lib/wave/power';
+  import type { ClosePoint } from '$lib/wave/plotly-build';
   import PowerBadge from './PowerBadge.svelte';
   import CountsBadge from './CountsBadge.svelte';
   import PlotlyWaveChart from './PlotlyWaveChart.svelte';
@@ -16,6 +17,7 @@
   export let monowaves: Monowave[];
   export let scenarios: Scenario[];
   export let asOf: string | null = null;
+  export let closeSeries: ClosePoint[] | null = null;
 
   const dispatch = createEventDispatcher<{ expand: void }>();
 
@@ -45,6 +47,7 @@
   <PlotlyWaveChart
     {monowaves}
     fibZones={liveFibZones}
+    {closeSeries}
     selectedScenario={topScenario}
     {asOf}
     height={196}

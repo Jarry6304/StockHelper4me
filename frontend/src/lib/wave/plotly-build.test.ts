@@ -39,6 +39,26 @@ describe('buildTraces', () => {
     expect(traces[0].x).toEqual([]);
     expect(traces[0].y).toEqual([]);
   });
+
+  it('closeSeries 給定 → 最底層多一條淡色收盤背景線(hover skip)', () => {
+    const mws = [mkMonowave('2026-01-01', '2026-01-05', 100, 110, 'Up')];
+    const closeSeries = [
+      { date: '2026-01-01', close: 99.5 },
+      { date: '2026-01-02', close: 101.2 },
+      { date: '2026-01-03', close: 103.8 }
+    ];
+    const traces = buildTraces({ monowaves: mws, fibZones: [], closeSeries });
+    expect(traces[0].name).toBe('收盤(後復權)');
+    expect(traces[0].y).toEqual([99.5, 101.2, 103.8]);
+    expect(traces[0].hoverinfo).toBe('skip'); // hover 交給 monowave 線
+    expect(traces[1].y).toEqual([100, 110]); // monowave 線維持其後
+  });
+
+  it('closeSeries 空陣列 → 不畫背景線(trace 數不變)', () => {
+    const traces = buildTraces({ monowaves: [], fibZones: [], closeSeries: [] });
+    expect(traces).toHaveLength(1);
+    expect(traces[0].name).toBe('價格');
+  });
 });
 
 describe('buildShapes', () => {

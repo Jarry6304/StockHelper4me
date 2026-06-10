@@ -59,6 +59,7 @@
       neely={data.waves?.neely ?? null}
       traditional={data.waves?.traditional ?? null}
       resonance={data.resonance}
+      closeSeries={data.ohlc}
       on:timeframe-change={handleTimeframeChange}
       on:state-change={handleStateChange}
     />
