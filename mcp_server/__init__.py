@@ -1,8 +1,6 @@
 """StockHelper4me MCP Server.
 
-對齊 plan `/root/.claude/plans/hashed-foraging-pixel.md`(MCP v2 重構)。
-
-把 src/agg/ aggregation layer + dashboards/charts/ plotly figure builders 包成
+把 src/fusion/ aggregation layer + dashboards/charts/ plotly figure builders 包成
 MCP(Model Context Protocol)server,讓 Claude Desktop 對話內直接 call tools
 查資料 + 看套圖。
 

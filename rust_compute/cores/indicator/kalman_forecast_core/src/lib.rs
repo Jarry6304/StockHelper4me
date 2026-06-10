@@ -2,8 +2,7 @@
 //
 // Local Linear Trend (LLT) Kalman filter for interval forecasting.
 //
-// Spec source: user v0.3 interval-forecast spine spec(2026-05-23)+
-// plan /root/.claude/plans/stockhelper4me-serene-thacker.md phase 3.
+// Spec source: user v0.3 interval-forecast spine spec(2026-05-23)phase 3.
 //
 // Critical rules (v0.3 spec §「強制規則」):
 //   - filtered state ONLY(x_t|t),禁用 RTS smoother(t 後資訊不可用)

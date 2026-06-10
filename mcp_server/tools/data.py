@@ -1,18 +1,11 @@
-"""Data tools — 回 JSON(text content),包 src/agg/ aggregation layer。
+"""Tool surface — public MCP tools 的入口層(回 JSON text content)。
 
-對齊 plan Phase D §Tool surface(Data tools)+ MCP v2 重構 plan
-(`/root/.claude/plans/hashed-foraging-pixel.md`)。
+註冊清單與分類見 mcp_server/server.py 的 mcp.tool() 區塊(單一真相源);
+本檔不維護工具數字與清單副本。
 
-**Public tools(LLM 預設曝露,LLM-friendly 高度封裝)**:
-- `market_context`:大盤環境綜合判讀(Tool 3,plan §Tool 3)
-- (Tool 1 `neely_forecast` 留 Step 3)
-- (Tool 2 `stock_health` 留 Step 2)
-
-**Hidden tools(向下兼容,LLM 預設不可見;debug / direct script 用)**:
-- `as_of_snapshot`:raw AsOfSnapshot(可能爆 token,LLM 用 public tools 取代)
-- `find_facts`:跨股搜尋當日 fact
-- `list_cores`:23 cores 清單
-- `fetch_ohlc`:price_daily_fwd OHLC 序列
+Hidden tools(預設不註冊;debug / script 直呼用):
+as_of_snapshot / find_facts / list_cores / fetch_ohlc 等,
+與 v3.31 整併進 stock_snapshot 的 6 個元件函式。
 """
 
 from __future__ import annotations
@@ -97,7 +90,7 @@ def as_of_snapshot(
         date: as_of 查詢日 ISO 字串(例 "2026-05-13")
         lookback_days: facts 期間天數。預設 90
         include_market: 是否並排 market-level facts。預設 True
-        cores: 限制 source_core(例 ["macd_core", "rsi_core"])。None=全 23 cores
+        cores: 限制 source_core(例 ["macd_core", "rsi_core"])。None=全部 cores(清單以 list_cores() 回傳為準)
         timeframes: 限制 indicator timeframe(例 ["daily", "weekly"])。None=全部
 
     Returns:
@@ -145,7 +138,7 @@ def find_facts(
     return [r.to_dict() for r in rows]
 
 
-# 23 cores 對齊 rust_compute/cores/ 實際 Cargo crates。
+# 對齊 rust_compute/cores/ 實際 crates;新增 core 須同步本清單(單一真相源 = Cargo workspace)。
 # kind:Wave / Indicator / Chip / Fundamental / Environment(對齊
 # cores_overview.md §8)。
 _CORES: list[dict[str, str]] = [

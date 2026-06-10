@@ -1,6 +1,6 @@
 """Aggregation Layer Streamlit dashboard(Phase C)。
 
-對齊 m3Spec/aggregation_layer.md r1 + plan /root/.claude/plans/squishy-foraging-stroustrup.md。
+對齊 m3Spec/aggregation_layer.md r1。
 
 6 tabs:
 1. 📈 K-line  ── candlestick + bollinger + MA + neely zigzag + 6 indicator subplots + facts markers

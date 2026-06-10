@@ -1,8 +1,7 @@
 """FastMCP server app + tool registration。
 
-對齊 plan Phase D + MCP v3 重構 + v3.22 B-5 + v3.31 consolidation
-(`/root/.claude/plans/hashed-foraging-pixel.md`)+ v1.0 雙軌共振決策層
-(m3Spec/dual_track_resonance.md)。
+工具整併歷程見 docs/changelog/(v3.22 B-5 / v3.31 consolidation / v3.32 /
+v4.25-26 / PR #123)+ 雙軌共振決策層規格 m3Spec/dual_track_resonance.md。
 
 **Public toolkit(v4.25:11 + 1 dual_track + 1 wave_impulse + 1 traditional = 14 tools)**:
 - `neely_forecast`:Neely NEoWave 預測(Tool 1)
@@ -112,7 +111,7 @@ mcp = FastMCP(
 #
 # 設計拍版(2026-05-17 v3.32):v3.31 consolidation 砍到 4 個 + v3.32 加 4 個
 # cross-stock factor toolkit screens(對齊提案 v1.1 §六)。
-# 對齊 plan /root/.claude/plans/hashed-foraging-pixel.md v3.32。
+# 工具註冊歷程見 docs/changelog/(v3.31 整併 / v3.32 / v4.25-26 / PR #123)。
 mcp.tool(_data_tools.neely_forecast)              # 預測 1:Neely NEoWave
 mcp.tool(_data_tools.kalman_trend)                # 預測 2:Kalman 1-D regime
 mcp.tool(_data_tools.magic_formula_screen)        # 跨股預測(Greenblatt 2005)

@@ -1,7 +1,6 @@
 """Phase 2 — promote report_date to real Bronze columns
 
-對齊 user v0.3 區間預測 spec(本 session)+ plan 文件 phase 2。
-完整規劃見 /root/.claude/plans/stockhelper4me-serene-thacker.md。
+對齊 user v0.3 區間預測 spec(本 session)phase 2。
 
 3 張 fundamental Bronze 表加 `report_date DATE` 欄,讓 PIT 層(src/pit/
 fundamental.py)能準確判斷「as-of-T 時這筆資料是否已公布」,而不必走

@@ -110,9 +110,9 @@ macOS / Linux:
 ## Tools(9 個 — 3 public + 6 render)
 
 > **v2 重構(2026-05-14)**:從 v1 的 4 data + 6 render = 10 tools,改為 **3 個高度
-> 封裝 public toolkit + 6 render tools = 9 tools**。對齊 plan
-> `/root/.claude/plans/hashed-foraging-pixel.md`:LLM 只看 3 個 tool,內部處理時間
+> 封裝 public toolkit + 6 render tools = 9 tools**:LLM 只看 3 個 tool,內部處理時間
 > 區間 / 數字 / 排序,輸出只回結論(每 tool ≤ 5K tokens,3-tool chain ≤ 15K tokens)。
+> 現行註冊清單以 `mcp_server/server.py` 的 mcp.tool() 區塊為單一真相源。
 >
 > 舊 4 tools(`as_of_snapshot` / `find_facts` / `list_cores` / `fetch_ohlc`)
 > **不再對 LLM 暴露**,但 function 留在 `mcp_server.tools.data` 內供 dashboard /
@@ -235,11 +235,11 @@ python -m mcp_server
 
 ## 對齊參考
 
-- 規格:plan `/root/.claude/plans/squishy-foraging-stroustrup.md` Phase D
-- Aggregation layer:`m3Spec/aggregation_layer.md` r1 + `src/agg/`
+- 規格:`m3Spec/aggregation_layer.md` Phase D
+- Aggregation layer:`m3Spec/aggregation_layer.md` r1 + `src/fusion/`
 - Plotly figure builders:`dashboards/charts/`(Phase C 落地)
 - Streamlit demo:`dashboards/aggregation.py`(同套 charts/ 的 web UI)
-- **v3.5 R5 refactor**(plan `/root/.claude/plans/hashed-foraging-pixel.md` §R5):
+- **v3.5 R5 refactor**(歷程見 docs/changelog/ §v3.5 R5):
   - 連線 single entry = `agg._db.get_connection()`(DELETE `mcp_server/_conn.py`)
   - cross-stock helper = `agg._db.fetch_cross_stock_ranked()`(給 `_magic_formula` 與
     未來 cross-stock cores 共用,對齊 cross_cores Layer 2.5 設計)
