@@ -10,12 +10,15 @@ helper(對齊 fusion_layer §5「reuses existing mcp_server.compute_* helpers」
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
 from fusion._shared import fact_to_event
 from fusion.raw._db import fetch_facts, get_connection
+
+_logger = logging.getLogger(__name__)
 
 # technical_summary 摘要級覆蓋的 indicator cores
 _TECHNICAL_CORES = ["macd_core", "rsi_core", "kd_core", "ma_core", "bollinger_core"]
@@ -42,7 +45,8 @@ def stock_snapshot(
     def _safe(label: str, fn):
         try:
             return fn()
-        except Exception as e:  # noqa: BLE001 — graceful degradation,對齊既有 stock_snapshot
+        except Exception as e:  # noqa: BLE001 — graceful degradation;但留 server-side traceback
+            _logger.exception("stock_snapshot section %s failed", label)
             return {"error": f"{type(e).__name__}: {e}", "section": label}
 
     # ── 6 既有 section:重用 mcp_server compute_* helper ──────────────────
@@ -63,7 +67,10 @@ def stock_snapshot(
     def _market_context():
         # v4.32 Golden L3:先讀物化 climate_fusion,缺 / 失敗 → compute_market_context fallback。
         # isinstance(dict) 守門 + try/except → 連線失敗或 mock conn 都安全降級為 compute。
-        from fusion.materialize.read import fetch_fusion_doc
+        from fusion.materialize.read import (
+            extract_snapshot_with_provenance,
+            fetch_fusion_doc,
+        )
         try:
             _c = get_connection(database_url)
             try:
@@ -73,8 +80,8 @@ def stock_snapshot(
                 )
             finally:
                 _c.close()
-            _snap = _row.get("snapshot") if hasattr(_row, "get") else None
-            if isinstance(_snap, dict):
+            _snap = extract_snapshot_with_provenance(_row, as_of)
+            if _snap is not None:
                 return _snap
         except Exception:  # noqa: BLE001
             pass
@@ -92,6 +99,7 @@ def stock_snapshot(
         try:
             conn = get_connection(database_url)
         except Exception as e:  # noqa: BLE001 — graceful degradation
+            _logger.exception("stock_snapshot db_connection failed")
             conn = None
             conn_err = {"error": f"{type(e).__name__}: {e}", "section": "db_connection"}
     if conn is not None:

@@ -154,6 +154,25 @@ class TestStockSnapshot:
             assert "error" not in result[section], \
                 f"{section} should not have errored"
 
+    def test_failed_section_logs_traceback(self, caplog):
+        """某 section 失敗時 server 端留 traceback(不再靜默吞錯),回應 shape 不變。"""
+        import logging
+
+        patches = _patch_all_helpers(loan=None)   # loan_collateral raise RuntimeError
+        for p in patches: p.start()
+        try:
+            with caplog.at_level(logging.ERROR):
+                result = data_tools.stock_snapshot("2330", "2026-05-15")
+        finally:
+            for p in reversed(patches): p.stop()
+
+        # 回應行為不變:該 section 仍是 error dict
+        assert "error" in result["loan_collateral"]
+        # server 端有 traceback(programming bug 不再與「無資料」無法區分)
+        recs = [r for r in caplog.records if "loan_collateral" in r.getMessage()]
+        assert recs, "section failure 未留 server log"
+        assert any(r.exc_info for r in recs)
+
     def test_multiple_failures_graceful(self):
         """3 個 helper 同時失敗 → 各自獨立 error,其他 3 個 ok。"""
         patches = _patch_all_helpers(health=None, market=None, commodity=None)

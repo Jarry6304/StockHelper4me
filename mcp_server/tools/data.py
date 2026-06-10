@@ -17,8 +17,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date as Date
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 
 def _parse_date(value: str | Date) -> Date:
@@ -39,6 +42,16 @@ _MAX_TOP_N = 500
 _MAX_LOOKBACK_DAYS = 365
 # 重工具讀連線的 runaway 安全網(毫秒);clamp 已釘死成本,此為非預期慢查詢 backstop
 _READ_TIMEOUT_MS = 30_000
+
+
+def _section_error(label: str, exc: Exception) -> dict[str, Any]:
+    """Consolidated 工具 section graceful degradation 的統一錯誤回值 + server log。
+
+    回應行為不變(仍回 {"error","section"},LLM 看得到型別+訊息);但 server 端
+    `logger.exception` 留完整 traceback,讓 programming bug(AttributeError 等)
+    不再與「該股無資料」無法區分。"""
+    _logger.exception("consolidated section %s failed", label)
+    return {"error": f"{type(exc).__name__}: {exc}", "section": label}
 
 
 # ────────────────────────────────────────────────────────────
@@ -364,7 +377,10 @@ def _read_materialized_snapshot(
     `isinstance(snapshot, dict)` 守門確保只回真實物化 dict(避免 mock conn 的 truthy 回值
     被誤當成物化結果;對齊既有測試僅 mock compute path 的行為)。
     """
-    from fusion.materialize.read import fetch_fusion_doc
+    from fusion.materialize.read import (
+        extract_snapshot_with_provenance,
+        fetch_fusion_doc,
+    )
     from fusion.raw._db import get_connection
 
     try:
@@ -378,8 +394,9 @@ def _read_materialized_snapshot(
             conn.close()
     except Exception:  # noqa: BLE001 — 連線 / 查詢失敗 → compute fallback
         return None
-    snap = row.get("snapshot") if hasattr(row, "get") else None
-    return snap if isinstance(snap, dict) else None
+    # 物化命中 → 附 _provenance(snapshot_date / staleness_days)揭露新鮮度;
+    # snapshot 非 dict / 無 row → None → caller 走 compute fallback。
+    return extract_snapshot_with_provenance(row, as_of)
 
 
 def market_context(
@@ -1023,7 +1040,7 @@ def market_overview(
         from fusion.market_dashboard import market_dashboard as _md
         out["dashboard"] = _md(as_of, database_url=database_url)
     except Exception as e:  # noqa: BLE001
-        out["dashboard"] = {"error": f"{type(e).__name__}: {e}", "section": "dashboard"}
+        out["dashboard"] = _section_error("dashboard", e)
 
     try:
         from fusion.market_events import market_events as _me
@@ -1031,7 +1048,7 @@ def market_overview(
         out["events"] = _me(start, as_of, severity_min=severity_min,
                             database_url=database_url)
     except Exception as e:  # noqa: BLE001
-        out["events"] = {"error": f"{type(e).__name__}: {e}", "section": "events"}
+        out["events"] = _section_error("events", e)
 
     return out
 
@@ -1072,13 +1089,13 @@ def stock_levels(
             from fusion.key_levels import key_levels as _kl
             out["key_levels"] = _kl(stock_id, as_of, database_url=database_url)
     except Exception as e:  # noqa: BLE001
-        out["key_levels"] = {"error": f"{type(e).__name__}: {e}", "section": "key_levels"}
+        out["key_levels"] = _section_error("key_levels", e)
 
     try:
         from fusion.pattern_scan import pattern_scan as _ps
         out["patterns"] = _ps(stock_id, as_of, database_url=database_url)
     except Exception as e:  # noqa: BLE001
-        out["patterns"] = {"error": f"{type(e).__name__}: {e}", "section": "patterns"}
+        out["patterns"] = _section_error("patterns", e)
 
     if entry_price is None:
         out["stop_loss"] = None
@@ -1091,7 +1108,7 @@ def stock_levels(
                 reward_risk_ratio=reward_risk_ratio, database_url=database_url,
             )
         except Exception as e:  # noqa: BLE001
-            out["stop_loss"] = {"error": f"{type(e).__name__}: {e}", "section": "stop_loss"}
+            out["stop_loss"] = _section_error("stop_loss", e)
 
     return out
 

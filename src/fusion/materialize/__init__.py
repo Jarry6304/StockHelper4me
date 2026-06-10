@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from fusion.materialize.climate_stage import run_climate_materialize
 from fusion.materialize.fusion_stage import run_fusion_materialize
-from fusion.materialize.read import fetch_fusion_doc
+from fusion.materialize.read import extract_snapshot_with_provenance, fetch_fusion_doc
 
 __all__ = [
     "run_fusion_materialize",
     "run_climate_materialize",
     "fetch_fusion_doc",
+    "extract_snapshot_with_provenance",
 ]

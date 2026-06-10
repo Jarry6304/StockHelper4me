@@ -41,3 +41,46 @@ def fetch_fusion_doc(
     with conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchone()
+
+
+def extract_snapshot_with_provenance(
+    row: Any, as_of: date,
+) -> dict[str, Any] | None:
+    """從 `fetch_fusion_doc` 的 row 取 snapshot dict,附上 `_provenance` 新鮮度揭露。
+
+    物化讀回的是「snapshot_date <= as_of 的最新一筆」,該 snapshot_date 可能落後
+    as_of(物化批次未跑到那麼新)。caller 過去只取 snapshot dict、丟掉 snapshot_date,
+    LLM 無從得知資料其實落後 → 與 compute fallback(精確 as_of 現算)混在一起無法區分。
+
+    本 helper 統一把 snapshot_date / staleness_days 揭露進 `_provenance`(對齊既有
+    indicator_staleness / scenario_staleness 慣例:揭露新鮮度,讓 LLM 自行判斷)。
+    物化路徑永遠帶 `_provenance.source="materialized"`;compute fallback 不帶 →
+    「有無 _provenance」即可區分資料來源。
+
+    Returns:
+        snapshot dict(含 `_provenance`)或 None(無 row / snapshot 非 dict → caller
+        走 compute fallback)。不 mutate 原 row(`{**snap, ...}`)。
+    """
+    snap = row.get("snapshot") if hasattr(row, "get") else None
+    if not isinstance(snap, dict):
+        return None
+    sd = row.get("snapshot_date") if hasattr(row, "get") else None
+    staleness: int | None = None
+    if sd is not None:
+        try:
+            staleness = (as_of - sd).days
+        except Exception:  # noqa: BLE001 — sd 型別異常不擋資料,只 provenance 缺值
+            staleness = None
+    return {
+        **snap,
+        "_provenance": {
+            "source": "materialized",
+            "snapshot_date": (
+                sd.isoformat() if hasattr(sd, "isoformat")
+                else (str(sd) if sd is not None else None)
+            ),
+            "as_of": as_of.isoformat(),
+            "staleness_days": staleness,
+            "is_stale": bool(staleness is not None and staleness > 0),
+        },
+    }
