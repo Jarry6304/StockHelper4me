@@ -188,7 +188,7 @@
         {selectedScenario}
         {asOf}
         {layers}
-        height={300}
+        height={560}
         xRangeDaysBack={typeof rangePreset === 'number' ? rangePreset : 540}
         forceAutorange={rangePreset === 'auto'}
         explicitRange={typeof rangePreset === 'number'}

@@ -89,7 +89,7 @@
       invalidationTriggers={layers.invalidation ? invalidationTriggers : null}
       {track2Bands}
       {layers}
-      height={270}
+      height={520}
       xRangeDaysBack={540}
       xRangeDaysForward={120}
     />

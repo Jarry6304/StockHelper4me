@@ -93,10 +93,13 @@ export function computeTradXRange(opts: TradBuildOptions): [string, string] | nu
   // (老形態 + asOf 同框會把 x 軸攤成 2+ 年、刻度壓扁 — user 回報「沒有時間軸」主因)
   if (!Number.isNaN(we) && we < fromMs) {
     const fromAnchor = !Number.isNaN(ws) ? ws : we;
-    return [
-      isoDate(new Date(fromAnchor - 30 * 86400000)),
-      isoDate(new Date(we + 90 * 86400000))
-    ];
+    let f = fromAnchor - 30 * 86400000;
+    const t2 = we + 90 * 86400000;
+    // corrective 形態常只跨數週 → 錨定窗會剩 3-4 個月(user 回報 x 軸太短);
+    // 保底 12 個月跨度,向過去補滿(形態維持在窗的右半)
+    const MIN_SPAN = 365 * 86400000;
+    if (t2 - f < MIN_SPAN) f = t2 - MIN_SPAN;
+    return [isoDate(new Date(f)), isoDate(new Date(t2))];
   }
 
   // 部分重疊:維持擴窗,把窗口拉大包含整個 wave_tree

@@ -396,8 +396,23 @@ describe('computeTradXRange — 形態錨定 / 擴窗 / preset', () => {
         wave_tree: { start: '2023-03-24', end: '2023-08-24' } as TradWaveNode
       })
     });
-    expect(range?.[0]).toBe('2023-02-22'); // start − 30d
     expect(range?.[1]).toBe('2023-11-22'); // end + 90d(不再硬拉到 asOf+90 攤成 3 年)
+    // 形態僅跨 5 個月 → 保底 12 個月跨度(向過去補滿),x 軸不會太短
+    expect(range?.[0]).toBe('2022-11-22');
+  });
+
+  it('stale 長形態(跨度 > 12 個月)→ 維持 start−30d,不再補', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 365,
+      xRangeDaysForward: 90,
+      selectedScenario: mkTradScenario({
+        wave_tree: { start: '2022-01-10', end: '2023-08-24' } as TradWaveNode
+      })
+    });
+    expect(range?.[0]).toBe('2021-12-11'); // start − 30d
+    expect(range?.[1]).toBe('2023-11-22'); // end + 90d
   });
 
   it('部分重疊(start 在窗外、end 在窗內)→ 維持擴窗包含整個 wave_tree', () => {

@@ -50,7 +50,7 @@
     {closeSeries}
     selectedScenario={topScenario}
     {asOf}
-    height={196}
+    height={380}
   />
 </div>
 

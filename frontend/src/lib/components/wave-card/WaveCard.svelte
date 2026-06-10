@@ -179,7 +179,7 @@
       0 18px 40px -24px #000,
       inset 0 1px 0 #ffffff08;
     overflow: hidden;
-    max-width: 460px;
+    max-width: 920px;
     transition: max-width 0.2s ease;
   }
 
