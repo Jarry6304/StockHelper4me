@@ -129,6 +129,9 @@ class WaveSummaryRow(BaseModel):
     resonance: str
     # neely snapshot 落後 as_of 天數(None = insufficient)
     staleness_days: int | None
+    # picked scenario 的 wave_tree.end 距 as_of 天數(形態年齡;>365 = V1 stale 視覺門檻;
+    # None = insufficient / 無法解析)
+    scenario_age_days: int | None
 
 
 class WavesSummary(BaseModel):

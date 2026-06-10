@@ -1,7 +1,7 @@
 """V2 跨股表 WAVE 欄批次摘要 — 伺服端抽取(對外只回結論,不回 forest)。
 
 對齊 v2-wave 拍版 (a)(2026-06-11,docs/changelog/v2-wave-endpoint.md):
-讀既有兩個資料源,每檔抽 7 個欄位,30 檔 2 條 batch SQL:
+讀既有兩個資料源,每檔抽 8 個欄位,30 檔 2 條 batch SQL:
 - `structural_snapshots` neely_core:top scenario(label / certainty / direction)
   + scenario_count + monowave 尾段 sparkline
 - `structural_snapshots` resonance_fusion(Golden L3 物化):findings 歸約成
@@ -237,6 +237,7 @@ def _insufficient_row(stock_id: str) -> dict[str, Any]:
         "sparkline": [],
         "resonance": "none",
         "staleness_days": None,
+        "scenario_age_days": None,
     }
 
 
@@ -272,6 +273,11 @@ def digest_from_docs(
     sd = (neely_row or {}).get("snapshot_date")
     staleness = (as_of - sd).days if isinstance(sd, date) else None
 
+    # 形態年齡:picked scenario 的 wave_tree.end 距 as_of 天數。與 staleness 是兩回事 —
+    # staleness = snapshot 新鮮度,age = 形態結尾距今(V1 stale 視覺門檻 >365d 用它)。
+    age = _recency_days(top, as_of)
+    age_days = int(age) if age != float("inf") else None
+
     reso = (reso_row or {}).get("snapshot")
     return {
         "stock_id": stock_id,
@@ -283,6 +289,7 @@ def digest_from_docs(
         "sparkline": _sparkline(monowaves),
         "resonance": _resonance_level(reso if isinstance(reso, dict) else None),
         "staleness_days": staleness,
+        "scenario_age_days": age_days,
     }
 
 

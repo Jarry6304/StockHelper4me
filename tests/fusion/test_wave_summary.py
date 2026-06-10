@@ -94,7 +94,15 @@ class TestDigestFromDocs:
             "sparkline": [0.0, 1.0, 0.5],
             "resonance": "basic",
             "staleness_days": 0,
+            "scenario_age_days": 10,  # wave_tree.end 2026-06-01 → as_of 2026-06-11
         }
+
+    def test_scenario_age_none_when_end_unparseable(self):
+        sc = _scenario()
+        sc["wave_tree"] = {}  # 無 end → recency inf → age None
+        d = digest_from_docs("2330", _neely_row([sc]), None, AS_OF)
+        assert d["scenario_age_days"] is None
+        assert d["insufficient"] is False  # 缺 end 不降級,只是 age 缺值
 
     def test_recency_tier_beats_power(self):
         """近期 Neutral 勝過一年前 StrongBullish(鏡射 V1 fb9e166 老化形態修正)。"""
@@ -157,6 +165,7 @@ class TestDigestFromDocs:
         assert d["insufficient"] is True
         assert d["label"] == "" and d["scenario_count"] == 0
         assert d["sparkline"] == [] and d["resonance"] == "none"
+        assert d["scenario_age_days"] is None
 
 
 class TestCompactLabel:

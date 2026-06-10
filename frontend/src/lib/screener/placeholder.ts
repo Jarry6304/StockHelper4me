@@ -31,6 +31,8 @@ export interface WaveDigest {
   /** ≤10 個 sparkline 樣本點(歸一化 0..1;後端 monowave 尾段)。 */
   sparkline: number[];
   resonance: ResonanceLevel;
+  /** top scenario 結尾距 as_of 天數(>365 = stale,鏡射 V1 視覺;null = 未知/fake)。 */
+  scenarioAgeDays: number | null;
   /** 是否為 placeholder fake(真實端點資料為 false)。 */
   isPlaceholder: boolean;
 }
@@ -56,6 +58,7 @@ export function insufficientDigest(stockId: string): WaveDigest {
     certainty: 'Possible',
     sparkline: [],
     resonance: 'none',
+    scenarioAgeDays: null,
     isPlaceholder: false
   };
 }
@@ -72,6 +75,7 @@ export function digestFromRow(row: WaveSummaryRow): WaveDigest {
     certainty: asEnum(row.certainty, CERTAINTIES, 'Possible'),
     sparkline: row.sparkline,
     resonance: asEnum(row.resonance, RESONANCES, 'none'),
+    scenarioAgeDays: typeof row.scenario_age_days === 'number' ? row.scenario_age_days : null,
     isPlaceholder: false
   };
 }
@@ -220,6 +224,7 @@ export function getWaveDigest(stockId: string): WaveDigest {
     certainty,
     sparkline,
     resonance,
+    scenarioAgeDays: null, // fake 無年齡語意(且不動 rng 消耗序,維持 deterministic 輸出)
     isPlaceholder: true
   };
 }
