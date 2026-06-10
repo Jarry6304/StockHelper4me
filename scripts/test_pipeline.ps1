@@ -244,18 +244,21 @@ Invoke-Phase 2 "Schema health(alembic head / table row counts)" {
         return
     }
 
-    Write-Step "alembic head"
-    $expectedHead = "f2g3h4i5j6k7"  # v4.25 雙軌共振 head(forecast_log.internal_only)
-    # alembic current 輸出含 2 行 INFO + 1 行 "<head> (head)";
-    # 用 Select-String 對整個輸出 grep,避免 -notmatch 對 string array 的奇怪行為
-    $alembicOut = alembic current 2>&1 | Out-String
-    if ($alembicOut -match [regex]::Escape($expectedHead)) {
-        Write-Pass "alembic head = $expectedHead"
+    Write-Step "alembic head(DB current vs code heads,動態比對)"
+    # 不寫死 head 字串 — 會隨 migration 演進漂移(2026-06-10 教訓:停在 v4.25
+    # 的舊值對正確 DB 誤報 WARN)。code head 從 `alembic heads` 即時解析。
+    $headsOut   = alembic heads 2>&1 | Out-String
+    $currentOut = alembic current 2>&1 | Out-String
+    $codeHead = ([regex]::Match($headsOut, '(?m)^([0-9a-z]+)\s+\(head\)')).Groups[1].Value
+    if (-not $codeHead) {
+        Write-Warn "無法從 alembic heads 解析 code head — output: $headsOut"
+    } elseif ($currentOut -match [regex]::Escape($codeHead)) {
+        Write-Pass "alembic head = $codeHead(DB 與 code 一致)"
     } else {
-        Write-Warn "alembic head 非預期 ($expectedHead) — output: $alembicOut"
+        Write-Warn "DB current 落後 code head ($codeHead) — 跑 alembic upgrade head;output: $currentOut"
     }
 
-    Write-Step "M3 表 row counts + 11 個 cross_cores tables 存在"
+    Write-Step "M3 表 row counts + 12 個 cross_cores tables 存在"
     # 改用外部 SQL file 避開 PowerShell here-string parser 問題(2026-05-19 user feedback)
     $schemaHealthSql = "$RepoRoot\scripts\_schema_health.sql"
     if (Test-Path $schemaHealthSql) {

@@ -98,12 +98,14 @@ def main() -> int:
     p = argparse.ArgumentParser(description="v3.31 MCP Kalman + Neely verify")
     p.add_argument("--stocks", default="2330",
                    help="逗號分隔股票清單(預設 2330)")
-    p.add_argument("--as-of", default="2026-05-15",
-                   help="查詢日 ISO 字串(預設 2026-05-15)")
+    p.add_argument("--as-of", default=None,
+                   help="查詢日 ISO 字串(預設今天 — 健檢查的是現況;"
+                        "寫死歷史日期會隨 params_hash 重算清舊 rows 而誤報 FAIL)")
     args = p.parse_args()
 
     stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
-    as_of = args.as_of
+    from datetime import date as _date
+    as_of = args.as_of or _date.today().isoformat()
 
     # Status table
     header = f"{'Stock':<8}{'Kalman':<10}{'Neely':<10}Notes"

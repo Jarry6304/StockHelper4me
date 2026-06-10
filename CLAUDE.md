@@ -240,12 +240,12 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 
 ## 下次 session 優先序
 
-1. **架構整備 P0-P2 production verify**:7 項已全收尾(2026-06-10,見
-   `docs/changelog/architecture-p0-p2.md`);DB-bound 驗收留本機 —
-   `verify_mcp_toolkit_v4_29.py` 退碼 0 / 任意 cwd 四入口連線(P2-2)/
-   `tw_cores run-all --stocks 2330` 輸出 row-identical(P1-1)。
-2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)② V2 WAVE 欄真實端點
+1. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)② V2 WAVE 欄真實端點
    拍版 (a)/(b)/(c) — 詳見 `docs/changelog/process-logs.md` §待辦 backlog。
-3. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
-4. **wall time / PG contention 觀察**:run-all 全市場 ~37 min(tpex universe 後);爆了先跑
-   `scripts/maintain_facts_stats.sql` 再用 `diagnose_slow_tw_cores.sql` 取證。
+2. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
+3. **wall time / PG contention 觀察**:run-all 全市場 ~37 min(tpex universe 後);爆了先跑
+   `scripts/maintain_facts_stats.sql` 再用 `diagnose_slow_tw_cores.sql` 取證
+   (2330 單股 smoke 已見 chip 表查詢 1-6.4s slow statement)。
+
+> 架構整備 P0-P2 已全收案(2026-06-10,含本機 production verify);
+> 紀錄與驗證結果見 `docs/changelog/architecture-p0-p2.md`。
