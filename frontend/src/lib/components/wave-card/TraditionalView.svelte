@@ -18,6 +18,18 @@
   /** 預設過濾 365d 外的歷史形態;user 拍版可切「顯示全部」看舊形態。 */
   let showAll = false;
 
+  /**
+   * 時間範圍 preset:null = 智慧預設(asOf−540d;選中 stale 形態時窗自動錨定形態本身)。
+   * 點 preset → 顯式 asOf 錨定窗(不做形態擴窗);「全部」→ autorange。
+   */
+  let rangePreset: number | 'auto' | null = null;
+  const RANGE_PRESETS: Array<{ label: string; value: number | 'auto' }> = [
+    { label: '6m', value: 180 },
+    { label: '1.5y', value: 540 },
+    { label: '3y', value: 1095 },
+    { label: '全部', value: 'auto' }
+  ];
+
   $: scenarios = (traditional.scenario_forest ?? []) as TraditionalScenario[];
   $: pivots = ((traditional as unknown as { pivot_series?: TradPivot[] }).pivot_series ?? []);
   $: allSorted = sortTradScenarios(scenarios, asOf);
@@ -127,9 +139,10 @@
       ({newestStale.days}d 前)。
       <div class="stale-detail">
         上游 <code>traditional_core</code> 引擎需要 corrective patterns
-        (Flat / Zigzag / Triangle / Combination 的 3-pivot A-B-C 序列)才產 scenario。
-        當前 2330 從 2024 Q3 起為連續上升走勢,corrective 形態套不上 → 引擎輸出僅含歷史片段。
-        全部 <b>{allSorted.length}</b> 條形態均 > 365d,以下列出按 preference + 結尾日排序。
+        (Flat / Zigzag / Triangle / Combination 的 3-pivot A-B-C 序列)才產 scenario;
+        近一年走勢未形成可完整標記的 corrective 形態 → forest 僅含歷史片段。
+        全部 <b>{allSorted.length}</b> 條形態均 > 365d,以下按 preference + 結尾日排序;
+        圖表視窗已錨定所選形態的時間段(可用上方範圍鈕切回現在)。
       </div>
     </div>
   {:else if !showAll && allSorted.length > visibleSorted.length}
@@ -151,12 +164,31 @@
 
   <div class="body">
     <div class="chart-pane">
+      <div class="range-presets" role="group" aria-label="圖表時間範圍">
+        <span class="rp-label">範圍</span>
+        {#each RANGE_PRESETS as p (p.label)}
+          <button
+            type="button"
+            class="preset"
+            class:active={rangePreset === p.value}
+            on:click={() => (rangePreset = rangePreset === p.value ? null : p.value)}
+          >
+            {p.label}
+          </button>
+        {/each}
+        {#if rangePreset === null}
+          <span class="rp-auto">自動(錨定所選形態)</span>
+        {/if}
+      </div>
       <TraditionalChart
         {pivots}
         {selectedScenario}
         {asOf}
         {layers}
         height={300}
+        xRangeDaysBack={typeof rangePreset === 'number' ? rangePreset : 540}
+        forceAutorange={rangePreset === 'auto'}
+        explicitRange={typeof rangePreset === 'number'}
       />
     </div>
 
@@ -313,6 +345,47 @@
   .chart-pane {
     padding: 14px;
     border-right: 1px solid var(--line);
+  }
+
+  .range-presets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    flex-wrap: wrap;
+  }
+
+  .rp-label {
+    letter-spacing: 1px;
+  }
+
+  .preset {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-dim);
+    background: var(--tag-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+
+  .preset:hover {
+    border-color: #3b6080;
+  }
+
+  .preset.active {
+    color: var(--wave);
+    border-color: #2e6f8c;
+    background: #0c2433;
+  }
+
+  .rp-auto {
+    color: var(--ink-faint);
+    font-size: 10px;
   }
 
   @media (max-width: 780px) {

@@ -330,8 +330,8 @@ describe('sortTradScenarios', () => {
   });
 });
 
-describe('computeTradXRange auto-expand to selectedScenario', () => {
-  it('selectedScenario.wave_tree 在預設窗外 → x-range 擴展包含 wave', () => {
+describe('computeTradXRange — 形態錨定 / 擴窗 / preset', () => {
+  it('selectedScenario 整段在預設窗外(stale)→ 窗錨定形態本身,不硬拉到 asOf', () => {
     const range = computeTradXRange({
       pivots: [],
       asOf: '2026-06-06',
@@ -341,8 +341,22 @@ describe('computeTradXRange auto-expand to selectedScenario', () => {
         wave_tree: { start: '2023-03-24', end: '2023-08-24' } as TradWaveNode
       })
     });
-    // from 應該擴展到 2023-03-24 - 30d ≈ 2023-02-22(早於預設的 2025-06-06)
-    expect(range?.[0].startsWith('2023-02')).toBe(true);
+    expect(range?.[0]).toBe('2023-02-22'); // start − 30d
+    expect(range?.[1]).toBe('2023-11-22'); // end + 90d(不再硬拉到 asOf+90 攤成 3 年)
+  });
+
+  it('部分重疊(start 在窗外、end 在窗內)→ 維持擴窗包含整個 wave_tree', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 365,
+      xRangeDaysForward: 90,
+      selectedScenario: mkTradScenario({
+        wave_tree: { start: '2024-12-01', end: '2026-01-15' } as TradWaveNode
+      })
+    });
+    expect(range?.[0]).toBe('2024-11-01'); // start − 30d
+    expect(range?.[1].startsWith('2026-09')).toBe(true); // asOf + 90d 保留
   });
 
   it('selectedScenario 在預設窗內 → 保留預設範圍', () => {
@@ -366,6 +380,32 @@ describe('computeTradXRange auto-expand to selectedScenario', () => {
       selectedScenario: null
     });
     expect(range?.[0].startsWith('2025-06')).toBe(true);
+  });
+
+  it('explicitRange(preset)→ 純 asOf 錨定,stale 形態不影響窗', () => {
+    const range = computeTradXRange({
+      pivots: [],
+      asOf: '2026-06-06',
+      xRangeDaysBack: 180,
+      xRangeDaysForward: 120,
+      explicitRange: true,
+      selectedScenario: mkTradScenario({
+        wave_tree: { start: '2023-03-24', end: '2023-08-24' } as TradWaveNode
+      })
+    });
+    expect(range?.[0]).toBe('2025-12-08'); // asOf − 180d
+    expect(range?.[1]).toBe('2026-10-04'); // asOf + 120d
+  });
+
+  it('forceAutorange(「全部」preset)→ null(交給 Plotly autorange)', () => {
+    expect(
+      computeTradXRange({
+        pivots: [],
+        asOf: '2026-06-06',
+        forceAutorange: true,
+        selectedScenario: null
+      })
+    ).toBeNull();
   });
 });
 

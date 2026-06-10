@@ -43,6 +43,10 @@ export interface TradBuildOptions {
   layers?: { fib: boolean; waveMarkers: boolean; invalidation: boolean };
   xRangeDaysBack?: number;
   xRangeDaysForward?: number;
+  /** user 點了「全部」preset → autorange(computeTradXRange 回 null)。 */
+  forceAutorange?: boolean;
+  /** user 點了顯式範圍 preset → 純 asOf 錨定窗,不做形態擴窗/錨定。 */
+  explicitRange?: boolean;
 }
 
 const COL_BG = '#0d1626';
@@ -60,6 +64,7 @@ function isoDate(d: Date): string {
 }
 
 export function computeTradXRange(opts: TradBuildOptions): [string, string] | null {
+  if (opts.forceAutorange) return null;
   const anchor = opts.asOf;
   if (!anchor) return null;
   const t = Date.parse(anchor);
@@ -69,17 +74,26 @@ export function computeTradXRange(opts: TradBuildOptions): [string, string] | nu
   let fromMs = t - back * 86400000;
   let toMs = t + forward * 86400000;
 
-  // 自動擴展:若 selectedScenario.wave_tree 在預設窗外,把窗口擴大包含整個 wave_tree
-  // (對齊 user「選了老的看不見」場景 — traditional 引擎可能只產 1-2 年前的形態)
+  // 顯式 preset(user 點了範圍鈕)→ 純 asOf 錨定,不做形態擴窗/錨定
+  if (opts.explicitRange) return [isoDate(new Date(fromMs)), isoDate(new Date(toMs))];
+
   const tree = opts.selectedScenario?.wave_tree as TradWaveNode | undefined;
-  if (tree?.start) {
-    const ws = Date.parse(tree.start);
-    if (!Number.isNaN(ws) && ws < fromMs) fromMs = ws - 30 * 86400000;
+  const ws = tree?.start ? Date.parse(tree.start) : Number.NaN;
+  const we = tree?.end ? Date.parse(tree.end) : Number.NaN;
+
+  // 整段形態都在預設窗外(stale)→ 窗錨定形態本身,不硬拉到 asOf
+  // (老形態 + asOf 同框會把 x 軸攤成 2+ 年、刻度壓扁 — user 回報「沒有時間軸」主因)
+  if (!Number.isNaN(we) && we < fromMs) {
+    const fromAnchor = !Number.isNaN(ws) ? ws : we;
+    return [
+      isoDate(new Date(fromAnchor - 30 * 86400000)),
+      isoDate(new Date(we + 90 * 86400000))
+    ];
   }
-  if (tree?.end) {
-    const we = Date.parse(tree.end);
-    if (!Number.isNaN(we) && we > toMs) toMs = we + 30 * 86400000;
-  }
+
+  // 部分重疊:維持擴窗,把窗口拉大包含整個 wave_tree
+  if (!Number.isNaN(ws) && ws < fromMs) fromMs = ws - 30 * 86400000;
+  if (!Number.isNaN(we) && we > toMs) toMs = we + 30 * 86400000;
 
   return [isoDate(new Date(fromMs)), isoDate(new Date(toMs))];
 }

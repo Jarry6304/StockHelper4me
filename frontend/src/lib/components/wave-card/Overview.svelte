@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { FibZone } from '$contracts/neely/FibZone';
   import type { Monowave } from '$contracts/neely/Monowave';
   import type { Scenario } from '$contracts/neely/Scenario';
   import { createEventDispatcher } from 'svelte';
   import {
+    collectLiveFibZones,
     extractCurrentPriceFromMonowaves,
     isScenarioInvalidated,
     pickDefaultScenario,
@@ -14,7 +14,6 @@
   import PlotlyWaveChart from './PlotlyWaveChart.svelte';
 
   export let monowaves: Monowave[];
-  export let flatFibZones: FibZone[];
   export let scenarios: Scenario[];
   export let asOf: string | null = null;
 
@@ -29,6 +28,10 @@
   // 詳見 power.ts §pickDefaultScenario rationale。
   $: currentPrice = extractCurrentPriceFromMonowaves(monowaves);
   $: topScenario = pickDefaultScenario(scenarios, asOf, { currentPrice });
+  // 雲層只畫 live(結尾 ≤180d)scenario 的 fib zones — 不再用 flat_fib_zones
+  // 全 forest 聯集(historical anchor 的價位會被畫進今天的投影窗 = 失準)。
+  $: liveFibZones = collectLiveFibZones(scenarios, asOf);
+  $: cloudHidden = scenarios.length > 0 && liveFibZones.length === 0;
   $: structureLabel = topScenario?.structure_label ?? null;
   $: powerRating = topScenario?.power_rating ?? null;
   $: rulesPassed = topScenario?.rules_passed_count ?? null;
@@ -41,12 +44,18 @@
 <div class="chartbox">
   <PlotlyWaveChart
     {monowaves}
-    fibZones={flatFibZones}
+    fibZones={liveFibZones}
     selectedScenario={topScenario}
     {asOf}
     height={196}
   />
 </div>
+
+{#if cloudHidden}
+  <div class="cloud-hint" role="status">
+    ☁ 近 180d 無進行中形態 — fib 雲層已隱藏(歷史形態的投影見「展開詳情」逐條檢視)
+  </div>
+{/if}
 
 <div class="meta">
   {#if structureLabel}
@@ -81,6 +90,13 @@
 <style>
   .chartbox {
     padding: 14px;
+  }
+
+  .cloud-hint {
+    padding: 0 14px 8px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-faint);
   }
 
   .meta {

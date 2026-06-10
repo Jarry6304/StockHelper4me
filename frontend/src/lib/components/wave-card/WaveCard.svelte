@@ -47,7 +47,8 @@
   // Neely 路徑
   $: neelyScenarios = activeNeely?.scenario_forest ?? [];
   $: neelyMonowaves = activeNeely?.monowave_series ?? [];
-  $: neelyFibZones = activeNeely?.flat_fib_zones ?? [];
+  // flat_fib_zones(全 forest 聯集)不再餵 UI — Overview 內部自組 live-only 雲層;
+  // payload 欄位保留給 fusion key_levels。
   $: neelyInsufficient = activeNeely?.insufficient_data ?? false;
   $: neelyCompactionTimeout = activeNeely?.compaction_timeout ?? false;
   $: degreeCeiling = activeNeely?.degree_ceiling ?? null;
@@ -130,7 +131,6 @@
     {#if state === 'overview'}
       <Overview
         monowaves={neelyMonowaves}
-        flatFibZones={neelyFibZones}
         scenarios={neelyScenarios}
         {asOf}
         on:expand={toDetail}

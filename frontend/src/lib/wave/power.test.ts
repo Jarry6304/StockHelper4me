@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { FibZone } from '$contracts/neely/FibZone';
 import type { Monowave } from '$contracts/neely/Monowave';
 import type { Scenario } from '$contracts/neely/Scenario';
 import type { Trigger } from '$contracts/neely/Trigger';
 import {
+  collectLiveFibZones,
   extractCurrentPriceFromMonowaves,
   isScenarioInvalidated,
   pickDefaultScenario,
@@ -45,7 +47,7 @@ function mkScenario(
     rules_passed_count: p.rules_passed_count ?? 0,
     deferred_rules_count: p.deferred_rules_count ?? 0,
     invalidation_triggers: p.invalidationTriggers ?? p.invalidation_triggers ?? [],
-    expected_fib_zones: [],
+    expected_fib_zones: p.expected_fib_zones ?? [],
     structural_facts: {} as never,
     advisory_findings: [],
     in_triangle_context: false,
@@ -423,6 +425,68 @@ describe('pickDefaultScenario invalidation filter + tier', () => {
     ];
     const picked = pickDefaultScenario(list, '2026-06-06', 365);
     expect(picked?.id).toBe('A');
+  });
+});
+
+describe('collectLiveFibZones', () => {
+  function mkZone(label: string, low: number, high: number): FibZone {
+    return { label, low, high, source_ratio: 0.382 };
+  }
+
+  it('只收 live(≤180d,tier ≥ 2)scenario 的 zones', () => {
+    const list = [
+      mkScenario({
+        id: 'LIVE',
+        waveEnd: '2026-05-01',
+        expected_fib_zones: [mkZone('.382', 2100, 2150)]
+      }),
+      mkScenario({
+        id: 'OLD',
+        waveEnd: '2022-03-15',
+        expected_fib_zones: [mkZone('.618', 500, 520)] // 2022 價位 — 不該進今天的雲層
+      })
+    ];
+    const zones = collectLiveFibZones(list, '2026-06-06');
+    expect(zones).toHaveLength(1);
+    expect(zones[0].label).toBe('.382');
+  });
+
+  it('去重 key = label|low|high(跨 scenario 同 zone 只留一份)', () => {
+    const list = [
+      mkScenario({
+        id: 'A',
+        waveEnd: '2026-05-01',
+        expected_fib_zones: [mkZone('.382', 2100, 2150)]
+      }),
+      mkScenario({
+        id: 'B',
+        waveEnd: '2026-05-20',
+        expected_fib_zones: [mkZone('.382', 2100, 2150), mkZone('1.618', 2600, 2680)]
+      })
+    ];
+    expect(collectLiveFibZones(list, '2026-06-06')).toHaveLength(2);
+  });
+
+  it('全 stale forest → 空陣列(呼叫端隱藏雲層 + 提示)', () => {
+    const list = [
+      mkScenario({ id: 'OLD1', waveEnd: '2022-03-15', expected_fib_zones: [mkZone('.382', 500, 520)] }),
+      mkScenario({ id: 'OLD2', waveEnd: '2023-08-24', expected_fib_zones: [mkZone('.618', 600, 620)] })
+    ];
+    expect(collectLiveFibZones(list, '2026-06-06')).toEqual([]);
+  });
+
+  it('181-365d(tier 1)不算 live', () => {
+    const list = [
+      mkScenario({ waveEnd: '2025-09-01', expected_fib_zones: [mkZone('.5', 1900, 1950)] })
+    ];
+    expect(collectLiveFibZones(list, '2026-06-06')).toEqual([]);
+  });
+
+  it('asOf=null → 無法判 recency → 空(不畫雲層)', () => {
+    const list = [
+      mkScenario({ waveEnd: '2026-05-01', expected_fib_zones: [mkZone('.382', 1, 2)] })
+    ];
+    expect(collectLiveFibZones(list, null)).toEqual([]);
   });
 });
 
