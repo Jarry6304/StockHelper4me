@@ -197,15 +197,19 @@ phase_2() {
     if [ -z "${DATABASE_URL:-}" ]; then warn "DATABASE_URL not set — skip"; return 0; fi
     if ! cmd_exists psql; then warn "psql not in PATH — skip"; return 0; fi
 
-    step "alembic head"
-    local expected="e0f1g2h3i4j5"
-    if alembic current 2>&1 | grep -q "$expected"; then
-        pass "alembic head = $expected"
+    step "alembic head(DB current vs code heads,動態比對)"
+    # 不寫死 head 字串 — 會隨 migration 演進漂移(同 .ps1 2026-06-10 修法)
+    local code_head
+    code_head="$(alembic heads 2>&1 | grep -oE '^[0-9a-z]+ \(head\)' | awk '{print $1}')"
+    if [ -z "$code_head" ]; then
+        warn "無法從 alembic heads 解析 code head"
+    elif alembic current 2>&1 | grep -q "$code_head"; then
+        pass "alembic head = $code_head(DB 與 code 一致)"
     else
-        warn "alembic head 非預期 ($expected)"
+        warn "DB current 落後 code head ($code_head) — 跑 alembic upgrade head"
     fi
 
-    step "M3 表 row counts + 11 個 cross_cores tables 存在(改用外部 SQL file)"
+    step "M3 表 row counts + 12 個 cross_cores tables 存在(改用外部 SQL file)"
     if [ -f "$REPO_ROOT/scripts/_schema_health.sql" ]; then
         psql "$DATABASE_URL" -f "$REPO_ROOT/scripts/_schema_health.sql"
     else
