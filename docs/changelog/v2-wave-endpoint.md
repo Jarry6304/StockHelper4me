@@ -50,8 +50,10 @@ production 分布 p50=4 / p95=11 scenarios → 30 檔讀時抽取成本可忽略
    修:伺服端 `_compact_label` 自 pattern_type 組緊湊型(`Flat·BFailure`,對齊
    wireframe 風格;完整 label 看 V1 卡)— 前端零 compute,不讓前端解析 Rust 字串。
 
-本機 200 OK 實測(修 1 後):2330 → `Flat BFailure / correction / count=24 /
-Primary / divergence / staleness=1`;3030 → `Impulse / up / count=17`。
+本機 200 OK 實測(兩修後最終版,2026-06-11):
+2330 → `label="Flat·BFailure" / correction / count=24 / Primary / divergence / staleness=1`;
+3030 → `label="Impulse" / up / count=17 / Primary / divergence / staleness=1`
+— production verify ✅ 收案。
 
 ## 驗證(2026-06-11 sandbox)
 
