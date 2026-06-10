@@ -56,7 +56,9 @@ def test_stock_levels_serves_materialized_levels(monkeypatch):
     _patch_materialized(monkeypatch, levels_doc)
     monkeypatch.setattr("fusion.pattern_scan.pattern_scan", lambda *a, **k: {"patterns": []})
     out = data_tools.stock_levels("2330", "2026-05-15")
-    assert out["key_levels"] == levels_doc
+    kl = out["key_levels"]
+    assert kl["_provenance"]["source"] == "materialized"  # 物化新鮮度揭露
+    assert {k: v for k, v in kl.items() if k != "_provenance"} == levels_doc
     assert out["stop_loss"] is None  # 未給 entry_price
 
 
@@ -75,7 +77,8 @@ def test_dual_track_serves_materialized(monkeypatch):
             "findings": [], "single_track_mode": False}
     _patch_materialized(monkeypatch, reso)
     out = data_tools.dual_track_resonance("2330", "2024-06-01")
-    assert out == reso
+    assert out["_provenance"]["source"] == "materialized"
+    assert {k: v for k, v in out.items() if k != "_provenance"} == reso
 
 
 def test_dual_track_non_default_params_skips_materialized(monkeypatch):
@@ -89,3 +92,50 @@ def test_dual_track_non_default_params_skips_materialized(monkeypatch):
         # 走 compute path(回 DualTrackResult,非我們的物化 dict)
         out = data_tools.dual_track_resonance("2330", "2024-06-01", primary_horizon=21)
     assert out.get("should_not") != "be_used"  # 沒回物化值
+
+
+# ── _provenance:物化新鮮度揭露(snapshot_date 落後 as_of → staleness 浮現)──────
+def test_materialized_provenance_surfaces_staleness(monkeypatch):
+    from datetime import date as _date
+
+    climate = {"overall_climate": "bullish", "climate_score": 1.0}
+    monkeypatch.setattr("fusion.raw._db.get_connection", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(
+        "fusion.materialize.read.fetch_fusion_doc",
+        lambda *a, **k: {"snapshot": climate, "snapshot_date": _date(2026, 5, 8)},
+    )
+    out = data_tools.market_context("2026-05-13")
+    prov = out["_provenance"]
+    assert prov["source"] == "materialized"
+    assert prov["snapshot_date"] == "2026-05-08"
+    assert prov["staleness_days"] == 5
+    assert prov["is_stale"] is True
+
+
+def test_materialized_provenance_fresh_same_day(monkeypatch):
+    from datetime import date as _date
+
+    monkeypatch.setattr("fusion.raw._db.get_connection", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(
+        "fusion.materialize.read.fetch_fusion_doc",
+        lambda *a, **k: {"snapshot": {"overall_climate": "x"},
+                         "snapshot_date": _date(2026, 5, 13)},
+    )
+    out = data_tools.market_context("2026-05-13")
+    assert out["_provenance"]["staleness_days"] == 0
+    assert out["_provenance"]["is_stale"] is False
+
+
+# ── _section_error:graceful degradation 仍回 error dict,但 server 端 log traceback ──
+def test_section_error_logs_and_returns_dict(caplog):
+    import logging as _logging
+
+    with caplog.at_level(_logging.ERROR):
+        try:
+            raise ValueError("boom")
+        except ValueError as e:
+            out = data_tools._section_error("key_levels", e)
+    assert out == {"error": "ValueError: boom", "section": "key_levels"}
+    recs = [r for r in caplog.records if "key_levels" in r.getMessage()]
+    assert recs, "section failure 未留 server log"
+    assert recs[0].exc_info and recs[0].exc_info[0] is ValueError  # 有真 traceback

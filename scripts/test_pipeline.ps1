@@ -221,8 +221,8 @@ Invoke-Phase 1 "Sandbox unit tests(Python + Rust workspace)" {
     python -m pytest tests/fusion/ -q 2>&1 | Tee-Object -Variable aggOut
     if ($LASTEXITCODE -ne 0) { throw "fusion tests FAILED" }
 
-    Write-Step "Python pytest — tests/mcp_server/(ignore render_tools fastmcp)"
-    python -m pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py -q 2>&1 | Tee-Object -Variable mcpOut
+    Write-Step "Python pytest — tests/mcp_server/"
+    python -m pytest tests/mcp_server/ -q 2>&1 | Tee-Object -Variable mcpOut
     if ($LASTEXITCODE -ne 0) { throw "mcp_server tests FAILED" }
 
     Write-Step "Python pytest — tests/cross_cores/"

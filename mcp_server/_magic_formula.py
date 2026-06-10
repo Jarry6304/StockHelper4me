@@ -58,7 +58,7 @@ def compute_magic_formula_screen(
             "narrative": "..."
           }
     """
-    conn = get_connection(database_url)
+    conn = get_connection(database_url, statement_timeout_ms=30_000)  # runaway query 安全網
     try:
         # 1+3. 用通用 helper 拉 latest ranking_date + top N rows(LEFT JOIN stock_info_ref)
         ranking_date, rows = fetch_cross_stock_ranked(

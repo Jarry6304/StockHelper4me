@@ -147,7 +147,9 @@ class TestDualTrackResonanceMCP:
             dual_track_resonance(
                 "2330", "2024-06-01",
                 primary_horizon=21, primary_confidence=0.95,
-                cross_stock_table="custom_ranked_derived",
+                # 非預設但白名單內的表(走 live path);非白名單會被早擋,見
+                # test_rejects_unknown_cross_stock_table。
+                cross_stock_table="f_score_ranked_derived",
             )
 
         # read_track2 收到 override 的 primary_horizon / primary_confidence
@@ -157,7 +159,17 @@ class TestDualTrackResonanceMCP:
 
         # fetch_is_top_30 收到 override 的 cross_stock_table
         assert cross_stock_calls, "fetch_is_top_30 not called"
-        assert cross_stock_calls[0]["source_table"] == "custom_ranked_derived"
+        assert cross_stock_calls[0]["source_table"] == "f_score_ranked_derived"
+
+    def test_rejects_unknown_cross_stock_table(self):
+        """非白名單 cross_stock_table → graceful error dict,不打 DB(SQL 注入防護)。"""
+        out = dual_track_resonance(
+            "2330", "2024-06-01",
+            cross_stock_table="evil_ranked_derived'; DROP TABLE facts; --",
+        )
+        assert "error" in out
+        assert "allowed" in out
+        assert out["stock_id"] == "2330"
 
     def test_json_serializable(self):
         """MCP 回傳必為 JSON-serializable(no datetime / Decimal 漏)。"""

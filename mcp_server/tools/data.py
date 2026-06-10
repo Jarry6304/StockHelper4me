@@ -17,8 +17,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date as Date
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 
 def _parse_date(value: str | Date) -> Date:
@@ -26,6 +29,29 @@ def _parse_date(value: str | Date) -> Date:
     if isinstance(value, Date):
         return value
     return Date.fromisoformat(value)
+
+
+def _clamp(value: int, lo: int, hi: int) -> int:
+    """夾 value 到 [lo, hi]。MCP 工具入口防 LLM 傳極端 top_n / lookback_days 觸發
+    runaway query(API 唯讀無 auth;clamp 把查詢成本上界釘死)。"""
+    return max(lo, min(int(value), hi))
+
+
+# MCP 工具參數安全上界(防 runaway query;合法呼叫遠在界內)
+_MAX_TOP_N = 500
+_MAX_LOOKBACK_DAYS = 365
+# 重工具讀連線的 runaway 安全網(毫秒);clamp 已釘死成本,此為非預期慢查詢 backstop
+_READ_TIMEOUT_MS = 30_000
+
+
+def _section_error(label: str, exc: Exception) -> dict[str, Any]:
+    """Consolidated 工具 section graceful degradation 的統一錯誤回值 + server log。
+
+    回應行為不變(仍回 {"error","section"},LLM 看得到型別+訊息);但 server 端
+    `logger.exception` 留完整 traceback,讓 programming bug(AttributeError 等)
+    不再與「該股無資料」無法區分。"""
+    _logger.exception("consolidated section %s failed", label)
+    return {"error": f"{type(exc).__name__}: {exc}", "section": label}
 
 
 # ────────────────────────────────────────────────────────────
@@ -291,7 +317,7 @@ def magic_formula_screen(
     """
     from mcp_server._magic_formula import compute_magic_formula_screen
 
-    return compute_magic_formula_screen(_parse_date(date), top_n=top_n)
+    return compute_magic_formula_screen(_parse_date(date), top_n=_clamp(top_n, 1, _MAX_TOP_N))
 
 
 def kalman_trend(
@@ -331,7 +357,9 @@ def kalman_trend(
     """
     from mcp_server._kalman import compute_kalman_trend
 
-    return compute_kalman_trend(stock_id, _parse_date(date), lookback_days=lookback_days)
+    return compute_kalman_trend(
+        stock_id, _parse_date(date), lookback_days=_clamp(lookback_days, 1, _MAX_LOOKBACK_DAYS),
+    )
 
 
 def _read_materialized_snapshot(
@@ -349,7 +377,10 @@ def _read_materialized_snapshot(
     `isinstance(snapshot, dict)` 守門確保只回真實物化 dict(避免 mock conn 的 truthy 回值
     被誤當成物化結果;對齊既有測試僅 mock compute path 的行為)。
     """
-    from fusion.materialize.read import fetch_fusion_doc
+    from fusion.materialize.read import (
+        extract_snapshot_with_provenance,
+        fetch_fusion_doc,
+    )
     from fusion.raw._db import get_connection
 
     try:
@@ -363,8 +394,9 @@ def _read_materialized_snapshot(
             conn.close()
     except Exception:  # noqa: BLE001 — 連線 / 查詢失敗 → compute fallback
         return None
-    snap = row.get("snapshot") if hasattr(row, "get") else None
-    return snap if isinstance(snap, dict) else None
+    # 物化命中 → 附 _provenance(snapshot_date / staleness_days)揭露新鮮度;
+    # snapshot 非 dict / 無 row → None → caller 走 compute fallback。
+    return extract_snapshot_with_provenance(row, as_of)
 
 
 def market_context(
@@ -608,7 +640,7 @@ def monthly_screen(
     """
     from mcp_server._screens import compute_monthly_screen
 
-    return compute_monthly_screen(_parse_date(date), top_n=top_n,
+    return compute_monthly_screen(_parse_date(date), top_n=_clamp(top_n, 1, _MAX_TOP_N),
                                    database_url=database_url)
 
 
@@ -630,7 +662,7 @@ def quarterly_screen(
     """
     from mcp_server._screens import compute_quarterly_screen
 
-    return compute_quarterly_screen(_parse_date(date), top_n=top_n,
+    return compute_quarterly_screen(_parse_date(date), top_n=_clamp(top_n, 1, _MAX_TOP_N),
                                      database_url=database_url)
 
 
@@ -653,7 +685,7 @@ def annual_low_risk_screen(
     """
     from mcp_server._screens import compute_annual_low_risk_screen
 
-    return compute_annual_low_risk_screen(_parse_date(date), top_n=top_n,
+    return compute_annual_low_risk_screen(_parse_date(date), top_n=_clamp(top_n, 1, _MAX_TOP_N),
                                           database_url=database_url)
 
 
@@ -686,7 +718,7 @@ def monthly_trigger_scan(
 
     return compute_monthly_trigger_scan(
         _parse_date(date),
-        stock_id=stock_id, top_n_per_type=top_n_per_type,
+        stock_id=stock_id, top_n_per_type=_clamp(top_n_per_type, 1, _MAX_TOP_N),
         database_url=database_url,
     )
 
@@ -746,7 +778,7 @@ def scan_wave_impulse(
 
     return compute_wave_impulse_scan(
         _parse_date(date),
-        timeframe=timeframe, top_n=top_n,
+        timeframe=timeframe, top_n=_clamp(top_n, 1, _MAX_TOP_N),
         include_observe=include_observe,
         database_url=database_url,
     )
@@ -1008,15 +1040,15 @@ def market_overview(
         from fusion.market_dashboard import market_dashboard as _md
         out["dashboard"] = _md(as_of, database_url=database_url)
     except Exception as e:  # noqa: BLE001
-        out["dashboard"] = {"error": f"{type(e).__name__}: {e}", "section": "dashboard"}
+        out["dashboard"] = _section_error("dashboard", e)
 
     try:
         from fusion.market_events import market_events as _me
-        start = as_of - timedelta(days=max(1, events_lookback_days))
+        start = as_of - timedelta(days=_clamp(events_lookback_days, 1, _MAX_LOOKBACK_DAYS))
         out["events"] = _me(start, as_of, severity_min=severity_min,
                             database_url=database_url)
     except Exception as e:  # noqa: BLE001
-        out["events"] = {"error": f"{type(e).__name__}: {e}", "section": "events"}
+        out["events"] = _section_error("events", e)
 
     return out
 
@@ -1057,13 +1089,13 @@ def stock_levels(
             from fusion.key_levels import key_levels as _kl
             out["key_levels"] = _kl(stock_id, as_of, database_url=database_url)
     except Exception as e:  # noqa: BLE001
-        out["key_levels"] = {"error": f"{type(e).__name__}: {e}", "section": "key_levels"}
+        out["key_levels"] = _section_error("key_levels", e)
 
     try:
         from fusion.pattern_scan import pattern_scan as _ps
         out["patterns"] = _ps(stock_id, as_of, database_url=database_url)
     except Exception as e:  # noqa: BLE001
-        out["patterns"] = {"error": f"{type(e).__name__}: {e}", "section": "patterns"}
+        out["patterns"] = _section_error("patterns", e)
 
     if entry_price is None:
         out["stop_loss"] = None
@@ -1076,7 +1108,7 @@ def stock_levels(
                 reward_risk_ratio=reward_risk_ratio, database_url=database_url,
             )
         except Exception as e:  # noqa: BLE001
-            out["stop_loss"] = {"error": f"{type(e).__name__}: {e}", "section": "stop_loss"}
+            out["stop_loss"] = _section_error("stop_loss", e)
 
     return out
 
@@ -1134,7 +1166,7 @@ def indicators(
 
     result = assemble_indicators(
         stock_id, as_of, selected,
-        lookback_days=lookback_days, database_url=database_url,
+        lookback_days=_clamp(lookback_days, 1, _MAX_LOOKBACK_DAYS), database_url=database_url,
     )
     result["selection"] = selection
     return result
@@ -1256,9 +1288,19 @@ def dual_track_resonance(
         - 現價跌破 invalidation_price → single_track_mode=True,共振判定跳過
     """
     from fusion.dual_track import resonance as _dual_resonance
-    from fusion.raw._db import get_connection
+    from fusion.raw._db import ALLOWED_RANKED_TABLES, get_connection
 
     as_of = _parse_date(date)
+    # SQL identifier 注入防護:cross_stock_table 由 caller(LLM)控,非白名單表名
+    # 早擋回 graceful error(library 層 fetch_is_top_30 也會 raise,此處讓 LLM 拿
+    # 乾淨訊息而非 500/propagated ValueError)。
+    if cross_stock_table not in ALLOWED_RANKED_TABLES:
+        return {
+            "stock_id": stock_id,
+            "as_of": as_of.isoformat(),
+            "error": f"cross_stock_table {cross_stock_table!r} 不在白名單",
+            "allowed": sorted(ALLOWED_RANKED_TABLES),
+        }
     # v4.32 Golden L3:預設參數 → 讀物化 resonance_fusion(daily);非預設 → compute fallback。
     # 物化 row = resonance().to_dict() 全量,讀到即直接回(免 30s timeout / fib cap 路徑)。
     if (

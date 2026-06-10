@@ -32,9 +32,10 @@
   pattern_scan / indicator_momentum/volatility/volume/pattern/stack
   → 整併進 market_overview / stock_levels / indicators
 
-**Hidden tools(v3.30 暫隱藏 — production silent fail 修好後解開)**:
+**Removed tools(2026-06)**:
 - render_kline / render_chip / render_fundamental / render_environment /
-  render_neely / render_facts_cloud
+  render_neely / render_facts_cloud(v3.30 起停用的 PNG MCP pipeline;v4.38 後
+  前端改 web-native Plotly,已移除)
 
 **Hidden tools(向下兼容,Step 4 才正式從 LLM 介面砍掉)**:
 - as_of_snapshot / find_facts / list_cores / fetch_ohlc
@@ -46,13 +47,6 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from mcp_server.tools import data as _data_tools
-# v3.30(2026-05-17):render tools 暫隱藏 — production 6 支(render_kline /
-# render_chip / render_fundamental / render_environment / render_neely /
-# render_facts_cloud)全部回 "outputSchema defined but no structured output
-# returned",PNG 生成 pipeline 後端 silent fail。functions 仍留在
-# `mcp_server.tools.render` 給 dashboard / direct python 用,只是不曝露 MCP。
-# 修好後解開下方 `mcp.tool(_render_tools.*)` 6 行即可。
-# from mcp_server.tools import render as _render_tools
 
 
 mcp = FastMCP(
@@ -164,13 +158,7 @@ mcp.tool(_data_tools.traditional_wave_forest)     # 傳統派波浪 forest(不�
 # list_cores / fetch_ohlc)— 它們的 function 仍留在 `mcp_server.tools.data` 內,
 # 供 dashboard / 既有 unit tests / direct python 呼叫者使用。新 LLM agent 走
 # 上方 3 個 public toolkit。
-
-# Render tools(視覺輸出 — PNG image content)
-# v3.30(2026-05-17):暫隱藏 — production 6 支全 silent fail
-# (outputSchema defined but no structured output returned)。修好後解開:
-# mcp.tool(_render_tools.render_kline)
-# mcp.tool(_render_tools.render_chip)
-# mcp.tool(_render_tools.render_fundamental)
-# mcp.tool(_render_tools.render_environment)
-# mcp.tool(_render_tools.render_neely)
-# mcp.tool(_render_tools.render_facts_cloud)
+#
+# Render tools(PNG 輸出)自 v3.30 起停用(production 6 支全 silent fail);v4.38
+# 後前端改 web-native Plotly,PNG MCP pipeline 不再需要 → 2026-06 移除
+# (mcp_server/tools/render.py + mcp_server/_image.py + test_render_tools.py;git 可還原)。

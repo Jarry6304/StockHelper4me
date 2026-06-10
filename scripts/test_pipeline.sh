@@ -179,8 +179,8 @@ phase_1() {
     step "Python pytest — tests/fusion/"
     if ! $pybin -m pytest tests/fusion/ -q 2>&1; then fail_msg "fusion tests FAILED"; return 1; fi
 
-    step "Python pytest — tests/mcp_server/ (skip render_tools)"
-    if ! $pybin -m pytest tests/mcp_server/ --ignore=tests/mcp_server/test_render_tools.py -q 2>&1; then
+    step "Python pytest — tests/mcp_server/"
+    if ! $pybin -m pytest tests/mcp_server/ -q 2>&1; then
         fail_msg "mcp_server tests FAILED"; return 1
     fi
 

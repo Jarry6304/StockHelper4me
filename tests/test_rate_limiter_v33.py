@@ -36,6 +36,18 @@ class TestRateLimiterV33:
         with pytest.raises(TypeError):
             RateLimiter(calls_per_hour=5700, burst_size=10, min_interval_ms=2250)
 
+    def test_init_rejects_nonpositive_calls_per_hour(self):
+        """calls_per_hour <= 0 → ValueError(防 refill_rate=0 在 acquire 除以零 +
+        while 迴圈永不前進)。"""
+        from rate_limiter import RateLimiter
+
+        with pytest.raises(ValueError):
+            RateLimiter(calls_per_hour=0, burst_size=10)
+        with pytest.raises(ValueError):
+            RateLimiter(calls_per_hour=-100, burst_size=10)
+        with pytest.raises(ValueError):
+            RateLimiter(calls_per_hour=5700, burst_size=0)
+
     @pytest.mark.asyncio
     async def test_burst_immediate_acquire(self):
         """初始 burst_size token 應該瞬間放完(無等待)。"""

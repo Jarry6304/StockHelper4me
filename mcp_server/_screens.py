@@ -111,7 +111,7 @@ def compute_monthly_screen(
     database_url: str | None = None,
 ) -> dict[str, Any]:
     """Toolkit A:Persistent Momentum + Revenue Momentum + Institutional Concert + vol overlay。"""
-    conn = get_connection(database_url)
+    conn = get_connection(database_url, statement_timeout_ms=30_000)  # runaway query 安全網
     try:
         def _pm():
             rd, rows = _fetch_top_rows(
@@ -193,7 +193,7 @@ def compute_quarterly_screen(
     database_url: str | None = None,
 ) -> dict[str, Any]:
     """Toolkit B:F-Score + Low Vol + Industry-Adj GP。"""
-    conn = get_connection(database_url)
+    conn = get_connection(database_url, statement_timeout_ms=30_000)  # runaway query 安全網
     try:
         def _fs():
             rd, rows = _fetch_top_rows(
@@ -262,7 +262,7 @@ def compute_annual_low_risk_screen(
     database_url: str | None = None,
 ) -> dict[str, Any]:
     """Toolkit C:Long-Term Low Vol + Dividend Yield(yield trap filter)+ 12-1 Momentum。"""
-    conn = get_connection(database_url)
+    conn = get_connection(database_url, statement_timeout_ms=30_000)  # runaway query 安全網
     try:
         def _ltlv():
             rd, rows = _fetch_top_rows(
@@ -339,7 +339,7 @@ def compute_monthly_trigger_scan(
       - 不傳 stock_id 時走 summary 模式:預設只回 top N(按 |revenue_yoy_pct| 排序)
         per trigger_type + counts,避免 payload 爆量
     """
-    conn = get_connection(database_url)
+    conn = get_connection(database_url, statement_timeout_ms=30_000)  # runaway query 安全網
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -595,7 +595,7 @@ def compute_wave_impulse_scan(
           cross_tf_aligned_count, narrative, caveat
         }
     """
-    conn = get_connection(database_url)
+    conn = get_connection(database_url, statement_timeout_ms=30_000)  # runaway query 安全網
     try:
         ranking_date, top_rows, observe_rows = _fetch_wave_impulse_rows(
             conn, as_of=as_of, timeframe=timeframe, top_n=top_n,
