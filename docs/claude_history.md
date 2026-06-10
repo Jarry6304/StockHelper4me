@@ -3283,3 +3283,345 @@ institutional 反推已由用戶本機 prototype 驗證 1775 ↔ 8875 ↔ 1775 1
 
 ---
 
+
+
+---
+
+# 以下段落自 CLAUDE.md 搬入(2026-06-10 P0-1 拆分)
+
+## v1.35 — Neely 22 spec gaps + P3/P2 indicator cores batch + Aggregation Layer 完整落地(2026-05-14)
+> ⚠️ 已過期(2026-06 拆分時標註),現行 schema 以 docs/schema_master.md 為準、現行狀態以 CLAUDE.md 為準。
+
+
+接 v1.34 P0 Gate v4 後,本 session(branch `claude/continue-previous-work-xdKrl`,
+PR #51 累積)推到極限完成 4 個主軸:
+
+1. **Neely Core P0 → v1.0.0 production-ready**(Phase 13-17 + 18 OBV oscillator
+   + 19 RSI Murphy 引用 + Pre-1.0.0 checklist),22 個 spec gaps 全部 fill
+2. **P3 indicator cores 8 個 batch**(williams_r / cci / keltner / donchian /
+   vwap / mfi / coppock / ichimoku)+ **P2 pattern cores 3 個 batch**
+   (support_resistance / candlestick_pattern / trendline)
+3. **Aggregation Layer 完整 4 Phase 落地**(Spec r1 → Python lib → Streamlit
+   dashboard 6 tabs → MCP server)+ 本 session agg 補強
+4. **Round 5/6 indicator calibration**(11 cores production-data-driven 觸發率
+   調至 per-EventKind ≤ 12/yr/stock)
+
+### Commits(本 session 主要,branch `claude/continue-previous-work-xdKrl`)
+
+| Commit | 範圍 |
+|---|---|
+| **Neely Phase 13-19**(7 commits)| |
+| `9791b09` | Phase 13:max_retracement Option<f64> 落地(spec §9.1) |
+| `8051b97` | Ch9 Exception Rule 落地(spec line 529 / Ch 9 p.9-7) |
+| `34d0382` | stale spec ref 大規模更新 m2Spec/oldm2Spec/ → m3Spec/ |
+| `4fd1c68` | Phase 14:PostBehavior 8-variant + WaveNumber(spec §9.2 / line 2024-2037) |
+| `65bef04` | Phase 15:Scenario 群 2 fields(monowave_structure_labels / round_state / pattern_isolation_anchors / triplexity_detected) |
+| `3685032` | Phase 16:FlatKind 7-variant + RunningCorrection 上提頂層 |
+| `6c3ea4d` | Phase 17:StructuralFacts 7 sub-fields 全填(fib / alternation / channeling / time / volume / gap / overlap) |
+| `a222e7a` | Phase 18:OBV Divergence 改 oscillator(OBV - OBV_MA) |
+| `4de97f3` | Phase 19:RSI Divergence Murphy 引用 + 2 cores SQL 對齊 |
+| `722c222` | P0 Gate runbook 更新 + Pre-1.0.0 checklist |
+| `baa6a58` | 🎉 neely_core v1.0.0:P0 Gate 通過 production-ready |
+| `fc860a4` | v1.0.1:3 個 P1 known issues 收尾(stage_elapsed_us + circular bootstrap + §8 query) |
+| **P3 + P2 batch**(3 commits)| |
+| `8d3c1a7` | P3 indicator cores 8 個 batch(williams_r / cci / keltner / donchian / vwap / mfi / coppock / ichimoku)|
+| `254ef0c` | P2 pattern cores 3 個 batch(support_resistance / candlestick_pattern / trendline) |
+| `262f56c` | tw_cores dispatch_structural + Workflow toml 補完 11 cores |
+| `5f08e6e` | Workflow toml walk-up cwd resolve(user 從 rust_compute/ 跑也能找到 workflows/) |
+| **Round 5/6 calibration**(2 commits)| |
+| `d929950` | Round 5:7 cores 觸發率 + vwap empty silent skip |
+| `c5638a4` | Round 6:4 stragglers tighten + ichimoku KumoTwist flat-cloud 閾值 |
+| **Aggregation Layer 補強**(本 commit)| |
+| `cd2b9b8` | agg layer 補強:health_check + 內建 look-ahead + input validation |
+
+Aggregation Layer 主體已先前 session 完成(commits `5bc9c55` spec r1 → `50d5310`
+Phase B-2 lib → `29e66c9` Phase B-3 Streamlit → `b87fccf`~`728c044` Phase C-1~C-8
+6 tabs → `8ca1a7d` Phase D MCP server,via PR #50 merged main 2026-05-13)。
+
+### Aggregation Layer 完整 4 Phase 狀態
+
+| Phase | 範圍 | 狀態 |
+|---|---|---|
+| **B-1**(Spec)| `m3Spec/aggregation_layer.md` r1 立稿 | ✅ |
+| **B-2**(Python lib)| `src/agg/` — 6 modules(__init__ / query / _types / _lookahead / _market / _db)+ `as_of()` API + `find_facts_today` + `as_of_with_ohlc` | ✅ |
+| **B-3**(Streamlit)| `dashboards/aggregation.py` — Phase C 內 6 tabs(K-line / Chip / Fund / Env / Neely / Facts 散點雲)+ 9 chart helper modules | ✅ |
+| **B-4**(FastAPI)| 未動工,留 future | 🟡 待需要 |
+| **C-0~C-8**(視覺化主幹)| `dashboards/charts/` — 9 個 plotly figure builder 模組,各 tab 對映完整 | ✅ |
+| **D**(MCP server)| `mcp_server/` — FastMCP stdio server 包 agg + dashboards/charts,Claude Desktop 對話內 call tools | ✅ |
+| **本 session 補強**| `health_check()` + `_market` 內建 look-ahead + `as_of()` input validation + 10 個新 tests | ✅ |
+
+`tests/agg/` **30 passed / 1 skipped**(pandas 未裝)+ `tests/mcp_server/test_data_tools.py` **9 passed**。
+
+### Neely Core v1.0.0 + v1.0.1 P0 Gate 全收尾
+
+Phase 13 → 19 把 spec §9.1 line 549 / §9.2 / §9.3 / 4 個剩餘 spec gaps 全部
+fill,+ OBV oscillator 算法升級 + RSI Murphy 引用補完。Production data 確認
+neely 22 條規則 R1-R7 / F1-F2 / Z1-Z4 / T1-T10 / W1-W2 全部 valid。
+
+| 指標 | 數值 |
+|---|---|
+| Rust workspace | **35 crates**(從 v1.34 24 crate + 11 new P3+P2 cores)|
+| 全部 tests | **384 passed / 0 failed / 0 warnings** |
+| Production state | 1263 stocks × 34 cores / 0 errors / ~10 min wall(concurrency=16)|
+| structural_snapshots core_names | **4**(neely + 3 P2 pattern cores)|
+| facts 總量 | ~10M rows |
+| Per-EventKind 觸發率 | **11/11 cores 全部 ≤ 12/yr/stock** ✅(v1.32 P2 acceptance 標準) |
+
+### Round 5/6 calibration:11 cores 命中 per-EventKind ≤ 12/yr
+
+Round 5 第一波 7 cores(williams_r / cci / ichimoku / donchian / coppock /
+candlestick_pattern / trendline)加 MIN_*_SPACING constants,production verify
+後 4 cores(candlestick 68.9 / cci 38.7 / ichimoku 25.3 / williams_r 17.6)未命中
+per-core total ≤ 12 目標。
+
+Round 6 加 tightened spacing + ichimoku KumoTwist `KUMO_TWIST_MIN_DIFF_PCT=0.001`
+flat-cloud flicker prevention。再 verify 後 reframe:**per-core total** 14-53/yr
+但 **per-EventKind** 3-5/kind ✅(對齊 v1.32 P2 baseline,institutional
+DivergenceWithinInstitution=68.18/yr accepted)。
+
+最終 verify SQL `WHERE per_kind_year_rate > 12.0` → **0 rows**(11/11 cores 全部
+EventKinds ≤ 12/yr/stock)。
+
+### agg layer 補強(本 commit `cd2b9b8`)
+
+3 個改進對齊 m3Spec/aggregation_layer.md r1 + 10 個新 tests:
+
+| 改進 | 範圍 | 動機 |
+|---|---|---|
+| `agg.health_check(database_url)` | `src/agg/query.py` + `__init__.py` export | 啟動時 1 個 query 確認 PG 可達 + 三表存在 + row counts。失敗時點明哪環掛掉,不再讓首個 as_of() 一路炸到第 4 個 SQL 才看見錯 |
+| `_market.fetch_market_facts` 內建 look-ahead filter | `src/agg/_market.py` + `query.py` 移除 redundant filter loop | 預設 `apply_lookahead_filter=True`。直接呼叫 `_market` 不會 leak 未來 fact;`query.as_of()` 同步 single source of truth |
+| `as_of()` input validation | `src/agg/query.py` | empty stock_id / negative lookback_days / 空 cores list 早 raise ValueError |
+
+新 tests:
+- `tests/agg/test_health_check.py`(3 case:all_exist / missing_table / connect_failure)— unittest.mock 不打真 PG
+- `tests/agg/test_market_lookahead.py`(3 case:filter_on drops future revenue / filter_off returns raw / 5 reserved keys always present)
+- `tests/agg/test_validation.py`(4 case:empty / whitespace / negative / empty cores)
+
+### 已知狀態(下次 session 起點)
+
+- Branch:`claude/continue-previous-work-xdKrl`(PR #51 累積)
+- alembic head:`x3y4z5a6b7c8`(不變)
+- Rust workspace:35 crates / **384 tests passed / 0 failed**
+- agg tests:**30 passed / 1 skipped(pandas)** + mcp_server data tests **9 passed**
+- Production state:1263 stocks × 34 cores / 4 structural_snapshots core_names / ~10M facts
+- Aggregation Layer 4 Phase 全部完整(B-1 spec / B-2 lib / B-3 dashboard / D MCP),B-4 FastAPI 留 future
+- 下個 session 可動:**B-4 FastAPI thin wrap** / **structural_snapshots schema partition** / **per-core timeframe override in Workflow toml** / 各 cores P3 後階段(若有 spec 來新需求)
+
+### 風險
+
+🟢 低:
+- 本 session 全部 commits 沙箱驗過 + user 本機 production verify pass(per-EventKind 0 rows ≤ 12)
+- agg 補強 0 collector.toml / 0 alembic / 0 Rust,純 Python lib 補強
+- Rollback:單 commit `git revert` 即可(各 phase 獨立)
+
+---
+
+
+## v1.10 → v1.34(已搬到 docs/claude_history.md)
+> ⚠️ 已過期(2026-06 拆分時標註),現行 schema 以 docs/schema_master.md 為準、現行狀態以 CLAUDE.md 為準。
+
+
+> 時間範圍:2026-05-02 → 2026-05-14
+> 內容:m2 PR sequencing(PR #18 → #22)+ M3 Cores 動工(PR-1 → PR-9a 全市場全核 dispatch)+ P1/P2/P3 cores batch + Aggregation Layer 4 Phase + v1.34 P0 Gate v3/v4 production 校準。
+> 動工早期 Bronze reverse-pivot / M3 cores 框架 / 各 indicator core best-guess threshold 校準歷史時參考 [`docs/claude_history.md`](docs/claude_history.md)。
+
+## 過去版本沿革（v1.5 ~ v1.9.1）
+> ⚠️ 已過期(2026-06 拆分時標註),現行 schema 以 docs/schema_master.md 為準、現行狀態以 CLAUDE.md 為準。
+
+
+> v1.5 / v1.6 / v1.7 的 commits 表 + 逐輪修正詳解 已搬到 [`docs/claude_history.md`](docs/claude_history.md)。
+> v1.8 / v1.9 / v1.9.1 的大項總覽 + commits 表 一同搬到 [`docs/claude_history.md`](docs/claude_history.md)(v1.18 reorg)。
+> 主檔保留:v1.7 收尾 PR 已合到 `m1/postgres-migration`,base sha `9890294`。
+>
+> 重點延續到 v1.10+(主檔):
+> - v1.8 P0-11 Rust 拆 multiplier(commit `c71d422`)+ P1-17 stock_dividend vf SQL 修(commit `608d275`)→ Convention 切換見「關鍵架構決策」表
+> - v1.9 PR #17 (B-3) events 砍 3 + fwd 加 4 + Rust schema_version 對齊 3.2 → schema v3.2 r1 動工入口
+> - v1.9.1 24 檔 split/par_value backfill 完成 + tblnC 分支整合 → av3 Test 4 100% 覆蓋
+
+---
+
+## 目前狀態：Phase 1~6 全部驗證通過 ✅
+> ⚠️ 已過期(2026-06 拆分時標註),現行 schema 以 docs/schema_master.md 為準、現行狀態以 CLAUDE.md 為準。
+
+
+| Phase | 內容 | 驗證結果 |
+|-------|------|---------|
+| 1 | stock_info / trading_calendar / market_index_tw | ✅ 3048 / 1773 / 3544 |
+| 2 | dividend / split / par_value / capital_reduction | ✅ 17 筆 dividend events |
+| 3 | price_daily / price_limit | ✅ 1772 筆/支 × 2 |
+| 4 | 後復權 + 週月K（Rust） | ✅ 4 個關鍵日驗證點全 OK |
+| 5 | 11 支 chip / financial | ✅ 5 類法人正確分開 |
+| 6 | 5 支 macro | ✅ exchange_rate 受 API 限制只有 57 筆 |
+
+### 後復權驗證資料（2330）
+
+| date | raw_close | fwd_close | fwd/raw | theoretical | match |
+|------|-----------|-----------|---------|-------------|-------|
+| 2019-01-02 | 219.50 | 237.54 | 1.0822 | 1.0822 | OK |
+| 2022-03-15 | 558.00 | 603.87 | 1.0822 | 1.0822 | OK（除息前一日） |
+| 2022-03-16 | 558.00 | 600.89 | 1.0769 | 1.0769 | OK（除息日當日） |
+| 2026-04-24 | 2185.00 | 2185.00 | 1.0000 | 1.0000 | OK（最新日） |
+
+### v1.7 / v2.0 (PG) schema 狀態
+
+review #3 + #4 後 user 本機 PostgreSQL 17 環境：
+
+- alembic head = `a1b2c3d4e5f6`（progress_status_check_expand）
+- baseline = `0da6e52171b1`（baseline_schema_v2_0），執行 `src/schema_pg.sql` 全文
+- `api_sync_progress.chk_progress_status` 含 5 種 status: `pending / completed / failed / empty / schema_mismatch`
+- `stock_info.detail` JSONB 欄位（baseline 就有，v1.6 之前漏用）已透過 collector.toml 改成 pack `data_update_date`
+- `stock_info.updated_at` 改由 schema `DEFAULT NOW()` + upsert UPDATE 路徑強制 NOW() 控制
+- 8 commit 全部驗過：`api_sync_progress` 343 segment（completed 322 / empty 21 / failed 0 / pending 0）
+
+---
+
+## v1.5 / v1.6 / v1.7 重要修正詳解
+> ⚠️ 已過期(2026-06 拆分時標註),現行 schema 以 docs/schema_master.md 為準、現行狀態以 CLAUDE.md 為準。
+
+
+> 完整 16 條(v1.5 8 條 + v1.6 3 條 + v1.7 review #1-#9)逐項詳解搬到 [`docs/claude_history.md`](docs/claude_history.md)。
+> 重點摘要:
+> - **Rust 後復權「先 push 再更新 multiplier」**(v1.5 commit `536962e`):除息日當日 raw 已是除息後,不可再乘該日 AF。**v1.8 進一步拆 price_multiplier / volume_multiplier 兩個 multiplier**(commit `c71d422`)
+> - **5 類法人各自獨立**(v1.5 commit `acc7b1f`):institutional 從 6 欄擴 10 欄
+> - **api_sync_progress 5 種 status**(v1.7 review #1):pending/completed/failed/empty/schema_mismatch,alembic `a1b2c3d4e5f6` 補 CHECK
+> - **DBWriter._table_pks 動態查 information_schema**(v1.7 review #8):schema 是 single source of truth
+> - **stock_info.updated_at 兩段修法**(v1.7 review #7):upsert UPDATE 強制 `updated_at = NOW()`
+> - **post_process 4 處 SELECT 補 market filter**(v1.7 review #6):對齊 schema PK
+> 
+> v1.8 在這些基礎上,加 P0-11 / P0-7 補丁 / P1-17 / overview §7.5 + §10.0,詳見 §「v1.8 大項總覽」。
+
+### Rust 後復權核心邏輯（保留摘要;Rust binary 對齊基準）
+
+詳見 [`docs/claude_history.md` §1](docs/claude_history.md)。
+
+**v1.5 修法**(原版錯誤是「先更新 multiplier 再 push」,造成除息日當日多乘一次 AF):
+
+```rust
+// 正確:先 push 再更新 multiplier
+for price in raw_prices.iter().rev() {
+    result.push(... close: price.close * multiplier ...);  // ← 先用當前
+    if let Some(&af) = event_af.get(&price.date) {
+        multiplier *= af;            // ← 再更新給更早的日子
+    }
+}
+```
+
+**v1.8 進化**:`compute_forward_adjusted` 拆兩個獨立 multiplier(`price_multiplier` 從 AF / `volume_multiplier` 從 vf);詳見 commit `c71d422` + `m2Spec/oldm2Spec/unified_alignment_review_r2.md` r3.1 P0-11 段。
+
+
+## 資料庫 Schema（25 張表，v1.5 變更標 ⚠️、v1.6 變更標 🆕、v1.7 變更標 🆙）
+> ⚠️ 已過期(2026-06 拆分時標註),現行 schema 以 docs/schema_master.md 為準、現行狀態以 CLAUDE.md 為準。
+
+
+| 資料表 | PK | 備註 |
+|--------|----|----|
+| `stock_info` | market, stock_id | 🆙 v1.7 改用既有 detail JSONB pack `data_update_date`（baseline schema 早就有 detail 欄位，只是 v1.6 之前 collector.toml 沒用上） |
+| `trading_calendar` | market, date | |
+| `market_index_tw` | market, stock_id, date | (TAIEX + TPEx) |
+| `price_adjustment_events` | market, stock_id, date, event_type | |
+| `price_daily` | market, stock_id, date | 🆕 v1.6 加 detail 欄位 |
+| `price_limit` | market, stock_id, date | 🆕 v1.6 加 detail 欄位 |
+| `price_daily_fwd` | market, stock_id, date | Rust 計算 |
+| `price_weekly_fwd` | market, stock_id, year, week | Rust 計算 |
+| `price_monthly_fwd` | market, stock_id, year, month | Rust 計算 |
+| `institutional_daily` | market, stock_id, date | ⚠️ v1.5 從 6 欄擴 10 欄（5 類法人）|
+| `margin_daily` | market, stock_id, date | 🆕 v1.6 加 detail 欄位 |
+| `foreign_holding` | market, stock_id, date | 🆕 v1.6 加 detail 欄位 |
+| `holding_shares_per` | market, stock_id, date | pack_holding_shares |
+| `valuation_daily` | market, stock_id, date | |
+| `day_trading` | market, stock_id, date | 🆕 v1.6 加 detail 欄位 |
+| `index_weight_daily` | market, stock_id, date | 🆕 v1.6 加 detail 欄位 |
+| `monthly_revenue` | market, stock_id, date | 🆕 v1.6 加 detail 欄位 |
+| `financial_statement` | market, stock_id, date, type | pack_financial |
+| `market_index_us` | market, stock_id, date | 🆕 v1.6 加 detail 欄位（SPY + ^VIX） |
+| `exchange_rate` | market, date, currency | ⚠️ FinMind 19 筆限制 |
+| `institutional_market_daily` | market, date | ⚠️ v1.5 同 institutional_daily 擴充 |
+| `market_margin_maintenance` | market, date | |
+| `fear_greed_index` | market, date | |
+| `_dividend_policy_staging` | market, stock_id, date | 🆕 v1.6 加 source 欄位（post_process 用） |
+| `api_sync_progress` | api_name, stock_id, segment_start | 🆙 v1.7 CHECK constraint 擴成 5 種 status（補 `empty` / `schema_mismatch`） |
+| `stock_sync_status` | market, stock_id | Rust Phase 4 寫 `fwd_adj_valid`；`last_full_sync`/`last_incr_sync` 欄位保留未用（v1.6 已砍 Python 端 dead helper） |
+| `schema_metadata` | key | 🆙 v1.7 PG baseline 才出現的表，記錄 `schema_version=2.0`；Rust binary 啟動時 assert |
+
+---
+
+
+
+## 已知問題清單(v1.x era,2026-06-10 拆分時自 CLAUDE.md 搬入)
+> ⚠️ 已過期(2026-06 拆分時標註):全部條目已處理或已被現行 backlog 取代;現行陷阱見 CLAUDE.md「已知陷阱」。
+
+## 已知問題清單（下次 session todo）
+
+按優先序排列，每項都標明影響範圍與建議修法：
+
+> v1.6 / v1.7 已處理：~~detail warning 群~~、~~dividend_policy 雙 source warning~~、~~api_sync_progress CHECK 漏 empty/schema_mismatch~~、~~Phase 4 mode 對齊裂縫~~、~~SqliteWriter 半殘狀態~~、~~post_process SELECT 缺 market filter~~、~~_TABLE_PKS 硬編碼~~、~~stock_info.updated_at 語意混亂~~
+
+> **v1.8 已處理**:~~Rust split/par_value/cap_inc volume 算錯方向(P0-11)~~ commit `c71d422`、~~Phase 4 staleness(P0-7 短期補丁)~~ commit `e051216`、~~field_mapper stock_dividend vf 計算(P1-17)~~ commit `608d275`、~~av3 Test 2 SQL CASE 誤判~~ commit `a2c94c2`、~~cores_overview §7.5 dirty queue 契約 + §10.0 Core 邊界三原則~~ commit `d029be3`
+
+> **v1.9 已處理**:~~PR #17 (B-3) events 砍 3 + fwd 加 4 + Rust 拆 multiplier~~ commit `4eddd1c`、~~rust_bridge schema version 對齊 3.2~~ commit `f215d5b`、~~R-1 漏改 Rust trading_calendar→trading_date_ref~~ commit `7db9c42`、~~config rule 5 + av3 SQL 過時欄~~ commit `ac7c980`、~~P1 dividend AF reference_price 偷懶 sanity check~~ commit `c8367f8`、~~PowerShell 中文亂碼 wrapper 5 輪修法~~ commit `3c3d8a0`、~~m2 blueprint Hard 階段 3 處 amend~~ commit `f46d50d`
+
+### ~~🔴 待 user 驗證：v1.6 schema 變更後的重跑~~（v1.7 已重跑驗證）
+
+v1.7 review #3 + #4 過程中 user 在本機跑過 `python src\main.py status` + 全表體檢 + Phase 1 重跑（`stock_info` 含 detail 欄位寫入），確認舊 v1.6 schema 變更也都生效。`api_sync_progress` 343 segment 全部健康（completed 322 / empty 21 / failed 0 / pending 0）。
+
+### ~~🟡 institutional_daily vs price_daily 多 2 筆~~（v1.6 已解）
+
+FinMind `TaiwanStockInstitutionalInvestorsBuySell` 在週六會回殘留資料（內容是某筆固定值，date 是非交易日，2330 在 2019-08-24/2019-10-26 各 1 筆，內容字字相同）。
+修法：`aggregators._filter_to_trading_days()` 在 pivot 前用 `trading_calendar` 過濾掉非交易日；`scripts/cleanup_non_trading_days.py` 一次性清現存歷史鬼資料。
+驗證後 `institutional_daily` 1772 vs `price_daily` 1773 對齊（差 1 是當日尚未結算）。
+
+### ~~🟢 exchange_rate FinMind 限制~~（v1.6 已解）
+
+**根因**：`TaiwanExchangeRate` 必須帶 `data_id` (currency) 才會回完整時序，不帶就只回每幣 3 個代表性日期 → 7 segment × 19 幣 × 3 = 57 筆假象。
+**驗證**：FinMind 測試 `get_datalist("TaiwanExchangeRate")` 回 `["AUD", "CAD", "CHF", "CNY", "EUR", "GBP", "HKD", "IDR", "JPY", "KRW", "MYR", "NZD", "PHP", "SEK", "SGD", "THB", "USD", "VND", "ZAR"]` 共 19 幣。
+**修法**：collector.toml 把 `exchange_rate` 從 `param_mode = "all_market"` 改成 `per_stock_fixed` + `fixed_ids = [...19 幣...]`，跟 `market_index_us` (SPY/^VIX)、`market_index_tw` (TAIEX/TPEx) 同樣 pattern。
+**重跑成本**：8 segment × 19 幣 = 152 個 API call（v3.3 sponsor 5700/h + 砍 min_interval 後 ≈ 1.6 分鐘跑完;v1.6 當時 free tier 1600/h + min_interval 2250ms 估 ~6 分鐘),phase 6 整體耗時略增。
+
+### 🟢 待做：agent-review-mcp 支線
+
+CLAUDE.md v1.4 第 6 點提到「要不要切支線開始建 agent-review-mcp（spec 在最早的訊息）」這件事還沒開始。原本想用的 branch 名稱已被 collector 改善的 review pass 佔用至今（review #3 + #4），下次 session 才有空檔切去做。
+
+### 🟢 待做：PR 合併（v1.7 PR review）
+
+`claude/review-collector-dependencies-n03rE` → `m1/postgres-migration` 的 PR 已開（review #3 + #4 共 8 commit + 本次 docs commit = 9 commit）。等 base 維護者 / Codex / Cursor review。
+
+### ~~🟡 待研究：Phase 4 真正的 incremental 優化~~（v1.26 已落地）
+
+v1.26 nice-to-have D 完成:`bronze/phase_executor._run_phase4` 加 incremental
+dirty queue filter — `mode=="incremental"` 時查 `price_daily_fwd.is_dirty=TRUE`
+distinct stock_id,0 dirty → skip Rust dispatch 完整省 ~6 分鐘。對齊
+`silver/orchestrator._run_7c` 同款 PR #20 dirty queue pattern。
+
+### ~~🟡 待研究：CLAUDE.md 章節重組~~（v1.8 已重組）
+
+每輪 review 都加段落，文件愈來愈長（v1.7 已 ~400 行）。下次可考慮把 v1.4 / v1.5 / v1.6 的 commits 表格與詳解搬到附錄或單獨 docs/ 目錄，主文只保留「最新 v1.X 銜接資訊 + 不變的關鍵架構決策」。
+
+
+
+## 完整重跑流程(從零開始;v1.x SQLite era,2026-06-10 拆分時自 CLAUDE.md 搬入)
+> ⚠️ 已過期(2026-06 拆分時標註):`data/tw_stock.db` 為 SQLite 時代產物;現行 fresh-init 走 `psql -f src/schema_pg.sql` + `alembic stamp head`(見 CLAUDE.md「環境細節」)。
+
+
+## 完整重跑流程（從零開始）
+
+```powershell
+cd C:\Users\jarry\source\repos\StockHelper4me
+del data\tw_stock.db
+python src\main.py backfill --stocks 2330,2317 --phases 1
+python src\main.py backfill --stocks 2330,2317 --phases 2
+python src\main.py backfill --stocks 2330,2317 --phases 3
+# Phase 4 之前確認 rust binary 存在；不存在的話：
+#   cd rust_compute && cargo build --release && cd ..
+python src\main.py backfill --stocks 2330,2317 --phases 4
+python src\main.py backfill --stocks 2330 --phases 5      # 5 類法人
+python src\main.py backfill --stocks 2330 --phases 6      # macro
+python scripts\check_all_tables.py
+```
+
+預估時間：~6 分鐘（不含 cargo build）。
+
+
+
+## PR sequencing 累積紀錄(至 v3.14,2026-06-10 拆分時自 CLAUDE.md「規格與歷史檔」搬入)
+
+當前 PR sequencing(累積)：`#17 ✅ → ... → #36 ✅(v1.27 pae dedup) → #M3-1 ~ #M3-9a ✅ 22 cores → #PR #48 ✅ spec alignment → #PR #50 ✅ Aggregation Layer → #PR #51 ✅ neely Phase 13-19 v1.0.x → PR #59 ✅ v3.5 5 層架構重構 9 commits + PR #60 ✅ docs 對齊 → PR #61 ✅ v3.6 Neely RuleId enum 補完 → PR #62 ✅ v3.7 spec_pending doc cleanup + exhaustive compaction 真窮舉 → PR #63 ✅ v3.8 agg per-timeframe lookback → PR #64 ✅ v3.9 partition observation + workflow toml audit → PR #65 ✅ v3.10 R6 DROP _legacy_v2 → PR #66 ✅ v3.11 Round 7 calibration → PR #67 ✅ v3.12-v3.14.1 gov_bank pipeline 收尾(2026-05-17)`。**M3 Cores 35 crates / 420 tests / 0 failed / 1266 stocks × 36 cores production-ready,Aggregation Layer 4 Phase 全套,neely Core v1.0.1 P0 Gate 通過,v3.5 5 層架構單一職責歸位,v3.6 RuleId enum 從 28 → 81 variants(全 76 spec variants 落地),v3.7 exhaustive compaction 真窮舉 + spec-blocked reframe,v3.8 agg per-timeframe lookback,v3.9 partition 暫不需要 + workflow toml dispatch audit,v3.10 m2 大重構終結 R6 DROP 3 張 _legacy_v2,v3.11 Round 7 calibration 5 cores tighten,v3.14 gov_bank pipeline 收尾(Bronze 13.39M / Silver fill 80.74% / alembic head a6b7c8d9e0f1 / new all_market_no_end param mode / Round 7 達標 verify ✅)**。

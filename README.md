@@ -3,7 +3,7 @@
 > 台股資料蒐集 + 計算 pipeline。FinMind API → **PostgreSQL 17**,**6 層架構**(Bronze / Silver per-stock / Cross-Stock Cores / M3 Cores / **Golden L3 fusion** / MCP + Web API),Python 3.11+ + Rust workspace **40 crates**(Silver S1 後復權 + M3 Cores + Aggregation Layer + Cross-Stock Cores **12 builders** + MCP toolkit **14 tools** + **唯讀 FastAPI Web API** + **Traditional Core 獨立波浪引擎**)。
 
 **版本**:**v4.38**(alembic head `j6k7l8m9n0o1` / 2026-06-06)。**v4.38** Web 前端原型上線:`frontend/` SvelteKit + Vite + TypeScript + Plotly.js,2 視圖(V1 個股 WAVE 卡 + V2 跨股因子排行)消費既有 Golden L3 唯讀 API;後端加 `CORSMiddleware`(`WEB_API_CORS_ORIGINS` env 覆寫,預設 `:5173`);0 Python(除 CORS 1 檔)/ 0 alembic / 0 Rust 改動;53 vitest passed + 24 web_api pytest passed。詳見 §「Web 前端原型(v4.38)」。**v4.37** Traditional Core **全市場 production-verified ☕**:compaction 改 `EngineNode.children: Vec<Rc<EngineNode>>` 共享子樹殺深拷貝(原 `Vec<EngineNode>` 深樹 derive(Clone) 每 round 拷貝整棵 → swap)→ 單股 **135-250s → 7.7s(~20-30×)**;全 universe 2171 stocks × 40 cores `run-all` ~2.5h,P0-Gate forest max 69/70/58 ≪ 200;`monowave_epsilon` 預設 0.0→0.03 + 4 旋鈕 env 覆寫(`TRAD_*`);`run-all` 預設 `--concurrency` 32→8;順帶修 magic_formula_core Rust `is_top_30`→`is_top_n`(v4.35 漏改 Rust 端)+ `wave_impulse_screen_derived` fresh-init schema drift;新 `scripts/verify_traditional_forest.py` + `workflows/magic_formula_only.toml`。**v4.32** Golden L3 fusion 物化 + 唯讀 FastAPI Web API + TS 契約 codegen;**v4.32.1** `stock_list.toml` `otc`→`tpex` 解鎖全部上櫃股(universe ~2172);**v4.33** 修復 streamlit 乾淨啟動讀不到 repo-root `.env` 的路徑 bug;**v4.34** 修復 revenue / financial / 景氣指標 3 個 dashboard chart 的 x 軸欄位;**v4.35** magic_formula `is_top_30`→`is_top_n` schema 對齊;**v4.36** DB sync 單緒寫入**全面並行化**:Bronze segment_runner DB 寫入走 `asyncio.to_thread` 解封 event loop / Silver 7a + Cross-stock Phase 8 builders `asyncio.gather` 並行 / Golden fusion universe loop + Forecast conformalize/fuse/backtest 走 `ThreadPoolExecutor + per-worker get_connection()`(0 alembic / 0 collector.toml / 0 Rust;+45 tests)。皆已 merge main
-**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)+ Phase 3b `scripts/recalibrate_kalman.ps1`(Kalman 全市場校準 → resonance track2 非 single_track)。完整 verify chain 見 [CLAUDE.md §v4.32/v4.33](CLAUDE.md)
+**測試流水線**:`scripts/test_pipeline.ps1`(Windows) / `scripts/test_pipeline.sh`(Unix)+ `scripts/verify_golden_l3_v4_32.ps1`(Golden L3 物化/MCP/API verify)+ `scripts/verify_mcp_toolkit_v4_29.py`(13-tool MCP)+ Phase 3b `scripts/recalibrate_kalman.ps1`(Kalman 全市場校準 → resonance track2 非 single_track)。完整 verify chain 見 [docs/changelog/v4.30-v4.38.md](docs/changelog/v4.30-v4.38.md) §v4.32/v4.33
 **狀態**:**v4.32**(2026-05-29 production-verified ☕):原 read-time 的 fusion(levels / resonance / climate)正名 **Golden L3** 並物化進 `structural_snapshots`(新 core_name `*_fusion`),對外只讀;新建**唯讀 FastAPI Web API**(`uvicorn web_api.app:app` — neely forest 完整 passthrough + brotli/gzip 協商 + N>250 保險絲;Windows/Py3.14 每請求 sync conn);**TypeScript 契約 codegen**(Rust ts-rs 63 型別 + Python pydantic2ts → `frontend/src/contracts/`)。Phase 3b Kalman 全市場校準腳本 `scripts/recalibrate_kalman.ps1`(讓 resonance track2 非 single_track)。**累積**:v4.25 dual-track 共振 + v4.26 wave_impulse_screen + v4.28 三 sprint + v4.29 + **v4.30/v4.31 + v4.32**。M3 Cores **39 crates**;Cross-Stock **12 builders**;MCP **13 tools** + Web API;**Rust 607 tests + ts feature 485**;**Python ~865 passed / +34(v4.32);fusion + mcp_server 子集 476 passed / 1 skipped / 0 failed(v4.33.1 後)**;v4.32.1 tpex 解鎖後 universe ~2172 stocks × 41 cores dispatch / facts daily ~78k new rows。
 
 ---
@@ -14,7 +14,8 @@
 
 | 文件 | 用途 |
 |---|---|
-| **`CLAUDE.md`** | v1.35 → **v4.4** 跨 session 歷程紀錄(改 schema / 加 entry 前必看「關鍵架構決策」+ 最新 v4.X 段;v1.5 ~ v1.34 已歸檔 `docs/claude_history.md`)|
+| **`CLAUDE.md`** | 入口檔(操作手冊 + 架構不變量 + 索引,≤400 行;改 schema / 加 entry 前必看「架構不變量」)|
+| **`docs/changelog/INDEX.md`** | 版本歷程索引(v3.5 → v4.38 帶狀分檔;一版一列;v1.x 沿革在 `docs/claude_history.md`)|
 | **`m2Spec/layered_schema_post_refactor.md`** | Bronze + Silver schema 規範(主要 spec)|
 | **`m3Spec/`** | M3 Cores 層 spec(13 份,涵蓋 indicator / pattern / chip / fundamental / environment / neely / agg layer)|
 |   `m3Spec/neely_core_architecture.md` | Neely Wave Core(P0)架構,r6(v3.6 RuleId enum 76 variants)|
@@ -87,7 +88,7 @@ Layer 3 的波浪分析有**兩個完全獨立的 vertical**,並排呈現、不�
 | **Neely** | `cores/wave/neely_core/` | NEoWave(Glenn Neely)| `structural_snapshots`(core_name=`neely_core`)| `/stocks/{id}/neely/forest` · MCP `neely_forecast` |
 | **Traditional**(2026-06-02 / PR #123)| `cores/wave/traditional_core/` | Frost & Prechter EWP | `traditional_snapshots`(自有表)| `/stocks/{id}/traditional/forest` · `/stocks/{id}/waves`(`{neely, traditional}` 並排組裝)· MCP `traditional_wave_forest` · Streamlit「🌲 Traditional Wave」|
 
-Traditional Core 與 Neely **完全解耦**(`cargo tree -p traditional_core` 零 neely;不 impl `WaveCore`;純函式 `run()`)。**由下而上多度數 fractal 引擎**:子浪細分(R6/R7/R8/R11)在 degree≥2 為硬建構約束,degree-0 monowave 為線、deferred(忠於原書「最小級數的浪不可再分」)。forest **不選 primary**,排序鍵 = `preference_score`(guidelines + qualifiers)。引擎/儲存/API/MCP/dashboard 全自有,沿用既有 plumbing 模式。詳見 `m3Spec/traditional_rules.md` + CLAUDE.md §「Traditional Core v2 / v3」。
+Traditional Core 與 Neely **完全解耦**(`cargo tree -p traditional_core` 零 neely;不 impl `WaveCore`;純函式 `run()`)。**由下而上多度數 fractal 引擎**:子浪細分(R6/R7/R8/R11)在 degree≥2 為硬建構約束,degree-0 monowave 為線、deferred(忠於原書「最小級數的浪不可再分」)。forest **不選 primary**,排序鍵 = `preference_score`(guidelines + qualifiers)。引擎/儲存/API/MCP/dashboard 全自有,沿用既有 plumbing 模式。詳見 `m3Spec/traditional_rules.md` + `docs/changelog/traditional-core.md`。
 
 > 校準(**v4.37 全市場 production-verified**):全 universe `run-all` ~2.5h,P0-Gate forest max 69/70/58 ≪ 200(`scripts/verify_traditional_forest.py` 看 p50/p95/max + 覆蓋)。引擎 perf bug 已修(compaction 改 `Rc` 共享子樹 → 單股 135-250s → 7.7s)。`monowave_epsilon` 預設 0.03,4 旋鈕**可 env 覆寫免重編 sweep**:`TRAD_MONOWAVE_EPSILON` / `TRAD_ROUND_BEAM_SIZE` / `TRAD_MAX_DEGREE_LEVELS` / `TRAD_FOREST_MAX_SIZE`。harness:`tw_cores traditional-debug --stock-id 3363`。
 
@@ -164,7 +165,7 @@ StockHelper4me/
 │   └── claude_history.md            # v1.4 → v1.9.1 詳細歷史
 ├── m2Spec/                          # Bronze / Silver spec(layered_schema_post_refactor)
 ├── m3Spec/                          # 13 份 M3 Cores spec
-└── CLAUDE.md                        # 跨 session 歷程紀錄
+└── CLAUDE.md                        # 入口檔(操作手冊 + 架構不變量;歷程在 docs/changelog/)
 ```
 
 ---
@@ -823,7 +824,7 @@ asyncio.run 跳轉。Per-worker `get_connection()` ~1-3ms TCP overhead 被並行
   (40ms sync sleep × 4 concurrent < 130ms wall,sync 路徑會 ≥ 160ms)、Semaphore
   限流、worker 失敗隔離、`--parallelism=1` backward-compat 路徑
 
-完整 spec + per-path 修法細節 + 風險見 `CLAUDE.md §v4.36`。
+完整 spec + per-path 修法細節 + 風險見 `docs/changelog/v4.30-v4.38.md` §v4.36。
 
 ---
 
