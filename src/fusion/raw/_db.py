@@ -2,15 +2,13 @@
 
 套件內部模組;外部請 import `fusion.raw` 公開出口(P2-1)。
 
-對齊 src/db.py:create_writer() 的 .env 載入 + DATABASE_URL 處理。
+DSN / .env 解析走 src/dsn.py 單一真相源(P2-2,與 src/db.py:create_writer 同源)。
 本 layer 純讀,故直接 psycopg connection(不走 PostgresWriter wrapper 的 write methods)。
 """
 
 from __future__ import annotations
 
-import os
 import re
-from pathlib import Path
 from typing import Any
 
 # ─── Cross-stock ranked 表 / 欄白名單(SQL identifier 注入防護)──────────────────
@@ -69,16 +67,6 @@ def ensure_safe_ranked_identifiers(
                 raise ValueError(f"extra_cols 欄名 {c!r} 非合法 SQL identifier")
 
 
-def _repo_root_env_path() -> Path:
-    """repo root 的 .env 路徑。
-
-    本檔在 src/fusion/raw/_db.py,需上溯 4 層到 repo root(parents[3]:
-    raw → fusion → src → repo root)。舊碼 parent.parent.parent 只到 src/ 是 bug
-    (對齊 src/db.py 時忘了 src/db.py 在 src/ 下故只 ×2,本檔深 2 層故須 ×4)。
-    """
-    return Path(__file__).resolve().parents[3] / ".env"
-
-
 def get_connection(database_url: str | None = None, *, statement_timeout_ms: int | None = None):
     """回傳 psycopg.Connection(read-only,autocommit=True,row_factory=dict_row)。
 
@@ -105,23 +93,10 @@ def get_connection(database_url: str | None = None, *, statement_timeout_ms: int
             "psycopg not installed. Run: pip install 'psycopg[binary]>=3.2'"
         ) from e
 
-    # 對齊 src/db.py 載入 .env 行為(路徑層數見 _repo_root_env_path docstring)
-    try:
-        from dotenv import load_dotenv
+    # DSN / .env 解析委派 src/dsn.py 單一真相源(P2-2;v4.33 路徑層數 bug 的根治)
+    from dsn import resolve_database_url
 
-        env_path = _repo_root_env_path()
-        if env_path.exists():
-            load_dotenv(env_path)
-    except ImportError:
-        pass
-
-    url = database_url or os.getenv("DATABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "DATABASE_URL 未設定。請執行以下任一:\n"
-            "  1. export DATABASE_URL=postgresql://twstock:twstock@localhost:5432/twstock\n"
-            "  2. 在 .env 檔設定 DATABASE_URL"
-        )
+    url = resolve_database_url(database_url)
     conn = psycopg.connect(url, row_factory=dict_row, autocommit=True)
     if statement_timeout_ms is not None and statement_timeout_ms > 0:
         # int-cast → 注入安全(SET 不接 bind 參數)。autocommit 下即 session 級。
