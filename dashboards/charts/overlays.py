@@ -40,10 +40,11 @@ def add_ma_lines(
 ) -> None:
     """ma_core.value.series_by_spec → 多條 line 疊在 K-line 主圖。
 
-    series_by_spec 結構:
+    series_by_spec 結構(對齊 ma_core Rust `MaSeriesEntry` 真實序列化;
+    spec 是 struct 非字串):
       [
-        {"spec": "SMA20", "series": [{date, value}, ...]},
-        {"spec": "SMA60", "series": [...]},
+        {"spec": {"kind": "Sma", "period": 20, "source": "Close"}, "series": [{date, value}, ...]},
+        {"spec": {"kind": "Sma", "period": 60, "source": "Close"}, "series": [...]},
         ...
       ]
     """
@@ -63,6 +64,11 @@ def add_ma_lines(
 
     for entry in series_by_spec:
         spec = entry.get("spec") or entry.get("name") or "MA"
+        if isinstance(spec, dict):
+            # MaSpec struct 序列化為 {"kind": "Sma", "period": 20, "source": "Close"};
+            # 組回 "SMA20" 標籤 — dict 直接當 color map key 是 unhashable TypeError
+            spec = f"{str(spec.get('kind', 'MA')).upper()}{spec.get('period', '')}"
+        spec = str(spec)
         series = entry.get("series") or []
         if not series:
             continue

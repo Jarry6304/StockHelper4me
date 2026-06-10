@@ -548,10 +548,28 @@ def build_parser() -> argparse.ArgumentParser:
 # 主程式
 # =============================================================================
 
+def _anchor_to_repo_root(path_str: str) -> str:
+    """相對路徑且 cwd 下不存在 → 改以 repo root 解析(v4.33 .env 同類修法)。
+
+    顯式絕對路徑、或 cwd 下找得到的相對路徑,原值不動;讓
+    `python C:\\...\\src\\main.py status` 從任意 cwd(排程任務 / %TEMP%)
+    都能載到預設的 config/collector.toml。
+    """
+    from dsn import REPO_ROOT
+
+    p = Path(path_str)
+    if p.is_absolute() or p.exists():
+        return path_str
+    anchored = REPO_ROOT / path_str
+    return str(anchored) if anchored.exists() else path_str
+
+
 def main() -> None:
     """CLI 主函式：解析參數後分派至對應的執行函式"""
     parser = build_parser()
     args   = parser.parse_args()
+    args.config     = _anchor_to_repo_root(args.config)
+    args.stock_list = _anchor_to_repo_root(args.stock_list)
 
     # ── 日誌初始化（config 載入前先用 INFO 啟動，避免 config 錯誤無日誌）
     # --verbose 是全域選項，在 args 中一定存在
