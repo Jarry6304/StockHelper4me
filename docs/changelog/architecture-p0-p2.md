@@ -31,14 +31,29 @@
 - TS codegen 重跑 `git diff frontend/src/contracts/` = 空(含刪檔重生驗證)
 - 內容守恆:拆分後總行數 vs 原 CLAUDE.md 差 −42(< 60)
 
-### DB-bound 項(sandbox 無 PG,留 user 本機)
+### DB-bound 項 — 本機驗證結果(2026-06-10,user 機器,production PG)✅ 收案
+
+| 驗收 | 結果 |
+|---|---|
+| `verify_mcp_toolkit_v4_29.py --stocks 2330,3030`(P1-2) | **PASS**:17 OK / 2 WARN(`indicators` payload 108KB > 50KB 軟預算,腳本語意可接受)/ 0 FAIL / 0 ERROR |
+| P2-2 四入口連線 | `main.py status` 自 %TEMP% ✅ / streamlit ✅ / uvicorn `/health` 回 `golden-l3-api ok` ✅ / MCP 8 tools importable ✅ |
+| `alembic upgrade head` | ✅ no-op(0 migration;env.py 鏡像正常) |
+| `tw_cores run-all --write --stocks 2330`(P1-1 smoke) | ✅ 42/42 cores ok / 0 err(neely 3 tf + traditional 3 tf 全 ok,rows=46,22.4s) |
+| `test_pipeline.ps1` | Phase 0/1/4 全綠(Rust 647 + Python 627 sandbox tests;kalman/neely 出值正常);Phase 2/3 為通用 SQL 健檢,需同一 session 設 psql PATH + DATABASE_URL,不在本案驗收清單 |
+
+驗證過程**順帶抓到並修掉 4 個既有問題**(各自獨立 commit):
+
+1. user DB 缺 `wave_impulse_screen_derived` — 舊 schema_pg.sql fresh-init + `alembic stamp head` 跳過 v4.26 migration 的歷史 drift;手動補 DDL + Phase 8 回填(9,204 rows / 190 candidates)後 `scan_wave_impulse` 轉 OK
+2. `main.py --config / --stock-list` 預設值 cwd 相對 → repo 外 cwd 炸「找不到 collector.toml」;`_anchor_to_repo_root`(dsn.REPO_ROOT)修,+3 tests
+3. `dashboards/charts/overlays.py` MA 線拿 `MaSpec` dict 當 color map key → `TypeError: unhashable`(潛伏 bug,K-line 勾 MA 即炸);組回 `"SMA20"` 標籤,+3 tests
+4. `verify_mcp_kalman_neely.py` `--as-of` 寫死 `2026-05-15` — 該日 rows 已被 params_hash 重算清掉,誤報 FAIL;預設改 `date.today()`
+
+### 本機 runbook(留存參考)
 
 ```powershell
-git pull
-python scripts/verify_mcp_toolkit_v4_29.py --stocks 2330,3030   # 退碼 0(P1-2 façade 驗收)
-# P2-2 v4.33 情境回歸:repo 外任意 cwd 起 web_api / MCP / main.py status / streamlit 四入口
-alembic upgrade head                                            # 應 no-op(0 migration;自足性回歸)
-cd rust_compute; cargo build --release -p tw_cores; cd ..
-.\rust_compute\target\release\tw_cores.exe run-all --write --stocks 2330   # P1-1 smoke:輸出 row-identical
-.\scripts\test_pipeline.ps1                                     # 全 pipeline 健康度
+python scripts/verify_mcp_toolkit_v4_29.py --stocks 2330,3030
+alembic upgrade head
+.\rust_compute\target\release\tw_cores.exe run-all --write --stocks 2330
+# Phase 2/3 需同一 session:psql 進 PATH + $env:DATABASE_URL
+.\scripts\test_pipeline.ps1
 ```
