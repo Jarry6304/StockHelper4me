@@ -7,7 +7,8 @@
 //   - load_daily(pool, stock_id, lookback_days):讀 price_daily_fwd 最近 N 天
 //   - load_weekly(pool, stock_id, lookback_weeks):讀 price_weekly_fwd
 //   - load_monthly(pool, stock_id, lookback_months):讀 price_monthly_fwd
-//   - load_for_neely(pool, stock_id, timeframe, params):輔助函式 — 套 NeelyCore.warmup_periods
+//   (Neely 專屬的 lookback 策略 load_for_neely 屬領域邏輯,P1-1 後住
+//    tw_cores::helpers — 本 crate 為共用層,零領域 crate 依賴)
 //
 // **M3 PR-7 階段**(沙箱無 PG 不能 end-to-end test):
 //   - 完整 sqlx 實作落地
@@ -17,12 +18,11 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use fact_schema::Timeframe;
-use neely_core::NeelyCore;
-use neely_core::NeelyCoreParams;
 use sqlx::postgres::PgPool;
 
-// Re-export 給 indicator cores 共用(避免它們再 dep neely_core)
-pub use neely_core::output::{OhlcvBar, OhlcvSeries};
+// Re-export 共用 OHLCV 型別(P1-1 後定義住 fact_schema;既有
+// `use ohlcv_loader::{OhlcvBar, OhlcvSeries}` 下游路徑不變)
+pub use fact_schema::{OhlcvBar, OhlcvSeries};
 
 /// price_daily_fwd / price_weekly_fwd / price_monthly_fwd 三表 row 共用結構
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -156,59 +156,6 @@ pub async fn load_monthly(
     .context("load_monthly: query price_monthly_fwd failed")?;
 
     Ok(rows_to_series(stock_id, Timeframe::Monthly, rows))
-}
-
-/// 輔助函式:依 timeframe 自動載入足量 OHLCV(NeelyCore 用)。
-///
-/// **v3.38(2026-05-18)user 拍版 per-forecast-horizon spec**:
-///   支援 1m / 3m / 6m forecast 三 horizon(drop 1y),統一資料窗口拉取:
-///   - Daily   = 1,500 bars(~6 yr,覆蓋 6m forecast `daily_bars_required=1500`)
-///   - Weekly  = 300 bars(~6 yr,覆蓋 6m forecast `weekly_bars_required=300`)
-///   - Monthly = 60 bars(~5 yr,對齊 user 拍版「年級評估不期待精準,monthly 只給
-///     long-anchor reference」+ 6m forecast `monthly_bars_required=60`)
-///   - Quarterly = warmup_buffered.max(72)(spec 外保留 floor)
-///
-/// **背景**:v3.36 hotfix 把 daily 推到 6 yr 是為了長 history 股(3030)長 degree
-/// scenarios,但 user audit + spec(neely_core_architecture §13.3)揭露 Daily 1-3 yr
-/// 對應 Minute degree(剛好是 1m-6m horizon);**長 degree anchor 走 weekly/monthly Neely
-/// 而非過度延伸 daily**(對齊 v3.37 multi-timeframe 設計 + NEoWave 原書「各 timeframe
-/// 負責自己 degree」哲學)。
-///
-/// v3.36 daily 6 yr 統計上 ok(對齊 user spec daily_bars_required=1500),保留;
-/// v3.36 monthly 144 bars 縮減為 60(對齊 user spec)。
-///
-/// MCP layer 用 `daily_bars` / `weekly_bars` / `monthly_bars` actual count 走 degradation
-/// logic(per-forecast-horizon `degree_uncertain` / `no_6m` / `insufficient_history`)。
-///
-/// 對齊 cores_overview §3.4 / §7.3 + m3Spec/neely_core_architecture.md §5.4 §8.6 §13.3。
-pub async fn load_for_neely(
-    pool: &PgPool,
-    stock_id: &str,
-    params: &NeelyCoreParams,
-) -> Result<OhlcvSeries> {
-    use fact_schema::WaveCore;
-    let core = NeelyCore::new();
-    let warmup = core.warmup_periods(params);
-    // 1.2x 緩衝(對齊 §7.3 原規格,Quarterly fallback 用)
-    let warmup_buffered = (warmup as f64 * 1.2).ceil() as i32;
-
-    // v3.38 user 拍版 fixed table(對齊 per-forecast-horizon spec 完整 6m 需求)
-    let lookback = match params.timeframe {
-        Timeframe::Daily     => 1500,                       // ~6 yr,6m forecast daily_bars_required
-        Timeframe::Weekly    => 300,                        // ~6 yr,6m forecast weekly_bars_required
-        Timeframe::Monthly   => 60,                         // ~5 yr,6m forecast monthly_bars_required
-        Timeframe::Quarterly => warmup_buffered.max(72),    // Quarterly 不在 user spec,保留 6 yr floor
-    };
-
-    match params.timeframe {
-        Timeframe::Daily => load_daily(pool, stock_id, lookback).await,
-        Timeframe::Weekly => load_weekly(pool, stock_id, lookback).await,
-        Timeframe::Monthly => load_monthly(pool, stock_id, lookback).await,
-        Timeframe::Quarterly => Err(anyhow::anyhow!(
-            "ohlcv_loader: Timeframe::Quarterly 不適用 OHLCV(Quarterly 為 financial_statement \
-             季頻財報專用,沒對應 price_*_fwd 表)"
-        )),
-    }
 }
 
 // ─── PIT-aware loader(v0.3 spec phase 3,2026-05-23)─────────────────────

@@ -636,6 +636,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "ts-rs",
 ]
 
 [[package]]
@@ -1523,7 +1524,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "fact_schema",
- "neely_core",
  "serde",
  "serde_json",
  "sqlx",

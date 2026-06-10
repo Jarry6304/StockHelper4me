@@ -14,7 +14,9 @@ OUT="$REPO/frontend/src/contracts"
 mkdir -p "$OUT/neely"
 
 echo "[1/2] Track A — Rust output.rs → TS (ts-rs, feature-gated)"
-( cd "$REPO/rust_compute" && TS_RS_EXPORT_DIR="$OUT" cargo test --features ts -p neely_core )
+# P1-1:OhlcvSeries / OhlcvBar 下放 fact_schema,其 export_bindings 測試隨型別
+# 定義走 → 兩個 crate 都要跑,缺 fact_schema 則該兩檔不再重生(drift 漏抓)。
+( cd "$REPO/rust_compute" && TS_RS_EXPORT_DIR="$OUT" cargo test --features ts -p fact_schema -p neely_core )
 
 echo "[2/2] Track B — Python fusion contracts → TS (pydantic2ts)"
 ( cd "$REPO" && pydantic2ts --module web_api.contracts --output "$OUT/fusion.ts" )

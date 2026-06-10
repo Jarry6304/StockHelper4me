@@ -262,7 +262,7 @@ async fn run_neely_single(stock_id: &str, timeframe: &str, write: bool) -> Resul
 
     let mut params = neely_core::NeelyCoreParams::default();
     params.timeframe = tf;
-    let series = ohlcv_loader::load_for_neely(&pool, stock_id, &params).await?;
+    let series = crate::helpers::load_for_neely(&pool, stock_id, &params).await?;
 
     tracing::info!(
         stock_id,
