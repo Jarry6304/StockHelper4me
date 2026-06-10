@@ -39,7 +39,7 @@
 | P2-2 四入口連線 | `main.py status` 自 %TEMP% ✅ / streamlit ✅ / uvicorn `/health` 回 `golden-l3-api ok` ✅ / MCP 8 tools importable ✅ |
 | `alembic upgrade head` | ✅ no-op(0 migration;env.py 鏡像正常) |
 | `tw_cores run-all --write --stocks 2330`(P1-1 smoke) | ✅ 42/42 cores ok / 0 err(neely 3 tf + traditional 3 tf 全 ok,rows=46,22.4s) |
-| `test_pipeline.ps1` | Phase 0/1/4 全綠(Rust 647 + Python 627 sandbox tests;kalman/neely 出值正常);Phase 2/3 為通用 SQL 健檢,需同一 session 設 psql PATH + DATABASE_URL,不在本案驗收清單 |
+| `test_pipeline.ps1` | **Phase 0-4 全綠**(Rust 647 + Python 627 sandbox / alembic head 動態比對一致 / 12 cross_cores 表 / facts 10.77M dead_pct≈0 / Neely forest P0 Gate p50=4 p95=11 max=137 ≪ 200 / kalman+neely 出值正常) |
 
 驗證過程**順帶抓到並修掉 4 個既有問題**(各自獨立 commit):
 
