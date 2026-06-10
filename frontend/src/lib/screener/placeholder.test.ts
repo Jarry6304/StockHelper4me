@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { getWaveDigest, getWaveDigests } from './placeholder';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  digestFromRow,
+  fetchWaveDigests,
+  getWaveDigest,
+  insufficientDigest
+} from './placeholder';
+import type { WaveSummaryRow } from '$contracts/fusion';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('getWaveDigest', () => {
   it('deterministic — 同 stock_id 永遠回同樣結果', () => {
@@ -70,13 +80,86 @@ describe('getWaveDigest', () => {
   });
 });
 
-describe('getWaveDigests', () => {
-  it('batch 對齊 single calls', () => {
-    const ids = ['2330', '3030', '3363'];
-    const batch = getWaveDigests(ids);
-    expect(batch).toHaveLength(3);
-    expect(batch[0]).toEqual(getWaveDigest('2330'));
-    expect(batch[1]).toEqual(getWaveDigest('3030'));
-    expect(batch[2]).toEqual(getWaveDigest('3363'));
+function realRow(overrides: Partial<WaveSummaryRow> = {}): WaveSummaryRow {
+  return {
+    stock_id: '2330',
+    insufficient: false,
+    label: 'Impulse·W3',
+    direction: 'up',
+    scenario_count: 4,
+    certainty: 'Primary',
+    sparkline: [0, 1, 0.5],
+    resonance: 'strong',
+    staleness_days: 0,
+    ...overrides
+  };
+}
+
+describe('digestFromRow(/waves/summary → WaveDigest)', () => {
+  it('正常 row 全欄映射,isPlaceholder=false', () => {
+    const d = digestFromRow(realRow());
+    expect(d).toEqual({
+      stockId: '2330',
+      insufficient: false,
+      label: 'Impulse·W3',
+      direction: 'up',
+      scenarioCount: 4,
+      certainty: 'Primary',
+      sparkline: [0, 1, 0.5],
+      resonance: 'strong',
+      isPlaceholder: false
+    });
+  });
+
+  it('insufficient row → insufficientDigest 退化值', () => {
+    const d = digestFromRow(realRow({ insufficient: true }));
+    expect(d).toEqual(insufficientDigest('2330'));
+    expect(d.isPlaceholder).toBe(false);
+  });
+
+  it('未知 enum 值防衛性收斂(direction/certainty/resonance fallback)', () => {
+    const d = digestFromRow(
+      realRow({ direction: 'sideways??', certainty: 'Sure', resonance: 'mega' })
+    );
+    expect(d.direction).toBe('flat');
+    expect(d.certainty).toBe('Possible');
+    expect(d.resonance).toBe('none');
+  });
+});
+
+describe('fetchWaveDigests', () => {
+  it('200 → Map keyed by stock_id;後端漏列補 insufficient', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          as_of: '2026-06-11',
+          timeframe: 'daily',
+          rows: [realRow()]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }) as typeof fetch;
+
+    const map = await fetchWaveDigests({ stockIds: ['2330', '9999'], date: '2026-06-11' });
+    expect(map.get('2330')?.label).toBe('Impulse·W3');
+    expect(map.get('9999')?.insufficient).toBe(true);
+  });
+
+  it('API 失敗 → 整欄 insufficient(不 throw)', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError('network down');
+    }) as typeof fetch;
+
+    const map = await fetchWaveDigests({ stockIds: ['2330'], date: '2026-06-11' });
+    expect(map.get('2330')?.insufficient).toBe(true);
+    expect(map.get('2330')?.isPlaceholder).toBe(false);
+  });
+
+  it('空 stockIds → 空 Map,不打 API', async () => {
+    const spy = vi.fn();
+    globalThis.fetch = spy as unknown as typeof fetch;
+    const map = await fetchWaveDigests({ stockIds: [], date: '2026-06-11' });
+    expect(map.size).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
   });
 });

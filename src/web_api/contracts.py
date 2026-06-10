@@ -8,6 +8,7 @@ m3Spec/read-api.md Track B。
 - LevelsFusion      ← src/fusion/key_levels.py::key_levels() 回傳 dict(物化 levels_fusion)
 - ResonanceFusion   ← src/fusion/dual_track/_shared.py::DualTrackResult.to_dict()(物化 resonance_fusion)
 - ClimateFusion     ← mcp_server/_climate.py::compute_market_context() 回傳 dict(物化 climate_fusion)
+- WavesSummary      ← src/fusion/wave_summary.py::wave_summary_rows()(GET /waves/summary 批次)
 
 codegen:`pydantic2ts --module web_api.contracts --output frontend/src/contracts/fusion.ts`
 """
@@ -108,6 +109,32 @@ class ResonanceFusion(BaseModel):
     findings: list[FibLineResonance]
     single_track_mode: bool
     notes: list[str]
+
+
+# ── waves/summary(wave_summary_rows;V2 跨股表 WAVE 欄)──────────────────────
+class WaveSummaryRow(BaseModel):
+    stock_id: str
+    # 引擎無法判斷 / 無 snapshot(WaveCell 顯示「— 無法判斷」;其餘欄為退化值)
+    insufficient: bool
+    # top scenario 結構標籤(選法鏡射前端 pickDefaultScenario,e.g. "5-3-5 ZZ·W4")
+    label: str
+    # up / down / flat / correction(WaveDirection 4 向箭頭)
+    direction: str
+    scenario_count: int
+    # Neely Certainty enum:Primary / Possible / Rare / MissingWaveBundle
+    certainty: str
+    # monowave 尾段 ≤10 點 min-max 歸一化 0..1
+    sparkline: list[float]
+    # 共振 badge:strong / basic / divergence / none(resonance_fusion findings 歸約)
+    resonance: str
+    # neely snapshot 落後 as_of 天數(None = insufficient)
+    staleness_days: int | None
+
+
+class WavesSummary(BaseModel):
+    as_of: str
+    timeframe: str
+    rows: list[WaveSummaryRow]
 
 
 # ── climate_fusion(compute_market_context)────────────────────────────────────

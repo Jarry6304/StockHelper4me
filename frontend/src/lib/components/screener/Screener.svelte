@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ScreenRow, ActiveToolkit } from '$lib/api';
+  import type { WaveDigest } from '$lib/screener/placeholder';
   import { toolkitFactorSummary } from '$lib/screener/factors';
   import ToolkitTabs from './ToolkitTabs.svelte';
   import ControlsBar from './ControlsBar.svelte';
@@ -12,6 +13,8 @@
   export let topN: number;
   export let rows: ScreenRow[];
   export let rankingDate: string | null = null;
+  /** WAVE 欄資料(/waves/summary 批次;pass-through 給 ScreenerTable)。 */
+  export let waveDigests: Map<string, WaveDigest> = new Map();
   export let showPlaceholderBadge: boolean = false;
 
   const dispatch = createEventDispatcher<{
@@ -57,7 +60,7 @@
       <div class="hint">提示:跑 <code>python src/main.py cross_cores phase 8</code> 重算 ranking。</div>
     </div>
   {:else}
-    <ScreenerTable {rows} {toolkit} {showPlaceholderBadge} />
+    <ScreenerTable {rows} {toolkit} {waveDigests} {showPlaceholderBadge} />
   {/if}
 </section>
 

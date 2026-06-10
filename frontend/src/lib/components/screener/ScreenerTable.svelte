@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ScreenRow } from '$lib/api';
   import { goto } from '$app/navigation';
-  import { getWaveDigest } from '$lib/screener/placeholder';
+  import { insufficientDigest, type WaveDigest } from '$lib/screener/placeholder';
   import { factorColumnsFor, formatFactor } from '$lib/screener/factors';
   import type { ActiveToolkit } from '$lib/api';
   import WaveCell from './WaveCell.svelte';
@@ -9,11 +9,15 @@
 
   export let rows: ScreenRow[];
   export let toolkit: ActiveToolkit;
+  /** WAVE 欄資料(loader 經 /waves/summary 批次抓;缺檔顯示 insufficient)。 */
+  export let waveDigests: Map<string, WaveDigest> = new Map();
   /** dev / ?debug=1 mode — 顯示 placeholder 角標。 */
   export let showPlaceholderBadge: boolean = false;
 
   $: factorCols = factorColumnsFor(toolkit);
-  $: digests = new Map(rows.map((r) => [r.stock_id, getWaveDigest(r.stock_id)]));
+  $: digests = new Map(
+    rows.map((r) => [r.stock_id, waveDigests.get(r.stock_id) ?? insufficientDigest(r.stock_id)])
+  );
 
   function topThirty(row: ScreenRow): boolean {
     // 後端 v4.35 改名 is_top_30 → is_top_n (concept 名稱仍叫 top30)

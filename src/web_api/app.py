@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from web_api.compression import add_compression
 from web_api.cors import add_cors
-from web_api.routers import market, screens, series, stocks
+from web_api.routers import market, screens, series, stocks, waves_summary
 
 
 def create_app() -> FastAPI:
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(series.router)
     app.include_router(market.router)
     app.include_router(screens.router)
+    app.include_router(waves_summary.router)
     return app
 
 

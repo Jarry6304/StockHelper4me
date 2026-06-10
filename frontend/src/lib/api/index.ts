@@ -37,3 +37,10 @@ export {
   type GetScreenArgs
 } from './screens';
 export { getMarketClimate, type GetClimateArgs } from './climate';
+export {
+  getWavesSummary,
+  type WaveTimeframe,
+  type WaveSummaryRow,
+  type WavesSummary,
+  type GetWavesSummaryArgs
+} from './waves_summary';

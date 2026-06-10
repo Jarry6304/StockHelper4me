@@ -107,3 +107,19 @@ export interface Track2Band {
   width_ratio: number | null;
   is_overly_wide: boolean;
 }
+export interface WaveSummaryRow {
+  stock_id: string;
+  insufficient: boolean;
+  label: string;
+  direction: string;
+  scenario_count: number;
+  certainty: string;
+  sparkline: number[];
+  resonance: string;
+  staleness_days: number | null;
+}
+export interface WavesSummary {
+  as_of: string;
+  timeframe: string;
+  rows: WaveSummaryRow[];
+}

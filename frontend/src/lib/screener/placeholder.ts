@@ -1,15 +1,19 @@
 /**
- * Placeholder WaveDigest generator — V2 跨股表 WAVE 欄專用(原型階段)。
+ * WaveDigest — V2 跨股表 WAVE 欄資料模組(2026-06-11 拍版 (a) 後接真端點)。
  *
- * 對齊 plan Phase 4 + spec CL4:
- *   - 沒有 wave-summary 批次端點,本層產 deterministic placeholder
- *   - 每個 placeholder 在 DOM 標 data-placeholder="true",dev mode UI 加角標
- *   - **未來接真實端點只動 getWaveDigest() 1 個 module**(對齊 D2 取捨)
+ * 真實資料源:`GET /waves/summary`(批次,伺服端抽取;`fetchWaveDigests()`)。
+ * fake 產生器保留兩用途(對齊 spec CL4 的 PH 角標語意):
+ *   - `VITE_WAVE_PLACEHOLDER=1`:後端未起時的 dev fallback(整欄標 isPlaceholder)
+ *   - vitest deterministic fixture
+ * API 失敗 → 整欄 insufficient 視覺(isPlaceholder=false),不擋表格主體。
  *
- * Hash 策略:對 stock_id 做 djb2(deterministic;同 stock_id 永遠回同樣 placeholder)。
+ * Hash 策略(fake):對 stock_id 做 djb2(deterministic;同 stock_id 永遠同樣輸出)。
  */
 
 import type { Certainty } from '$contracts/neely/Certainty';
+import type { WaveSummaryRow } from '$contracts/fusion';
+import { getWavesSummary, type WaveTimeframe } from '$lib/api/waves_summary';
+import type { FetchOptions } from '$lib/api/client';
 
 export type ResonanceLevel = 'strong' | 'basic' | 'divergence' | 'none';
 export type WaveDirection = 'up' | 'down' | 'flat' | 'correction';
@@ -24,12 +28,94 @@ export interface WaveDigest {
   /** scenario_forest 長度。 */
   scenarioCount: number;
   certainty: Certainty;
-  /** 6-10 個 sparkline 樣本點(歸一化 0..1)。 */
+  /** ≤10 個 sparkline 樣本點(歸一化 0..1;後端 monowave 尾段)。 */
   sparkline: number[];
   resonance: ResonanceLevel;
-  /** 是否為原型 placeholder(production 接真實端點時應為 false)。 */
+  /** 是否為 placeholder fake(真實端點資料為 false)。 */
   isPlaceholder: boolean;
 }
+
+// ── 真實端點 → WaveDigest ───────────────────────────────────────────────────
+
+const DIRECTIONS: readonly WaveDirection[] = ['up', 'down', 'flat', 'correction'];
+const CERTAINTIES: readonly Certainty[] = ['Primary', 'Possible', 'Rare', 'MissingWaveBundle'];
+const RESONANCES: readonly ResonanceLevel[] = ['strong', 'basic', 'divergence', 'none'];
+
+function asEnum<T extends string>(v: unknown, pool: readonly T[], fallback: T): T {
+  return pool.includes(v as T) ? (v as T) : fallback;
+}
+
+/** insufficient 退化值(API 失敗 / 該股無資料時的 cell 狀態)。 */
+export function insufficientDigest(stockId: string): WaveDigest {
+  return {
+    stockId,
+    insufficient: true,
+    label: '',
+    direction: 'flat',
+    scenarioCount: 0,
+    certainty: 'Possible',
+    sparkline: [],
+    resonance: 'none',
+    isPlaceholder: false
+  };
+}
+
+/** /waves/summary row → WaveDigest(純映射,enum 防衛性收斂)。 */
+export function digestFromRow(row: WaveSummaryRow): WaveDigest {
+  if (row.insufficient) return insufficientDigest(row.stock_id);
+  return {
+    stockId: row.stock_id,
+    insufficient: false,
+    label: row.label,
+    direction: asEnum(row.direction, DIRECTIONS, 'flat'),
+    scenarioCount: row.scenario_count,
+    certainty: asEnum(row.certainty, CERTAINTIES, 'Possible'),
+    sparkline: row.sparkline,
+    resonance: asEnum(row.resonance, RESONANCES, 'none'),
+    isPlaceholder: false
+  };
+}
+
+export interface FetchWaveDigestsArgs {
+  stockIds: string[];
+  date: Date | string;
+  timeframe?: WaveTimeframe;
+}
+
+/**
+ * 批次取 WAVE digest(V2 表格唯一入口)。
+ *
+ * - `VITE_WAVE_PLACEHOLDER=1` → fake(整欄 PH 角標)
+ * - API 失敗 → 整欄 insufficient(不 throw,表格主體照常)
+ */
+export async function fetchWaveDigests(
+  args: FetchWaveDigestsArgs,
+  opts?: FetchOptions
+): Promise<Map<string, WaveDigest>> {
+  const { stockIds } = args;
+  if (stockIds.length === 0) return new Map();
+
+  if (import.meta.env?.VITE_WAVE_PLACEHOLDER === '1') {
+    return new Map(stockIds.map((id) => [id, getWaveDigest(id)]));
+  }
+
+  try {
+    const res = await getWavesSummary(
+      { stockIds, date: args.date, timeframe: args.timeframe },
+      opts
+    );
+    const out = new Map(res.rows.map((r) => [r.stock_id, digestFromRow(r)]));
+    // 防後端漏列(理論上不會):缺檔補 insufficient
+    for (const id of stockIds) {
+      if (!out.has(id)) out.set(id, insufficientDigest(id));
+    }
+    return out;
+  } catch {
+    return new Map(stockIds.map((id) => [id, insufficientDigest(id)]));
+  }
+}
+
+// ── fake 產生器(dev fallback + test fixture)────────────────────────────────
 
 const LABELS = [
   '5-3-5 ZZ·W4',
@@ -93,6 +179,7 @@ function pickWeighted<T>(rng: () => number, pool: Array<{ value: T; weight: numb
   return pool[pool.length - 1].value;
 }
 
+/** fake digest(deterministic;dev fallback / test fixture 用)。 */
 export function getWaveDigest(stockId: string): WaveDigest {
   const seed = djb2(stockId);
   const rng = lcg(seed);
@@ -100,17 +187,7 @@ export function getWaveDigest(stockId: string): WaveDigest {
   // ~5% 命中 insufficient_data(對齊 plan Phase 4「random 5% insufficient」)
   const insufficient = rng() < 0.05;
   if (insufficient) {
-    return {
-      stockId,
-      insufficient: true,
-      label: '',
-      direction: 'flat',
-      scenarioCount: 0,
-      certainty: 'Possible',
-      sparkline: [],
-      resonance: 'none',
-      isPlaceholder: true
-    };
+    return { ...insufficientDigest(stockId), isPlaceholder: true };
   }
 
   const label = LABELS[Math.floor(rng() * LABELS.length)];
@@ -145,8 +222,4 @@ export function getWaveDigest(stockId: string): WaveDigest {
     resonance,
     isPlaceholder: true
   };
-}
-
-export function getWaveDigests(stockIds: string[]): WaveDigest[] {
-  return stockIds.map(getWaveDigest);
 }
