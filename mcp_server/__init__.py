@@ -1,8 +1,6 @@
 """StockHelper4me MCP Server.
 
-對齊 plan `/root/.claude/plans/hashed-foraging-pixel.md`(MCP v2 重構)。
-
-把 src/agg/ aggregation layer + dashboards/charts/ plotly figure builders 包成
+把 src/fusion/ aggregation layer + dashboards/charts/ plotly figure builders 包成
 MCP(Model Context Protocol)server,讓 Claude Desktop 對話內直接 call tools
 查資料 + 看套圖。
 
@@ -20,7 +18,7 @@ Transport: stdio(本機 process)。Phase 2 再 lift 同套 tools 到 HTTP transp
 (Render PNG tools 自 v3.30 停用、2026-06 移除;前端改 web-native Plotly。)
 """
 
-# v3.5 R5 C12:連線 single entry 全走 fusion.raw._db.get_connection,DELETE mcp_server/_conn.py
+# v3.5 R5 C12:連線 single entry 全走 fusion.raw.get_connection,DELETE mcp_server/_conn.py
 # 對齊 dashboards/aggregation.py 同一 sys.path 模式 — 確保從 repo root 跑
 # `python -m mcp_server` 時 src/(放 agg/ silver/ bronze/ cross_cores/)+ repo root
 # (放 dashboards/)都在 sys.path。

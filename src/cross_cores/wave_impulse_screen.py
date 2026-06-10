@@ -40,8 +40,7 @@ DOWN** → 預期新 impulse 啟動(對齊 NEoWave「A-B-C 結束後啟動新 im
 - NEoWave Ch6/7:corrective pattern 收尾後啟動新 impulse(Glenn Neely 1990
   "Mastering Elliott Wave")
 - Prechter & Frost (1978) "Elliott Wave Principle" Ch.2 主升段定義
-- r3 pivot 完整討論 + production data 見 commit message + plan
-  /root/.claude/plans/wave-impulse-cross-stock-virtual-papert.md
+- r3 pivot 完整討論 + production data 見 commit message + docs/changelog/(v4.26)
 """
 
 from __future__ import annotations

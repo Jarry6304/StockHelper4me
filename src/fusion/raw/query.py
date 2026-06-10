@@ -50,7 +50,7 @@ def as_of(
     Args:
         stock_id: 股票代號(例 "2330",或保留字 "_index_taiex_")
         as_of: 查詢日(回測 / 即時都用同一介面)
-        cores: 限制 source_core 範圍。None = 全部 23 cores
+        cores: 限制 source_core 範圍。None = 全部 cores(清單以 Cargo workspace 為準)
         lookback_days: daily facts 期間。預設 90 天(對齊 spec §4.2)
         lookback_days_monthly: monthly facts 期間。預設 90 天 = 3 個發布週期(spec §4.2)
         lookback_days_quarterly: quarterly facts 期間。預設 180 天 = 2 季(spec §4.2)

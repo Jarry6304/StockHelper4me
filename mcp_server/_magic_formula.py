@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from fusion.raw._db import (
+from fusion.raw import (
     fetch_cross_stock_ranked,
     get_connection,
 )  # v3.5 R5 C12+C13:connection single entry + cross-stock helper
@@ -32,7 +32,7 @@ def compute_magic_formula_screen(
 ) -> dict[str, Any]:
     """跑 Magic Formula top-N 篩選。
 
-    v3.5 R5 C13:cross-stock 邏輯走 `fusion.raw._db.fetch_cross_stock_ranked` 通用 helper;
+    v3.5 R5 C13:cross-stock 邏輯走 `fusion.raw.fetch_cross_stock_ranked` 通用 helper;
     universe_size + stats 仍是 magic_formula 特有的 percentile 統計,留在本 file。
 
     Args:

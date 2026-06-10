@@ -2,7 +2,7 @@
 
 跑:`uvicorn web_api.app:app`(需 `pip install -e ".[web]"` + DATABASE_URL)。
 全端點唯讀 / 切片,零 compute(對齊 m3Spec/read-api.md)。handler 為 sync(FastAPI
-threadpool)+ 每請求 sync psycopg conn(fusion.raw._db.get_connection)→ 完全不碰 asyncio
+threadpool)+ 每請求 sync psycopg conn(fusion.raw.get_connection)→ 完全不碰 asyncio
 event loop(Windows ProactorEventLoop / Python 3.14 安全)。
 """
 

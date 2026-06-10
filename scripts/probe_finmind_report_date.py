@@ -33,6 +33,8 @@ from pathlib import Path
 
 import aiohttp
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
 # Windows cp950 console UTF-8 修法
 if sys.platform == "win32":
     try:
@@ -75,17 +77,12 @@ def _resolve_token(cli_token: str | None) -> str | None:
     tok = os.environ.get("FINMIND_TOKEN")
     if tok:
         return tok
-    # Try repo root .env
-    try:
-        from dotenv import load_dotenv
-        repo_root = Path(__file__).resolve().parent.parent
-        env_path = repo_root / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-            return os.environ.get("FINMIND_TOKEN")
-    except ImportError:
-        pass
-    return None
+    # repo-root .env 載入走 src/dsn.py 單一真相源(P2-2);本腳本只需 token
+    # 副作用,不需 DATABASE_URL,故用 load_repo_env 而非 resolve_database_url。
+    from dsn import load_repo_env
+
+    load_repo_env()
+    return os.environ.get("FINMIND_TOKEN")
 
 
 async def _probe_one(

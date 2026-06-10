@@ -1,7 +1,6 @@
 """Interval-forecast spine: forecast_log table (v0.3 spec, Phase 1)
 
-對齊 user v0.3 區間預測 spine spec(2026-05-23 session)+ plan 文件
-`/root/.claude/plans/stockhelper4me-serene-thacker.md` Phase 1。
+對齊 user v0.3 區間預測 spine spec(2026-05-23 session)Phase 1。
 
 `forecast_log` 為機械軌 backtest 與裁量軌 forward log 共用 sink,與 `facts` 表
 並列(同 PG schema,職責不同)。一個 source_core 對同一 (stock, T, horizon)

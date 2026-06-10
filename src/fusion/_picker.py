@@ -3,6 +3,8 @@ fusion/_picker.py
 =================
 NEoWave forest scenario picker 共用 helpers — 跨模組 single source of truth。
 
+套件內部模組;外部請 import `fusion` 頂層公開出口(P2-1)。
+
 對齊 v4.26 follow-up:`track1.py`(v4.25.x canonical)+ `_forecast.py`(v3.35
 較舊)兩處 drift consolidation。本檔抽出 **truly identical** 的 helper(power
 rating / pattern type / wave count / date 解析),既有 caller import 此處取代

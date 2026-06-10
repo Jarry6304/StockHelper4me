@@ -2,7 +2,7 @@
 name        = "neely_core"
 version     = "0.1.0"
 edition     = "2021"
-description = "Neely Wave Core(P0;對齊 m2Spec/oldm2Spec/neely_core.md r2)— skeleton 階段"
+description = "Neely Wave Core(P0;對齊 docs/archive/oldm2Spec/neely_core.md r2)— skeleton 階段"
 
 [lib]
 path = "src/lib.rs"
@@ -21,4 +21,6 @@ ts-rs          = { version = "10", features = ["chrono-impl"], optional = true }
 [features]
 # `cargo test --features ts` 從 output.rs 型別樹生 TS interface(drift 被抓 = 治本)。
 # 生產 `cargo build --release -p tw_cores` 走預設 feature(不含 ts)→ 不引入 ts-rs。
-ts = ["dep:ts-rs"]
+# P1-1:OhlcvSeries 下放 fact_schema 後,ts feature 必須串 fact_schema/ts,
+# 否則 codegen 缺 OhlcvSeries / OhlcvBar 型別(契約 diff 非空即此因)。
+ts = ["dep:ts-rs", "fact_schema/ts"]

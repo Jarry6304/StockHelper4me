@@ -8,7 +8,6 @@ Provides:
 - backtest harness (`backtest.run_backtest`)
 
 Spec source: user v0.3 interval-forecast spine spec (this session, 2026-05-23).
-Plan: /root/.claude/plans/stockhelper4me-serene-thacker.md
 """
 
 from forecast._db import (

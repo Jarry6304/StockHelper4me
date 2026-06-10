@@ -32,7 +32,7 @@ def fetch_traditional_forest(
     database_url: str | None = None,
 ) -> dict[str, Any] | None:
     """讀 traditional_snapshots 最新 forest dict(latest per (stock, timeframe))。None = 無 row。"""
-    from fusion.raw._db import get_connection
+    from fusion.raw import get_connection
 
     conn = get_connection(database_url)
     try:

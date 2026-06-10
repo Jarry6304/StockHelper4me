@@ -1,6 +1,6 @@
 """wave_impulse_screen_derived — Wave Impulse Cross-Stock Screen
 
-對齊 plan `/root/.claude/plans/wave-impulse-cross-stock-virtual-papert.md` §6 Schema。
+Schema 拍版歷程見 docs/changelog/(v4.26)。
 
 cross_cores Phase 8 第 12 個 builder。讀 `structural_snapshots`(neely_core forest)
 → 套既有 picker → 雙軸驗證浪位 → emit cross-stock ranking 表。

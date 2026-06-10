@@ -1066,7 +1066,7 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
     #
     # ⚠️ v4.30(2026-05-29)dirty queue 設計揭露:Silver 7c 走 dirty queue
     # 時,只重算「有新 price_adjustment_events」的少數 stocks(對齊
-    # `m2Spec/oldm2Spec/collector_rust_restructure_blueprint_v3_2.md §5.7`
+    # `docs/archive/oldm2Spec/collector_rust_restructure_blueprint_v3_2.md §5.7`
     # multiplier 倒推設計)。但 daily price_daily incremental 寫入新一天的 close
     # *沒* 觸發 dirty → fwd 表停留在上次 full-rebuild 日期 → magic_formula /
     # kalman / 任何讀 latest price_daily_fwd 的下游全 stale。

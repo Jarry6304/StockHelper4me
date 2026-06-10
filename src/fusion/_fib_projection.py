@@ -1,5 +1,7 @@
 """Fibonacci 投影 + 失效價抽取共用 helper(single source of truth)。
 
+套件內部模組;外部請 import `fusion` 頂層公開出口(P2-1)。
+
 v4.33 從 `mcp_server/_forecast.py` 抽出 — 原為 module-private(`_project_range` /
 `_find_closest_zone` / `_extract_invalidation_price` / `_TIMEFRAME_FIB_RANGE`)。
 neelywave 複合雲圖(dashboards/charts/neely_wave.py)與 forecast tool 兩處共用,

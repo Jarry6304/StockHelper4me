@@ -2,7 +2,7 @@
 
 > **版本**:v1.1(v3.5 R3 後 Cross-Stock Cores Layer 2.5 新層加進架構)
 > **日期**:2026-05-16
-> **配套文件**:`data_refactor_plan.md`(重構計畫)、`cores_overview.md`(Cores 層通用規範)、`adr/0001_tw_market_handling.md`、plan `/root/.claude/plans/hashed-foraging-pixel.md`(v3.5 5 層架構重構)
+> **配套文件**:`data_refactor_plan.md`(重構計畫)、`cores_overview.md`(Cores 層通用規範)、`adr/0001_tw_market_handling.md`、docs/changelog/(v3.5 5 層架構重構歷程)
 > **適用範圍**:tw-stock-collector / StockHelper4me — PR #R1~#R6 完成後的目標狀態 + v3.5 R1-R5 layer reshape
 > **架構原則**:本文件遵循 README「架構原則:計算 / 規則分層」—— Silver per-stock 與 Cross-Stock 兩條 builder 軌道分擔複雜計算,Cores 層只做規則 / 算式套用。詳見 §1.5。
 > **目的**:

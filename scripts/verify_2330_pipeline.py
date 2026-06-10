@@ -24,7 +24,7 @@ for _p in (str(_REPO / "src"), str(_REPO)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from fusion.raw._db import get_connection  # noqa: E402
+from fusion.raw import get_connection  # noqa: E402
 
 RESULTS: list[tuple[str, str, str, str]] = []  # (stage, check, status, detail)
 _REL_TOL = 1e-3   # 相對容差(浮點重算)

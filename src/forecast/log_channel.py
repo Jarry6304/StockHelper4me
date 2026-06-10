@@ -1,7 +1,6 @@
 """log_channel forecast core — trailing-window OLS on log(close).
 
-對齊 user v0.3 區間預測 spec phase 5 + plan 文件
-/root/.claude/plans/stockhelper4me-serene-thacker.md phase 5。
+對齊 user v0.3 區間預測 spec phase 5。
 
 對近 window 個 log(asof_adj_close) 做 OLS:
   log_p_t = β0 + β1·t + ε

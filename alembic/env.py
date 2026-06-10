@@ -16,7 +16,10 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
-# 載入 .env(若存在)
+# 載入 .env(若存在)— 鏡像 src/dsn.py 解析語意(P2-2 拍板 B:本檔保留
+# 等義副本換零安裝自足,fresh clone 未 pip install 也能跑 migration;
+# 改 src/dsn.py 語意必同步本段)。driver prefix 轉換(下方)為 SQLAlchemy
+# 專屬,永遠留在本檔。
 try:
     from dotenv import load_dotenv
 

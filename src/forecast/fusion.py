@@ -38,7 +38,7 @@ Future work(M8+,獨立 sprint):
       - fundamental_forecast_core ← revenue YoY + financial_statement
     每個 follow 既有 5 接點 pattern(寫 forecast_log calibrated=False →
     conformalize 加 X / X_cqr → 進 eligible_cores 自動 picked up)。完整紀錄
-    見 CLAUDE.md §v4.23。
+    見 docs/changelog/v4.20-v4.29.md §v4.23。
 """
 
 from __future__ import annotations

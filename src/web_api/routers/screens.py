@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
-from fusion.raw._db import ALLOWED_RANKED_TABLES, fetch_cross_stock_ranked
+from fusion.raw import ALLOWED_RANKED_TABLES, fetch_cross_stock_ranked
 from web_api.pool import db_conn
 
 router = APIRouter(prefix="/screens", tags=["screens"])
@@ -28,9 +28,9 @@ _ALLOWED: dict[str, str] = {
     "dividend_yield": "dividend_yield_ranked_derived",
     "mom_12_1": "mom_12_1_ranked_derived",
 }
-# 與 library 層權威白名單(fusion.raw._db)對齊,防兩處 drift(import-time 即炸)。
+# 與 library 層權威白名單(fusion.raw)對齊,防兩處 drift(import-time 即炸)。
 assert set(_ALLOWED.values()) <= ALLOWED_RANKED_TABLES, (
-    "screens._ALLOWED 含 fusion.raw._db.ALLOWED_RANKED_TABLES 未涵蓋的表"
+    "screens._ALLOWED 含 fusion.raw.ALLOWED_RANKED_TABLES 未涵蓋的表"
 )
 
 

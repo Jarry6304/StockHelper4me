@@ -569,22 +569,9 @@ def create_writer(connection_url: str | None = None) -> DBWriter:
     Raises:
         RuntimeError: 環境變數缺失且未提供 connection_url
     """
-    # 鏡像 alembic/env.py:載 .env 檔(若存在),讓 verify_*.py / main.py 等
-    # 入口不必各自手動 load_dotenv。load_dotenv 預設不覆蓋已存在的環境變數。
-    try:
-        from dotenv import load_dotenv
+    # DSN / .env 解析委派 src/dsn.py 單一真相源(P2-2);
+    # 副作用(載 .env 帶入 FINMIND_TOKEN 等)保留,讓 verify_*.py / main.py
+    # 等入口不必各自手動載 .env。
+    from dsn import resolve_database_url
 
-        env_path = Path(__file__).resolve().parent.parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-    except ImportError:
-        pass
-
-    url = connection_url or os.getenv("DATABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "DATABASE_URL 未設定。請執行以下任一:\n"
-            "  1. export DATABASE_URL=postgresql://twstock:twstock@localhost:5432/twstock\n"
-            "  2. 在 .env 檔設定 DATABASE_URL(配合 python-dotenv)"
-        )
-    return PostgresWriter(url)
+    return PostgresWriter(resolve_database_url(connection_url))

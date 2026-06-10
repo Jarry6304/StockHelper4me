@@ -1,7 +1,4 @@
-"""Plotly figure builders 共用元件 — palette / layout / 工具。
-
-對齊 plan /root/.claude/plans/squishy-foraging-stroustrup.md。
-"""
+"""Plotly figure builders 共用元件 — palette / layout / 工具。"""
 
 from __future__ import annotations
 

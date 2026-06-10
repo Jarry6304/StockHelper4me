@@ -1,6 +1,6 @@
 """Aggregation Layer Streamlit dashboard(Phase C)。
 
-對齊 m3Spec/aggregation_layer.md r1 + plan /root/.claude/plans/squishy-foraging-stroustrup.md。
+對齊 m3Spec/aggregation_layer.md r1。
 
 6 tabs:
 1. 📈 K-line  ── candlestick + bollinger + MA + neely zigzag + 6 indicator subplots + facts markers
@@ -342,7 +342,7 @@ with tab_neely:
         if show_res:
             try:
                 from fusion.dual_track.resonance import resonance
-                from fusion.raw._db import get_connection
+                from fusion.raw import get_connection
                 with get_connection() as _conn:
                     resonance_result = resonance(
                         stock_id, as_of_date, conn=_conn,

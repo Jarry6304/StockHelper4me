@@ -51,7 +51,7 @@ pub async fn run_stock_cores(
         for nt in neely_timeframes {
             let mut neely_params = neely_core::NeelyCoreParams::default();
             neely_params.timeframe = nt;
-            match ohlcv_loader::load_for_neely(pool, stock_id, &neely_params).await {
+            match crate::helpers::load_for_neely(pool, stock_id, &neely_params).await {
                 Ok(series) => summary.push(dispatch_neely(pool, stock_id, &series, neely_params, write).await),
                 Err(e) => summary.push(loader_err_summary(
                     "neely_core", stock_id, "load_for_neely", &e,

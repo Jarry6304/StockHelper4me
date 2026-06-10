@@ -1,7 +1,6 @@
 # dashboards/ — Streamlit 視覺化 Dashboard(Phase B-3 + C 視覺化主幹)
 
-對齊 m3Spec/aggregation_layer.md r1 + plan
-`/root/.claude/plans/squishy-foraging-stroustrup.md`(已 archive)。
+對齊 m3Spec/aggregation_layer.md r1。
 
 ## 安裝
 

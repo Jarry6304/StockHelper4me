@@ -2,7 +2,7 @@
 name        = "fact_schema"
 version     = "0.1.0"
 edition     = "2021"
-description = "Cores 共用 Fact / Trait / Timeframe 定義(對齊 m2Spec/oldm2Spec/cores_overview.md §3 §6.2)"
+description = "Cores 共用 Fact / Trait / Timeframe 定義(對齊 docs/archive/oldm2Spec/cores_overview.md §3 §6.2)"
 
 [dependencies]
 serde      = { workspace = true }
@@ -10,3 +10,9 @@ serde_json = { workspace = true }
 chrono     = { workspace = true }
 anyhow     = { workspace = true }
 blake3     = { workspace = true }
+# P1-1:OhlcvSeries / OhlcvBar 下放至本 crate,ts 契約 codegen 隨型別走
+# (feature-gated → 生產 build 預設不開,零風險;對齊 neely_core 同款宣告)
+ts-rs      = { version = "10", features = ["chrono-impl"], optional = true }
+
+[features]
+ts = ["dep:ts-rs"]

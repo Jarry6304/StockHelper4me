@@ -1,7 +1,6 @@
 """Plotly figure builders for Aggregation dashboard(Phase C)。
 
-對齊 m3Spec/aggregation_layer.md §11 Phase B-3 + plan
-/root/.claude/plans/squishy-foraging-stroustrup.md。
+對齊 m3Spec/aggregation_layer.md §11 Phase B-3。
 
 模組分工:
 - _base:共用 palette / layout helpers

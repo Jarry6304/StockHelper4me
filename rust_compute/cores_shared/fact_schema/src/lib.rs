@@ -17,6 +17,10 @@ use anyhow::Result;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
+// OHLCV 共用型別(P1-1 自 neely_core 下放;見 ohlcv.rs 檔頭 rationale)
+pub mod ohlcv;
+pub use ohlcv::{OhlcvBar, OhlcvSeries};
+
 // ---------------------------------------------------------------------------
 // Timeframe
 // ---------------------------------------------------------------------------
