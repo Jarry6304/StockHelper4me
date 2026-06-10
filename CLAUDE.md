@@ -240,9 +240,10 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 
 ## 下次 session 優先序
 
-1. **架構整備 P0-P2**(2026-06-10 spec):P0-1/P0-2 文件拆分與 docstring 清理、P1-1 `OhlcvSeries`
-   下放 fact_schema、P1-2 `tools/data.py` 拆域檔、P2-1 fusion 公開面、P2-2 DSN 單一真相源、
-   P2-3 README 瘦身 + oldm2Spec 歸檔 — 完成者見 docs/changelog/ 最新帶檔。
+1. **架構整備 P0-P2 production verify**:7 項已全收尾(2026-06-10,見
+   `docs/changelog/architecture-p0-p2.md`);DB-bound 驗收留本機 —
+   `verify_mcp_toolkit_v4_29.py` 退碼 0 / 任意 cwd 四入口連線(P2-2)/
+   `tw_cores run-all --stocks 2330` 輸出 row-identical(P1-1)。
 2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)② V2 WAVE 欄真實端點
    拍版 (a)/(b)/(c) — 詳見 `docs/changelog/process-logs.md` §待辦 backlog。
 3. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。

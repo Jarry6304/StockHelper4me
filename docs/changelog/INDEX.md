@@ -4,6 +4,7 @@
 
 | 版本 | 日期 | 一句話 | 檔案 |
 |---|---|---|---|
+| P0–P2 | 2026-06-10 | 架構整備:文件拆分 / data.py 域檔 / fusion 公開面… | architecture-p0-p2.md |
 | v4.38 | 2026-06-06 | Web 前端原型(Svelte + Plotly):個股 W… | v4.30-v4.38.md |
 | v4.37 | 2026-06-06 | Traditional Core production 收尾… | v4.30-v4.38.md |
 | v4.36 | 2026-06-04 | DB sync 單緒寫入全面並行化:Bronze + Sil… | v4.30-v4.38.md |

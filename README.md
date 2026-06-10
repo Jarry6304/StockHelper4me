@@ -337,7 +337,7 @@ WAVE 欄原型走 `placeholder.ts`(deterministic djb2 + LCG 產 fake digest),真
 端點留 production hardening 拍版 (a) 新批次 `/waves/summary` / (b) 物化進
 `*_ranked_derived` / (c) lazy 單檔。對齊 spec 「待議」。
 
-詳見 §v4.38 + plan `/root/.claude/plans/stockhelper4me-web-recursive-adleman.md`。
+詳見 `docs/changelog/v4.30-v4.38.md` §v4.38。
 
 ### 4.10 排程與任務總覽(一次看懂要跑什麼)
 
