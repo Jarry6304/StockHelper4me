@@ -342,7 +342,7 @@ with tab_neely:
         if show_res:
             try:
                 from fusion.dual_track.resonance import resonance
-                from fusion.raw._db import get_connection
+                from fusion.raw import get_connection
                 with get_connection() as _conn:
                     resonance_result = resonance(
                         stock_id, as_of_date, conn=_conn,

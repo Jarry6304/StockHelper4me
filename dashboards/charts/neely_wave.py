@@ -25,12 +25,12 @@ from typing import Any
 import plotly.graph_objects as go
 
 from dashboards.charts._base import PALETTE, coerce_date, neely_monowave_points
-from fusion._fib_projection import (
+from fusion import (
     TIMEFRAME_FIB_RANGE,
     extract_invalidation_price,
     project_range,
 )
-from fusion._picker import effective_degree, power_rating_sign, power_rating_strength
+from fusion import effective_degree, power_rating_sign, power_rating_strength
 from forecast.neely_emitter import _DEFAULT_HORIZON, _DEGREE_TO_HORIZON
 
 

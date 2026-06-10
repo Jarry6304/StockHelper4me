@@ -36,7 +36,7 @@ from typing import Any
 # `coerce_date` 回 None,簽章不同;留 future PR 統一處理 error handling 路徑)
 # B1:_DEGREE_RANK + classify 也收斂到 _picker(此檔之前已是 11-level canonical,
 # 改為 delegate;_degree_rank / _compute_scenario_effective_degree 變 thin wrapper)。
-from fusion._picker import (
+from fusion import (
     DEGREE_RANK as _DEGREE_RANK_CANONICAL,
     classify_degree_by_years as _classify_degree_by_years_canonical,
     degree_rank as _degree_rank_canonical,
@@ -44,9 +44,9 @@ from fusion._picker import (
     power_rating_sign as _power_rating_sign,
     power_rating_strength as _power_rating_strength,
 )
-# v4.33 投影 / 失效抽取 helper 抽到 fusion._fib_projection(single source of truth,
+# v4.33 投影 / 失效抽取 helper 抽到 fusion 公開出口(實作在套件內部模組;single source of truth,
 # dashboards neelywave 複合雲圖共用)。以舊私名 alias 保留,內部呼叫端 0 改動。
-from fusion._fib_projection import (
+from fusion import (
     TIMEFRAME_FIB_RANGE as _TIMEFRAME_FIB_RANGE,
     extract_invalidation_price as _extract_invalidation_price,
     find_closest_zone as _find_closest_zone,
@@ -62,7 +62,7 @@ from fusion._fib_projection import (
 #
 # 每個 horizon 用 fib zones 的 ratio 範圍取 range_high / range_low
 # ratio_lo = 預期下界 fib;ratio_hi = 預期上界 fib
-# (v4.33 _TIMEFRAME_FIB_RANGE 定義搬到 fusion._fib_projection,上方 import 回來)
+# (v4.33 _TIMEFRAME_FIB_RANGE 定義搬進 fusion 套件,上方 import 回來)
 
 # Prob_up 時間衰減(plan §Tool 1 第 3 點;v3.38 對齊 3 horizon)
 _TIMEFRAME_DECAY: dict[str, float] = {
@@ -389,7 +389,7 @@ def _scenario_is_invalidated(scenario: dict, current_price: float) -> bool:
     v3.35 原版 direction-blind ANY-kind logic 自此退役(對齊 v4.25.1 揭露的
     「production 反咬」+ b1 skill「禁 direction-blind fallback」)。
     """
-    from fusion._picker import canonical_is_invalidated
+    from fusion import canonical_is_invalidated
     return canonical_is_invalidated(scenario, current_price)
 
 

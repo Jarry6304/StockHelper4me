@@ -62,7 +62,7 @@ def _read_materialized_snapshot(
         extract_snapshot_with_provenance,
         fetch_fusion_doc,
     )
-    from fusion.raw._db import get_connection
+    from fusion.raw import get_connection
 
     try:
         conn = get_connection(database_url)

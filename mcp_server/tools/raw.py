@@ -196,7 +196,7 @@ def fetch_ohlc(
         list[dict] {date, open, high, low, close, volume},ORDER BY date ASC。
         date 欄全 ISO 字串。
     """
-    from fusion.raw._db import fetch_ohlc as _fetch, get_connection
+    from fusion.raw import fetch_ohlc as _fetch, get_connection
 
     conn = get_connection()
     try:

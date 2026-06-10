@@ -158,8 +158,7 @@ def compute_market_context(
     Returns:
         dict 結構對齊 plan §Tool 3 Output(v3.25 後 ~2 KB / ~500 tokens)
     """
-    from fusion.raw._db import get_connection
-    from fusion.raw._market import fetch_market_facts
+    from fusion.raw import fetch_market_facts, get_connection
 
     own_conn = conn is None
     if own_conn:

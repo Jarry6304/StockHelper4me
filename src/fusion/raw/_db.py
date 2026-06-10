@@ -1,5 +1,7 @@
 """Aggregation Layer PG connection helper.
 
+套件內部模組;外部請 import `fusion.raw` 公開出口(P2-1)。
+
 對齊 src/db.py:create_writer() 的 .env 載入 + DATABASE_URL 處理。
 本 layer 純讀,故直接 psycopg connection(不走 PostgresWriter wrapper 的 write methods)。
 """

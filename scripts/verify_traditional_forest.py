@@ -18,7 +18,7 @@ for p in (str(_REPO / "src"), str(_REPO)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from fusion.raw._db import get_connection  # noqa: E402
+from fusion.raw import get_connection  # noqa: E402
 
 _DIST_SQL = """
 SELECT timeframe,

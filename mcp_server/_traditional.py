@@ -37,7 +37,7 @@ def compute_traditional_forest(
     database_url: str | None = None,
 ) -> dict[str, Any]:
     """回 traditional forest 摘要(讀 traditional_snapshots 最新 row)。"""
-    from fusion.raw._db import get_connection
+    from fusion.raw import get_connection
 
     conn = get_connection(database_url)
     try:

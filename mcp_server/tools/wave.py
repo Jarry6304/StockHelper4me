@@ -193,7 +193,7 @@ def dual_track_resonance(
         - 現價跌破 invalidation_price → single_track_mode=True,共振判定跳過
     """
     from fusion.dual_track import resonance as _dual_resonance
-    from fusion.raw._db import ALLOWED_RANKED_TABLES, get_connection
+    from fusion.raw import ALLOWED_RANKED_TABLES, get_connection
 
     as_of = _parse_date(date)
     # SQL identifier 注入防護:cross_stock_table 由 caller(LLM)控,非白名單表名
