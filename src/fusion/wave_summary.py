@@ -122,6 +122,32 @@ def _scenario_certainty(scenario: dict[str, Any]) -> str:
     return best or "Possible"
 
 
+def _compact_label(scenario: dict[str, Any]) -> str:
+    """cell 用緊湊標籤(對齊 wireframe "Flat·BFailure" 風格,CL5 summary-only)。
+
+    raw `structure_label` 是 Rust Debug 格式長字串
+    (例 "Flat { sub_kind: BFailure } Down (3-wave from mw238 to mw240)",
+    2026-06-11 production 實測 ~50 字元)— 直接進 11px mono cell 會撐爆表格;
+    從 pattern_type 結構化欄位組緊湊型,完整 label 看 V1 個股卡。
+    """
+    pt = scenario.get("pattern_type")
+    if isinstance(pt, str) and pt:
+        return pt  # "Impulse" / "RunningCorrection"
+    if isinstance(pt, dict) and pt:
+        kind = next(iter(pt))
+        val = pt.get(kind)
+        if isinstance(val, dict):
+            sub = val.get("sub_kind")
+            if isinstance(sub, str) and sub:
+                return f"{kind}·{sub}"
+            subs = val.get("sub_kinds")
+            if isinstance(subs, list) and subs:
+                return f"{kind}·" + "+".join(str(s) for s in subs[:2])
+        return str(kind)
+    # pattern_type 缺值 fallback:截短 raw label
+    return str(scenario.get("structure_label") or "")[:24]
+
+
 def _scenario_direction(scenario: dict[str, Any]) -> str:
     """WAVE 欄 4 向箭頭語意:修正型結構 → correction(↘);推動型依 power 符號。
 
@@ -250,7 +276,7 @@ def digest_from_docs(
     return {
         "stock_id": stock_id,
         "insufficient": False,
-        "label": str(top.get("structure_label") or ""),
+        "label": _compact_label(top),
         "direction": _scenario_direction(top),
         "scenario_count": len(forest),
         "certainty": _scenario_certainty(top),

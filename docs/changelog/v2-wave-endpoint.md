@@ -38,6 +38,21 @@ production 分布 p50=4 / p95=11 scenarios → 30 檔讀時抽取成本可忽略
 3. 「只動 getWaveDigest() 1 個 module」實際 = placeholder.ts 改寫 + loader/props
    3 處 pass-through(digests 需從 loader 下發;cell 與 fake 產生器確實只在 1 個 module)
 
+## Production 實踩兩修(2026-06-11 user 本機首發)
+
+1. **uvicorn `ModuleNotFoundError: dsn`**:本端點是 uvicorn 下第一個真打 DB 的
+   路徑(/health 不碰連線),觸發 `fusion.raw._db → from dsn import …`;user venv
+   的 editable install 早於 P2-2,模組對映快照缺新增的頂層 `src/dsn.py`。
+   修:`web_api/__init__.py` 自插 `src/` 進 sys.path(對齊 mcp_server / dashboards
+   既有慣例,web_api 原是唯一漏的入口)+ `tests/web_api/test_syspath.py` 回歸鎖。
+2. **label 撐爆 cell**:raw `structure_label` 是 Rust Debug 原文
+   (`"Flat { sub_kind: BFailure } Down (3-wave from mw238 to mw240)"`,~50 字元)。
+   修:伺服端 `_compact_label` 自 pattern_type 組緊湊型(`Flat·BFailure`,對齊
+   wireframe 風格;完整 label 看 V1 卡)— 前端零 compute,不讓前端解析 Rust 字串。
+
+本機 200 OK 實測(修 1 後):2330 → `Flat BFailure / correction / count=24 /
+Primary / divergence / staleness=1`;3030 → `Impulse / up / count=17`。
+
 ## 驗證(2026-06-11 sandbox)
 
 - `pytest tests/` **1023 passed**(+38:fusion 抽取 24 + web_api 端點 14)/ 1 pre-existing fail / 2 xfailed

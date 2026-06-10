@@ -23,7 +23,9 @@ AS_OF = date(2026, 6, 11)
 def _scenario(
     *,
     label: str = "Impulse·W3",
-    pattern_type="Impulse",
+    # 預設 None → label 走 structure_label fallback(picker 身分測試直接認 label);
+    # 緊湊標籤組裝另測 TestCompactLabel
+    pattern_type=None,
     power: str = "Bullish",
     end: str = "2026-06-01",
     passed: int = 10,
@@ -80,12 +82,12 @@ def _reso_row(findings_levels: list[str], *, single_track: bool = False) -> dict
 
 class TestDigestFromDocs:
     def test_normal_extraction(self):
-        row = _neely_row([_scenario()])
+        row = _neely_row([_scenario(pattern_type="Impulse")])
         d = digest_from_docs("2330", row, _reso_row(["basic"]), AS_OF)
         assert d == {
             "stock_id": "2330",
             "insufficient": False,
-            "label": "Impulse·W3",
+            "label": "Impulse",
             "direction": "up",
             "scenario_count": 1,
             "certainty": "Primary",
@@ -155,6 +157,30 @@ class TestDigestFromDocs:
         assert d["insufficient"] is True
         assert d["label"] == "" and d["scenario_count"] == 0
         assert d["sparkline"] == [] and d["resonance"] == "none"
+
+
+class TestCompactLabel:
+    """cell 緊湊標籤(production 實測 raw structure_label 是 ~50 字元 Rust Debug 原文)。"""
+
+    @pytest.mark.parametrize("pattern_type,expect", [
+        ("Impulse", "Impulse"),
+        ("RunningCorrection", "RunningCorrection"),
+        ({"Flat": {"sub_kind": "BFailure"}}, "Flat·BFailure"),
+        ({"Zigzag": {"sub_kind": "Normal"}}, "Zigzag·Normal"),
+        ({"Diagonal": {"sub_kind": "Leading"}}, "Diagonal·Leading"),
+        ({"Combination": {"sub_kinds": ["FlatX", "Zigzag", "Tri"]}}, "Combination·FlatX+Zigzag"),
+        ({"Triangle": {}}, "Triangle"),
+    ])
+    def test_from_pattern_type(self, pattern_type, expect):
+        sc = _scenario(pattern_type=pattern_type)
+        d = digest_from_docs("2330", _neely_row([sc]), None, AS_OF)
+        assert d["label"] == expect
+
+    def test_missing_pattern_type_falls_back_truncated_structure_label(self):
+        sc = _scenario(label="Flat { sub_kind: BFailure } Down (3-wave from mw238 to mw240)")
+        d = digest_from_docs("2330", _neely_row([sc]), None, AS_OF)
+        assert d["label"] == "Flat { sub_kind: BFailur"  # 截 24 字元
+        assert len(d["label"]) <= 24
 
 
 class TestResonanceLevel:

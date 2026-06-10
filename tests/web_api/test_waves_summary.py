@@ -93,7 +93,7 @@ class TestWavesSummary:
         assert body["as_of"] == "2026-06-11" and body["timeframe"] == "daily"
         rows = {row["stock_id"]: row for row in body["rows"]}
         assert rows["2330"]["insufficient"] is False
-        assert rows["2330"]["label"] == "Impulse·W3"
+        assert rows["2330"]["label"] == "Impulse"  # 緊湊標籤(自 pattern_type 組)
         assert rows["2330"]["direction"] == "up"
         assert rows["2330"]["certainty"] == "Primary"
         assert rows["2330"]["resonance"] == "strong"
