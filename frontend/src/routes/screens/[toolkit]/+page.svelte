@@ -51,7 +51,7 @@
   <header class="page-header">
     <h1>跨股篩選表 <span class="muted">/ {data.toolkit}</span></h1>
     <div class="sub">
-      backbone ◂ <code>/screens/{data.toolkit}</code> · wave/共振欄 ◂⚠ 需新端點(原型用 placeholder)
+      backbone ◂ <code>/screens/{data.toolkit}</code> · wave/共振欄 ◂ <code>/waves/summary</code>(批次)
     </div>
   </header>
 
@@ -74,6 +74,7 @@
       topN={data.topN}
       rows={data.rows}
       rankingDate={data.rankingDate}
+      waveDigests={data.waveDigests}
       showPlaceholderBadge={debug}
       on:toolkit-change={onToolkitChange}
       on:date-change={onDateChange}
