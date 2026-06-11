@@ -21,7 +21,8 @@ date_segmenter.py
 """
 
 import logging
-from datetime import date, timedelta
+import os
+from datetime import date, datetime, time as dt_time, timedelta
 
 from config_loader import ApiConfig, CollectorConfig
 from sync_tracker import SyncTracker
@@ -31,6 +32,30 @@ logger = logging.getLogger("collector.date_segmenter")
 # pack_financial 的 incremental 起始日往前回拉的天數
 # 120 天約涵蓋一個完整公告週期：上一季結束日 + 公告期限 + 緩衝
 INCREMENTAL_LOOKBACK_DAYS = 120
+
+# 今日段 cutoff:FinMind EOD 資料盤後才發布(價量約 14:00 起、法人 ~17:00、
+# 融資券更晚)。cutoff 前段尾 cap 在昨日,避免抓到「今日空段」標 empty
+# 推進水位線 → 該日永久跳過(2026-06-09 實踩破洞)。
+# env COLLECTOR_TODAY_CUTOFF=HH:MM 覆寫;設 00:00 等效停用。
+_DEFAULT_TODAY_CUTOFF = "15:30"
+
+
+def effective_today(now: datetime | None = None) -> date:
+    """段尾用的「有效今日」:cutoff 前回昨日,cutoff(含)後回今日。"""
+    now = now or datetime.now()
+    raw = os.environ.get("COLLECTOR_TODAY_CUTOFF", _DEFAULT_TODAY_CUTOFF)
+    try:
+        hh, mm = raw.split(":")
+        cutoff = dt_time(int(hh), int(mm))
+    except (ValueError, TypeError):
+        logger.warning(
+            f"COLLECTOR_TODAY_CUTOFF={raw!r} 解析失敗,改用預設 {_DEFAULT_TODAY_CUTOFF}"
+        )
+        hh, mm = _DEFAULT_TODAY_CUTOFF.split(":")
+        cutoff = dt_time(int(hh), int(mm))
+    if now.time() < cutoff:
+        return now.date() - timedelta(days=1)
+    return now.date()
 
 
 class DateSegmenter:
@@ -70,7 +95,8 @@ class DateSegmenter:
             [(start_date, end_date), ...] 格式的日期段列表
             日期格式：YYYY-MM-DD 字串
         """
-        today = date.today()
+        # 段尾 = 有效今日(15:30 cutoff 前 cap 在昨日,見 effective_today)
+        today = effective_today()
 
         # 個別 API 可用 backfill_start_override 縮短回補範圍
         # （例：減資資料 2020 起即可，免拉到 2019）

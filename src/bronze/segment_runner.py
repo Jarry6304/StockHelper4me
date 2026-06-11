@@ -12,6 +12,7 @@ v3.5 R1 C3:從 phase_executor._run_api() 內 inline `_process_segment` closure
 
 import asyncio
 import logging
+from datetime import date
 from typing import Callable
 
 from bronze.aggregators import apply_aggregation
@@ -22,6 +23,25 @@ from field_mapper import FieldMapper
 from sync_tracker import SyncTracker
 
 logger = logging.getLogger("collector.bronze.segment_runner")
+
+
+def _progress_status(rows: list, seg_end: str, today: date | None = None) -> str | None:
+    """段完成後的進度標記;回 None = 不標記(留給下次 incremental 重抓)。
+
+    「今日空段」不標:EOD 各 dataset 盤後分批發布(價量 ~14:00 / 法人 ~17:00 /
+    融資券更晚),今日的空回應分不清「真空」還是「尚未發布」;標 empty 會推進
+    水位線(sync_tracker 把 empty 視同 completed),該日永久跳過
+    (2026-06-09 實踩破洞)。歷史日的空回應仍標 empty(legit:該股無此類事件)。
+    """
+    if rows:
+        return "completed"
+    today = today or date.today()
+    try:
+        if date.fromisoformat(seg_end) >= today:
+            return None
+    except ValueError:
+        pass  # seg_end 異常格式 → 照舊標 empty,不擋流程
+    return "empty"
 
 
 class _SegmentRunner:
@@ -104,8 +124,15 @@ class _SegmentRunner:
             if not await self._write(stock_id, seg_start, seg_end, rows):
                 return  # DB write 失敗已 mark_failed
 
-            # 更新進度
-            status = "empty" if not rows else "completed"
+            # 更新進度(今日空段 → None 不標記,留給下次 incremental 重抓)
+            status = _progress_status(rows, seg_end)
+            if status is None:
+                logger.debug(
+                    f"[Phase {api_config.phase}][{api_config.name}] "
+                    f"今日空段不標記 stock={stock_id}, segment={seg_start}~{seg_end}"
+                    f"(EOD 可能尚未發布)"
+                )
+                return
             self.sync_tracker.mark_progress(
                 api_config.name, stock_id, seg_start, seg_end,
                 status=status, record_count=len(rows),
