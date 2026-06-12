@@ -10,6 +10,7 @@ import asyncio
 import sys
 import threading
 import time
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -130,6 +131,40 @@ class TestMergeDelistDate:
         await runner._write("__ALL__", "2026-01-01", "2026-02-01", rows)
         # 只一筆 valid → 一次 update
         assert db.update.call_count == 1
+
+
+class TestProgressStatus:
+    """進度標記決策:今日空段不標記(2026-06-09 破洞防回歸)。
+
+    empty 推進水位線(sync_tracker SKIP_STATUSES 含 empty)→ EOD 發布前抓到的
+    今日空段一旦標 empty,該日永久跳過。今日空段回 None(不標),下次重抓;
+    歷史日空段照標 empty(legit:該股無此類事件)。
+    """
+
+    def test_rows_present_completed(self):
+        from bronze.segment_runner import _progress_status
+
+        assert _progress_status([{"x": 1}], "2026-06-11", today=date(2026, 6, 11)) == "completed"
+
+    def test_historical_empty_marks_empty(self):
+        from bronze.segment_runner import _progress_status
+
+        assert _progress_status([], "2026-06-10", today=date(2026, 6, 11)) == "empty"
+
+    def test_today_empty_not_marked(self):
+        from bronze.segment_runner import _progress_status
+
+        assert _progress_status([], "2026-06-11", today=date(2026, 6, 11)) is None
+
+    def test_future_end_empty_not_marked(self):
+        from bronze.segment_runner import _progress_status
+
+        assert _progress_status([], "2026-06-12", today=date(2026, 6, 11)) is None
+
+    def test_bad_seg_end_falls_back_empty(self):
+        from bronze.segment_runner import _progress_status
+
+        assert _progress_status([], "not-a-date", today=date(2026, 6, 11)) == "empty"
 
 
 class TestEventLoopNotBlocked:
