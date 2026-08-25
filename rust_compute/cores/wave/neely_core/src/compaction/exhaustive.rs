@@ -13,11 +13,14 @@
 //   - 每 level 跑 `three_rounds::aggregate_one_level` 對 Figure 4-3 五大序列比對
 //   - 收斂條件:`MAX_COMPACTION_LEVELS` 或 next level 為空(進 Round 3 暫停)
 //
-// 留 V3 後續:
-//   - Round 2 動作 B「邊界波 Retracement Rules 重評」(spec line 1249-1251),需要部分
-//     Stage 3-4 rerun,複雜度高 — 目前在 `three_rounds.rs` 留 `AdvisoryFinding` 註解
-//   - sub-wave 嵌套真實 monowave price(目前 Level-0 placeholder = wave_tree.children.len()),
-//     接 Stage 3 Bottom-up Generator 進階 + 5-wave-of-3 嵌套
+// **G2.0 現況(m3Spec/neely_compaction_v2.md,2026-08-25)**:本檔遞迴迴圈與
+// `three_rounds.rs` 弱比對為 v2 規格的**取代對象**(§3.3 — tiling-round 引擎,G2.1+);
+// 止血後狀態:D-1/D-2 由 P1 相鄰性過濾擋下(枚舉不完整但產出皆合法)、D-3 由 P3
+// 暫填 Σ(children) 止血,D-4/D-5 未修 — 完整缺陷表見 v2 規格 §1.2。
+//
+// 留 tiling-round 引擎(G2.1+)接手,不再於本檔演進:
+//   - Round 2 動作 B「邊界波 Retracement Rules 重評」真鄰居版(v2 §6.1;現行視窗內近似 = D-4)
+//   - sub-wave 嵌套真實 monowave price(v2 §5.1 CompactionNode 端點合約)
 
 use crate::output::{Monowave, Scenario};
 use super::three_rounds;
@@ -108,15 +111,7 @@ mod tests {
         }
     }
 
-    fn make_simple(id: &str) -> Scenario {
-        make_scenario(
-            id,
-            StructureLabel::Five,
-            MonowaveDirection::Up,
-            "2026-01-01",
-            "2026-01-01",
-        )
-    }
+    // G2.0 T-6(compaction v2 §8.4):同日退化日期改真實日期鏈(測試債清償,D-6)
 
     #[test]
     fn empty_input_yields_empty() {
@@ -125,7 +120,13 @@ mod tests {
 
     #[test]
     fn single_scenario_pass_through() {
-        let scenarios = vec![make_simple("a")];
+        let scenarios = vec![make_scenario(
+            "a",
+            StructureLabel::Five,
+            MonowaveDirection::Up,
+            "2026-01-01",
+            "2026-01-10",
+        )];
         let forest = compact(scenarios, &[]);
         // 1 scenario < 3 → 無 aggregation,Level 0 pass-through
         assert_eq!(forest.len(), 1);
@@ -134,7 +135,10 @@ mod tests {
 
     #[test]
     fn two_scenarios_pass_through() {
-        let scenarios = vec![make_simple("a"), make_simple("b")];
+        let scenarios = vec![
+            make_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            make_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-20"),
+        ];
         let forest = compact(scenarios, &[]);
         // 2 scenarios < 3 → 無 aggregation
         assert_eq!(forest.len(), 2);
@@ -190,9 +194,12 @@ mod tests {
 
     #[test]
     fn max_compaction_levels_respected() {
-        // 構造可無限 aggregate 的場景:極多 alternating zigzag scenarios
+        // 構造大量可 aggregate 的場景:50 段連續 alternating scenarios。
+        // T-6:原「同月 % 28 wrap」會產生 end < start 的退化日期;改真實連續
+        // 日期鏈(50 段 × 5 天),P1 相鄰性檢查下 aggregation 仍發生
+        let base = date("2026-01-01");
         let mut scenarios = Vec::new();
-        for i in 0..50 {
+        for i in 0..50i64 {
             let dir = if i % 2 == 0 {
                 MonowaveDirection::Up
             } else {
@@ -203,8 +210,8 @@ mod tests {
             } else {
                 StructureLabel::Three
             };
-            let start = format!("2026-01-{:02}", (i % 28) + 1);
-            let end = format!("2026-01-{:02}", ((i + 1) % 28) + 1);
+            let start = (base + chrono::Duration::days(i * 5)).format("%Y-%m-%d").to_string();
+            let end = (base + chrono::Duration::days((i + 1) * 5)).format("%Y-%m-%d").to_string();
             scenarios.push(make_scenario(
                 &format!("s{}", i),
                 label,

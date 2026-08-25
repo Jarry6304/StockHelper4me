@@ -1,24 +1,30 @@
-// compaction — Stage 8:Compaction(窮舉 Forest)+ Forest 上限保護
+// compaction — Stage 8:Compaction(遞迴 aggregation Forest)+ Forest 上限保護
 //
-// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 8 / §十一 / §十二。
+// 對齊 m3Spec/neely_core_architecture.md §三 / §七 Stage 8 / §十一 / §十二
+//     + m3Spec/neely_compaction_v2.md(v2 規格;§1.2 缺陷表 D-1 ~ D-6)。
 //
 // 子模組:
-//   - exhaustive.rs   — 窮舉模式(預設,留 PR-5b 完整實作)
-//   - beam_search.rs  — Forest 上限保護的 fallback(§12)
+//   - exhaustive.rs   — v3.7 遞迴迴圈:逐 level 呼叫 three_rounds::aggregate_one_level
+//   - three_rounds.rs — Round 1-2 一層 aggregation(label 序列 + 方向交替 + S&B 弱比對)
+//   - beam_search.rs  — Forest 上限保護的 fallback(§12;雙重排序 §10.3)
 //
 // 關鍵設計:
 //   - 純結構壓縮,**不**選最優,不附 primary(§9.3)
 //   - 重寫 v1.1 的「貪心選分數」(§4.2)— 多種解讀路徑窮舉成 Forest
 //
-// **M3 PR-5 階段**(先實踐以後再改):
-//   - 簡化版 Compaction:每個通過 Stage 5-7 的 Scenario 直接成 Forest 一棵樹
-//     (尚未做「合法 compression paths 窮舉」— 那需要 sub-wave 嵌套結構,留 PR-5b)
-//   - Forest 上限保護完整實作:超過 forest_max_size → BeamSearchFallback(top-K by power_rating)
-//   - 逾時保護:elapsed > compaction_timeout_secs → 直接返回現有 forest + 標 compaction_timeout
+// **G2.0 止血後現況(compaction v2 §8,2026-08-25)**:
+//   - D-1/D-2(對重疊 forest 滑窗、無相鄰性檢查)→ P1 相鄰性硬檢查止血:
+//     枚舉不完整但產出皆合法,不再拼出時間重疊/有間隙的 Level-N 結構
+//   - D-3(聚合 scenario 規則欄全空)→ P3 暫填 Σ(children.rules_passed_count),
+//     真值重驗留 G2.2(W5 端點泛化)
+//   - D-4(邊界波以視窗內近似)/ D-5(Terminal Impulse 產不出)未修
+//   - exhaustive.rs / three_rounds.rs 兩檔為 v2 規格 §3.3 的取代對象:
+//     tiling-round 引擎(G2.1+)落地並過 P0 Gate v3 後刪除,在此之前不再演進
+//     聚合邏輯;beam_search.rs 護欄保留(v2 §7.1 / architecture §10 原樣)
 //
-// 留後續 PR(對齊 §十一):
-//   - exhaustive.rs:窮舉所有合法 compression paths(需要 sub-wave 嵌套結構)
-//   - beam_search.rs 進階:k 值 P0 Gate 校準
+// Forest 上限保護 / 逾時保護(不隨 v2 改動,architecture §10):
+//   - 超過 forest_max_size → BeamSearchFallback(雙重排序 top-K)
+//   - elapsed > compaction_timeout_secs → 返回現有 forest + 標 compaction_timeout
 
 use crate::config::{NeelyEngineConfig, OverflowStrategy};
 use crate::output::{Monowave, PowerRating, Scenario};
@@ -37,14 +43,14 @@ pub struct CompactionResult {
     pub overflow_triggered: bool,
     /// Compaction 是否逾時(超過 compaction_timeout_secs)
     pub timeout_triggered: bool,
-    /// 本階段窮舉的合法 compression paths 數(M3 PR-5 簡化版 = scenarios.len())
+    /// 本階段產出的 forest 節點總數(Level 0 + 各 level aggregation,護欄剪枝前)
     pub compaction_paths: usize,
 }
 
 /// Stage 8 主入口。
 ///
 /// 流程:
-///   1. exhaustive::compact() 跑窮舉壓縮(M3 PR-5 簡化版直接 pass-through)
+///   1. exhaustive::compact() 跑遞迴 aggregation(v3.7;G2.0 P1 相鄰性過濾在內層)
 ///   2. 檢查 forest size 是否超過 cfg.forest_max_size
 ///   3. 超過 → 套 cfg.overflow_strategy(BeamSearchFallback / Unbounded)
 ///   4. 同時檢查 compaction_timeout_secs
@@ -56,7 +62,7 @@ pub fn compact(
     let start = Instant::now();
     let timeout_duration = std::time::Duration::from_secs(cfg.compaction_timeout_secs);
 
-    // ── Step 1:exhaustive 窮舉(目前簡化 pass-through)
+    // ── Step 1:exhaustive 遞迴 aggregation(v3.7 迴圈 + G2.0 P1 過濾)
     let initial_forest = exhaustive::compact(scenarios, monowaves);
     let initial_count = initial_forest.len();
 

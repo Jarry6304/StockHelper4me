@@ -25,7 +25,11 @@
 //   - **Stage 8**:Three Rounds nested parent context(Triangle 內部 in_triangle_context)
 //                  + Round 3 暫停偵測(`awaiting_l_label` / `round3_pause`)+ Forest 上限保護
 //                  (BeamSearchFallback 雙重排序 PowerRating level + rules_passed_count;Phase 8 / P0 Gate v2)
-//   - **Stage 8 / Compaction**:exhaustive pass-through(待 sub-wave 嵌套後補,architecture §10.1 工程現實折衷)
+//   - **Stage 8 / Compaction**:v3.7 遞迴迴圈(exhaustive::compact 逐 level 跑
+//                  three_rounds::aggregate_one_level 弱比對)+ G2.0 止血
+//                  (m3Spec/neely_compaction_v2.md §8:P1 相鄰性硬檢查 / P3 Σ(children) 計數);
+//                  缺陷 D-4 / D-5 未修、D-1~D-3 止血非根治 — 完整缺陷表見 v2 規格 §1.2,
+//                  tiling-round 引擎(G2.1+)為取代路徑
 //   - **Stage 9a**:Missing Wave 完整偵測(P2 MissingWaveBundle + MissingWavePosition 分類;Phase 9)
 //   - **Stage 9b**:Ch12 Emulation 完整偵測(4 種 EmulationKind;Phase 9)
 //   - **Stage 10a**:Ch10 Power Rating r5 查表(±3..±3 7 級,寫死);
@@ -391,7 +395,8 @@ impl WaveCore for NeelyCore {
             stage_7_5_start.elapsed().as_micros() as u64,
         );
 
-        // ── Stage 8:Compaction(M3 PR-5,簡化 pass-through + Forest 上限保護)
+        // ── Stage 8:Compaction(v3.7 遞迴迴圈 + G2.0 止血 + Forest 上限保護;
+        //    m3Spec/neely_compaction_v2.md §8)
         // v4.4a:提前構建 monowave_series 給 compaction(Level-0 magnitude 真實 lookup)
         let monowave_series_for_compaction: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
         let stage_8_start = Instant::now();

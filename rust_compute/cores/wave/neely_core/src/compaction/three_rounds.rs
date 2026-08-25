@@ -16,6 +16,13 @@
 // 本檔 API:
 //   - `aggregate_one_level(scenarios) -> Vec<Scenario>` — 對輸入 list 跑一次 Round 1-2,
 //     回新生 Level-N+1 scenarios(空 vec = 已收斂)
+//
+// **G2.0 止血(m3Spec/neely_compaction_v2.md §8,2026-08-25)**:
+//   - P1:`window_is_contiguous` 相鄰性硬檢查於 try_aggregate_* 進入點(D-1/D-2 止血 —
+//     重疊替代解讀不可再拼成 Level-N 形態;枚舉不完整但產出皆合法)
+//   - P3:`build_aggregated.rules_passed_count` 暫填 Σ(children)(D-3 排序墊底止血)
+//   - D-4(邊界波取視窗內近似)/ D-5(Terminal Impulse 產不出)未修,留 tiling-round
+//     引擎(G2.1+);本檔整檔為 v2 規格 §3.3 的淘汰對象
 
 use crate::output::{
     AdvisoryFinding, AdvisorySeverity, ComplexityLevel, Monowave, MonowaveDirection,
@@ -100,6 +107,10 @@ fn try_aggregate_5(
     window_start: usize,
     monowaves: &[Monowave],
 ) -> Option<Scenario> {
+    // G2.0 P1:相鄰性硬檢查,先於一切既有檢查(compaction v2 §8.1)
+    if !window_is_contiguous(window) {
+        return None;
+    }
     // v4.8 G1.3 partial Stage 3-4 rerun:邊界波 retracement 超極端 Fib² 範圍 → reject
     if boundary_retracement_extreme(window, monowaves) {
         return None;
@@ -154,6 +165,10 @@ fn try_aggregate_3(
     window_start: usize,
     monowaves: &[Monowave],
 ) -> Option<Scenario> {
+    // G2.0 P1:相鄰性硬檢查,先於一切既有檢查(compaction v2 §8.1)
+    if !window_is_contiguous(window) {
+        return None;
+    }
     // v4.8 G1.3 partial Stage 3-4 rerun:邊界波 retracement 超極端 Fib² 範圍 → reject
     if boundary_retracement_extreme(window, monowaves) {
         return None;
@@ -216,6 +231,10 @@ fn try_aggregate_7(
     window_start: usize,
     monowaves: &[Monowave],
 ) -> Option<Scenario> {
+    // G2.0 P1:相鄰性硬檢查,先於一切既有檢查(compaction v2 §8.1)
+    if !window_is_contiguous(window) {
+        return None;
+    }
     if boundary_retracement_extreme(window, monowaves) {
         return None;
     }
@@ -245,6 +264,10 @@ fn try_aggregate_11(
     window_start: usize,
     monowaves: &[Monowave],
 ) -> Option<Scenario> {
+    // G2.0 P1:相鄰性硬檢查,先於一切既有檢查(compaction v2 §8.1)
+    if !window_is_contiguous(window) {
+        return None;
+    }
     if boundary_retracement_extreme(window, monowaves) {
         return None;
     }
@@ -270,6 +293,31 @@ fn try_aggregate_11(
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// **G2.0 P1(compaction v2 §8.1)**:相鄰性硬檢查 — D-1/D-2 止血。
+///
+/// 兩條規則(任一違反即整窗過濾,回 false;不記 rejection — 止血期屬過濾,非規則拒絕):
+/// 1. 視窗每相鄰對共享端點:`window[i].wave_tree.end == window[i+1].wave_tree.start`
+///    (日期精確相等,不設容差;依 monowave 共享端點慣例 `pure_close.rs`)
+/// 2. 視窗內任兩 scenario 時間範圍不相同(排除同段替代解自我聚合;零長度退化段
+///    可讓端點鏈成立但範圍重複,故獨立成條)
+fn window_is_contiguous(window: &[Scenario]) -> bool {
+    for i in 1..window.len() {
+        if window[i - 1].wave_tree.end != window[i].wave_tree.start {
+            return false;
+        }
+    }
+    for i in 0..window.len() {
+        for j in (i + 1)..window.len() {
+            if window[i].wave_tree.start == window[j].wave_tree.start
+                && window[i].wave_tree.end == window[j].wave_tree.end
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
 
 fn alternating(dirs: &[MonowaveDirection]) -> bool {
     if dirs.len() < 2 {
@@ -520,9 +568,15 @@ fn build_aggregated(
         power_rating: PowerRating::Neutral, // 之後 rate_scenario 重算
         max_retracement: None,
         post_pattern_behavior: PostBehavior::Unconstrained,
+        // G2.0 P3(compaction v2 §8.3):passed_rules 維持空,provisional until G2.2
+        // (Level-N 規則重驗留 W5);count 暫填 Σ(children) 修 D-3 排序墊底 —
+        // BeamSearchFallback 第二鍵不再把 Level-N 永遠排在組內最底。
+        // 注意:此 Σ 值隨 Scenario 序列化外流(facts 敘述與下游排序鍵/選圖器
+        // 都讀 rules_passed_count),G2.2 前 Level-N 的 count 是未驗證的暫定值 —
+        // 影響面清單見 docs/changelog/neely-compaction-v2.md §G2.0
         passed_rules: Vec::new(),
         deferred_rules: Vec::new(),
-        rules_passed_count: 0,
+        rules_passed_count: window.iter().map(|s| s.rules_passed_count).sum(),
         deferred_rules_count: 0,
         invalidation_triggers: Vec::new(),
         expected_fib_zones: Vec::new(),
@@ -886,5 +940,133 @@ mod tests {
             .iter()
             .find(|s| matches!(s.pattern_type, NeelyPatternType::Zigzag { .. }));
         assert!(zigzag.is_none(), "last pair ratio 50/10 = 5 > 4.236 → reject");
+    }
+
+    // G2.0 P1 相鄰性硬檢查 tests(compaction v2 §8.4 T-1 ~ T-4)---------------
+
+    #[test]
+    fn t1_overlapping_scenarios_do_not_aggregate() {
+        // T-1:5 個時間重疊 scenario,label/方向/S&B(time 維度)全過 —
+        // 沒有 P1 時會拼出 Trending Impulse(D-1 缺陷);P1 後回空
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-05", "2026-01-12"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-08", "2026-01-20"),
+            mk_scenario("d", StructureLabel::Three, MonowaveDirection::Down, "2026-01-12", "2026-01-25"),
+            mk_scenario("e", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-02-01"),
+        ];
+        let result = aggregate_one_level(&scenarios, &[]);
+        assert!(
+            result.is_empty(),
+            "時間重疊的替代解讀不得聚合(D-1/D-2 止血)"
+        );
+    }
+
+    #[test]
+    fn t2_gap_in_window_does_not_aggregate() {
+        // T-2:4 連續 + 1 間隙(d.end 2026-01-29 ≠ e.start 2026-02-03)。
+        // 全 :_3 交替(Triangle 候選;3-窗 [:3,:3,:3] 不匹配任何序列,
+        // 唯一可能的 5-窗被間隙擋下)→ 回空
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Three, MonowaveDirection::Up, "2026-01-01", "2026-01-08"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-08", "2026-01-15"),
+            mk_scenario("c", StructureLabel::Three, MonowaveDirection::Up, "2026-01-15", "2026-01-22"),
+            mk_scenario("d", StructureLabel::Three, MonowaveDirection::Down, "2026-01-22", "2026-01-29"),
+            mk_scenario("e", StructureLabel::Three, MonowaveDirection::Up, "2026-02-03", "2026-02-10"),
+        ];
+        let result = aggregate_one_level(&scenarios, &[]);
+        assert!(result.is_empty(), "端點間隙 → 不聚合");
+    }
+
+    #[test]
+    fn t3_contiguous_impulse_children_share_endpoints() {
+        // T-3:5 連續合法(:5:3:5:3:5 交替)→ 產 1 個 Level-1 Impulse;
+        // children 端點鏈逐對相等(I2 在現行引擎輸出上的最低保證)。
+        // 與 spec 表字面偏差(記錄):spec「產 1 個 Level-1」讀在 tiling 語意
+        // (G2.1+ 單一視窗);現行滑窗引擎對同一條鏈另合法聚合出 [a,b,c] /
+        // [c,d,e] 兩個 Zigzag,故本測斷言收斂為「恰 1 個 Impulse」
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-15"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
+            mk_scenario("d", StructureLabel::Three, MonowaveDirection::Down, "2026-01-25", "2026-01-30"),
+            mk_scenario("e", StructureLabel::Five, MonowaveDirection::Up, "2026-01-30", "2026-02-10"),
+        ];
+        let result = aggregate_one_level(&scenarios, &[]);
+        let impulses: Vec<_> = result
+            .iter()
+            .filter(|s| matches!(s.pattern_type, NeelyPatternType::Impulse))
+            .collect();
+        assert_eq!(impulses.len(), 1, "連續 5 窗應產恰 1 個 Level-1 Impulse");
+        let children = &impulses[0].wave_tree.children;
+        assert_eq!(children.len(), 5);
+        for i in 1..children.len() {
+            assert_eq!(
+                children[i - 1].end,
+                children[i].start,
+                "children 端點鏈第 {} 對必須共享端點",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn t4_duplicate_date_range_in_window_does_not_aggregate() {
+        // T-4:視窗含同段替代解(d 與 b 覆蓋同一日期範圍)→ 回空。
+        // 與 spec 表字面偏差(記錄):spec 寫「同 T-3」,但 T-3 的 :5:3:5:3:5
+        // 構造下未受污染的 [a,b,c] 3-窗仍會合法聚合出 Zigzag(結果非空),
+        // 故改用全 :_3 構造使 5-窗為唯一候選。另注意:重複範圍同時打斷端點鏈
+        // (c.end ≠ d.start),此處實際由 P1 規則 1 攔下;規則 2(端點鏈成立但
+        // 範圍重複)僅零長度退化段可達,由
+        // window_is_contiguous_rejects_duplicate_range_even_when_chain_holds 覆蓋
+        let scenarios = vec![
+            mk_scenario("a", StructureLabel::Three, MonowaveDirection::Up, "2026-01-01", "2026-01-08"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-08", "2026-01-15"),
+            mk_scenario("c", StructureLabel::Three, MonowaveDirection::Up, "2026-01-15", "2026-01-22"),
+            mk_scenario("d", StructureLabel::Three, MonowaveDirection::Down, "2026-01-08", "2026-01-15"),
+            mk_scenario("e", StructureLabel::Three, MonowaveDirection::Up, "2026-01-22", "2026-01-29"),
+        ];
+        let result = aggregate_one_level(&scenarios, &[]);
+        assert!(result.is_empty(), "視窗含同段替代解 → 不聚合");
+    }
+
+    #[test]
+    fn window_is_contiguous_rejects_duplicate_range_even_when_chain_holds() {
+        // P1 規則 2 獨立驗證:零長度退化段讓端點鏈成立([01-10,01-10] 兩枚),
+        // 但兩 scenario 覆蓋同一範圍 → false;移除重複後同鏈 → true
+        let dup = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-10"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-10", "2026-01-10"),
+        ];
+        assert!(!window_is_contiguous(&dup), "端點鏈成立但範圍重複 → false");
+
+        let ok = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-10"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-10", "2026-01-20"),
+        ];
+        assert!(window_is_contiguous(&ok), "端點鏈成立且範圍全異 → true");
+    }
+
+    #[test]
+    fn p3_aggregated_rules_passed_count_sums_children() {
+        // G2.0 P3(compaction v2 §8.3):Level-N rules_passed_count = Σ(children);
+        // passed_rules 維持空(provisional until G2.2)
+        let mut scenarios = vec![
+            mk_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
+            mk_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-15"),
+            mk_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
+        ];
+        scenarios[0].rules_passed_count = 7;
+        scenarios[1].rules_passed_count = 4;
+        scenarios[2].rules_passed_count = 6;
+        let result = aggregate_one_level(&scenarios, &[]);
+        let zigzag = result
+            .iter()
+            .find(|s| matches!(s.pattern_type, NeelyPatternType::Zigzag { .. }))
+            .expect("連續 :5:3:5 應聚合出 Zigzag");
+        assert_eq!(zigzag.rules_passed_count, 17, "Σ(children) = 7+4+6");
+        assert!(zigzag.passed_rules.is_empty(), "passed_rules 維持空(provisional)");
     }
 }

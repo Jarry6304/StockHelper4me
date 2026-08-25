@@ -11,8 +11,14 @@
 //   - 保留兩端極值(StrongBullish / StrongBearish)優先,Neutral 次之
 //   - 達到 k 個 scenario 即停
 //
-// **M3 PR-5 階段**:用 |power_rating| 排序保留 top-K(對齊 §12 文字描述)。
-// 排序 tie-break:同 |power_rating| 時保留 Bullish 側(任意決定,不影響功能)。
+// 雙重排序(architecture §10.3):
+//   鍵 1:PowerRating 級別 |rating|(±3 > ±2 > ±1 > 0)— 強訊號不被弱訊號擠掉
+//   鍵 2(組內):rules_passed_count — 同級別內通過規則多者優先
+//   tie-break:同組同 count 時保留 Bullish 側(任意決定,不影響功能)
+//
+// **G2.0(compaction v2 §8.3 / §8.4 T-5)**:鍵 2 補實 — lib.rs 自 Phase 8 起宣稱
+// 雙重排序,實作長期只有鍵 1;P3 讓 Level-N 帶 Σ(children) 計數後鍵 2 才有意義,
+// 一併補上,Level-N 不再因 count=0 在組內墊底。
 //
 // k 預設 100(NeelyEngineConfig.OverflowStrategy::BeamSearchFallback default)。
 // P0 Gate 五檔實測後可能調整。
@@ -21,20 +27,20 @@ use super::power_rating_magnitude;
 use crate::output::Scenario;
 use std::cmp::Ordering;
 
-/// 保留 top-K by |power_rating|(兩端極值優先),Neutral 後保留。
+/// 雙重排序保留 top-K:|power_rating| 級別 → 組內 rules_passed_count(architecture §10.3)。
 pub fn keep_top_k_by_power_rating(mut scenarios: Vec<Scenario>, k: usize) -> Vec<Scenario> {
     if scenarios.len() <= k {
         return scenarios;
     }
 
-    // 排序:|power_rating| 降序;同 |rating| 時 Bullish 優先(magnitude > 0 排前)
     scenarios.sort_by(|a, b| {
         let ma = power_rating_magnitude(a.power_rating);
         let mb = power_rating_magnitude(b.power_rating);
-        let abs_a = ma.abs();
-        let abs_b = mb.abs();
-        match abs_b.cmp(&abs_a) {
-            Ordering::Equal => mb.cmp(&ma), // 同 |rating| 時 Bullish(正)排前
+        match mb.abs().cmp(&ma.abs()) {
+            Ordering::Equal => match b.rules_passed_count.cmp(&a.rules_passed_count) {
+                Ordering::Equal => mb.cmp(&ma), // 同組同 count 時 Bullish(正)排前
+                other => other,
+            },
             other => other,
         }
     });
@@ -116,5 +122,29 @@ mod tests {
         let kept = keep_top_k_by_power_rating(scenarios, 1);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].id, "bull", "同 |rating| 時 Bullish 優先");
+    }
+
+    #[test]
+    fn t5_level_n_with_summed_rules_not_ranked_bottom() {
+        // G2.0 T-5(compaction v2 §8.4):同 PowerRating 組內,Level-1(P3 後帶
+        // Σ(children) 計數)不因舊 count=0 墊底 — 雙重排序鍵 2 淘汰的是組內
+        // 通過規則最少的 Level-0
+        let mut level_1 = make("level_1_aggregated", PowerRating::Neutral);
+        level_1.rules_passed_count = 12; // Σ(children):P3 暫填語意
+        let mut l0_a = make("l0_a", PowerRating::Neutral);
+        l0_a.rules_passed_count = 5;
+        let mut l0_b = make("l0_b", PowerRating::Neutral);
+        l0_b.rules_passed_count = 1;
+        let mut l0_c = make("l0_c", PowerRating::Neutral);
+        l0_c.rules_passed_count = 3;
+
+        let kept = keep_top_k_by_power_rating(vec![l0_a, l0_b, level_1, l0_c], 3);
+        let ids: Vec<&str> = kept.iter().map(|s| s.id.as_str()).collect();
+        assert!(
+            ids.contains(&"level_1_aggregated"),
+            "Level-1 帶 Σrules=12 不得被淘汰"
+        );
+        assert!(!ids.contains(&"l0_b"), "組內 count 最低(1)者被淘汰");
+        assert_eq!(kept[0].id, "level_1_aggregated", "組內 count 最高者排前");
     }
 }
