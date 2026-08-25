@@ -11,7 +11,7 @@
 //   - 從 M3 PR-5 簡化版 pass-through 升為真遞迴 aggregation
 //   - 對齊 spec §Three Rounds:Round 1 識別 → Round 2 壓縮 → 遞迴回 Round 1 在更大級
 //   - 每 level 跑 `three_rounds::aggregate_one_level` 對 Figure 4-3 五大序列比對
-//   - 收斂條件:`MAX_COMPACTION_LEVELS` 或 next level 為空(進 Round 3 暫停)
+//   - 收斂條件:`max_levels`(config `max_compaction_levels`)或 next level 為空(進 Round 3 暫停)
 //
 // **G2.0 現況(m3Spec/neely_compaction_v2.md,2026-08-25)**:本檔遞迴迴圈與
 // `three_rounds.rs` 弱比對為 v2 規格的**取代對象**(§3.3 — tiling-round 引擎,G2.1+);
@@ -25,25 +25,27 @@
 use crate::output::{Monowave, Scenario};
 use super::three_rounds;
 
-/// Compaction Level 上限(對齊 architecture §13 warmup_periods 隱含的 Degree 階層):
-/// 一般股票歷史 ~20 年 daily ≈ 5000 K 線,理論 Degree 約 Minute → Cycle 6-7 級。
-/// 4 級窮舉足以涵蓋 Subminuette → Primary,超過走 beam_search fallback。
-const MAX_COMPACTION_LEVELS: usize = 4;
-
 /// 窮舉所有合法 compression paths,產出 Forest。
 ///
 /// **v3.7 真窮舉版**:對輸入 scenarios 跑遞迴 aggregation:
 ///   - Level 0:原始 base scenarios(對齊 v2.0 pass-through 行為)
-///   - Level 1~MAX:對前一 level 跑 `three_rounds::aggregate_one_level`
-///   - 收斂條件:next level 為空(Round 3 暫停)or hit MAX_COMPACTION_LEVELS
+///   - Level 1~max:對前一 level 跑 `three_rounds::aggregate_one_level`
+///   - 收斂條件:next level 為空(Round 3 暫停)or hit `max_levels`
+///
+/// `max_levels` 自 G2.1 起由 `NeelyEngineConfig.max_compaction_levels` 傳入
+/// (compaction v2 A-8:常數升級 config 欄,預設 4)。
 ///
 /// 結果 Forest 含**所有 levels** 的 scenarios,順序不反映優先級(對齊 §9.3)。
 /// 由 upstream 的 forest_max_size + BeamSearchFallback 接管上限保護。
-pub fn compact(scenarios: Vec<Scenario>, monowaves: &[Monowave]) -> Vec<Scenario> {
+pub fn compact(
+    scenarios: Vec<Scenario>,
+    monowaves: &[Monowave],
+    max_levels: usize,
+) -> Vec<Scenario> {
     let mut forest = scenarios.clone(); // Level 0
     let mut current_level = scenarios;
 
-    for _level in 1..=MAX_COMPACTION_LEVELS {
+    for _level in 1..=max_levels {
         let next_level = three_rounds::aggregate_one_level(&current_level, monowaves);
         if next_level.is_empty() {
             break; // Round 3 暫停:沒新 aggregation 發生
@@ -115,7 +117,7 @@ mod tests {
 
     #[test]
     fn empty_input_yields_empty() {
-        assert!(compact(vec![], &[]).is_empty());
+        assert!(compact(vec![], &[], 4).is_empty());
     }
 
     #[test]
@@ -127,7 +129,7 @@ mod tests {
             "2026-01-01",
             "2026-01-10",
         )];
-        let forest = compact(scenarios, &[]);
+        let forest = compact(scenarios, &[], 4);
         // 1 scenario < 3 → 無 aggregation,Level 0 pass-through
         assert_eq!(forest.len(), 1);
         assert_eq!(forest[0].id, "a");
@@ -139,7 +141,7 @@ mod tests {
             make_scenario("a", StructureLabel::Five, MonowaveDirection::Up, "2026-01-01", "2026-01-10"),
             make_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-20"),
         ];
-        let forest = compact(scenarios, &[]);
+        let forest = compact(scenarios, &[], 4);
         // 2 scenarios < 3 → 無 aggregation
         assert_eq!(forest.len(), 2);
     }
@@ -152,7 +154,7 @@ mod tests {
             make_scenario("b", StructureLabel::Three, MonowaveDirection::Down, "2026-01-10", "2026-01-15"),
             make_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
         ];
-        let forest = compact(scenarios, &[]);
+        let forest = compact(scenarios, &[], 4);
         // Level 0:3 個 + Level 1:1 個 Zigzag = 4
         assert_eq!(forest.len(), 4);
         let level_1 = forest
@@ -171,7 +173,7 @@ mod tests {
             make_scenario("d", StructureLabel::Three, MonowaveDirection::Down, "2026-01-25", "2026-01-30"),
             make_scenario("e", StructureLabel::Five, MonowaveDirection::Up, "2026-01-30", "2026-02-10"),
         ];
-        let forest = compact(scenarios, &[]);
+        let forest = compact(scenarios, &[], 4);
         // Level 0:5 個 + Level 1:有 5-pattern Impulse 與內含的 3-pattern Zigzag(滑窗 a-b-c / c-d-e)
         let impulses: Vec<_> = forest
             .iter()
@@ -187,7 +189,7 @@ mod tests {
             make_scenario("b", StructureLabel::Three, MonowaveDirection::Up, "2026-01-10", "2026-01-15"),
             make_scenario("c", StructureLabel::Five, MonowaveDirection::Up, "2026-01-15", "2026-01-25"),
         ];
-        let forest = compact(scenarios, &[]);
+        let forest = compact(scenarios, &[], 4);
         // 全 Up 方向 → 無 aggregation,Level 0 pass-through
         assert_eq!(forest.len(), 3);
     }
@@ -220,8 +222,8 @@ mod tests {
                 &end,
             ));
         }
-        let forest = compact(scenarios, &[]);
-        // Level 0:50 + 各 level 多次 aggregation,有限數量(MAX_COMPACTION_LEVELS=4 終止)
+        let forest = compact(scenarios, &[], 4);
+        // Level 0:50 + 各 level 多次 aggregation,有限數量(max_levels 終止)
         assert!(forest.len() > 50, "至少 Level 0 50 個 + Level 1+ aggregated");
         // 確認沒有 runaway:total < 一個合理上限(對齊 forest_max_size 1000 預設值;
         // 真實 production 由 upstream beam_search 保護)

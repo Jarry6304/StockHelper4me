@@ -27,8 +27,20 @@ pub struct NeelyEngineConfig {
     /// 跨 timeframe 統一,屬「約定俗成的工程慣例」非主觀調參(§6.5)。
     pub atr_period: usize,
 
-    /// Bottom-up Candidate Generator 的 beam width
+    /// Bottom-up Candidate Generator 的 beam width。
+    /// **deprecated(G2.1,compaction v2 附錄 A)**:tiling-round 引擎切換(G2.4)後
+    /// 由 `round_beam_size` 承接;舊 Stage 3 pipeline 移除前仍消費本欄。
     pub beam_width: usize,
+
+    /// Compaction v2 round 引擎:round 內 tiling pool 上限(compaction v2 §5.5 /
+    /// 附錄 A;預設 32,Gate 校準)。與 forest_max_size / BeamSearchFallback
+    /// 分層並存:前者控 round 內分支爆炸,後者控輸出上限。
+    pub round_beam_size: usize,
+
+    /// Compaction 聚合輪數上限(compaction v2 A-8 定案:常數 4 → config 欄;
+    /// 工程參數非 Neely 常數,可外部化不違 architecture §6.6)。
+    /// 觸頂造成的枚舉缺漏由 `level_cap_hit` 診斷旗標可觀察,動態化另議。
+    pub max_compaction_levels: usize,
 
     /// Forest 上限保護:超過此 size 用 BeamSearchFallback
     ///
@@ -54,6 +66,8 @@ impl Default for NeelyEngineConfig {
         Self {
             atr_period: 14,
             beam_width: 50,
+            round_beam_size: 32,
+            max_compaction_levels: 4,
             // P0 Gate v2 production scale 校準後(1264 stocks):降 1000 → 200(留 5× p99 餘量)
             forest_max_size: 200,
             compaction_timeout_secs: 60,
@@ -81,6 +95,8 @@ mod tests {
         let cfg = NeelyEngineConfig::default();
         assert_eq!(cfg.atr_period, 14);
         assert_eq!(cfg.beam_width, 50);
+        assert_eq!(cfg.round_beam_size, 32); // compaction v2 附錄 A(G2.1)
+        assert_eq!(cfg.max_compaction_levels, 4); // compaction v2 A-8 定案
         assert_eq!(cfg.forest_max_size, 200); // P0 Gate v2 校準後(2026-05-14 production 1264 stocks max=37)
         assert_eq!(cfg.compaction_timeout_secs, 60);
         assert!((cfg.neutral_threshold_taiex - 0.5).abs() < 1e-9);

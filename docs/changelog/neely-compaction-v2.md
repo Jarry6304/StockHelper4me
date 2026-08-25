@@ -74,3 +74,50 @@ production run 觀察;若翻轉不可接受,G2.2 前可於下游 picker 對
 D-4(邊界波以視窗內第 1/2 段近似,真鄰居需 tiling)、D-5(3-3-3-3-3 一律判
 Triangle,Terminal Impulse 產不出)→ G2.1(tiling/round 迴圈)/ G2.2(W5 端點
 泛化 + W6 分岔判別)。開放問題 Q3 → Q1 → Q6 決議順序與期限見規格 §12。
+
+---
+
+## G2.1 — tiling-round 引擎骨架 + shadow 雙軌啟動(2026-08-25)
+
+規格 §3 / §5(附錄 B G2.1 交付):CompactionNode / tiling / round 迴圈 / dedup /
+beam / `level_cap_hit`(A-8)全落地;**shadow 雙軌**啟動 — 新引擎每次 compute
+隨行,僅寫 `NeelyDiagnostics.shadow_compaction`,serving forest 完全不動。
+
+| 項 | 檔案 | 內容 |
+|---|---|---|
+| 引擎本體 | `compaction/round_engine.rs`(新) | `CompactionNode`(Rc 共享,§5.1 合約:kind / base_label(葉持 Stage 0 候選集)/ degree_level / bar+date+price 端點 / children / net_direction / canonical 預算);base tiling(§5.2:非 Neutral + **合成葉橋接**,Neutral 段併前一 directional 節點、開頭 Neutral 記 diagnostics 後排除);round 迴圈(視窗 {3,5,7,11} × 全 tiling,原 tiling 保留為「停在此度數」alternate);per-round canonical_key dedup(§5.4);beam(§5.5 三鍵:max \|PowerRating\| → Σ rules → Σ degree);memoization(§5.6 視窗 children key);`compaction_timeout_secs` 硬保險 |
+| 接受階梯 | 同上 | W1(I2 防衛:debug panic / release 記 `w1_violations`)/ W2(I5 閉合表,葉任一候選匹配即過)/ W3(net direction 交替)/ W4(S&B 端點版)/ W7(Fib² **全**相鄰對,§4.2 語意修正);**W5/W6 stub 留 G2.2** — validation 恆 None、3-3-3-3-3 暫僅出 Triangle、Flat 以 Common 佔位 |
+| 不變量檢查器 | 同上 | `check_invariants`:I1(時間正序)/ I2(共享端點,日期+價格精確相等)/ I3(children 遞迴分割)/ I4(層級單調)/ I5(label 閉合)逐 tiling 計數;I6 由凍結收集 canonical 去重保證。G2.1 gate 準則 = 六檔 I1–I6 零違反 |
+| 診斷合約 | `output.rs` | 新增 `ShadowCompactionDiagnostics`(engine tag / base_tiling_len / neutral_bridged / leading_neutral_dropped / rounds_run / tiling_count / `level_cap_hit` / timed_out / w1_violations / `round_branch_cap_hits` / node_count_by_level / invariant_violations / §9.3 召回計數 / elapsed_us)+ `NeelyDiagnostics.shadow_compaction: Option<…>`(JSONB 加欄相容;ts-rs 契約已重生) |
+| 工程參數 | `config.rs` | `round_beam_size = 32` 新增、`max_compaction_levels = 4`(A-8 定案,自 exhaustive.rs 常數升級 config 欄,舊迴圈同步改讀);`beam_width` 標 deprecated(附錄 A,G2.4 切換後移除) |
+| 接線 | `lib.rs` | Stage 8s:`run_shadow(&classified, &old_forest, cfg)` 於 Stage 8 後隨行;`stage_elapsed_us["stage_8s_compaction_v2_shadow"]` 計時 |
+
+### G2.1 拍板(G2.2 可推翻)
+
+1. **W4 time 維度用日曆日**(與現行 `similarity_and_balance` 同基準,shadow 比對
+   不引入額外差異);bars 基準留 G2.2 隨 Q3 實驗一併裁決。
+2. **W7 語意修正落地**(全相鄰對,舊引擎僅首尾邊界對):spec §4.2 明訂;由此
+   產生的召回缺口屬 §9.3 允許清單外的第三類,Gate 報告需標注(spec §9.3 允許
+   清單建議於 r4 增補此類)。
+3. §9.3 召回**僅計數不設門檻**:G2.1 階梯缺 W5/W6,98% 門檻於 Gate v3(全階梯)
+   才適用。投影嚴格依 spec 取新引擎 **degree_level = 1** 節點(非 ≥ 1),召回鍵
+   = (start_bar, end_bar, pattern_tag),舊 scenario 日期經 monowave 端點反查 bar;
+   舊 forest 內 Level ≥ 2 聚合結構上不可能被 degree-1 投影命中,屬 Gate 缺口
+   diff 報告的預期類別。
+4. **round 內分支護欄**:新分支 materialize 上限 = `round_beam_size × 8`
+   (G2.1 階梯無 W5/W6 → 接受稠密,無上限實測 600-monowave 檔 18.5s + 3.1GB;
+   beam 只保 round_beam_size,超額 materialize 無意義)。截斷偏向先枚舉視窗,
+   輪數記 `round_branch_cap_hits` 供 Gate 觀測;逾時檢查下沉至視窗粒度。
+   工程護欄非 Neely 語意,G2.2 加 W5/W6 後接受率下降可重估。
+
+### 驗證(2026-08-25 sandbox)
+
+- `cargo test -p neely_core`:**443 passed / 0 failed**(+14 round_engine:合成葉
+  橋接 ×2 / 聚合+不變量零違反 / round-2 嵌套 / level_cap_hit 正反 ×2 / beam 截斷 /
+  少節點早退 / 多義葉多解 / 不變量檢查器壞輸入 + I1 覆蓋條款 / §9.3 召回 / dedup /
+  稠密鏈 branch cap 有界);`cargo test --workspace`:**668 passed / 0 failed**;
+  ts 契約經 `codegen/generate.sh` Track A 重生(`cargo test --features ts` 全綠)
+- 六檔 + 全市場 shadow 觀測(I1–I6 計數、level_cap_hit / round_branch_cap_hits
+  命中率、召回率、stage_8s 耗時)留 user 本機 production run:讀
+  `snapshot->'diagnostics'->'shadow_compaction'`(structural_snapshots 的 payload
+  欄是 `snapshot`,無獨立 diagnostics 欄)

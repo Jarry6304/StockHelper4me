@@ -6,6 +6,8 @@
 // 子模組:
 //   - exhaustive.rs   — v3.7 遞迴迴圈:逐 level 呼叫 three_rounds::aggregate_one_level
 //   - three_rounds.rs — Round 1-2 一層 aggregation(label 序列 + 方向交替 + S&B 弱比對)
+//   - round_engine.rs — **Compaction v2 tiling-round 引擎**(G2.1 shadow 雙軌,
+//                       只寫 diagnostics;Gate v3 過後取代 exhaustive/three_rounds)
 //   - beam_search.rs  — Forest 上限保護的 fallback(§12;雙重排序 §10.3)
 //
 // 關鍵設計:
@@ -32,6 +34,7 @@ use std::time::Instant;
 
 pub mod beam_search;
 pub mod exhaustive;
+pub mod round_engine;
 pub mod three_rounds;
 
 /// Compaction 結果。
@@ -62,8 +65,9 @@ pub fn compact(
     let start = Instant::now();
     let timeout_duration = std::time::Duration::from_secs(cfg.compaction_timeout_secs);
 
-    // ── Step 1:exhaustive 遞迴 aggregation(v3.7 迴圈 + G2.0 P1 過濾)
-    let initial_forest = exhaustive::compact(scenarios, monowaves);
+    // ── Step 1:exhaustive 遞迴 aggregation(v3.7 迴圈 + G2.0 P1 過濾;
+    //    輪數上限自 G2.1 起走 cfg.max_compaction_levels,A-8)
+    let initial_forest = exhaustive::compact(scenarios, monowaves, cfg.max_compaction_levels);
     let initial_count = initial_forest.len();
 
     // ── Step 2-3:Forest 上限保護

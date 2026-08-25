@@ -328,6 +328,53 @@ pub struct NeelyDiagnostics {
     pub elapsed_ms: u64,
     /// 峰值記憶體(P0 Gate 校準用)
     pub peak_memory_mb: u64,
+    /// G2.1(m3Spec/neely_compaction_v2.md §3.3):Compaction v2 tiling-round 引擎
+    /// shadow 雙軌診斷。serving forest 不受影響;G2.4 切換刪舊後本欄退役。
+    /// JSONB 加欄相容:舊消費端忽略未知欄。
+    pub shadow_compaction: Option<ShadowCompactionDiagnostics>,
+}
+
+/// Compaction v2 shadow 雙軌診斷(G2.1;m3Spec/neely_compaction_v2.md §3.3 / §9.3)。
+///
+/// tiling-round 引擎(`compaction::round_engine`)每次 compute 隨行,僅寫本結構:
+/// - I1–I6 不變量違反計數(§2.2;任一 > 0 = 引擎 bug,Gate v3 紅燈)
+/// - `level_cap_hit`(A-8:輪數上限造成的枚舉缺漏,由靜默轉可觀察)
+/// - §9.3 shadow 比對計數(舊 forest scenario 依 (start_bar, end_bar, pattern) 被
+///   新引擎節點命中數;召回率門檻於 Gate v3 全階梯後才適用,此處僅計數)
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
+pub struct ShadowCompactionDiagnostics {
+    /// 引擎版本 tag(例 "tiling-round-g2.1")
+    pub engine: String,
+    /// base tiling 節點數(非 Neutral monowaves + 合成葉)
+    pub base_tiling_len: usize,
+    /// Neutral 段併入前一 directional 節點的次數(§5.2 合成葉橋接)
+    pub neutral_bridged: usize,
+    /// 開頭 Neutral 無前節點可併,直接排除的數量(記 diagnostics,§5.2)
+    pub leading_neutral_dropped: usize,
+    /// 實際發生聚合的輪數
+    pub rounds_run: usize,
+    /// 收斂後 tiling pool 大小(beam 截斷後)
+    pub tiling_count: usize,
+    /// A-8:觸 max_compaction_levels 上限跳出(非零聚合收斂)
+    pub level_cap_hit: bool,
+    /// shadow 引擎自身逾時(不影響 serving `compaction_timeout`)
+    pub timed_out: bool,
+    /// W1/I2 防衛在 release 記到的違反數(> 0 = 引擎 bug)
+    pub w1_violations: usize,
+    /// round 內新分支 materialize 上限(round_beam_size × 8)截斷的輪數。
+    /// 工程護欄非 Neely 語意;> 0 = 該檔枚舉受截斷,Gate 觀測項(A-8 精神)
+    pub round_branch_cap_hits: usize,
+    /// degree_level → 節點數(canonical 去重後;key 為字串供 JSONB 直取)
+    pub node_count_by_level: HashMap<String, usize>,
+    /// I1–I6 違反計數(key "I1".."I6")
+    pub invariant_violations: HashMap<String, usize>,
+    /// §9.3:舊 forest scenario 總數
+    pub old_forest_scenarios: usize,
+    /// §9.3:依 (start_bar, end_bar, pattern_tag) 被新引擎 **degree_level = 1**
+    /// 節點命中的舊 scenario 數(spec 投影定義;舊 Level ≥ 2 聚合屬預期缺口類別)
+    pub old_forest_matched: usize,
+    pub elapsed_us: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -202,6 +202,7 @@ mod tests {
                 stage_elapsed_us: HashMap::new(),
                 elapsed_ms: 0,
                 peak_memory_mb: 0,
+                shadow_compaction: None,
             },
             rule_book_references: Vec::new(),
             insufficient_data: false,

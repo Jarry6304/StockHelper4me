@@ -405,6 +405,18 @@ impl WaveCore for NeelyCore {
             "stage_8_compaction".to_string(),
             stage_8_start.elapsed().as_micros() as u64,
         );
+
+        // ── Stage 8s:Compaction v2 tiling-round 引擎 shadow 雙軌(G2.1;
+        //    m3Spec/neely_compaction_v2.md §3.3)。僅寫 diagnostics,serving forest
+        //    不受影響;Gate v3 通過後一個 PR 內切換並刪舊路徑。
+        let stage_8s_start = Instant::now();
+        let shadow_compaction =
+            compaction::round_engine::run_shadow(&classified, &compaction_result.forest, cfg);
+        stage_elapsed.insert(
+            "stage_8s_compaction_v2_shadow".to_string(),
+            stage_8s_start.elapsed().as_micros() as u64,
+        );
+
         let mut forest = compaction_result.forest;
 
         // v4.7.1 G1.1:Compaction-after pattern_isolation validation(spec Step 5)
@@ -599,6 +611,7 @@ impl WaveCore for NeelyCore {
                 compaction_timeout: compaction_result.timeout_triggered,
                 stage_elapsed_us: stage_elapsed,
                 elapsed_ms,
+                shadow_compaction: Some(shadow_compaction),
                 ..Default::default()
             },
             rule_book_references: Vec::new(),
