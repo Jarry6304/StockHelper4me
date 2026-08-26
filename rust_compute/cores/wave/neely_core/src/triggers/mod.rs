@@ -304,6 +304,8 @@ mod tests {
         let children: Vec<WaveNode> = children
             .into_iter()
             .map(|(label, s, e)| WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label,
                 start: d(s),
                 end: d(e),
@@ -312,8 +314,11 @@ mod tests {
             .collect();
         let date = d("2026-01-01");
         Scenario {
+            wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: "test".to_string(),
                 start: date,
                 end: date,

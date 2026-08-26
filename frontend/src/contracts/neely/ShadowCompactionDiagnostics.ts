@@ -71,6 +71,11 @@ q3_flips: number,
  */
 node_count_by_level: { [key in string]?: number }, 
 /**
+ * G2.4 Gate v3:pattern tag → 節點數(canonical 去重後)— §9.2 Terminal
+ * Impulse 存在性門檻與形態分布報告的資料源
+ */
+node_count_by_pattern: { [key in string]?: number }, 
+/**
  * I1–I6 違反計數(key "I1".."I6")
  */
 invariant_violations: { [key in string]?: number }, 

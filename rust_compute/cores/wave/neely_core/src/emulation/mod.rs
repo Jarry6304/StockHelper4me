@@ -395,8 +395,11 @@ mod tests {
     fn make_scenario(pattern: NeelyPatternType, children: Vec<WaveNode>) -> Scenario {
         let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         Scenario {
+            wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: "test".to_string(),
                 start: date,
                 end: date,
@@ -430,6 +433,8 @@ mod tests {
     fn wave_node(start_offset: i64, dur: i64) -> WaveNode {
         let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         WaveNode {
+            degree_level: 0,
+            base_label: crate::output::StructureLabel::Three,
             label: "W".to_string(),
             start: base + chrono::Duration::days(start_offset),
             end: base + chrono::Duration::days(start_offset + dur - 1),

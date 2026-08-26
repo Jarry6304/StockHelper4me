@@ -37,6 +37,13 @@ def neely_forecast(
 
     輸出只回結論(~2 KB / ~500 tokens),不回 raw scenario_forest。
 
+    Forest 語意(G2.4 契約協調,compaction v2 §7.4):scenario **巢狀分層** —
+    `wave_tree` 節點帶 `degree_level`(葉 monowave = 0,parent = max(children)+1)
+    與 `base_label`(:3/:5);同一 forest 內 Level-0(monowave 級)與 Level-N
+    (聚合級)scenario 是**不同層級的解讀,不是同級並列的替代方案**,
+    比較/排序時勿把跨層 scenario 當同級競爭。結構化 `wave_count` 欄 =
+    wave_tree 頂層 children 數(取代 structure_label 字串 parse)。
+
     Args:
         stock_id: 股票代號(例 "2330")
         date: 查詢日 ISO 字串

@@ -414,8 +414,11 @@ mod tests {
 
     fn make_scenario_triangle(classified: &[ClassifiedMonowave], kind: TriangleKind) -> Scenario {
         Scenario {
+            wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: "test".to_string(),
                 start: classified.first().unwrap().monowave.start_date,
                 end: classified.last().unwrap().monowave.end_date,

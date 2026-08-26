@@ -213,6 +213,7 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 | `scripts/test_pipeline.ps1` / `.sh` | 5-phase 測試流水線(Environment / Sandbox / Schema / Production / MCP) |
 | `scripts/verify_mcp_toolkit_v4_29.py` | 全覆蓋 public MCP tool 健康度(payload budget,退碼 0/1) |
 | `scripts/verify_traditional_forest.py` | Traditional P0-Gate forest 分布 + 覆蓋驗收(免 psql) |
+| `scripts/verify_compaction_v2_gate.py` | Compaction v2 P0 Gate v3 全市場聚合(§9.2 硬門檻退碼 0/1) |
 | `scripts/verify_golden_l3_v4_32.ps1` | Golden L3 物化 + serving 驗證流水線 |
 | `scripts/recalibrate_kalman.ps1` + `install_recalibrate_task.ps1` | Phase 3b Kalman 校準(週排程增量) |
 | `scripts/split_claude_md.py` | 一次性:CLAUDE.md → docs/changelog/ 拆分(P0-1,已執行) |

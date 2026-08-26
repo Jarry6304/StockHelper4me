@@ -376,6 +376,9 @@ pub struct ShadowCompactionDiagnostics {
     pub q3_flips: usize,
     /// degree_level → 節點數(canonical 去重後;key 為字串供 JSONB 直取)
     pub node_count_by_level: HashMap<String, usize>,
+    /// G2.4 Gate v3:pattern tag → 節點數(canonical 去重後)— §9.2 Terminal
+    /// Impulse 存在性門檻與形態分布報告的資料源
+    pub node_count_by_pattern: HashMap<String, usize>,
     /// I1–I6 違反計數(key "I1".."I6")
     pub invariant_violations: HashMap<String, usize>,
     /// §9.3:舊 forest scenario 總數
@@ -439,6 +442,11 @@ pub struct RuleReference {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct Scenario {
     pub id: String,
+
+    /// G2.4 契約協調(compaction v2 §7.4):結構化 wave 數 = wave_tree 頂層
+    /// children 數。fusion track1 改讀此欄;`structure_label` 字串 parse
+    /// (`wave_count_from_label`)標 deprecated,一個 release 後移除(Q6)。
+    pub wave_count: usize,
 
     pub wave_tree: WaveNode,
     pub pattern_type: NeelyPatternType,
@@ -626,13 +634,23 @@ pub enum AdvisorySeverity {
     Strong,
 }
 
-/// Wave Tree(階層化波浪結構)。具體欄位於後續 PR 補完。
+/// Wave Tree(階層化波浪結構)。
+///
+/// **G2.4 契約協調(compaction v2 §7.3)**:加 `degree_level` / `base_label`
+/// 兩欄(JSONB 加欄不刪欄,舊消費端忽略未知欄)— 巢狀展示與 MCP 語意必需。
+/// 現行(切換前)引擎為 best-effort 填值:root = 形態層(degree 1 起)、
+/// 葉 = monowave leg(degree 0,label 取 Stage 0 Primary 候選,無則依 slot);
+/// tiling-round 引擎切換後由 CompactionNode 凍結為真值。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct WaveNode {
     pub label: String,
     pub start: NaiveDate,
     pub end: NaiveDate,
+    /// 葉(monowave leg)= 0;parent = max(children) + 1(compaction v2 I4)
+    pub degree_level: usize,
+    /// `:3` / `:5` 前端標示(compaction v2 I5;葉為 Stage 0 標籤或 slot 推定)
+    pub base_label: StructureLabel,
     pub children: Vec<WaveNode>,
 }
 

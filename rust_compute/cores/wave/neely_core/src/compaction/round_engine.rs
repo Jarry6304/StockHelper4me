@@ -1313,6 +1313,7 @@ pub fn run_shadow(
         q3_windows: 0,
         q3_flips: 0,
         node_count_by_level: HashMap::new(),
+        node_count_by_pattern: HashMap::new(),
         invariant_violations: InvariantCounters::default().to_map(),
         old_forest_scenarios: old_forest.len(),
         old_forest_matched: 0,
@@ -1484,6 +1485,13 @@ pub fn run_shadow(
             .node_count_by_level
             .entry(n.degree_level.to_string())
             .or_insert(0) += 1;
+        // G2.4 Gate v3:pattern 分布(Terminal 存在性門檻 §9.2 的資料源)
+        if let NodeKind::Pattern(pt) = &n.kind {
+            *diag
+                .node_count_by_pattern
+                .entry(pattern_tag(pt))
+                .or_insert(0) += 1;
+        }
         // §6.2 Complexity 真算 + Triplexity(G2.3;canonical 去重後逐節點)
         *diag
             .complexity_count_by_level
@@ -2152,8 +2160,11 @@ mod tests {
         let classified = impulse_chain();
         // 造一個舊 forest scenario:日期範圍 = 新引擎 Zigzag [0..3](bar 0..15)
         let old = Scenario {
+            wave_count: 0,
             id: "old-zz".to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: "zz".to_string(),
                 start: date("2026-01-01"),
                 end: date("2026-01-16"),

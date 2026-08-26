@@ -549,16 +549,22 @@ fn build_aggregated(
     );
 
     let children: Vec<WaveNode> = window.iter().map(|s| s.wave_tree.clone()).collect();
+    // G2.4 §7.3:parent degree = max(children) + 1(I4);base 依 Ch7 Compaction 表
+    let parent_degree = children.iter().map(|c| c.degree_level).max().unwrap_or(0) + 1;
     let wave_tree = WaveNode {
         label: format!("{}_compact", label_prefix),
         start: first.wave_tree.start,
         end: last.wave_tree.end,
+        degree_level: parent_degree,
+        base_label,
         children,
     };
 
     let in_triangle = matches!(pattern_type, NeelyPatternType::Triangle { .. });
     let mut new_scenario = Scenario {
         id,
+        // G2.4 §7.4:結構化 wave 數 = 頂層 children 數(fusion 改讀此欄)
+        wave_count: window.len(),
         wave_tree,
         pattern_type,
         initial_direction: first.initial_direction,
@@ -621,8 +627,11 @@ mod tests {
         end: &str,
     ) -> Scenario {
         Scenario {
+            wave_count: 0,
             id: id.to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: id.to_string(),
                 start: date(start),
                 end: date(end),

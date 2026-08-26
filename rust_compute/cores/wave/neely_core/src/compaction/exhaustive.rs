@@ -75,8 +75,11 @@ mod tests {
         end: &str,
     ) -> Scenario {
         Scenario {
+            wave_count: 0,
             id: id.to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: id.to_string(),
                 start: date(start),
                 end: date(end),

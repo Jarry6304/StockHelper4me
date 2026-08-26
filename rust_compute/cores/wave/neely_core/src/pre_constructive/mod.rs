@@ -415,6 +415,8 @@ mod tests {
         };
         let children: Vec<WaveNode> = (0..n_children)
             .map(|i| WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: format!("c{}", i),
                 start: start_date,
                 end: end_date,
@@ -422,8 +424,11 @@ mod tests {
             })
             .collect();
         crate::output::Scenario {
+            wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: "agg".to_string(),
                 start: start_date,
                 end: end_date,

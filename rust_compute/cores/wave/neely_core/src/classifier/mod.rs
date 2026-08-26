@@ -77,9 +77,9 @@ pub fn classify(
         mi[mi.len() - 1]
     );
 
-    let wave_tree = build_wave_tree(candidate, classified);
-
     let compacted_base = compaction_base_label(&pattern_type);
+
+    let wave_tree = build_wave_tree(candidate, classified, &pattern_type, compacted_base);
 
     // Phase 15:Scenario 群 2 fields 從現有 pipeline output 萃取
     let monowave_structure_labels = build_monowave_structure_labels(candidate, classified);
@@ -115,6 +115,8 @@ pub fn classify(
 
     Some(Scenario {
         id: candidate.id.clone(),
+        // G2.4 §7.4:結構化 wave 數(= wave_tree 頂層 children 數;fusion 改讀此欄)
+        wave_count: candidate.wave_count,
         wave_tree,
         pattern_type,
         initial_direction,
@@ -512,7 +514,12 @@ fn classify_complexity(candidate: &WaveCandidate) -> ComplexityLevel {
     }
 }
 
-fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> WaveNode {
+fn build_wave_tree(
+    candidate: &WaveCandidate,
+    classified: &[ClassifiedMonowave],
+    pattern: &NeelyPatternType,
+    root_base: StructureLabel,
+) -> WaveNode {
     let mi = &candidate.monowave_indices;
     let start = classified[mi[0]].monowave.start_date;
     let end = classified[mi[mi.len() - 1]].monowave.end_date;
@@ -540,6 +547,11 @@ fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave])
                 label,
                 start: mw.start_date,
                 end: mw.end_date,
+                // G2.4 §7.3:葉 = monowave leg(degree 0);base 取 Stage 0
+                // Primary 候選,無 Primary 依 pattern slot 推定
+                degree_level: 0,
+                base_label: leg_base_label(idx, classified)
+                    .unwrap_or_else(|| slot_base_label(pattern, i)),
                 children: Vec::new(),
             }
         })
@@ -549,7 +561,39 @@ fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave])
         label,
         start,
         end,
+        // G2.4 §7.3:Level-0 scenario 的 root = 形態層(degree 1 over monowave legs)
+        degree_level: 1,
+        base_label: root_base,
         children,
+    }
+}
+
+/// G2.4 §7.3 helper:leg 的 Stage 0 Primary 結構標籤(無 Primary → None)。
+fn leg_base_label(
+    classified_idx: usize,
+    classified: &[ClassifiedMonowave],
+) -> Option<StructureLabel> {
+    use crate::output::Certainty;
+    classified[classified_idx]
+        .structure_label_candidates
+        .iter()
+        .find(|c| matches!(c.certainty, Certainty::Primary))
+        .map(|c| c.label)
+}
+
+/// G2.4 §7.3 helper:依 pattern 的 `:5` slot 位置推定 leg base(無 Primary 時
+/// 的 fallback;Triangle / Combination / Diagonal children 全 `:3`)。
+fn slot_base_label(pattern: &NeelyPatternType, leg_idx: usize) -> StructureLabel {
+    let five_slots: &[usize] = match pattern {
+        NeelyPatternType::Impulse => &[0, 2, 4],
+        NeelyPatternType::Zigzag { .. } => &[0, 2],
+        NeelyPatternType::Flat { .. } | NeelyPatternType::RunningCorrection => &[2],
+        _ => &[],
+    };
+    if five_slots.contains(&leg_idx) {
+        StructureLabel::Five
+    } else {
+        StructureLabel::Three
     }
 }
 

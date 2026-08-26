@@ -15,7 +15,13 @@ import type { StructureLabel } from "./StructureLabel";
 import type { Trigger } from "./Trigger";
 import type { WaveNode } from "./WaveNode";
 
-export type Scenario = { id: string, wave_tree: WaveNode, pattern_type: NeelyPatternType, 
+export type Scenario = { id: string, 
+/**
+ * G2.4 契約協調(compaction v2 §7.4):結構化 wave 數 = wave_tree 頂層
+ * children 數。fusion track1 改讀此欄;`structure_label` 字串 parse
+ * (`wave_count_from_label`)標 deprecated,一個 release 後移除(Q6)。
+ */
+wave_count: number, wave_tree: WaveNode, pattern_type: NeelyPatternType, 
 /**
  * candidate 起始 monowave direction(Phase 5 PR 新增,供 Power Rating 判 Bullish/Bearish 符號)
  */

@@ -121,8 +121,11 @@ mod tests {
     ) -> Scenario {
         let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         Scenario {
+            wave_count: 0,
             id: id.to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: id.to_string(),
                 start: base + chrono::Duration::days(start_day),
                 end: base + chrono::Duration::days(end_day),

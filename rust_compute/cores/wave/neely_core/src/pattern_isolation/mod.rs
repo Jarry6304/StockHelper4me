@@ -463,8 +463,11 @@ mod tests {
             StructuralFacts, WaveNode,
         };
         Scenario {
+            wave_count: 0,
             id: "test_scenario".to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: "test".to_string(),
                 start: start_date,
                 end: end_date,

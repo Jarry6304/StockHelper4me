@@ -1,7 +1,8 @@
 # neely_core Compaction v2 — Tiling-Round 引擎(G2.x 系列)
 
 > 進度:G2.0 ✅ / G2.1 ✅ / G2.2 ✅(gate 五檔實測過 + Q3 拍板 + Q1 全市場
-> 抽樣收案)/ **G2.3 ✅(gate 五檔實測過,2026-08-26)** / G2.4 未開工。
+> 抽樣收案)/ G2.3 ✅(gate 五檔實測過)/ **G2.4 前半 ✅(契約協調 + Gate 工具;
+> 後半切換刪舊等本機 P0 Gate v3 全門檻)**。
 
 > 規格:`m3Spec/neely_compaction_v2.md`(r3 draft,2026-08-26)。
 > 現行 Compaction 三層缺陷(D-1 ~ D-6)正式記錄後,分 G2.0 ~ G2.4 五個里程碑
@@ -337,3 +338,41 @@ shadow 引擎與 diagnostics,serving forest 不受影響。
 
 **G2.3 收案(2026-08-26)**;餘 G2.4:下游契約協調(§7.4)+ P0 Gate v3
 (全市場)+ 切換刪舊 — 依 spec 附錄 B,等拍板開工。
+
+---
+
+## G2.4 前半 — 下游契約協調(§7.3/§7.4)+ Gate v3 工具(2026-08-26)
+
+切換刪舊(後半)依 spec §3.3 於 P0 Gate v3 全門檻過後一個 PR 內執行;
+本段先落**阻斷性契約協調**與 Gate 聚合工具,全部加欄相容、serving 行為不變。
+
+| 項 | 檔案 | 內容 |
+|---|---|---|
+| `Scenario.wave_count`(§7.4) | `output.rs` + `classifier/mod.rs` + `three_rounds.rs` | 結構化欄 = wave_tree 頂層 children 數(Level-0 = candidate.wave_count;three_rounds 聚合 = window.len());JSONB 加欄相容 |
+| `WaveNode.degree_level` / `base_label`(§7.3) | 同上 | 巢狀展示與 MCP 語意欄:現行(切換前)引擎 best-effort 填值 — Level-0 root = degree 1 + Ch7 base;葉 = degree 0 + Stage 0 Primary 候選(無 Primary 依 pattern `:5` slot 推定);three_rounds parent = max(children)+1(I4)。切換後由 CompactionNode 凍結真值 |
+| fusion 改讀新欄(Q6) | `src/fusion/dual_track/track1.py` | `primary.get("wave_count")` 優先,舊 snapshot 退 `wave_count_from_label` 字串 parse;`_picker.wave_count_from_label` docstring 標 **DEPRECATED**(一個 release 後移除,structure_label 格式屆時改 `{Pattern} L{degree} [...]`) |
+| MCP 說明(§7.4) | `mcp_server/tools/wave.py` | `neely_forecast` docstring 補 forest 巢狀語意:degree_level / base_label 欄、「Level-0 與 Level-N 是不同層級解讀非同級並列」、wave_count 結構化欄 |
+| Gate 資料源補欄 | `output.rs` + `round_engine.rs` | `ShadowCompactionDiagnostics.node_count_by_pattern`(canonical 去重後 pattern tag 分布)— §9.2 Terminal Impulse 存在性門檻與形態分布報告的資料源 |
+| Gate v3 聚合腳本(§9.4) | `scripts/verify_compaction_v2_gate.py`(新) | 全市場 latest 列(`created_at DESC`)聚合:硬性五項自動判定(inv=0 / w1=0 / Terminal 存在 / forest proxy p99≤40 / 召回率≥98% + 低於門檻檔清單)+ 觀測項(cap 率 / 耗時分位 / level·complexity·pattern 分布 / §6.1 三檔 / A-10 / Q3 殘差);退碼 0/1;runtime/RSS 與抽驗/前端檢視列手動欄 |
+| 文件同步(§7.4) | `m3Spec/neely_core_architecture.md` §14.1 | 範例 JSON 補 `wave_count` + 巢狀 `wave_tree`(degree_level/base_label)欄;`rust_compute/schema_dump.txt` 為表級 dump 無 JSONB 欄位樣例,無需更新 |
+
+### 驗證(2026-08-26 sandbox)
+
+- `cargo test -p neely_core` 463 passed / workspace **688 passed / 0 failed**
+  (契約欄位為加欄,無行為變更;~28 個測試 fixture 補欄)
+- ts 契約重生:`Scenario.ts` / `WaveNode.ts` / `ShadowCompactionDiagnostics.ts`
+  (加欄相容);`--features ts` 全綠
+- Python:fusion/wave 相關測試選集全綠;sandbox 全套 16 failed 為 bronze /
+  rate_limiter / web_api-syspath 環境性失敗(乾淨 HEAD 重現,與本次無關,
+  正式基準以本機 pytest 為準)
+
+### G2.4 後半(等 Gate)
+
+1. **本機 P0 Gate v3**:baseline 計時(現行 run-all wall time 入
+   docs/benchmarks)→ 新 binary 全市場 `run-all --write` → 
+   `scripts/verify_compaction_v2_gate.py` → 結果入
+   `docs/benchmarks/neely_compaction_v2_gate_results_<date>.md`。
+2. **切換刪舊**(Gate 全過後一 PR):§7.1/§7.2 凍結流程(CompactionNode →
+   Scenario 23 欄)、serving forest 改吃 tiling-round、刪 `exhaustive.rs` 遞迴 +
+   `three_rounds.rs` 弱比對路徑、`beam_width` 移除(附錄 A)、structure_label
+   新格式 + fusion 字串 parse 移除(Q6 一個 release 條款自此起算)。
