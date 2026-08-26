@@ -130,6 +130,14 @@ degree_clamped_levels: number,
  */
 degree1_node_keys: Array<string>, 
 /**
+ * G2.4 Gate v3 召回驗屍:每個未召回的舊 forest scenario 重放接受階梯,
+ * 記第一個拒絕階段 → 計數(key:no_aligned_start / no_aligned_end /
+ * len_mismatch / w1 / w3 / w4 / w7 / w2_label / w6 / w5 / tag_diff /
+ * accepted_but_not_collected)。r4 §9.3 門檻/允許清單拍板的量化依據;
+ * shadow 期專用
+ */
+recall_miss_by_stage: { [key in string]?: number }, 
+/**
  * G2.3 A-10:收集 forest 節點以「覆蓋葉 union」語意(PatternBound 完整
  * 落於節點覆蓋 monowave 範圍內)計得的 anchors 總數
  */

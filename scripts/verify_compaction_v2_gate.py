@@ -9,10 +9,12 @@ neely_compaction_v2_gate_results_<date>.md,格式沿用 P0 Gate v2)。
 硬性門檻(任一失敗 exit 1):
   - I1–I6 violation 總和 = 0;w1_violations 總和 = 0
   - Terminal Impulse 存在性:全市場 node_count_by_pattern 含 Diagonal:* > 0
-  - forest_size proxy p99 ≤ 40(shadow 期以收集 degree≥1 節點數近似;
-    G2.4 收集修正後為凍結側護欄前的全量,超標時以 §7.1 步驟 4 護欄複驗)
   - §9.3 召回率 ≥ 98%(允許缺口 (a) beam/dedup 時序 (b) 舊引擎 I1/I2 違規聚合;
-    低於門檻檔以 --diff 逐檔分類)
+    低於門檻檔以 --diff 逐檔分類;全聚合並印召回驗屍 —
+    未召回舊 scenario 的第一個拒絕階段分布)
+
+forest proxy(收集全量,§7.1 凍結護欄前)自 G2.4 收集修正後轉觀測項,
+p99 ≤ 40 門檻於切換後以真 forest_size 判。
 
 runtime:§9.2 門檻的公平量測 = shadow(切換後取代 stage_8)相對整體 neely
 compute 的占比;run-all 總 wall time 受 DB 狀態影響僅作附註。RSS 門檻:
@@ -20,7 +22,8 @@ diagnostics peak_memory_mb 未填值(全 0,backlog),以工作管理員觀測。
 
 用法:
   .venv\\Scripts\\python.exe scripts\\verify_compaction_v2_gate.py
-  ... --stocks 0050,2330,3363,6547,1312     # 限定檔(六檔複測)
+  ... --stocks "0050,2330,3363,6547,1312,1213"   # 限定檔複測;PowerShell
+      必須加引號 — 未引號逗號串被拆成陣列且 0050 → 50(實測掉檔)
   ... --diff 2330                            # 單檔召回缺口分類報告
 """
 from __future__ import annotations
@@ -155,7 +158,8 @@ def diff_one_stock(conn, stock_id: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stocks", help="逗號分隔 stock_id,限定聚合範圍(六檔複測用)")
+    ap.add_argument("--stocks", nargs="+",
+                    help="逗號或空白分隔 stock_id(PowerShell 請加引號,防陣列拆分)")
     ap.add_argument("--diff", help="單檔 §9.3 召回缺口分類報告")
     args = ap.parse_args()
 
@@ -170,7 +174,7 @@ def main() -> int:
     stock_filter = ""
     params: tuple = ()
     if args.stocks:
-        ids = [s.strip() for s in args.stocks.split(",") if s.strip()]
+        ids = [t.strip() for chunk in args.stocks for t in chunk.split(",") if t.strip()]
         stock_filter = " AND stock_id = ANY(%s)"
         params = (ids,)
 
@@ -210,6 +214,7 @@ def main() -> int:
     q3_flips = 0
     recall_num = 0
     recall_den = 0
+    miss_by_stage = Counter()
     low_recall: list[tuple[str, int, int]] = []
     inv_stocks: list[str] = []
 
@@ -245,6 +250,8 @@ def main() -> int:
         anchors_overlap += d.get("anchors_overlap_total", 0)
         q3_windows += d.get("q3_windows", 0)
         q3_flips += d.get("q3_flips", 0)
+        for k, v in (d.get("recall_miss_by_stage") or {}).items():
+            miss_by_stage[k] += v
         den = d.get("old_forest_scenarios", 0)
         num = d.get("old_forest_matched", 0)
         recall_num += num
@@ -273,8 +280,7 @@ def main() -> int:
          f"total={inv_total}" + (f" stocks={inv_stocks[:10]}" if inv_stocks else "")),
         ("w1_violations = 0", w1_total == 0, f"total={w1_total}"),
         ("Terminal Impulse 存在", terminal_nodes > 0, f"Diagonal:* nodes={terminal_nodes}"),
-        ("forest_size proxy p99 <= 40", p99_forest <= 40,
-         f"p50={pctile(forest_sizes, 0.5)} p95={pctile(forest_sizes, 0.95)} p99={p99_forest}"),
+
         ("§9.3 召回率 >= 98%", recall >= 0.98,
          f"{recall_num}/{recall_den} = {recall:.2%}(低於門檻 {len(low_recall)} 檔;--diff 分類)"),
     ]
@@ -284,6 +290,8 @@ def main() -> int:
         if not ok:
             hard_fail = True
         print(f"- [{mark}] {name} — {detail}")
+    print(f"- [觀測] forest proxy(收集全量,§7.1 護欄前;凍結側才判 p99<=40)"
+          f" p50={pctile(forest_sizes, 0.5)} p95={pctile(forest_sizes, 0.95)} p99={p99_forest}")
     shadow_total_s = sum(elapsed_ms) / 1000.0
     neely_total_s = neely_total_ms / 1000.0
     if neely_total_s:
@@ -309,6 +317,12 @@ def main() -> int:
           f"(高估 {1 - anchors_union / anchors_overlap:.1%})" if anchors_overlap else "")
     print(f"- Q3 殘差:{q3_flips}/{q3_windows}"
           f" = {q3_flips / q3_windows:.1%}" if q3_windows else "")
+    if miss_by_stage:
+        total_miss = sum(miss_by_stage.values())
+        print()
+        print("## §9.3 召回驗屍(未召回舊 scenario 的第一個拒絕階段)")
+        for k, v in miss_by_stage.most_common():
+            print(f"- {k}: {v} ({v / total_miss:.1%})")
     print()
     print("## Pattern 分布(top 15)")
     for k, v in pattern_counts.most_common(15):

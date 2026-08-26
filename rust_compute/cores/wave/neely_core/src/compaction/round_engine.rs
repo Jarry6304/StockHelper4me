@@ -1326,6 +1326,7 @@ pub fn run_shadow(
         degree_map: HashMap::new(),
         degree_clamped_levels: 0,
         degree1_node_keys: Vec::new(),
+        recall_miss_by_stage: HashMap::new(),
         anchors_union_total: 0,
         anchors_overlap_total: 0,
         elapsed_us: 0,
@@ -1344,6 +1345,8 @@ pub fn run_shadow(
         .zip(base.nodes.last())
         .map(|(f, l)| (f.start_date, l.end_date));
     let base_key = tiling_key(&base.nodes);
+    // 召回驗屍(G2.4)需要 base 葉序列;Rc clone 廉價
+    let base_leaves: Vec<Rc<CompactionNode>> = base.nodes.clone();
     let mut pool: Vec<Tiling> = vec![Tiling { nodes: base.nodes }];
     let mut seen: HashSet<String> = HashSet::from([base_key]);
     // §5.6 memo:視窗 children canonical 串 → 階梯結果(分支間大量共享視窗;
@@ -1574,16 +1577,97 @@ pub fn run_shadow(
         .collect();
     key_strs.sort();
     diag.degree1_node_keys = key_strs;
+    // 召回驗屍(G2.4 Gate 第一輪揭露 absent 80-98% → 逐階段歸因):
+    // 每個未召回舊 scenario 對 base 葉序列找對齊視窗,重放階梯記第一個拒絕者
+    let leaf_start_idx: HashMap<usize, usize> = base_leaves
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.start_bar, i))
+        .collect();
     for sc in old_forest {
         if let Some(key) = old_scenario_key(sc, &start_map, &end_map) {
             if new_keys.contains(&key) {
                 diag.old_forest_matched += 1;
+                continue;
             }
+            let (sb, eb, tag) = key;
+            let cat: &str = match leaf_start_idx.get(&sb) {
+                None => "no_aligned_start",
+                Some(&i) => {
+                    let mut j = i;
+                    let mut found = false;
+                    while j < base_leaves.len() && base_leaves[j].end_bar <= eb {
+                        if base_leaves[j].end_bar == eb {
+                            found = true;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if !found {
+                        "no_aligned_end"
+                    } else if !matches!(j - i + 1, 3 | 5 | 7 | 11) {
+                        "len_mismatch"
+                    } else {
+                        recall_autopsy_stage(&base_leaves[i..=j], &tag)
+                    }
+                }
+            };
+            *diag
+                .recall_miss_by_stage
+                .entry(cat.to_string())
+                .or_insert(0) += 1;
         }
     }
 
     diag.elapsed_us = start.elapsed().as_micros() as u64;
     diag
+}
+
+/// 召回驗屍(G2.4):對齊視窗重放接受階梯,回第一個拒絕階段;
+/// 全過但 tag 不同 → "tag_diff";全過且 tag 相同 → "accepted_but_not_collected"
+/// (= 收集 bug 指標,理論上不可達 — round 1 枚舉涵蓋全部 base 視窗)。
+/// 不動 LadderCounters(驗屍不計入唯一視窗統計)。
+fn recall_autopsy_stage(window: &[Rc<CompactionNode>], want_tag: &str) -> &'static str {
+    if !w1_adjacency(window) {
+        return "w1";
+    }
+    if !w3_alternating(window) {
+        return "w3";
+    }
+    if !w4_similarity_balance(window) {
+        return "w4";
+    }
+    if !w7_internal_extreme(window) {
+        return "w7";
+    }
+    let rows = w2_label_rows(window);
+    if rows.is_empty() {
+        return "w2_label";
+    }
+    let mut proposed: Vec<AcceptedKind> = Vec::new();
+    for row in rows {
+        match row {
+            RowMatch::Direct(k) => proposed.push(k),
+            RowMatch::ThreesFive => proposed.extend(w6_fork_threes_five(window)),
+        }
+    }
+    if proposed.is_empty() {
+        return "w6";
+    }
+    let (synth, candidate) = synth_window(window);
+    let report = validator::validate_candidate(&candidate, &synth);
+    let kinds: Vec<&AcceptedKind> = proposed
+        .iter()
+        .filter(|k| k.base != StructureLabel::Five || report.overall_pass)
+        .collect();
+    if kinds.is_empty() {
+        return "w5";
+    }
+    if kinds.iter().any(|k| pattern_tag(&k.pattern) == want_tag) {
+        "accepted_but_not_collected"
+    } else {
+        "tag_diff"
+    }
 }
 
 fn collect_pattern_nodes(

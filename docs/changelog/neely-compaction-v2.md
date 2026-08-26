@@ -413,3 +413,26 @@ Neutral 橋接 bar 錯位為新嫌疑)。
 驗證:`cargo test -p neely_core` 463 passed / workspace 688 passed / ts 重生。
 複測程序:六檔 rerun → `--stocks` 聚合看召回方向 → `--diff` 分類殘餘 →
 全市場 rerun(建議先跑 `maintain_facts_stats.sql` 解 DB 慢)。
+
+### Gate 第二輪(六檔複測)+ 召回驗屍儀表(2026-08-26/27)
+
+六檔複測(g2.4 收集修正後,`--stocks` 限定):inv/w1 仍 0;**收集修正生效**
+(2330 degree-1 20→38)**但召回率未動(10.5%)** — `--diff` 分類把兩個嫌疑
+同時排除:`bar_offset_le3 = 0`(非 Neutral 橋接錯位)、`tag_mismatch` 極少
+(1213 僅 1 筆)。**80–98% 屬 `absent`:舊視窗在新階梯下整個未被接受**
+(2330 exact 4/20;1213 exact 0/46、新 degree-1 僅 12)。根因移向接受階梯
+本身的 spec 修正累積效應(W2 label 閘 / W4 bars / W7 全相鄰對 / W5 /A-9),
+各項皆 spec 明訂,但 §9.3 98% 門檻未預期總量 — 需逐階段量化才能拍板
+「r4 修門檻/允許清單」vs「引擎 bug」。
+
+**召回驗屍儀表(本輪落地)**:`recall_miss_by_stage` — 每個未召回舊
+scenario 對 base 葉序列找對齊視窗、重放階梯記第一個拒絕者
+(no_aligned_start/end、len_mismatch、w1/w3/w4/w7/w2_label/w6/w5、
+tag_diff、accepted_but_not_collected = 收集 bug 指標);gate 腳本聚合印出。
+附修:forest proxy 轉觀測(收集修正後為 §7.1 護欄前全量,p99≤40 於切換後
+以真 forest_size 判 — 另記 spec 張力:1213 舊 forest 46 > 40,98% 召回與
+p99≤40 對密集檔在數學上互斥,r4 需明文兩者關係);`--stocks` 改 nargs
+且**PowerShell 須加引號**(未引號逗號串被拆陣列、`0050` 數字化為 `50` —
+第二輪實測掉檔的根因)。
+
+複測程序:rebuild → 六檔 rerun → gate `--stocks "..."`(引號)看驗屍分布。
