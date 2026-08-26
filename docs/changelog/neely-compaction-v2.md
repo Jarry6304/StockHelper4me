@@ -1,7 +1,7 @@
 # neely_core Compaction v2 — Tiling-Round 引擎(G2.x 系列)
 
 > 進度:G2.0 ✅ / G2.1 ✅ / G2.2 ✅(gate 五檔實測過 + Q3 拍板 + Q1 全市場
-> 抽樣收案)/ **G2.3 ✅(sandbox;本機 gate 觀測項見該節)** / G2.4 未開工。
+> 抽樣收案)/ **G2.3 ✅(gate 五檔實測過,2026-08-26)** / G2.4 未開工。
 
 > 規格:`m3Spec/neely_compaction_v2.md`(r3 draft,2026-08-26)。
 > 現行 Compaction 三層缺陷(D-1 ~ D-6)正式記錄後,分 G2.0 ~ G2.4 五個里程碑
@@ -306,3 +306,34 @@ shadow 引擎與 diagnostics,serving forest 不受影響。
 4. **§6.2 / §6.3**:complexity 分布(五檔預期以 1 為主、2 少量)、degree_map
    合理(daily ~4 年資料 ceiling = Minor)。
 5. **A-10 收緊幅度**:anchors_overlap_total − anchors_union_total。
+
+### G2.3 gate 五檔實測(2026-08-26 本機,bars 991-996)
+
+| stock | inv | w1 | levels | cplx | bnd checked/info/warn | anchors u/o | q3 殘差 | ms |
+|---|---|---|---|---|---|---|---|---|
+| 0050 | 0 | 0 | 1:10 | 1:10 | 1584/113/300 | 1/7 | 1/1 | 11.2 |
+| 2330 | 0 | 0 | 1:19, 2:1 | 1:20 | 1612/353/81 | 2/6 | 1/8 | 13.6 |
+| 3363 | 0 | 0 | 1:10 | 1:10 | 1542/165/272 | 1/5 | 0/2 | 11.1 |
+| 6547 | 0 | 0 | 1:11 | 1:11 | 1274/85/46 | 3/5 | 2/2 | 10.0 |
+| 1312 | 0 | 0 | 1:11 | 1:11 | 1572/241/253 | 1/4 | 0/3 | 10.8 |
+
+- **gate 過**:engine 全 `tiling-round-g2.3`;inv / w1 五檔全 0;耗時與 G2.2 持平。
+- **A-9 效應判讀修正**:degree-1 節點 10/19/10/11/11 vs G2.2 的 9/16/12/11/10 —
+  增減互見,非本檔原預告的「減或持平」。機制:A-9 收緊的是單窗可產 kind,
+  但被廢除的低分窗(Flat Common power 0)原佔 materialize 名額,兩階段按分
+  選取下名額讓給高分窗;且細分後 RunningCorrection \|power\|=3 等抬高 splice
+  分數 → beam 池組成重組,collected forest 聯集波動。屬預期池重組,非回歸。
+- **§6.1 分布**:Pass 63–90% / Info 6.7–21.9% / Warning 3.6–18.9% — 多數 Pass,
+  Warning 檔是否進 beam 參考鍵留 Gate v3;skipped=0(端點側 splice 未被按分
+  選中,合理)。
+- **§6.2 / §6.3**:complexity 全 1(2330 之 degree-2 節點 pattern 子節點屬 :3
+  族,不構成 Multiwave — 語意正確);triplexity 0;degree_map 996 bars ≈ 4 年
+  → ceiling Minor,2330 `{0:Minuette,1:Minute,2:Minor}`、餘 `{0:Minute,1:Minor}`,
+  clamped 0。
+- **A-10 收緊幅度**:union 1–3 vs overlap 4–7 — 現行日期重疊近似**高估
+  60–86%**,收緊有實質效果(spec 廢除近似的實證依據)。
+- **Q3 殘差**:Σ 4/16 = 25% 分歧率(bars 判準為主判後的殘差觀測),
+  持續佐證 Q3 拍板。
+
+**G2.3 收案(2026-08-26)**;餘 G2.4:下游契約協調(§7.4)+ P0 Gate v3
+(全市場)+ 切換刪舊 — 依 spec 附錄 B,等拍板開工。
