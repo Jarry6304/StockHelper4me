@@ -194,8 +194,8 @@ V2 WAVE 欄是 placeholder(spec CL4),真實端點留 production 拍版 (a)/(b)/(
 全市場 2171 stocks × 40 cores ~2.5h,P0-Gate forest max 69/70/58 ≪ 200 全過。
 詳見 docs/changelog/v4.30-v4.38.md §v4.37。
 
-當前狀態(2026-06-10 實測):alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 647 passed;
-Python `pytest tests/` 526 passed / 1 skipped;MCP 14 public tools;universe ~2172 stocks × 41 cores;
+當前狀態:alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 668 passed(2026-08-26 實測);
+Python `pytest tests/` 526 passed / 1 skipped(2026-06-10 實測);MCP 14 public tools;universe ~2172 stocks × 41 cores;
 collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`。
 
 ## helper 腳本清單
@@ -240,14 +240,19 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 
 ## 下次 session 優先序
 
-1. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
+1. **neely Compaction v2(G2.x 系列,進行中)**:規格 `m3Spec/neely_compaction_v2.md`(r3);
+   G2.0 止血 + G2.1 tiling-round shadow 引擎已收案(含 2026-08-26 六檔 gate 實測
+   I1–I6 零違反),歷程與 G2.2 設計輸入(branch cap 視窗偏置 / W4 round-1 語意差)
+   見 `docs/changelog/neely-compaction-v2.md`。當前:G2.2(W5 端點泛化 + W6 分岔
+   判別 + Q3 六檔雙軌實驗);TAIEX 於 `price_daily_fwd` 無供料另列 backlog。
+2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地
    (2026-06-11,`GET /waves/summary`;見 docs/changelog/v2-wave-endpoint.md),
    production verify 留本機 runbook。③ **漸進收攏 spec 拍版**(波浪引擎歷史段定型 +
    尾端錨定;討論稿 `m3Spec/proposal_progressive_settlement.md`,拍版前不動 Rust;
    表現層止血已落地,見 docs/changelog/wave-view-tuning.md)。
-2. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
-3. **wall time / PG contention 觀察**:run-all 全市場 ~37 min(tpex universe 後);爆了先跑
+3. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
+4. **wall time / PG contention 觀察**:run-all 全市場 ~37 min(tpex universe 後);爆了先跑
    `scripts/maintain_facts_stats.sql` 再用 `diagnose_slow_tw_cores.sql` 取證
    (2330 單股 smoke 已見 chip 表查詢 1-6.4s slow statement)。
 
