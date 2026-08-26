@@ -1,7 +1,7 @@
 # neely_core Compaction v2 — Tiling-Round 引擎(G2.x 系列)
 
-> 進度:G2.0 ✅ / G2.1 ✅ / G2.2 ✅(gate 五檔實測過 + Q3 拍板 + **Q1 全市場
-> 抽樣收案**)/ G2.3 進行中 / G2.4 未開工。
+> 進度:G2.0 ✅ / G2.1 ✅ / G2.2 ✅(gate 五檔實測過 + Q3 拍板 + Q1 全市場
+> 抽樣收案)/ **G2.3 ✅(sandbox;本機 gate 觀測項見該節)** / G2.4 未開工。
 
 > 規格:`m3Spec/neely_compaction_v2.md`(r3 draft,2026-08-26)。
 > 現行 Compaction 三層缺陷(D-1 ~ D-6)正式記錄後,分 G2.0 ~ G2.4 五個里程碑
@@ -264,3 +264,45 @@ initial_direction 語意」。全市場 production 抽樣 + 程式碼確證後**
 偽 Running 全憑此拿到 ±3 最強評級(雜訊);修正後會落回 Flat
 Irregular*/IrregularFailure(−1/−2)。**影響 serving forest / MCP / fusion 多空
 判讀,需獨立拍板 + 重跑,不順路塞進 G2.3。**
+
+---
+
+## G2.3 — 邊界重評 / Complexity 真算 / Degree 對映 / anchors union / Combination 細分(2026-08-26)
+
+規格 §6(Round 2 Reassessment)+ A-9 / A-10(附錄 B G2.3 交付)。全部落在
+shadow 引擎與 diagnostics,serving forest 不受影響。
+
+| 項 | 檔案 | 內容 |
+|---|---|---|
+| A-9 Combination / Flat 細分 | `round_engine.rs` + `classifier/mod.rs` | W2 rows 細分與 monowave 級**同源**:`classify_3wave_mags`(量值版核心)自 `classify_3wave_segment` 抽出、`map_double/triple_combination` 開 pub(crate) — 3-窗 [:3 :3 :5] 依幅度分 RunningCorrection / Flat 七變體(b/a < 61.8% 不符 Flat 最低要求 → **row 不成立**,G2.2 Common 佔位廢除);7/11-窗依 Ch8 Table A/B(x-wave ≥ 61.8% × min(兩側淨幅)= 大 x)對映 11-variant `CombinationKind`,大 x + Zigzag 構成段等不可辨識組合不產 garbage(與 monowave 級行為一致) |
+| §6.1 邊界波重評(D-4 修復) | `round_engine.rs` | 聚合成功後 parent 於其 tiling 取**真實前後鄰居**,(\|m(−1)\|, parent 首子波)與(parent 末子波, \|m(+1)\|)magnitude 比三檔:[0.382, 2.618] Pass / [0.236, 4.236] 內 Advisory Info / 之外 Advisory Warning — **不拒絕聚合**;無鄰居或零幅度該側跳過。邊界重評屬 tiling 語境(同節點跨 tiling 鄰居不同)→ 逐 materialize 計數;凍結時 AdvisoryFinding 掛載留 G2.4 收集階段 |
+| §6.2 Complexity 真算 + Triplexity | 同上 | 節點樹遞迴:葉 = 0(Simple)/ degree-1 = 1(Polywave)/ 任一 `:5` 子節點為 impulsive polywave = 2(Multiwave,修正波同式 — Zigzag/Flat 之 `:5` 子節點同計)/ 一 `:5` 為 Multiwave 且另一 `:5` ≥ Polywave = 3(Macrowave 上限);Triplexity = 子樹內 Impulse 段(impulsive pattern node + `:5` slot 上的葉 = Level-0)出現 ≥ 3 種不同 level。收集 forest 分布進 diagnostics;凍結時 `complexity_level`/`triplexity_detected` 欄對映留 G2.4(ComplexityLevel enum 3 值 vs Level 0-3 的壓縮拍板) |
+| §6.3 Degree 對映 | 同上 | ceiling 錨定法:tiling 最高 degree_level 對映 Stage 11 同式 ceiling(`degree::compute_ceiling`)允許之最高 Degree,逐層向下遞減;超出 11 級下界夾 SubMicro 並計數。輸出展示用,**不**回饋任何接受條件 |
+| A-10 anchors union | 同上 | 節點 anchors 語意收緊觀測:PatternBound **完整含於**節點覆蓋 monowave 範圍(union)vs 現行「日期範圍重疊即算」近似 — 兩者並行計數(`anchors_union_total` / `anchors_overlap_total`),收緊幅度供 Gate;凍結時實際掛載留 G2.4。`run_shadow` 簽名 + `&pattern_bounds` / `input.timeframe` 接線 |
+| 診斷合約 | `output.rs` | `ShadowCompactionDiagnostics` +10 欄(boundary_* ×4 / complexity_count_by_level / triplexity_nodes / degree_map / degree_clamped_levels / anchors_union_total / anchors_overlap_total);engine tag → `tiling-round-g2.3`;ts 契約重生(加欄相容);`CombinationKind` 補 `PartialEq` |
+
+### 驗證(2026-08-26 sandbox)
+
+- `cargo test -p neely_core`:**463 passed / 0 failed**(+14:A-9 3-窗 Flat 細分 /
+  Running / weak-b 落 row ×3、7-窗 DoubleZigzag / 大x+Zigzag 落 row / 大x DoubleThree
+  ×3、§6.1 三檔 + impulse_chain 鄰居計數 ×2、§6.2 spec 表逐級 + triplexity ×2、
+  §6.3 錨定 + 夾邊 ×2、A-10 union<overlap integration ×1)
+- `cargo test --workspace`:**688 passed / 0 failed**(674 baseline + 14);
+  ts codegen(`--features ts`)全綠
+- production 影響:無(全 shadow);G2.2 已知邊界三項(Flat/Combination 細分、
+  Alternation complexity 軸尚未消費 degree 差、邊界重評)本輪收掉前兩者的
+  細分/重評主體;Alternation complexity 軸改用 degree_level 差(§4.3)屬 W5
+  validator 內規則輸入,留 G2.4 凍結時與 structural_facts 一併接
+
+### 待本機(G2.3 gate 觀測項)
+
+六檔 run 讀 `snapshot->'diagnostics'->'shadow_compaction'`(`created_at DESC`):
+
+1. `engine = "tiling-round-g2.3"`、inv/w1 仍全 0(I1–I6 gate 不回歸)。
+2. **A-9 效應**:degree-1 節點 pattern 分布(Flat 變體 / Combination kind 細分
+   後,節點數應較 G2.2 的 9–16 減或持平 — weak-b Flat row 廢除是唯一收緊源)。
+3. **§6.1 分布**:boundary_advisory_info / warning 佔 pairs_checked 比例
+   (預期多數 Pass;Warning 高 = 邊界比例極端的解讀多,供 beam 參考)。
+4. **§6.2 / §6.3**:complexity 分布(五檔預期以 1 為主、2 少量)、degree_map
+   合理(daily ~4 年資料 ceiling = Minor)。
+5. **A-10 收緊幅度**:anchors_overlap_total − anchors_union_total。

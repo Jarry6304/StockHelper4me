@@ -194,7 +194,7 @@ V2 WAVE 欄是 placeholder(spec CL4),真實端點留 production 拍版 (a)/(b)/(
 全市場 2171 stocks × 40 cores ~2.5h,P0-Gate forest max 69/70/58 ≪ 200 全過。
 詳見 docs/changelog/v4.30-v4.38.md §v4.37。
 
-當前狀態:alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 668 passed(2026-08-26 實測);
+當前狀態:alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 688 passed(2026-08-26 實測);
 Python `pytest tests/` 526 passed / 1 skipped(2026-06-10 實測);MCP 14 public tools;universe ~2172 stocks × 41 cores;
 collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`。
 
@@ -241,12 +241,13 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 ## 下次 session 優先序
 
 1. **neely Compaction v2(G2.x 系列,進行中)**:規格 `m3Spec/neely_compaction_v2.md`(r3);
-   G2.0 / G2.1 / G2.2 主體已收案(六檔 gate 實測 I1–I6 零違反;**Q3 拍板:
-   flip 33.3% > 5% → bars 反查已落地,W4 time 轉 bars**),歷程與 r4 spec 待修點
-   (§4.3 族別閘門明文 / §9.3 允許清單 / Q3 定稿)見
-   `docs/changelog/neely-compaction-v2.md`。餘項:Q1 Running 覆核(G2.2 尾)→
-   G2.3(邊界重評 / Complexity 真算 / kind 細分);TAIEX 於 `price_daily_fwd`
-   無供料另列 backlog。
+   G2.0–G2.3 已收案(gate 實測 I1–I6 零違反;Q3 拍板 bars 反查落地;**Q1 收案:
+   雙軌定案 — 符號鏈首子波 / 幾何鏈 net**;G2.3 = 邊界重評 D-4 / Complexity 真算 /
+   Degree 對映 / anchors union A-10 / Combination 細分 A-9),歷程與 r4 spec 待修點
+   (§4.3 族別閘門明文 / §7.2 initial_direction 列 / §9.3 允許清單 / Q1、Q3 定稿)見
+   `docs/changelog/neely-compaction-v2.md`。餘項:G2.3 本機 gate 觀測 → G2.4
+   (契約協調 + P0 Gate v3 + 切換刪舊);`is_running_correction` proxy 語意不符
+   (偽 Running 持 ±3 評級)獨立拍板項;TAIEX 於 `price_daily_fwd` 無供料另列 backlog。
 2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地
    (2026-06-11,`GET /waves/summary`;見 docs/changelog/v2-wave-endpoint.md),

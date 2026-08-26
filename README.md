@@ -8,7 +8,7 @@
 
 | 指標 | 值 |
 |---|---|
-| Rust | 50 crates / 668 tests |
+| Rust | 50 crates / 688 tests |
 | Python | 973 tests passed |
 | MCP | 14 public tools |
 | Universe | ~2,172 stocks × 41 cores |
