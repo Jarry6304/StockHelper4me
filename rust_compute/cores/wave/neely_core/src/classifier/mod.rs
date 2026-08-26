@@ -321,10 +321,16 @@ fn classify_3wave_segment(
             sub_kind: ZigzagKind::Single,
         };
     }
-    let a_mag = classified[mi[0]].metrics.magnitude;
-    let b_mag = classified[mi[1]].metrics.magnitude;
-    let c_mag = classified[mi[2]].metrics.magnitude;
+    classify_3wave_mags(
+        classified[mi[0]].metrics.magnitude,
+        classified[mi[1]].metrics.magnitude,
+        classified[mi[2]].metrics.magnitude,
+    )
+}
 
+/// 量值版 3-wave 分類核心 — monowave 級與 Level-N 節點級(compaction v2
+/// round_engine,A-9 同源要求)共用;「波」介面泛化為 a/b/c magnitude。
+pub(crate) fn classify_3wave_mags(a_mag: f64, b_mag: f64, c_mag: f64) -> NeelyPatternType {
     // 1. Running Correction 上提頂層(spec r5 line 1161 + spec line 2035)
     if flat_classifier::is_running_correction(a_mag, b_mag, c_mag) {
         return NeelyPatternType::RunningCorrection;
@@ -391,7 +397,7 @@ fn x_wave_is_large(
 /// Table A(小 x-wave):允許 Zigzag 構成段。
 /// Table B(大 x-wave):構成段只能 Flat —— 任一為 Zigzag → None
 /// (對齊 m3Spec/neely_rules.md Ch8 Table B 修正:大 x-wave 場景不可出現 Zigzag)。
-fn map_double_combination(
+pub(crate) fn map_double_combination(
     kind_a: &NeelyPatternType,
     kind_b: &NeelyPatternType,
     large_x: bool,
@@ -453,7 +459,7 @@ fn classify_11wave_combination(
 /// Table A(小 x-wave):允許 Zigzag 構成段。
 /// Table B(大 x-wave):構成段只能 Flat —— 任一為 Zigzag → None
 /// (對齊 m3Spec/neely_rules.md Ch8 Table B 修正)。
-fn map_triple_combination(
+pub(crate) fn map_triple_combination(
     kind_a: &NeelyPatternType,
     kind_b: &NeelyPatternType,
     kind_c: &NeelyPatternType,

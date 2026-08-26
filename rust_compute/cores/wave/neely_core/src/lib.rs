@@ -414,6 +414,8 @@ impl WaveCore for NeelyCore {
             &classified,
             &compaction_result.forest,
             &input.bars,
+            &pattern_bounds,
+            input.timeframe,
             cfg,
         );
         stage_elapsed.insert(

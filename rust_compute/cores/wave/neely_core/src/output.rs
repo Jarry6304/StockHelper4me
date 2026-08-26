@@ -383,6 +383,30 @@ pub struct ShadowCompactionDiagnostics {
     /// §9.3:依 (start_bar, end_bar, pattern_tag) 被新引擎 **degree_level = 1**
     /// 節點命中的舊 scenario 數(spec 投影定義;舊 Level ≥ 2 聚合屬預期缺口類別)
     pub old_forest_matched: usize,
+    /// G2.3 §6.1 邊界波重評(D-4):完成比對的 (parent 首/末子波, 真鄰居) 對數
+    pub boundary_pairs_checked: usize,
+    /// §6.1:比值落 [0.236, 0.382) ∪ (2.618, 4.236] 的 Advisory(Info)數
+    pub boundary_advisory_info: usize,
+    /// §6.1:比值落 [0.236, 4.236] 外的 Advisory(Warning)數(不拒絕聚合)
+    pub boundary_advisory_warning: usize,
+    /// §6.1:tiling 首/末 parent 無對應鄰居(或零幅度不可比)跳過的側數
+    pub boundary_sides_skipped: usize,
+    /// G2.3 §6.2 Complexity 真算:complexity level(0..=3)→ 節點數
+    /// (canonical 去重後收集 forest;取代硬寫 Complex 的分布觀測)
+    pub complexity_count_by_level: HashMap<String, usize>,
+    /// §6.2:子樹內出現 ≥ 3 種不同 Complexity Level 之 Impulse 段的節點數
+    pub triplexity_nodes: usize,
+    /// G2.3 §6.3 Degree 對映(ceiling 錨定):degree_level → Degree 名
+    /// (輸出展示用;不回饋任何接受條件)
+    pub degree_map: HashMap<String, String>,
+    /// §6.3:超出 11 級下界被夾至 SubMicro 的 level 數(記 diagnostics)
+    pub degree_clamped_levels: usize,
+    /// G2.3 A-10:收集 forest 節點以「覆蓋葉 union」語意(PatternBound 完整
+    /// 落於節點覆蓋 monowave 範圍內)計得的 anchors 總數
+    pub anchors_union_total: usize,
+    /// A-10 對照組:現行「日期範圍重疊即算」近似語意計得的 anchors 總數
+    /// (收緊幅度 = overlap − union,Gate 觀測)
+    pub anchors_overlap_total: usize,
     pub elapsed_us: u64,
 }
 
@@ -742,7 +766,7 @@ pub enum TriangleKind {
     Limiting,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum CombinationKind {
     /// Table A 小 x-wave 組合:(5-3-5) + x + (5-3-5) = Double Zigzag

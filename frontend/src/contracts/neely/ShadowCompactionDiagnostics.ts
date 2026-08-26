@@ -82,4 +82,48 @@ old_forest_scenarios: number,
  * §9.3:依 (start_bar, end_bar, pattern_tag) 被新引擎 **degree_level = 1**
  * 節點命中的舊 scenario 數(spec 投影定義;舊 Level ≥ 2 聚合屬預期缺口類別)
  */
-old_forest_matched: number, elapsed_us: bigint, };
+old_forest_matched: number, 
+/**
+ * G2.3 §6.1 邊界波重評(D-4):完成比對的 (parent 首/末子波, 真鄰居) 對數
+ */
+boundary_pairs_checked: number, 
+/**
+ * §6.1:比值落 [0.236, 0.382) ∪ (2.618, 4.236] 的 Advisory(Info)數
+ */
+boundary_advisory_info: number, 
+/**
+ * §6.1:比值落 [0.236, 4.236] 外的 Advisory(Warning)數(不拒絕聚合)
+ */
+boundary_advisory_warning: number, 
+/**
+ * §6.1:tiling 首/末 parent 無對應鄰居(或零幅度不可比)跳過的側數
+ */
+boundary_sides_skipped: number, 
+/**
+ * G2.3 §6.2 Complexity 真算:complexity level(0..=3)→ 節點數
+ * (canonical 去重後收集 forest;取代硬寫 Complex 的分布觀測)
+ */
+complexity_count_by_level: { [key in string]?: number }, 
+/**
+ * §6.2:子樹內出現 ≥ 3 種不同 Complexity Level 之 Impulse 段的節點數
+ */
+triplexity_nodes: number, 
+/**
+ * G2.3 §6.3 Degree 對映(ceiling 錨定):degree_level → Degree 名
+ * (輸出展示用;不回饋任何接受條件)
+ */
+degree_map: { [key in string]?: string }, 
+/**
+ * §6.3:超出 11 級下界被夾至 SubMicro 的 level 數(記 diagnostics)
+ */
+degree_clamped_levels: number, 
+/**
+ * G2.3 A-10:收集 forest 節點以「覆蓋葉 union」語意(PatternBound 完整
+ * 落於節點覆蓋 monowave 範圍內)計得的 anchors 總數
+ */
+anchors_union_total: number, 
+/**
+ * A-10 對照組:現行「日期範圍重疊即算」近似語意計得的 anchors 總數
+ * (收緊幅度 = overlap − union,Gate 觀測)
+ */
+anchors_overlap_total: number, elapsed_us: bigint, };

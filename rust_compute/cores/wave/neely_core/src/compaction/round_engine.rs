@@ -1,18 +1,23 @@
-// round_engine.rs — Compaction v2 tiling-round 引擎(G2.2:全階梯 shadow)
+// round_engine.rs — Compaction v2 tiling-round 引擎(G2.3:重評 / 真算 / 細分)
 //
 // 對齊 m3Spec/neely_compaction_v2.md:
 //   §2.2 不變量 I1–I6 / §3.1 目標架構 / §4 try_all_neely 七階梯 / §4.4 W6 分岔 /
-//   §5 round 引擎 / §9.3 shadow 比對 / §12 Q3 雙軌實驗。
+//   §5 round 引擎 / §6 Round 2 Reassessment / §9.3 shadow 比對 / §12 Q1/Q3 收案。
 //
-// G2.1(骨架)+ G2.2(本輪)已落地:
+// G2.1(骨架)+ G2.2(全階梯)+ G2.3(本輪)已落地:
 //   - 基礎設施:Rc 節點、base tiling(Neutral 合成葉橋接)、round 迴圈、dedup、
 //     beam、`level_cap_hit`(A-8)
-//   - 階梯:W1(I2 防衛)/ W2(I5 閉合表)/ W3(交替)/ W4(S&B)/
-//     **W5(Ch5 Validator 端點泛化,§4.3)** / **W6(3-3-3-3-3 分岔判別,§4.4,
-//     D-5 修復 — Terminal Impulse 以 Diagonal 表徵,對齊 classifier 慣例)** /
-//     W7(Fib² 全相鄰對)
-//   - **Q3 雙軌實驗儀表**(§12):5-窗的 Overlap / 回測判定 — 端點版 vs bars
-//     反查版並跑,翻轉計數進 diagnostics(> 5% 依 spec 落 bars 反查)
+//   - 階梯:W1(I2 防衛)/ W2(I5 閉合表 + **A-9 Flat 七變體 / CombinationKind
+//     細分,與 classifier 量值版核心同源**)/ W3(交替)/ W4(S&B)/
+//     W5(Ch5 Validator 端點泛化,§4.3)/ W6(3-3-3-3-3 分岔判別,§4.4,
+//     D-5 修復 — Terminal Impulse 以 Diagonal 表徵)/ W7(Fib² 全相鄰對)
+//   - **§6.1 邊界波重評**(D-4):真鄰居 magnitude 三檔判定(Pass / Info /
+//     Warning),不拒絕聚合;shadow 期計數觀測
+//   - **§6.2 Complexity 真算 + Triplexity**、**§6.3 Degree ceiling 錨定對映**、
+//     **A-10 anchors union vs 現行 overlap 近似**(收集 forest 統計)
+//   - Q3 bars 反查為判準(2026-08-26 拍板;q3_* 保留為殘差觀測);Q1 雙軌定案
+//     (符號鏈 = 首子波 → `synth_window` 之 `window[0].net_direction`;
+//     幾何鏈 = 節點 net → W3)
 //   - **shadow 雙軌**(§3.3):輸出僅寫 `NeelyDiagnostics.shadow_compaction`,
 //     serving forest 完全不受影響;Gate v3 通過後才切換
 //
@@ -27,21 +32,22 @@
 //   - round 內生成走 **兩階段**(G2.1 gate 實測修正):先枚舉全部視窗收
 //     splice 候選(輕量 spec,不 materialize),再依 beam 鍵近似分數降序選
 //     materialize 至 branch cap — 消除先枚舉視窗的時間軸偏置
-//   - W4 time 維度沿用日曆日(G2.1 拍板);Q3 實驗結論若落 bars 反查,W4 一併重議
-//   - W5 / Q3 計數以「唯一視窗」為單位(memo 命中不重計)
+//   - W5 / Q3 計數以「唯一視窗」為單位(memo 命中不重計);§6.1 邊界重評屬
+//     tiling 語境(同節點跨 tiling 鄰居不同)→ 逐 materialize 計
 
 use crate::candidates::WaveCandidate;
 use crate::classifier;
 use crate::config::NeelyEngineConfig;
 use crate::monowave::{ClassifiedMonowave, ProportionMetrics};
 use crate::output::{
-    Certainty, DiagonalKind, MonowaveDirection, NeelyPatternType, OhlcvBar, RuleId, Scenario,
-    ShadowCompactionDiagnostics, StructureLabel, StructureLabelCandidate, TriangleKind, WaveNode,
-    ZigzagKind,
+    Certainty, Degree, DiagonalKind, MonowaveDirection, NeelyPatternType, OhlcvBar, PatternBound,
+    RuleId, Scenario, ShadowCompactionDiagnostics, StructureLabel, StructureLabelCandidate,
+    TriangleKind, WaveNode, ZigzagKind,
 };
 use crate::power_rating;
 use crate::validator::{self, ValidationReport};
 use chrono::NaiveDate;
+use fact_schema::Timeframe;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Instant;
@@ -381,9 +387,38 @@ enum RowMatch {
     ThreesFive,
 }
 
+/// 3 節點 sub-segment(a-b-c)以量值版核心分類 — 與 monowave 級
+/// `classifier::classify_3wave_mags` 同源(A-9 要求;「波」介面泛化為端點幅度)。
+fn classify_3seg_nodes(seg: &[Rc<CompactionNode>]) -> NeelyPatternType {
+    debug_assert_eq!(seg.len(), 3);
+    classifier::classify_3wave_mags(
+        seg[0].price_magnitude(),
+        seg[1].price_magnitude(),
+        seg[2].price_magnitude(),
+    )
+}
+
+/// x-wave 相對兩側 sub-segment 是否為「大 x-wave」(Table B)—
+/// 與 monowave 級 `x_wave_is_large` 同式:x magnitude ≥ 61.8% × min(兩側淨幅)。
+fn x_node_is_large(
+    x: &Rc<CompactionNode>,
+    sub_a: &[Rc<CompactionNode>],
+    sub_b: &[Rc<CompactionNode>],
+) -> bool {
+    let net_span = |seg: &[Rc<CompactionNode>]| -> f64 {
+        (seg[seg.len() - 1].end_price - seg[0].start_price).abs()
+    };
+    x.price_magnitude() >= 0.618 * net_span(sub_a).min(net_span(sub_b))
+}
+
 /// W2:I5 閉合表(§4.2.1)。回傳匹配 rows(0..k,同窗多解各產分支)。
-/// Flat 以 Common 佔位(七變體細分 = classifier 泛化,列 G2.3 與 A-9 同批);
-/// Combination 沿用通用 kind(A-9,G2.3)。
+///
+/// **G2.3(A-9)**:Flat 七變體與 CombinationKind 細分以 classifier 量值版核心
+/// 同源判定,取代 Common / DoubleThree / TripleThree 佔位 —
+/// 3-窗 [:3 :3 :5] 依 a/b/c 幅度細分 RunningCorrection / Flat{七變體}
+/// (b/a < 61.8% 不符 Flat 最低要求 → 該 row 不成立);
+/// 7/11-窗依 Ch8 Table A/B(x-wave 大小 + 構成段 kind)對映 11-variant,
+/// 不可辨識組合 → row 不成立(不產 garbage,與 monowave 級行為一致)。
 fn w2_label_rows(window: &[Rc<CompactionNode>]) -> Vec<RowMatch> {
     use Slot::{Five, Three};
     let mut out = Vec::new();
@@ -404,12 +439,15 @@ fn w2_label_rows(window: &[Rc<CompactionNode>]) -> Vec<RowMatch> {
                 }));
             }
             if matches_seq(&[Three, Three, Five]) {
-                out.push(RowMatch::Direct(AcceptedKind {
-                    pattern: NeelyPatternType::Flat {
-                        sub_kind: crate::output::FlatKind::Common,
-                    },
-                    base: StructureLabel::Three,
-                }));
+                // A-9:依幅度細分 Flat-family(Zigzag 判讀 = b/a 過小,
+                // 與 [:3 :3 :5] row 的 Flat 語意矛盾 → row 不成立)
+                match classify_3seg_nodes(window) {
+                    NeelyPatternType::Zigzag { .. } => {}
+                    pt => out.push(RowMatch::Direct(AcceptedKind {
+                        pattern: pt,
+                        base: StructureLabel::Three,
+                    })),
+                }
             }
         }
         5 => {
@@ -425,22 +463,38 @@ fn w2_label_rows(window: &[Rc<CompactionNode>]) -> Vec<RowMatch> {
         }
         7 => {
             if matches_seq(&[Three; 7]) {
-                out.push(RowMatch::Direct(AcceptedKind {
-                    pattern: NeelyPatternType::Combination {
-                        sub_kinds: vec![crate::output::CombinationKind::DoubleThree],
-                    },
-                    base: StructureLabel::Three,
-                }));
+                // A-9:3+x+3 → Double-* 細分(位置慣例:x = 第 4 節點)
+                let kind_a = classify_3seg_nodes(&window[0..3]);
+                let kind_b = classify_3seg_nodes(&window[4..7]);
+                let large_x = x_node_is_large(&window[3], &window[0..3], &window[4..7]);
+                if let Some(k) = classifier::map_double_combination(&kind_a, &kind_b, large_x) {
+                    out.push(RowMatch::Direct(AcceptedKind {
+                        pattern: NeelyPatternType::Combination {
+                            sub_kinds: vec![k],
+                        },
+                        base: StructureLabel::Three,
+                    }));
+                }
             }
         }
         11 => {
             if matches_seq(&[Three; 11]) {
-                out.push(RowMatch::Direct(AcceptedKind {
-                    pattern: NeelyPatternType::Combination {
-                        sub_kinds: vec![crate::output::CombinationKind::TripleThree],
-                    },
-                    base: StructureLabel::Three,
-                }));
+                // A-9:3+x+3+x+3 → Triple-* 細分(x = 第 4、8 節點)
+                let kind_a = classify_3seg_nodes(&window[0..3]);
+                let kind_b = classify_3seg_nodes(&window[4..7]);
+                let kind_c = classify_3seg_nodes(&window[8..11]);
+                let large_x = x_node_is_large(&window[3], &window[0..3], &window[4..7])
+                    || x_node_is_large(&window[7], &window[4..7], &window[8..11]);
+                if let Some(k) =
+                    classifier::map_triple_combination(&kind_a, &kind_b, &kind_c, large_x)
+                {
+                    out.push(RowMatch::Direct(AcceptedKind {
+                        pattern: NeelyPatternType::Combination {
+                            sub_kinds: vec![k],
+                        },
+                        base: StructureLabel::Three,
+                    }));
+                }
             }
         }
         _ => {}
@@ -612,6 +666,203 @@ fn w6_fork_threes_five(window: &[Rc<CompactionNode>]) -> Vec<AcceptedKind> {
     }
 
     out
+}
+
+// ---------------------------------------------------------------------------
+// §6.1 邊界波重評(D-4 修復;G2.3)— 真鄰居 magnitude 三檔判定,不拒絕聚合
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryTier {
+    /// ∈ [0.382, 2.618] — 通過,無事
+    Pass,
+    /// ∈ [0.236, 0.382) ∪ (2.618, 4.236] — Advisory(Info):現行 mild 檔語意搬移
+    Info,
+    /// [0.236, 4.236] 外 — Advisory(Warning):該解讀在更大序列中的角色可疑;
+    /// 形態內部合法性已由 W5/W7 保證,**不拒絕聚合**
+    Warning,
+}
+
+/// 單側 magnitude 比三檔判定;任一側零幅度(不可比)→ None(caller 記 skipped)。
+fn boundary_tier(a_mag: f64, b_mag: f64) -> Option<BoundaryTier> {
+    if a_mag <= PRICE_EPS || b_mag <= PRICE_EPS {
+        return None;
+    }
+    let r = a_mag / b_mag;
+    if (SB_MIN_RATIO..=SB_MAX_RATIO).contains(&r) {
+        Some(BoundaryTier::Pass)
+    } else if (FIB2_MIN..=FIB2_MAX).contains(&r) {
+        Some(BoundaryTier::Info)
+    } else {
+        Some(BoundaryTier::Warning)
+    }
+}
+
+/// §6.1:聚合成功後,parent 於其 tiling 取真實前後鄰居 m(−1) / m(+1),
+/// 對 (|m(−1)|, parent 首子波) 與 (parent 末子波, |m(+1)|) 各判一次。
+/// shadow 期以計數觀測;凍結時之 AdvisoryFinding 掛載屬 tiling 語境
+/// (同節點跨 tiling 鄰居不同),留 G2.4 收集階段處理。
+fn boundary_reassess(
+    prev: Option<&Rc<CompactionNode>>,
+    parent: &Rc<CompactionNode>,
+    next: Option<&Rc<CompactionNode>>,
+    diag: &mut ShadowCompactionDiagnostics,
+) {
+    let sides = [
+        (
+            prev.map(|p| p.price_magnitude()),
+            parent.children.first().map(|c| c.price_magnitude()),
+        ),
+        (
+            parent.children.last().map(|c| c.price_magnitude()),
+            next.map(|n| n.price_magnitude()),
+        ),
+    ];
+    for (a, b) in sides {
+        match (a, b) {
+            (Some(a), Some(b)) => match boundary_tier(a, b) {
+                Some(tier) => {
+                    diag.boundary_pairs_checked += 1;
+                    match tier {
+                        BoundaryTier::Pass => {}
+                        BoundaryTier::Info => diag.boundary_advisory_info += 1,
+                        BoundaryTier::Warning => diag.boundary_advisory_warning += 1,
+                    }
+                }
+                None => diag.boundary_sides_skipped += 1,
+            },
+            // tiling 首/末 parent 無對應鄰居 → 該側跳過(記 diagnostics,§6.1)
+            _ => diag.boundary_sides_skipped += 1,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §6.2 ComplexityLevel 真算 + Triplexity(G2.3;取代硬寫 Complex)
+// ---------------------------------------------------------------------------
+
+/// rules Ch7 Complexity Rule(Neely Extension)遞迴定義(§6.2 表):
+/// 葉 = Level-0(Simple);degree-1 合法形態 = Level-1(Polywave);
+/// 至少一個 `:5` 子節點自身為 pattern node(impulsive polywave)= Level-2
+/// (Multiwave);一 `:5` 子節點為 Multiwave 且另一 `:5` 至少 Polywave =
+/// Level-3(Macrowave,上限)。
+fn node_complexity(n: &CompactionNode) -> usize {
+    if matches!(n.kind, NodeKind::Leaf) {
+        return 0;
+    }
+    let five_levels: Vec<usize> = n
+        .children
+        .iter()
+        .filter(|c| {
+            matches!(c.kind, NodeKind::Pattern(_))
+                && matches!(&c.label, NodeLabel::Fixed(l) if is_impulsive_label(*l))
+        })
+        .map(|c| node_complexity(c))
+        .collect();
+    if five_levels.is_empty() {
+        1
+    } else if five_levels.len() >= 2 && five_levels.iter().copied().max().unwrap_or(0) >= 2 {
+        3
+    } else {
+        2
+    }
+}
+
+/// 形態內 `:5` slot 的 child index(Level-0 Impulse 段辨識用;
+/// Triangle / Combination / Terminal(Diagonal)children 全 `:3`,無 slot)。
+fn five_slot_indices(pt: &NeelyPatternType) -> &'static [usize] {
+    match pt {
+        NeelyPatternType::Impulse => &[0, 2, 4],
+        NeelyPatternType::Zigzag { .. } => &[0, 2],
+        NeelyPatternType::Flat { .. } | NeelyPatternType::RunningCorrection => &[2],
+        _ => &[],
+    }
+}
+
+/// §6.2 Triplexity:收集子樹內所有 Impulse 段的 Complexity Level —
+/// impulsive pattern node 記自身 level;`:5` slot 上的葉記 Level-0。
+fn collect_impulse_levels(n: &CompactionNode, out: &mut HashSet<usize>) {
+    if let NodeKind::Pattern(pt) = &n.kind {
+        if matches!(
+            pt,
+            NeelyPatternType::Impulse | NeelyPatternType::Diagonal { .. }
+        ) {
+            out.insert(node_complexity(n));
+        }
+        for idx in five_slot_indices(pt) {
+            if let Some(c) = n.children.get(*idx) {
+                if matches!(c.kind, NodeKind::Leaf) {
+                    out.insert(0);
+                }
+            }
+        }
+        for c in &n.children {
+            collect_impulse_levels(c, out);
+        }
+    }
+}
+
+/// 同一結構內出現 ≥ 3 種不同 Complexity Level 的 Impulse 段 → triplexity。
+fn triplexity_detected(n: &CompactionNode) -> bool {
+    let mut levels = HashSet::new();
+    collect_impulse_levels(n, &mut levels);
+    levels.len() >= 3
+}
+
+// ---------------------------------------------------------------------------
+// §6.3 degree_level → Degree 對映(G2.3;ceiling 錨定,輸出展示用)
+// ---------------------------------------------------------------------------
+
+/// 11 級 Degree 體系升冪(architecture §13.3;index 0 = SubMicro 下界)。
+const DEGREE_LADDER: [Degree; 11] = [
+    Degree::SubMicro,
+    Degree::Micro,
+    Degree::SubMinuette,
+    Degree::Minuette,
+    Degree::Minute,
+    Degree::Minor,
+    Degree::Intermediate,
+    Degree::Primary,
+    Degree::Cycle,
+    Degree::Supercycle,
+    Degree::GrandSupercycle,
+];
+
+fn degree_ladder_index(d: &Degree) -> usize {
+    match d {
+        Degree::SubMicro => 0,
+        Degree::Micro => 1,
+        Degree::SubMinuette => 2,
+        Degree::Minuette => 3,
+        Degree::Minute => 4,
+        Degree::Minor => 5,
+        Degree::Intermediate => 6,
+        Degree::Primary => 7,
+        Degree::Cycle => 8,
+        Degree::Supercycle => 9,
+        Degree::GrandSupercycle => 10,
+    }
+}
+
+/// §6.3 ceiling 錨定法:tiling 最高 degree_level 對映 ceiling 允許之最高
+/// Degree,逐層向下遞減;超出 11 級下界夾至 SubMicro(計數記 diagnostics)。
+/// 僅供輸出展示與 cross_timeframe_hints,**不**回饋任何接受條件。
+fn degree_name_map(max_level: usize, ceiling: &Degree) -> (HashMap<String, String>, usize) {
+    let ceil_idx = degree_ladder_index(ceiling);
+    let mut map = HashMap::new();
+    let mut clamped = 0usize;
+    for level in 0..=max_level {
+        let offset = max_level - level;
+        let idx = match ceil_idx.checked_sub(offset) {
+            Some(i) => i,
+            None => {
+                clamped += 1;
+                0
+            }
+        };
+        map.insert(level.to_string(), format!("{:?}", DEGREE_LADDER[idx]));
+    }
+    (map, clamped)
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,11 +1283,15 @@ fn splice_score(
 }
 
 /// 跑 tiling-round 引擎(shadow):產 diagnostics,不動 serving forest。
-/// `old_forest` 供 §9.3 召回計數;`bars` 供 Q3 雙軌 bars 反查(空 = 不量測)。
+/// `old_forest` 供 §9.3 召回計數;`bars` 供 Q3 bars 反查判準(空 = 退端點);
+/// `pattern_bounds` 供 A-10 anchors union 觀測;`timeframe` 供 §6.3 Degree
+/// ceiling 錨定(與 Stage 11 同式推導)。
 pub fn run_shadow(
     classified: &[ClassifiedMonowave],
     old_forest: &[Scenario],
     bars: &[OhlcvBar],
+    pattern_bounds: &[PatternBound],
+    timeframe: Timeframe,
     cfg: &NeelyEngineConfig,
 ) -> ShadowCompactionDiagnostics {
     let start = Instant::now();
@@ -1044,7 +1299,7 @@ pub fn run_shadow(
 
     let base = build_base_tiling(classified, bars);
     let mut diag = ShadowCompactionDiagnostics {
-        engine: "tiling-round-g2.2".to_string(),
+        engine: "tiling-round-g2.3".to_string(),
         base_tiling_len: base.nodes.len(),
         neutral_bridged: base.bridged,
         leading_neutral_dropped: base.leading_dropped,
@@ -1061,6 +1316,16 @@ pub fn run_shadow(
         invariant_violations: InvariantCounters::default().to_map(),
         old_forest_scenarios: old_forest.len(),
         old_forest_matched: 0,
+        boundary_pairs_checked: 0,
+        boundary_advisory_info: 0,
+        boundary_advisory_warning: 0,
+        boundary_sides_skipped: 0,
+        complexity_count_by_level: HashMap::new(),
+        triplexity_nodes: 0,
+        degree_map: HashMap::new(),
+        degree_clamped_levels: 0,
+        anchors_union_total: 0,
+        anchors_overlap_total: 0,
         elapsed_us: 0,
     };
 
@@ -1163,6 +1428,11 @@ pub fn run_shadow(
                 parent_key,
                 spec.report.as_ref().map(|r| (**r).clone()),
             );
+            // §6.1 邊界波重評(G2.3):parent 對其 tiling 中真實前後鄰居判定
+            // (advisory 三檔,不拒絕;同節點跨 tiling 鄰居不同 → 逐 splice 計)
+            let prev = spec.s.checked_sub(1).map(|i| &t.nodes[i]);
+            let next = t.nodes.get(spec.s + spec.w);
+            boundary_reassess(prev, &parent, next, &mut diag);
             let mut nodes: Vec<Rc<CompactionNode>> = Vec::with_capacity(t.nodes.len() - spec.w + 1);
             nodes.extend(t.nodes[..spec.s].iter().cloned());
             nodes.push(parent);
@@ -1214,6 +1484,47 @@ pub fn run_shadow(
             .node_count_by_level
             .entry(n.degree_level.to_string())
             .or_insert(0) += 1;
+        // §6.2 Complexity 真算 + Triplexity(G2.3;canonical 去重後逐節點)
+        *diag
+            .complexity_count_by_level
+            .entry(node_complexity(n).to_string())
+            .or_insert(0) += 1;
+        if triplexity_detected(n) {
+            diag.triplexity_nodes += 1;
+        }
+    }
+
+    // §6.3 Degree 對映(G2.3):最高 degree_level 錨定 Stage 11 同式 ceiling
+    let max_level = forest_nodes
+        .values()
+        .map(|n| n.degree_level)
+        .max()
+        .unwrap_or(0);
+    let ceiling = crate::degree::compute_ceiling(bars, timeframe);
+    let (degree_map, clamped) = degree_name_map(max_level, &ceiling.max_reachable_degree);
+    diag.degree_map = degree_map;
+    diag.degree_clamped_levels = clamped;
+
+    // A-10(G2.3):anchors 語意收緊觀測 — union(PatternBound 完整含於節點
+    // 覆蓋 monowave 範圍)vs 現行「日期範圍重疊即算」近似,收緊幅度供 Gate。
+    if !pattern_bounds.is_empty() {
+        let mw_bar_ranges: Vec<(usize, usize)> =
+            classified.iter().map(|c| c.monowave.bar_indices).collect();
+        for n in forest_nodes.values() {
+            for pb in pattern_bounds {
+                let (Some(pb_s), Some(pb_e)) =
+                    (mw_bar_ranges.get(pb.start_idx), mw_bar_ranges.get(pb.end_idx))
+                else {
+                    continue;
+                };
+                if pb_s.0 >= n.start_bar && pb_e.1 <= n.end_bar {
+                    diag.anchors_union_total += 1;
+                }
+                if pb_s.0 <= n.end_bar && n.start_bar <= pb_e.1 {
+                    diag.anchors_overlap_total += 1;
+                }
+            }
+        }
     }
 
     // §9.3 shadow 召回計數:舊 forest scenario 依 (start_bar, end_bar, pattern_tag)
@@ -1391,7 +1702,7 @@ mod tests {
     #[test]
     fn shadow_impulse_chain_aggregates_with_zero_invariant_violations() {
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
         assert_eq!(diag.base_tiling_len, 5);
         assert!(diag.rounds_run >= 1, "應至少發生一輪聚合");
         assert!(!diag.timed_out);
@@ -1412,7 +1723,7 @@ mod tests {
         let mut classified = impulse_chain();
         classified.push(cm(25, 30, 121.0, 109.0, Down, &[Three]));
         classified.push(cm(30, 55, 109.0, 139.0, Up, &[Five]));
-        let diag = run_shadow(&classified, &[], &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0);
         assert!(diag.rounds_run >= 2, "round 2 應發生(rounds_run = {})", diag.rounds_run);
@@ -1432,7 +1743,7 @@ mod tests {
         classified.push(cm(30, 55, 109.0, 139.0, Up, &[Five]));
         let mut c = cfg();
         c.max_compaction_levels = 1;
-        let diag = run_shadow(&classified, &[], &[], &c);
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &c);
         assert_eq!(diag.rounds_run, 1);
         assert!(diag.level_cap_hit, "round 1 仍有聚合但被上限截斷 → level_cap_hit");
     }
@@ -1440,7 +1751,7 @@ mod tests {
     #[test]
     fn shadow_converges_without_cap_hit_when_no_more_aggregation() {
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
         assert!(
             !diag.level_cap_hit,
             "零聚合收斂(Round 3 暫停)不得標 level_cap_hit"
@@ -1452,7 +1763,7 @@ mod tests {
         let classified = impulse_chain();
         let mut c = cfg();
         c.round_beam_size = 2;
-        let diag = run_shadow(&classified, &[], &[], &c);
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &c);
         assert!(diag.tiling_count <= 2, "pool 超過 round_beam_size 應被 beam 截斷");
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0);
@@ -1463,7 +1774,7 @@ mod tests {
         use MonowaveDirection::Up;
         use StructureLabel::Five;
         let classified = vec![cm(0, 5, 100.0, 110.0, Up, &[Five])];
-        let diag = run_shadow(&classified, &[], &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
         assert_eq!(diag.base_tiling_len, 1);
         assert_eq!(diag.rounds_run, 0);
         assert!(diag.node_count_by_level.is_empty());
@@ -1481,7 +1792,7 @@ mod tests {
             cm(15, 20, 116.0, 109.0, Down, &[Five, Three]),
             cm(20, 25, 109.0, 121.0, Up, &[Five, Three]),
         ];
-        let diag = run_shadow(&classified, &[], &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
         // degree-1 節點應同時含 Impulse 路徑與 Triangle 路徑(+ Zigzag/Flat 子窗)
         let level1 = diag.node_count_by_level.get("1").copied().unwrap_or(0);
         assert!(level1 >= 4, "多解視窗應產多個 degree-1 節點,got {}", level1);
@@ -1818,7 +2129,7 @@ mod tests {
         }
         let c = cfg();
         let started = std::time::Instant::now();
-        let diag = run_shadow(&classified, &[], &[], &c);
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &c);
         assert!(
             started.elapsed().as_secs() < 10,
             "60 段稠密鏈必須在秒級完成(護欄失效 = 分支爆炸)"
@@ -1873,7 +2184,7 @@ mod tests {
             pattern_isolation_anchors: Vec::new(),
             triplexity_detected: false,
         };
-        let diag = run_shadow(&classified, &[old], &[], &cfg());
+        let diag = run_shadow(&classified, &[old], &[], &[], Timeframe::Daily, &cfg());
         assert_eq!(diag.old_forest_scenarios, 1);
         assert_eq!(
             diag.old_forest_matched, 1,
@@ -1886,8 +2197,362 @@ mod tests {
     fn dedup_same_aggregation_reached_twice_counted_once() {
         // impulse_chain 的 Zigzag [0..3] 在多輪間可被重複生成;seen dedup 應保唯一
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
         // node_count_by_level 以 canonical 去重;Impulse+2 Zigzag = 3(不因分支重複膨脹)
         assert_eq!(diag.node_count_by_level.get("1"), Some(&3));
+    }
+
+    // ── G2.3:A-9 W2 細分(與 classifier 量值版核心同源)──────────────────
+
+    /// 3-窗 [:3 :3 :5] 依幅度細分 Flat 變體(b/a=0.85、c/b≥1 → Common)
+    #[test]
+    fn a9_three_window_flat_refined_to_common() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        let classified = vec![
+            cm(0, 5, 1000.0, 900.0, Down, &[Three]),
+            cm(5, 10, 900.0, 985.0, Up, &[Three]),
+            cm(10, 15, 985.0, 895.0, Down, &[Five]),
+        ];
+        let base = build_base_tiling(&classified, &[]);
+        let rows = w2_label_rows(&base.nodes);
+        assert_eq!(rows.len(), 1);
+        match &rows[0] {
+            RowMatch::Direct(k) => assert!(
+                matches!(
+                    k.pattern,
+                    NeelyPatternType::Flat {
+                        sub_kind: crate::output::FlatKind::Common
+                    }
+                ),
+                "應細分為 Flat Common:{:?}",
+                k.pattern
+            ),
+            RowMatch::ThreesFive => panic!("非 3-3-3-3-3 分岔"),
+        }
+    }
+
+    /// 3-窗 b>a 且 c<a → RunningCorrection(量值版核心同源)
+    #[test]
+    fn a9_three_window_running_correction() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        let classified = vec![
+            cm(0, 5, 1000.0, 900.0, Down, &[Three]),
+            cm(5, 10, 900.0, 1020.0, Up, &[Three]),
+            cm(10, 15, 1020.0, 940.0, Down, &[Five]),
+        ];
+        let base = build_base_tiling(&classified, &[]);
+        let rows = w2_label_rows(&base.nodes);
+        assert_eq!(rows.len(), 1);
+        match &rows[0] {
+            RowMatch::Direct(k) => assert!(
+                matches!(k.pattern, NeelyPatternType::RunningCorrection),
+                "{:?}",
+                k.pattern
+            ),
+            RowMatch::ThreesFive => panic!(),
+        }
+    }
+
+    /// 3-窗 b/a < 61.8% 不符 Flat 最低要求 → row 不成立(G2.2 的 Common 佔位廢除)
+    #[test]
+    fn a9_three_window_weak_b_drops_flat_row() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        let classified = vec![
+            cm(0, 5, 1000.0, 900.0, Down, &[Three]),
+            cm(5, 10, 900.0, 950.0, Up, &[Three]),
+            cm(10, 15, 950.0, 870.0, Down, &[Five]),
+        ];
+        let base = build_base_tiling(&classified, &[]);
+        assert!(w2_label_rows(&base.nodes).is_empty());
+    }
+
+    /// 7-窗小 x-wave + 兩側 Zigzag 構成段 → DoubleZigzag(Table A)
+    #[test]
+    fn a9_seven_window_small_x_double_zigzag() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::Three;
+        let classified = vec![
+            cm(0, 5, 1000.0, 900.0, Down, &[Three]),
+            cm(5, 10, 900.0, 950.0, Up, &[Three]),
+            cm(10, 15, 950.0, 860.0, Down, &[Three]),
+            cm(15, 20, 860.0, 890.0, Up, &[Three]), // x mag 30 < 0.618×140
+            cm(20, 25, 890.0, 790.0, Down, &[Three]),
+            cm(25, 30, 790.0, 840.0, Up, &[Three]),
+            cm(30, 35, 840.0, 750.0, Down, &[Three]),
+        ];
+        let base = build_base_tiling(&classified, &[]);
+        let rows = w2_label_rows(&base.nodes);
+        assert_eq!(rows.len(), 1);
+        match &rows[0] {
+            RowMatch::Direct(k) => match &k.pattern {
+                NeelyPatternType::Combination { sub_kinds } => assert_eq!(
+                    sub_kinds,
+                    &vec![crate::output::CombinationKind::DoubleZigzag]
+                ),
+                other => panic!("應為 Combination:{:?}", other),
+            },
+            RowMatch::ThreesFive => panic!(),
+        }
+    }
+
+    /// 7-窗大 x-wave + Zigzag 構成段 → Table B 不可辨識 → row 不成立
+    #[test]
+    fn a9_seven_window_large_x_with_zigzag_drops_row() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::Three;
+        let classified = vec![
+            cm(0, 5, 1000.0, 900.0, Down, &[Three]),
+            cm(5, 10, 900.0, 950.0, Up, &[Three]),
+            cm(10, 15, 950.0, 860.0, Down, &[Three]),
+            cm(15, 20, 860.0, 1060.0, Up, &[Three]), // x mag 200 ≥ 0.618×140 → 大 x
+            cm(20, 25, 1060.0, 960.0, Down, &[Three]),
+            cm(25, 30, 960.0, 1010.0, Up, &[Three]),
+            cm(30, 35, 1010.0, 920.0, Down, &[Three]),
+        ];
+        let base = build_base_tiling(&classified, &[]);
+        assert!(w2_label_rows(&base.nodes).is_empty());
+    }
+
+    /// 7-窗大 x-wave + 兩側 Flat 構成段 → DoubleThree(Table B)
+    #[test]
+    fn a9_seven_window_large_x_flats_double_three() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::Three;
+        let classified = vec![
+            cm(0, 5, 1000.0, 900.0, Down, &[Three]),
+            cm(5, 10, 900.0, 985.0, Up, &[Three]),
+            cm(10, 15, 985.0, 895.0, Down, &[Three]),
+            cm(15, 20, 895.0, 965.0, Up, &[Three]), // x mag 70 ≥ 0.618×105 → 大 x
+            cm(20, 25, 965.0, 865.0, Down, &[Three]),
+            cm(25, 30, 865.0, 950.0, Up, &[Three]),
+            cm(30, 35, 950.0, 860.0, Down, &[Three]),
+        ];
+        let base = build_base_tiling(&classified, &[]);
+        let rows = w2_label_rows(&base.nodes);
+        assert_eq!(rows.len(), 1);
+        match &rows[0] {
+            RowMatch::Direct(k) => match &k.pattern {
+                NeelyPatternType::Combination { sub_kinds } => assert_eq!(
+                    sub_kinds,
+                    &vec![crate::output::CombinationKind::DoubleThree]
+                ),
+                other => panic!("應為 Combination:{:?}", other),
+            },
+            RowMatch::ThreesFive => panic!(),
+        }
+    }
+
+    // ── G2.3:§6.1 邊界波重評三檔 ────────────────────────────────────────
+
+    #[test]
+    fn boundary_tier_three_bands() {
+        assert_eq!(boundary_tier(100.0, 100.0), Some(BoundaryTier::Pass));
+        assert_eq!(boundary_tier(100.0, 300.0), Some(BoundaryTier::Info)); // 0.333
+        assert_eq!(boundary_tier(300.0, 100.0), Some(BoundaryTier::Info)); // 3.0
+        assert_eq!(boundary_tier(100.0, 500.0), Some(BoundaryTier::Warning)); // 0.2
+        assert_eq!(boundary_tier(500.0, 100.0), Some(BoundaryTier::Warning)); // 5.0
+        assert_eq!(boundary_tier(0.0, 100.0), None); // 零幅度不可比
+    }
+
+    /// impulse_chain 三個 splice 的真鄰居計數:全窗 Impulse 兩側無鄰居(skip 2)、
+    /// Zigzag [0..3] 右鄰 Pass + 左 skip、Zigzag [2..5] 左鄰 Pass + 右 skip;
+    /// round 2 之 [P_z1, l3, l4] Flat row 因 A-9(b/a=0.44)不再成立,無新 splice。
+    #[test]
+    fn boundary_reassess_counts_on_impulse_chain() {
+        let classified = impulse_chain();
+        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
+        assert_eq!(diag.boundary_pairs_checked, 2);
+        assert_eq!(diag.boundary_sides_skipped, 4);
+        assert_eq!(diag.boundary_advisory_info, 0);
+        assert_eq!(diag.boundary_advisory_warning, 0);
+    }
+
+    // ── G2.3:§6.2 Complexity 真算 + Triplexity ──────────────────────────
+
+    fn leaf_node(labels: &[StructureLabel]) -> Rc<CompactionNode> {
+        Rc::new(CompactionNode {
+            kind: NodeKind::Leaf,
+            label: NodeLabel::LeafCandidates(labels.to_vec()),
+            degree_level: 0,
+            start_bar: 0,
+            end_bar: 1,
+            start_date: date("2026-01-01"),
+            end_date: date("2026-01-02"),
+            start_price: 100.0,
+            end_price: 110.0,
+            children: Vec::new(),
+            validation: None,
+            net_direction: MonowaveDirection::Up,
+            canonical: String::new(),
+            true_range: None,
+        })
+    }
+
+    fn pattern_node(
+        pt: NeelyPatternType,
+        base: StructureLabel,
+        degree: usize,
+        children: Vec<Rc<CompactionNode>>,
+    ) -> Rc<CompactionNode> {
+        Rc::new(CompactionNode {
+            kind: NodeKind::Pattern(pt),
+            label: NodeLabel::Fixed(base),
+            degree_level: degree,
+            start_bar: 0,
+            end_bar: 10,
+            start_date: date("2026-01-01"),
+            end_date: date("2026-03-01"),
+            start_price: 100.0,
+            end_price: 120.0,
+            children,
+            validation: None,
+            net_direction: MonowaveDirection::Up,
+            canonical: String::new(),
+            true_range: None,
+        })
+    }
+
+    #[test]
+    fn complexity_levels_per_spec_table() {
+        use StructureLabel::{Five, Three};
+        let leaf5 = || leaf_node(&[Five]);
+        let leaf3 = || leaf_node(&[Three]);
+        // Level-0:葉
+        assert_eq!(node_complexity(&leaf5()), 0);
+        // Level-1:degree-1 Polywave(children 全葉,無 :5 pattern 子節點)
+        let poly_impulse = pattern_node(
+            NeelyPatternType::Impulse,
+            Five,
+            1,
+            vec![leaf5(), leaf3(), leaf5(), leaf3(), leaf5()],
+        );
+        assert_eq!(node_complexity(&poly_impulse), 1);
+        // Level-2:Multiwave — 至少一個 :5 子節點自身為 impulsive polywave
+        let multiwave = pattern_node(
+            NeelyPatternType::Impulse,
+            Five,
+            2,
+            vec![
+                Rc::clone(&poly_impulse),
+                leaf3(),
+                leaf5(),
+                leaf3(),
+                leaf5(),
+            ],
+        );
+        assert_eq!(node_complexity(&multiwave), 2);
+        // Multiwave 修正:Zigzag 之 :5 子節點為 impulsive polywave → 同為 Level-2
+        let multiwave_zz = pattern_node(
+            NeelyPatternType::Zigzag {
+                sub_kind: ZigzagKind::Single,
+            },
+            Three,
+            2,
+            vec![Rc::clone(&poly_impulse), leaf3(), leaf5()],
+        );
+        assert_eq!(node_complexity(&multiwave_zz), 2);
+        // Level-3:Macrowave — 一 :5 為 Multiwave 且另一 :5 至少 Polywave
+        let macrowave = pattern_node(
+            NeelyPatternType::Impulse,
+            Five,
+            3,
+            vec![
+                Rc::clone(&multiwave),
+                leaf3(),
+                Rc::clone(&poly_impulse),
+                leaf3(),
+                leaf5(),
+            ],
+        );
+        assert_eq!(node_complexity(&macrowave), 3);
+        // Triangle(children 全 :3)→ 恆 Level-1
+        let triangle = pattern_node(
+            NeelyPatternType::Triangle {
+                sub_kind: TriangleKind::Contracting,
+            },
+            Three,
+            2,
+            vec![leaf3(), leaf3(), leaf3(), leaf3(), leaf3()],
+        );
+        assert_eq!(node_complexity(&triangle), 1);
+    }
+
+    #[test]
+    fn triplexity_requires_three_distinct_impulse_levels() {
+        use StructureLabel::{Five, Three};
+        let leaf5 = || leaf_node(&[Five]);
+        let leaf3 = || leaf_node(&[Three]);
+        let poly = pattern_node(
+            NeelyPatternType::Impulse,
+            Five,
+            1,
+            vec![leaf5(), leaf3(), leaf5(), leaf3(), leaf5()],
+        );
+        // Multiwave:Impulse 段 levels = {2(自身), 1(poly), 0(:5 slot 葉)} → triplexity
+        let multiwave = pattern_node(
+            NeelyPatternType::Impulse,
+            Five,
+            2,
+            vec![Rc::clone(&poly), leaf3(), leaf5(), leaf3(), leaf5()],
+        );
+        assert!(triplexity_detected(&multiwave));
+        // Polywave 單獨:levels = {1(自身), 0(:5 slot 葉)} → 不足 3
+        assert!(!triplexity_detected(&poly));
+    }
+
+    // ── G2.3:§6.3 Degree ceiling 錨定對映 ──────────────────────────────
+
+    #[test]
+    fn degree_map_anchors_max_level_to_ceiling() {
+        let (map, clamped) = degree_name_map(2, &Degree::Minor);
+        assert_eq!(map.get("2").map(String::as_str), Some("Minor"));
+        assert_eq!(map.get("1").map(String::as_str), Some("Minute"));
+        assert_eq!(map.get("0").map(String::as_str), Some("Minuette"));
+        assert_eq!(clamped, 0);
+    }
+
+    #[test]
+    fn degree_map_clamps_below_submicro() {
+        // ceiling SubMinuette(idx 2)、max_level 3 → level 0 超下界夾 SubMicro
+        let (map, clamped) = degree_name_map(3, &Degree::SubMinuette);
+        assert_eq!(map.get("3").map(String::as_str), Some("SubMinuette"));
+        assert_eq!(map.get("2").map(String::as_str), Some("Micro"));
+        assert_eq!(map.get("1").map(String::as_str), Some("SubMicro"));
+        assert_eq!(map.get("0").map(String::as_str), Some("SubMicro"));
+        assert_eq!(clamped, 1);
+    }
+
+    // ── G2.3:A-10 anchors union vs 現行 overlap 近似 ────────────────────
+
+    #[test]
+    fn a10_anchors_union_tighter_than_overlap() {
+        use StructureLabel::Three;
+        let pb = |s: usize, e: usize| PatternBound {
+            start_idx: s,
+            end_idx: e,
+            start_label: Three,
+            end_label: Three,
+            validated: false,
+            forced_corrective: false,
+        };
+        // forest = Impulse [bars 0..25] + Zigzag [0..15] + Zigzag [10..25]
+        // pb(0,2) = bars 0..15:union 含於 Impulse + Z1(2);overlap 加 Z2(3)
+        // pb(3,4) = bars 15..25:union 含於 Impulse + Z2(2);overlap 加 Z1(3)
+        let classified = impulse_chain();
+        let bounds = [pb(0, 2), pb(3, 4)];
+        let diag = run_shadow(&classified, &[], &[], &bounds, Timeframe::Daily, &cfg());
+        assert_eq!(diag.engine, "tiling-round-g2.3");
+        assert_eq!(diag.anchors_union_total, 4);
+        assert_eq!(diag.anchors_overlap_total, 6);
+        // §6.3:空 bars → ceiling "no data" = SubMicro;max_level 1 錨定 →
+        // level 1 = SubMicro、level 0 超下界夾 SubMicro(clamped 1)
+        assert_eq!(diag.degree_map.get("1").map(String::as_str), Some("SubMicro"));
+        assert_eq!(diag.degree_clamped_levels, 1);
+        // §6.2:degree-1 節點(children 全葉)complexity 全 1
+        assert_eq!(diag.complexity_count_by_level.get("1"), Some(&3));
+        assert_eq!(diag.triplexity_nodes, 0);
     }
 }
