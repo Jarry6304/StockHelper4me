@@ -1,5 +1,8 @@
 # neely_core Compaction v2 — Tiling-Round 引擎(G2.x 系列)
 
+> 進度:G2.0 ✅ / G2.1 ✅(六檔 gate 實測收案)/ **G2.2 實作落地**(Q3 翻轉率
+> 待本機六檔量測定案)/ G2.3、G2.4 未開工。
+
 > 規格:`m3Spec/neely_compaction_v2.md`(r3 draft,2026-08-26)。
 > 現行 Compaction 三層缺陷(D-1 ~ D-6)正式記錄後,分 G2.0 ~ G2.4 五個里程碑
 > 以 tiling-round 引擎取代 `compaction/exhaustive.rs` 遞迴迴圈 +
@@ -26,6 +29,8 @@
 | T-2 | `t2_gap_in_window_does_not_aggregate` | 4 連續 + 1 間隙 → 回空(全 :_3 構造使 5-窗為唯一候選) |
 | T-3 | `t3_contiguous_impulse_children_share_endpoints` | 5 連續合法 → 恰 1 個 Level-1 Impulse;children 端點鏈逐對相等 |
 | T-4 | `t4_duplicate_date_range_in_window_does_not_aggregate` + `window_is_contiguous_rejects_duplicate_range_even_when_chain_holds` | 同段替代解在窗內 → 回空;P1 規則 2(零長度退化段令端點鏈成立但範圍重複)由 helper 單元測獨立驗證 |
+| T-5 | `t5_level_n_with_summed_rules_not_ranked_bottom` | BeamSearch 同組內 Level-1(Σrules=12)不墊底,淘汰的是組內 count 最低的 Level-0 |
+| T-6 | exhaustive tests 日期債清償 | `make_simple` 同日退化值 → 真實日期鏈;`max_compaction_levels_respected` 之 `% 28` 月內 wrap(產生 end < start)→ chrono 連續 50 段 × 5 天;`p3_aggregated_rules_passed_count_sums_children` 鎖 P3 語意 |
 
 ### 與 spec §8.4 字面的偏差(記錄)
 
@@ -58,8 +63,6 @@
 此為 D-3 修復方向的預期效果(Level-N 不再恆墊底),但翻轉幅度留下次
 production run 觀察;若翻轉不可接受,G2.2 前可於下游 picker 對
 `passed_rules.is_empty() && rules_passed_count > 0`(暫定值特徵)降權。
-| T-5 | `t5_level_n_with_summed_rules_not_ranked_bottom` | BeamSearch 同組內 Level-1(Σrules=12)不墊底,淘汰的是組內 count 最低的 Level-0 |
-| T-6 | exhaustive tests 日期債清償 | `make_simple` 同日退化值 → 真實日期鏈;`max_compaction_levels_respected` 之 `% 28` 月內 wrap(產生 end < start)→ chrono 連續 50 段 × 5 天;`p3_aggregated_rules_passed_count_sums_children` 鎖 P3 語意 |
 
 ### 驗證(2026-08-25 sandbox)
 
@@ -147,3 +150,44 @@ beam / `level_cap_hit`(A-8)全落地;**shadow 雙軌**啟動 — 新引擎每次
   (重疊滑窗清單相鄰項無法成鏈,D-1 假聚合徹底消失,對齊「枚舉不完整但產出皆
   合法」設計);連帶 P3 Σ 外流與下游 top-scenario 翻轉疑慮在 G2.4 切換前實務上
   不發生(serving forest 無 Level-N 可翻)
+
+---
+
+## G2.2 — W5 端點泛化 + W6 分岔判別 + Q3 雙軌儀表(2026-08-26)
+
+規格 §4(七階梯補完)+ §12 Q3;附帶修一個既有 production bug 與 G2.1 gate
+實測揭露的 branch cap 偏置。D-3 / D-5 的引擎側修復到位;Q3 結論待六檔量測。
+
+| 項 | 檔案 | 內容 |
+|---|---|---|
+| **既有 bug 修復** | `classifier/mod.rs` | `rules_passed_count` 原填 `report.passed.len()` — validator Pass 分支從不記 passed(清單靠 `default_passed_rules` 反推),**production 所有 Level-0 的 count 恆 0** 且與 `passed_rules` 欄不一致(BeamSearch 鍵 2 / fusion / 前端 picker 的該排序鍵長期 inert;昨日 (C) 查全 0 的真因)。改與 passed_rules 同源(`derived_passed.len()`)+ 回歸鎖測試 |
+| W5 端點泛化(§4.3) | `round_engine.rs` | `synth_window`:視窗 → 合成 ClassifiedMonowave 序列(端點價 / duration_bars / label 候選;ATR 等 bar 級概念不虛構,規則本體亦不消費)+ WaveCandidate → 餵既有 `validator::validate_candidate` — 同一套規則碼雙形態輸入;passed 與 Level-0 同源推導(`default_passed_rules` 開 pub(crate) 共用),ValidationReport 附掛節點,**beam 鍵 2 起真值** |
+| **W5 閘門按 I5 族別**(實作詮釋) | 同上 | Ch5 Essential R1–R7 是衝動建構規則::5 族 kind(Impulse / Terminal)以 `overall_pass` 硬閘;:3 族(Zigzag/Flat/Triangle/Combination)essentials 天生不成立(Triangle W3 < W2 即 R4 fail),一律硬閘會使 W6 分岔成死碼、D-5 不可修 — 對齊 validator 自身「變體規則 Fail 資訊性,交 Classifier」語意。**此詮釋需 r4 spec 增補 §4.3 明文** |
+| W6 分岔判別(§4.4,D-5 修復) | 同上 | 3-3-3-3-3 端點幾何:Contracting(a-c/b-d 兩線收斂 + e 不破 a-c 線 ±5%)/ Expanding(發散 + 逐波擴大 ±10% 鬆綁)/ **Terminal Impulse**(W2/W4 不完全回測 + W3 非最短 + W1/W4 範圍重疊;以 `Diagonal{Ending}` 表徵,對齊 classifier 慣例,I5 → :5)— 可同時接受(各產分支,不選 primary)。趨勢線端點內建幾何,trendline_core 耦合留 P1 |
+| Q3 雙軌儀表(§12) | 同上 + `lib.rs` | 每唯一 5-窗:端點版 vs bars 反查版(`bar_indices` 範圍掃真實 high/low,結果快取)的 Overlap(W1/W4)與 W2/W4 回測判定並跑;`q3_windows` / `q3_flips` 進 shadow diagnostics — **翻轉率 = q3_flips/q3_windows,> 5% 依 spec 落 bars 反查**。run_shadow 簽名 + `&input.bars` |
+| branch cap 偏置修正(G2.1 gate 輸入 a) | 同上 | round 內生成改**兩階段**:先枚舉全視窗收輕量 splice spec(不 materialize),再依 beam 鍵近似分數(parent \|power\| → W5 passed 數 → degree)降序 materialize 至 cap — 時間軸晚段行情不再因先枚舉被截斷 |
+| 診斷合約 | `output.rs` | `ShadowCompactionDiagnostics` 加 `w5_rejected_windows` / `q3_windows` / `q3_flips`(唯一視窗語意,memo 命中不重計);engine tag → `tiling-round-g2.2`;ts 契約重生 |
+
+### 驗證(2026-08-26 sandbox)
+
+- `cargo test -p neely_core`:**449 passed / 0 failed**(+6:W5 essential 拒絕 /
+  W5 通過附真值計數 / W6 terminal 接受 / W6 contracting 過族別閘(同窗 :5 被閘,
+  閘門語意直測)/ Q3 影線翻轉正反組 / classifier count 回歸鎖)
+- `cargo test --workspace`:**674 passed / 0 failed**;ts codegen 全綠
+
+### 待本機(G2.2 收案條件)
+
+1. **Q3 量測**:重跑六檔 `tw_cores run --stock-id ... --write` 後讀
+   `shadow_compaction` 的 `q3_flips / q3_windows` — 翻轉率 ≤ 5% → 端點版定案;
+   > 5% → 落 bars 反查(W4 time 基準一併重議)。
+2. **W5 拒絕率 / cap 命中觀測**:`w5_rejected_windows`、`level_cap_hit` 與
+   `round_branch_cap_hits` 相對 G2.1 基線的變化(預期:接受變稀,cap 命中下降)。
+3. **Q1(Running 類)**:production 抽 Running 樣本人工覆核 net_direction 語意
+   (spec §12,G2.2 結束前定案)。
+
+### G2.2 已知邊界(留後續)
+
+- Flat 七變體 / CombinationKind 細分:classifier 泛化留 G2.3(A-9 同批)。
+- W5 拒絕的完整 RuleRejection 記錄(§4.1):shadow 期以計數觀測,G2.4 切換時進
+  `NeelyDiagnostics.rejections`。
+- Alternation complexity 軸(degree_level 差)與邊界重評 / Complexity 真算:G2.3(§6)。

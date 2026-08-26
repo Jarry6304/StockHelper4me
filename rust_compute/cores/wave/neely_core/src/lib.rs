@@ -410,8 +410,12 @@ impl WaveCore for NeelyCore {
         //    m3Spec/neely_compaction_v2.md §3.3)。僅寫 diagnostics,serving forest
         //    不受影響;Gate v3 通過後一個 PR 內切換並刪舊路徑。
         let stage_8s_start = Instant::now();
-        let shadow_compaction =
-            compaction::round_engine::run_shadow(&classified, &compaction_result.forest, cfg);
+        let shadow_compaction = compaction::round_engine::run_shadow(
+            &classified,
+            &compaction_result.forest,
+            &input.bars,
+            cfg,
+        );
         stage_elapsed.insert(
             "stage_8s_compaction_v2_shadow".to_string(),
             stage_8s_start.elapsed().as_micros() as u64,

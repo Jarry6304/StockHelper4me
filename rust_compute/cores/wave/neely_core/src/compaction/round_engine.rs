@@ -1,33 +1,46 @@
-// round_engine.rs — Compaction v2 tiling-round 引擎(G2.1 shadow 骨架)
+// round_engine.rs — Compaction v2 tiling-round 引擎(G2.2:全階梯 shadow)
 //
 // 對齊 m3Spec/neely_compaction_v2.md:
-//   §2.2 不變量 I1–I6 / §3.1 目標架構 / §5.1 CompactionNode 合約 / §5.2 主迴圈 /
-//   §5.4 canonical_key / §5.5 beam 排序鍵 / §5.6 memoization / §9.3 shadow 比對。
+//   §2.2 不變量 I1–I6 / §3.1 目標架構 / §4 try_all_neely 七階梯 / §4.4 W6 分岔 /
+//   §5 round 引擎 / §9.3 shadow 比對 / §12 Q3 雙軌實驗。
 //
-// G2.1 範圍(v2 附錄 B):
-//   - 基礎設施:Rc 節點共享、base tiling(Neutral 合成葉橋接)、round 迴圈、
-//     per-round canonical_key dedup、round_beam_size beam、`level_cap_hit` 旗標(A-8)
-//   - 接受階梯:W1(I2 防衛)/ W2(label 序列 I5 閉合表)/ W3(方向交替)/
-//     W4(S&B)/ W7(Fib² 視窗內部比例)
-//   - W5(Ch5 端點泛化)/ W6(分岔判別,D-5 修復)留 G2.2:本檔 stub —
-//     validation 恆 None、Level-N rules 計數恆 0、3-3-3-3-3 暫僅出 Triangle
+// G2.1(骨架)+ G2.2(本輪)已落地:
+//   - 基礎設施:Rc 節點、base tiling(Neutral 合成葉橋接)、round 迴圈、dedup、
+//     beam、`level_cap_hit`(A-8)
+//   - 階梯:W1(I2 防衛)/ W2(I5 閉合表)/ W3(交替)/ W4(S&B)/
+//     **W5(Ch5 Validator 端點泛化,§4.3)** / **W6(3-3-3-3-3 分岔判別,§4.4,
+//     D-5 修復 — Terminal Impulse 以 Diagonal 表徵,對齊 classifier 慣例)** /
+//     W7(Fib² 全相鄰對)
+//   - **Q3 雙軌實驗儀表**(§12):5-窗的 Overlap / 回測判定 — 端點版 vs bars
+//     反查版並跑,翻轉計數進 diagnostics(> 5% 依 spec 落 bars 反查)
 //   - **shadow 雙軌**(§3.3):輸出僅寫 `NeelyDiagnostics.shadow_compaction`,
 //     serving forest 完全不受影響;Gate v3 通過後才切換
 //
-// 工程注意(G2.1 拍板,G2.2 可推翻):
-//   - W4 time 維度沿用現行 `three_rounds::similarity_and_balance` 的日曆日基準,
-//     shadow 比對同基準不引入額外差異;bars 基準留 G2.2 隨 Q3 實驗一併裁決
-//   - W7 依 v2 §4.2「語意修正」檢查視窗內**全**相鄰對(舊引擎僅查首尾邊界對);
-//     此為 spec 明訂語意變更,shadow 召回缺口若源於此,屬 Gate 報告需標注類別
+// 工程注意:
+//   - W5 端點介面:每視窗合成 ClassifiedMonowave(端點價 / duration_bars /
+//     label 候選),餵既有 `validator::validate_candidate` — 同一套規則碼雙形態
+//     輸入(§4.3「bar 級概念不上樓,價格結構規則全上樓」;規則本體不消費 ATR,
+//     §4.3 的 R3 容差替換在此程式路徑無實體)。passed 清單與 Level-0 同源
+//     (classifier::default_passed_rules 反推),beam 鍵 2 因此可比
+//   - W7 位於便宜前濾(與 W3/W4 同組)— 與 spec 階梯末位語意等價(row 無關,
+//     全拒/全過),省掉對必死視窗跑 W5
+//   - round 內生成走 **兩階段**(G2.1 gate 實測修正):先枚舉全部視窗收
+//     splice 候選(輕量 spec,不 materialize),再依 beam 鍵近似分數降序選
+//     materialize 至 branch cap — 消除先枚舉視窗的時間軸偏置
+//   - W4 time 維度沿用日曆日(G2.1 拍板);Q3 實驗結論若落 bars 反查,W4 一併重議
+//   - W5 / Q3 計數以「唯一視窗」為單位(memo 命中不重計)
 
+use crate::candidates::WaveCandidate;
+use crate::classifier;
 use crate::config::NeelyEngineConfig;
-use crate::monowave::ClassifiedMonowave;
+use crate::monowave::{ClassifiedMonowave, ProportionMetrics};
 use crate::output::{
-    MonowaveDirection, NeelyPatternType, Scenario, ShadowCompactionDiagnostics, StructureLabel,
-    TriangleKind, WaveNode, ZigzagKind,
+    Certainty, DiagonalKind, MonowaveDirection, NeelyPatternType, OhlcvBar, RuleId, Scenario,
+    ShadowCompactionDiagnostics, StructureLabel, StructureLabelCandidate, TriangleKind, WaveNode,
+    ZigzagKind,
 };
 use crate::power_rating;
-use crate::validator::ValidationReport;
+use crate::validator::{self, ValidationReport};
 use chrono::NaiveDate;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -331,10 +344,16 @@ fn w7_internal_extreme(window: &[Rc<CompactionNode>]) -> bool {
     true
 }
 
-/// W2:I5 閉合表(§4.2.1)。回傳匹配的候選形態(0..k,同窗多解各產分支)。
-/// G2.1 註記:3-3-3-3-3 暫僅出 Triangle{Contracting}(Terminal 分岔 = W6,G2.2);
-/// Flat 暫以 Common 佔位(七變體交 G2.2 W6);Combination 沿用通用 kind(A-9,G2.3)。
-fn w2_label_rows(window: &[Rc<CompactionNode>]) -> Vec<AcceptedKind> {
+/// W2 row 匹配結果:Direct = 形態唯一;ThreesFive = 3-3-3-3-3,交 W6 分岔(§4.4)。
+enum RowMatch {
+    Direct(AcceptedKind),
+    ThreesFive,
+}
+
+/// W2:I5 閉合表(§4.2.1)。回傳匹配 rows(0..k,同窗多解各產分支)。
+/// Flat 以 Common 佔位(七變體細分 = classifier 泛化,列 G2.3 與 A-9 同批);
+/// Combination 沿用通用 kind(A-9,G2.3)。
+fn w2_label_rows(window: &[Rc<CompactionNode>]) -> Vec<RowMatch> {
     use Slot::{Five, Three};
     let mut out = Vec::new();
 
@@ -346,56 +365,51 @@ fn w2_label_rows(window: &[Rc<CompactionNode>]) -> Vec<AcceptedKind> {
     match window.len() {
         3 => {
             if matches_seq(&[Five, Three, Five]) {
-                out.push(AcceptedKind {
+                out.push(RowMatch::Direct(AcceptedKind {
                     pattern: NeelyPatternType::Zigzag {
                         sub_kind: ZigzagKind::Single,
                     },
                     base: StructureLabel::Three,
-                });
+                }));
             }
             if matches_seq(&[Three, Three, Five]) {
-                out.push(AcceptedKind {
+                out.push(RowMatch::Direct(AcceptedKind {
                     pattern: NeelyPatternType::Flat {
                         sub_kind: crate::output::FlatKind::Common,
                     },
                     base: StructureLabel::Three,
-                });
+                }));
             }
         }
         5 => {
             if matches_seq(&[Five, Three, Five, Three, Five]) {
-                out.push(AcceptedKind {
+                out.push(RowMatch::Direct(AcceptedKind {
                     pattern: NeelyPatternType::Impulse,
                     base: StructureLabel::Five,
-                });
+                }));
             }
             if matches_seq(&[Three, Three, Three, Three, Three]) {
-                out.push(AcceptedKind {
-                    pattern: NeelyPatternType::Triangle {
-                        sub_kind: TriangleKind::Contracting,
-                    },
-                    base: StructureLabel::Three,
-                });
+                out.push(RowMatch::ThreesFive);
             }
         }
         7 => {
             if matches_seq(&[Three; 7]) {
-                out.push(AcceptedKind {
+                out.push(RowMatch::Direct(AcceptedKind {
                     pattern: NeelyPatternType::Combination {
                         sub_kinds: vec![crate::output::CombinationKind::DoubleThree],
                     },
                     base: StructureLabel::Three,
-                });
+                }));
             }
         }
         11 => {
             if matches_seq(&[Three; 11]) {
-                out.push(AcceptedKind {
+                out.push(RowMatch::Direct(AcceptedKind {
                     pattern: NeelyPatternType::Combination {
                         sub_kinds: vec![crate::output::CombinationKind::TripleThree],
                     },
                     base: StructureLabel::Three,
-                });
+                }));
             }
         }
         _ => {}
@@ -403,40 +417,356 @@ fn w2_label_rows(window: &[Rc<CompactionNode>]) -> Vec<AcceptedKind> {
     out
 }
 
-/// try_all_neely 的 G2.1 部分階梯(W1→W3→W4→W7 為 row 無關前濾,再展 W2 rows;
-/// 短路語意與 §4.2 cheap→expensive 排序等價)。W5/W6 stub:接受即定案,無重驗。
-fn try_ladder_g21(
-    window: &[Rc<CompactionNode>],
-    w1_violations: &mut usize,
-) -> Vec<AcceptedKind> {
-    if !w1_adjacency(window) {
-        *w1_violations += 1;
-        return Vec::new();
-    }
-    if !w3_alternating(window) || !w4_similarity_balance(window) || !w7_internal_extreme(window) {
-        return Vec::new();
-    }
-    w2_label_rows(window)
+// ---------------------------------------------------------------------------
+// W5:Ch5 Validator 端點泛化(§4.3)
+// ---------------------------------------------------------------------------
+
+/// 視窗 → 合成 (ClassifiedMonowave 序列, WaveCandidate),餵既有 validator。
+/// 「波」介面泛化為端點結構:monowave 與聚合節點同構(§4.3);
+/// ATR / 45° metrics 為 bar 級概念,不為 Level-N 虛構(規則本體不消費)。
+fn synth_window(window: &[Rc<CompactionNode>]) -> (Vec<ClassifiedMonowave>, WaveCandidate) {
+    let synth: Vec<ClassifiedMonowave> = window
+        .iter()
+        .map(|n| {
+            let candidates: Vec<StructureLabelCandidate> = match &n.label {
+                NodeLabel::Fixed(l) => vec![StructureLabelCandidate {
+                    label: *l,
+                    certainty: Certainty::Primary,
+                }],
+                NodeLabel::LeafCandidates(v) => v
+                    .iter()
+                    .map(|l| StructureLabelCandidate {
+                        label: *l,
+                        certainty: Certainty::Primary,
+                    })
+                    .collect(),
+            };
+            ClassifiedMonowave {
+                monowave: crate::output::Monowave {
+                    start_date: n.start_date,
+                    end_date: n.end_date,
+                    start_price: n.start_price,
+                    end_price: n.end_price,
+                    direction: n.net_direction,
+                    bar_indices: (n.start_bar, n.end_bar),
+                },
+                atr_at_start: 0.0,
+                metrics: ProportionMetrics {
+                    magnitude: n.price_magnitude(),
+                    duration_bars: n.end_bar.saturating_sub(n.start_bar) + 1,
+                    atr_relative: 0.0,
+                    slope_vs_45deg: 0.0,
+                },
+                structure_label_candidates: candidates,
+                polywave_size: n.children.len(),
+            }
+        })
+        .collect();
+    let candidate = WaveCandidate {
+        id: format!(
+            "shadow-w{}-b{}-b{}",
+            window.len(),
+            window[0].start_bar,
+            window[window.len() - 1].end_bar
+        ),
+        monowave_indices: (0..window.len()).collect(),
+        wave_count: window.len(),
+        initial_direction: window[0].net_direction,
+    };
+    (synth, candidate)
 }
 
-/// `canonical` 由 caller 預算(`pattern_canonical` 只需 window slice)—
-/// 讓 round 迴圈能以 spliced key 先查 seen,命中即免 materialize(#4 護欄配套)。
-fn make_parent(
+// ---------------------------------------------------------------------------
+// W6:3-3-3-3-3 分岔判別(§4.4,D-5 修復)
+// ---------------------------------------------------------------------------
+
+/// 兩點式端點趨勢線在 x 的取值(x1 == x2 退化時回 y1)。
+fn line_at(x1: f64, y1: f64, x2: f64, y2: f64, x: f64) -> f64 {
+    if (x2 - x1).abs() < 1e-9 {
+        y1
+    } else {
+        y1 + (y2 - y1) * (x - x1) / (x2 - x1)
+    }
+}
+
+/// 修正波 corr 未完全回測前波 prev(端點版):corr 端點未越過 prev 起點。
+fn not_fully_retraced(prev: &CompactionNode, corr: &CompactionNode) -> bool {
+    match prev.net_direction {
+        MonowaveDirection::Up => corr.end_price > prev.start_price,
+        MonowaveDirection::Down => corr.end_price < prev.start_price,
+        MonowaveDirection::Neutral => false,
+    }
+}
+
+fn endpoint_range(n: &CompactionNode) -> (f64, f64) {
+    (
+        n.start_price.min(n.end_price),
+        n.start_price.max(n.end_price),
+    )
+}
+
+/// §4.4:同序列雙候選,端點幾何判別,**兩者可同時接受**(各產分支,不選 primary)。
+///
+/// | 形態 | 端點幾何必要條件 | base |
+/// |---|---|---|
+/// | Contracting Triangle | a-c 線與 b-d 線收斂(視窗首尾兩線垂直間距遞減);e 不破 a-c 線(±5%,三檔容差之 Triangle 檔) | :3 |
+/// | Expanding Triangle | 兩線發散;逐波擴大(±10% 一般容差鬆綁) | :3 |
+/// | Terminal Impulse | W2/W4 不完全回測前波 + W3 非最短(R7)+ W1/W4 價格範圍重疊(Overlap_Terminal 反向作必要條件) | :5 |
+///
+/// Terminal Impulse 以 `Diagonal{Ending}` 表徵(classifier / ch11_terminal_impulse
+/// 「Terminal ↔ Diagonal」既有慣例;I5:Diagonal → :5)。
+/// 兩組皆不滿足 → 本 row 不產 kind(視窗拒絕)。
+/// 趨勢線先用端點內建幾何;trendline_core 耦合留 P1(§4.4 / Q3)。
+fn w6_fork_threes_five(window: &[Rc<CompactionNode>]) -> Vec<AcceptedKind> {
+    debug_assert_eq!(window.len(), 5);
+    let (a, b, c, d, e) = (&window[0], &window[1], &window[2], &window[3], &window[4]);
+    let (ma, mc, me) = (a.price_magnitude(), c.price_magnitude(), e.price_magnitude());
+    let mut out = Vec::new();
+
+    let ac = |x: f64| line_at(a.end_bar as f64, a.end_price, c.end_bar as f64, c.end_price, x);
+    let bd = |x: f64| line_at(b.end_bar as f64, b.end_price, d.end_bar as f64, d.end_price, x);
+    let x_early = b.end_bar as f64;
+    let x_late = e.end_bar as f64;
+    let gap_early = (ac(x_early) - bd(x_early)).abs();
+    let gap_late = (ac(x_late) - bd(x_late)).abs();
+
+    // Contracting:收斂 + e 不破 a-c 線
+    let e_breach = {
+        let line_val = ac(e.end_bar as f64);
+        let tol = line_val.abs() * 0.05;
+        let bd_side = bd(x_early) - ac(x_early); // b/d 所在側
+        let e_side = e.end_price - line_val;
+        bd_side * e_side < 0.0 && e_side.abs() > tol
+    };
+    if gap_late < gap_early && !e_breach {
+        out.push(AcceptedKind {
+            pattern: NeelyPatternType::Triangle {
+                sub_kind: TriangleKind::Contracting,
+            },
+            base: StructureLabel::Three,
+        });
+    }
+
+    // Expanding:發散 + 逐波擴大
+    if gap_late > gap_early && mc >= ma * 0.9 && me >= mc * 0.9 {
+        out.push(AcceptedKind {
+            pattern: NeelyPatternType::Triangle {
+                sub_kind: TriangleKind::Expanding,
+            },
+            base: StructureLabel::Three,
+        });
+    }
+
+    // Terminal Impulse
+    let w3_not_shortest = !(mc < ma && mc < me);
+    let (a_lo, a_hi) = endpoint_range(a);
+    let (d_lo, d_hi) = endpoint_range(d);
+    let w1_w4_overlap = a_lo <= d_hi && d_lo <= a_hi;
+    if not_fully_retraced(a, b) && not_fully_retraced(c, d) && w3_not_shortest && w1_w4_overlap {
+        out.push(AcceptedKind {
+            pattern: NeelyPatternType::Diagonal {
+                sub_kind: DiagonalKind::Ending,
+            },
+            base: StructureLabel::Five,
+        });
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Q3 雙軌實驗(§12;G2.2 六檔量測)
+// ---------------------------------------------------------------------------
+
+/// 節點範圍的真實 (low, high):以 bar_indices 掃 bars(O(bars),spec 已列成本);
+/// 結果快取供重疊視窗共享。範圍越界 / bars 不足 → None(該窗不比對)。
+fn true_range(
+    n: &CompactionNode,
+    bars: &[OhlcvBar],
+    cache: &mut HashMap<(usize, usize), (f64, f64)>,
+) -> Option<(f64, f64)> {
+    let key = (n.start_bar, n.end_bar);
+    if let Some(v) = cache.get(&key) {
+        return Some(*v);
+    }
+    if n.start_bar > n.end_bar || n.end_bar >= bars.len() {
+        return None;
+    }
+    let slice = &bars[n.start_bar..=n.end_bar];
+    let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+    let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+    cache.insert(key, (lo, hi));
+    Some((lo, hi))
+}
+
+/// Q3:5-窗的 Overlap(W1/W4 範圍)與 W2/W4 回測判定 — 端點版 vs bars 反查版。
+/// 回 Some(是否翻轉);bars 不可用 → None(不計)。
+fn q3_compare(
     window: &[Rc<CompactionNode>],
-    kind: &AcceptedKind,
-    canonical: String,
-) -> Rc<CompactionNode> {
+    bars: &[OhlcvBar],
+    cache: &mut HashMap<(usize, usize), (f64, f64)>,
+) -> Option<bool> {
+    debug_assert_eq!(window.len(), 5);
+    let (a, b, c, d, _e) = (&window[0], &window[1], &window[2], &window[3], &window[4]);
+
+    // 端點版
+    let (a_lo, a_hi) = endpoint_range(a);
+    let (d_lo, d_hi) = endpoint_range(d);
+    let ep_overlap = a_lo <= d_hi && d_lo <= a_hi;
+    let ep_b_full = !not_fully_retraced(a, b);
+    let ep_d_full = !not_fully_retraced(c, d);
+
+    // bars 反查版
+    let (abl, abh) = true_range(a, bars, cache)?;
+    let (dbl, dbh) = true_range(d, bars, cache)?;
+    let (bbl, bbh) = true_range(b, bars, cache)?;
+    let bars_overlap = abl <= dbh && dbl <= abh;
+    let bars_b_full = match a.net_direction {
+        MonowaveDirection::Up => bbl <= a.start_price,
+        MonowaveDirection::Down => bbh >= a.start_price,
+        MonowaveDirection::Neutral => false,
+    };
+    let bars_d_full = match c.net_direction {
+        MonowaveDirection::Up => dbl <= c.start_price,
+        MonowaveDirection::Down => dbh >= c.start_price,
+        MonowaveDirection::Neutral => false,
+    };
+
+    Some(ep_overlap != bars_overlap || ep_b_full != bars_b_full || ep_d_full != bars_d_full)
+}
+
+// ---------------------------------------------------------------------------
+// 階梯組裝
+// ---------------------------------------------------------------------------
+
+/// 唯一視窗計數(memo 命中不重計;§4.1 失敗記錄的 shadow 版 — 完整 RuleRejection
+/// 留 G2.4 切換時進 NeelyDiagnostics.rejections,shadow 期以計數觀測)。
+#[derive(Debug, Default)]
+struct LadderCounters {
+    w1_violations: usize,
+    w5_rejected_windows: usize,
+    q3_windows: usize,
+    q3_flips: usize,
+}
+
+struct LadderOutcome {
+    kinds: Vec<AcceptedKind>,
+    /// W5 報告(passed 已含 default_passed_rules 同源推導);視窗內各 kind 共享
+    report: Option<Rc<ValidationReport>>,
+}
+
+impl LadderOutcome {
+    fn empty() -> Self {
+        LadderOutcome {
+            kinds: Vec::new(),
+            report: None,
+        }
+    }
+}
+
+/// try_all_neely(§4)G2.2 全階梯:W1 → (W3/W4/W7 便宜前濾)→ W2 rows →
+/// W6 row 展開(含 3-3-3-3-3 分岔)→ W5(Ch5 端點重驗)按 I5 族別閘門。
+///
+/// **W5 閘門按族別適用**(§4.3 適用表的實作詮釋):Ch5 Essential R1–R7 是
+/// 衝動建構規則 — 對 `:5` 族 kind(Impulse / Terminal)以 `overall_pass` 硬閘;
+/// `:3` 族(Zigzag/Flat/Triangle/Combination)essentials 天生不成立(Triangle
+/// 的 W3 短於 W2 即 R4 fail),一律硬閘會使 W6 分岔成死碼、D-5 不可修 —
+/// 對齊 validator 自身「變體規則 Fail 是資訊性,交 Classifier」語意,
+/// `:3` 族不受衝動 essentials 閘,ValidationReport 仍附掛節點供下游參考。
+fn try_ladder(
+    window: &[Rc<CompactionNode>],
+    bars: &[OhlcvBar],
+    counters: &mut LadderCounters,
+    range_cache: &mut HashMap<(usize, usize), (f64, f64)>,
+) -> LadderOutcome {
+    if !w1_adjacency(window) {
+        counters.w1_violations += 1;
+        return LadderOutcome::empty();
+    }
+    if !w3_alternating(window) || !w4_similarity_balance(window) || !w7_internal_extreme(window) {
+        return LadderOutcome::empty();
+    }
+    let rows = w2_label_rows(window);
+    if rows.is_empty() {
+        return LadderOutcome::empty();
+    }
+
+    // W6:row 展開(3-3-3-3-3 → 分岔判別)
+    let mut proposed: Vec<AcceptedKind> = Vec::new();
+    for row in rows {
+        match row {
+            RowMatch::Direct(k) => proposed.push(k),
+            RowMatch::ThreesFive => proposed.extend(w6_fork_threes_five(window)),
+        }
+    }
+    if proposed.is_empty() {
+        return LadderOutcome::empty();
+    }
+
+    // W5:Ch5 Validator 端點重驗(每視窗一次;passed 與 Level-0 同源推導)
+    let (synth, candidate) = synth_window(window);
+    let mut report = validator::validate_candidate(&candidate, &synth);
+    let derived: Vec<RuleId> = report
+        .passed
+        .iter()
+        .cloned()
+        .chain(classifier::default_passed_rules(&candidate, &report))
+        .collect();
+    report.passed = derived;
+
+    // Q3 雙軌(5-窗且 bars 可用;量測不受閘門結果影響)
+    if window.len() == 5 && !bars.is_empty() {
+        if let Some(flipped) = q3_compare(window, bars, range_cache) {
+            counters.q3_windows += 1;
+            if flipped {
+                counters.q3_flips += 1;
+            }
+        }
+    }
+
+    // 族別閘門::5 族要求 overall_pass
+    let kinds: Vec<AcceptedKind> = proposed
+        .into_iter()
+        .filter(|k| k.base != StructureLabel::Five || report.overall_pass)
+        .collect();
+    if kinds.is_empty() {
+        // 視窗曾有候選但全數被 W5 擋下 → 唯一視窗拒絕計數(§4.1 shadow 版)
+        counters.w5_rejected_windows += 1;
+        return LadderOutcome::empty();
+    }
+    LadderOutcome {
+        kinds,
+        report: Some(Rc::new(report)),
+    }
+}
+
+/// 視窗淨向(與 make_parent 同式;splice 候選評分共用)。
+fn window_net_direction(window: &[Rc<CompactionNode>]) -> MonowaveDirection {
     let first = window.first().expect("non-empty window");
     let last = window.last().expect("non-empty window");
-    let degree = window.iter().map(|n| n.degree_level).max().unwrap_or(0) + 1;
     let delta = last.end_price - first.start_price;
-    let net = if delta > 0.0 {
+    if delta > 0.0 {
         MonowaveDirection::Up
     } else if delta < 0.0 {
         MonowaveDirection::Down
     } else {
         first.net_direction
-    };
+    }
+}
+
+/// `canonical` 由 caller 預算(`pattern_canonical` 只需 window slice)—
+/// 讓 round 迴圈能以 spliced key 先查 seen,命中即免 materialize。
+/// `validation` = W5 報告(G2.2 起真值;beam 鍵 2 讀 passed.len())。
+fn make_parent(
+    window: &[Rc<CompactionNode>],
+    kind: &AcceptedKind,
+    canonical: String,
+    validation: Option<ValidationReport>,
+) -> Rc<CompactionNode> {
+    let first = window.first().expect("non-empty window");
+    let last = window.last().expect("non-empty window");
+    let degree = window.iter().map(|n| n.degree_level).max().unwrap_or(0) + 1;
+    let net = window_net_direction(window);
     let children: Vec<Rc<CompactionNode>> = window.to_vec();
     Rc::new(CompactionNode {
         kind: NodeKind::Pattern(kind.pattern.clone()),
@@ -450,7 +780,7 @@ fn make_parent(
         start_price: first.start_price,
         end_price: last.end_price,
         children,
-        validation: None,
+        validation,
         net_direction: net,
     })
 }
@@ -649,11 +979,37 @@ pub fn check_invariants(
 // Shadow 主入口(§5.2 主迴圈 + §9.3 比對計數)
 // ---------------------------------------------------------------------------
 
+/// round 內 splice 候選(輕量 spec;兩階段生成的第一階段產物,不 materialize)。
+struct SpliceSpec {
+    tiling_idx: usize,
+    s: usize,
+    w: usize,
+    kind: AcceptedKind,
+    report: Option<Rc<ValidationReport>>,
+    /// beam 鍵近似分數(parent |power| / W5 passed 數 / parent degree)—
+    /// 供 materialize 排序,消除先枚舉視窗的時間軸偏置(G2.1 gate 實測修正)
+    score: (i32, usize, usize),
+}
+
+fn splice_score(
+    kind: &AcceptedKind,
+    report: &Option<Rc<ValidationReport>>,
+    window: &[Rc<CompactionNode>],
+) -> (i32, usize, usize) {
+    let net = window_net_direction(window);
+    let rating = power_rating::table::lookup_power_rating(&kind.pattern, net, false);
+    let power = super::power_rating_magnitude(rating).abs();
+    let passed = report.as_ref().map(|r| r.passed.len()).unwrap_or(0);
+    let degree = window.iter().map(|n| n.degree_level).max().unwrap_or(0) + 1;
+    (power, passed, degree)
+}
+
 /// 跑 tiling-round 引擎(shadow):產 diagnostics,不動 serving forest。
-/// `old_forest` 供 §9.3 召回計數((start_bar, end_bar, pattern_tag) 匹配)。
+/// `old_forest` 供 §9.3 召回計數;`bars` 供 Q3 雙軌 bars 反查(空 = 不量測)。
 pub fn run_shadow(
     classified: &[ClassifiedMonowave],
     old_forest: &[Scenario],
+    bars: &[OhlcvBar],
     cfg: &NeelyEngineConfig,
 ) -> ShadowCompactionDiagnostics {
     let start = Instant::now();
@@ -661,7 +1017,7 @@ pub fn run_shadow(
 
     let base = build_base_tiling(classified);
     let mut diag = ShadowCompactionDiagnostics {
-        engine: "tiling-round-g2.1".to_string(),
+        engine: "tiling-round-g2.2".to_string(),
         base_tiling_len: base.nodes.len(),
         neutral_bridged: base.bridged,
         leading_neutral_dropped: base.leading_dropped,
@@ -671,6 +1027,9 @@ pub fn run_shadow(
         timed_out: false,
         w1_violations: 0,
         round_branch_cap_hits: 0,
+        w5_rejected_windows: 0,
+        q3_windows: 0,
+        q3_flips: 0,
         node_count_by_level: HashMap::new(),
         invariant_violations: InvariantCounters::default().to_map(),
         old_forest_scenarios: old_forest.len(),
@@ -693,22 +1052,22 @@ pub fn run_shadow(
     let base_key = tiling_key(&base.nodes);
     let mut pool: Vec<Tiling> = vec![Tiling { nodes: base.nodes }];
     let mut seen: HashSet<String> = HashSet::from([base_key]);
-    // §5.6 memo:視窗 children canonical 串 → 接受形態(分支間大量共享視窗)
-    let mut memo: HashMap<String, Rc<Vec<AcceptedKind>>> = HashMap::new();
-    let mut w1_violations = 0usize;
+    // §5.6 memo:視窗 children canonical 串 → 階梯結果(分支間大量共享視窗;
+    // W5/Q3 計數在 memo miss 時累計 = 唯一視窗語意)
+    let mut memo: HashMap<String, Rc<LadderOutcome>> = HashMap::new();
+    let mut counters = LadderCounters::default();
+    let mut range_cache: HashMap<(usize, usize), (f64, f64)> = HashMap::new();
 
-    // 工程護欄(G2.1 review #4):round 內 materialize 的新分支上限。
-    // beam 只保 round_beam_size,一輪 materialize 超過 8× beam 的分支不可能
-    // 全數存活;G2.1 階梯無 W5/W6,稠密行情下接受率高,無上限會在 timeout
-    // 觸發前吃掉數 GB(600-monowave 實測 3.1GB)。截斷偏向先枚舉的視窗,
-    // 截斷輪數記 `round_branch_cap_hits` 供 Gate 觀測(A-8 精神)。
+    // 工程護欄:round 內 materialize 的新分支上限(beam 只保 round_beam_size,
+    // 超額 materialize 無意義;無上限實測 600-monowave 檔 3.1GB)。
+    // G2.2 起兩階段生成:先枚舉全視窗收輕量 splice 候選,再依 beam 鍵近似分數
+    // 降序 materialize 至上限 — 截斷不再偏向時間軸前段(G2.1 gate 實測修正)。
     let branch_cap = cfg.round_beam_size.saturating_mul(8).max(8);
 
     'rounds: for round in 1..=cfg.max_compaction_levels {
-        let mut new_tilings: Vec<Tiling> = Vec::new();
-        let mut branch_capped = false;
-
-        'gen: for t in &pool {
+        // ── 階段 1:枚舉 + 階梯(輕量 spec,不 materialize)
+        let mut specs: Vec<SpliceSpec> = Vec::new();
+        for (tiling_idx, t) in pool.iter().enumerate() {
             for w in [3usize, 5, 7, 11] {
                 if t.nodes.len() < w {
                     continue;
@@ -721,46 +1080,77 @@ pub fn run_shadow(
                     }
                     let window = &t.nodes[s..s + w];
                     let memo_key = tiling_key(window);
-                    let kinds = match memo.get(&memo_key) {
-                        Some(k) => Rc::clone(k),
+                    let outcome = match memo.get(&memo_key) {
+                        Some(o) => Rc::clone(o),
                         None => {
-                            let k = Rc::new(try_ladder_g21(window, &mut w1_violations));
-                            memo.insert(memo_key, Rc::clone(&k));
-                            k
+                            let o = Rc::new(try_ladder(
+                                window,
+                                bars,
+                                &mut counters,
+                                &mut range_cache,
+                            ));
+                            memo.insert(memo_key, Rc::clone(&o));
+                            o
                         }
                     };
-                    for kind in kinds.iter() {
-                        // 先組 spliced key 查 seen,命中即免 materialize
-                        let parent_key = pattern_canonical(
-                            &kind.pattern,
-                            kind.base,
-                            window[0].start_bar,
-                            window[w - 1].end_bar,
-                            window,
-                        );
-                        let key = spliced_tiling_key(&t.nodes, s, w, &parent_key);
-                        if !seen.insert(key) {
-                            continue;
-                        }
-                        // 新 tiling:視窗換 parent,其餘保留(Rc 指標串,不深拷貝)
-                        let parent = make_parent(window, kind, parent_key);
-                        let mut nodes: Vec<Rc<CompactionNode>> =
-                            Vec::with_capacity(t.nodes.len() - w + 1);
-                        nodes.extend(t.nodes[..s].iter().cloned());
-                        nodes.push(parent);
-                        nodes.extend(t.nodes[s + w..].iter().cloned());
-                        new_tilings.push(Tiling { nodes });
-                        if new_tilings.len() >= branch_cap {
-                            branch_capped = true;
-                            break 'gen;
-                        }
+                    for kind in outcome.kinds.iter() {
+                        let score = splice_score(kind, &outcome.report, window);
+                        specs.push(SpliceSpec {
+                            tiling_idx,
+                            s,
+                            w,
+                            kind: kind.clone(),
+                            report: outcome.report.clone(),
+                            score,
+                        });
                     }
                 }
             }
         }
 
-        if new_tilings.is_empty() {
+        if specs.is_empty() {
             // Round 3 暫停:本輪零聚合(§5.2.d)
+            break;
+        }
+
+        // ── 階段 2:依分數降序 materialize(seen dedup;至多 branch_cap)
+        specs.sort_by(|a, b| b.score.cmp(&a.score));
+        let mut new_tilings: Vec<Tiling> = Vec::new();
+        let mut branch_capped = false;
+        for spec in &specs {
+            if new_tilings.len() >= branch_cap {
+                branch_capped = true;
+                break;
+            }
+            let t = &pool[spec.tiling_idx];
+            let window = &t.nodes[spec.s..spec.s + spec.w];
+            let parent_key = pattern_canonical(
+                &spec.kind.pattern,
+                spec.kind.base,
+                window[0].start_bar,
+                window[spec.w - 1].end_bar,
+                window,
+            );
+            let key = spliced_tiling_key(&t.nodes, spec.s, spec.w, &parent_key);
+            if !seen.insert(key) {
+                continue;
+            }
+            // 新 tiling:視窗換 parent,其餘保留(Rc 指標串,不深拷貝)
+            let parent = make_parent(
+                window,
+                &spec.kind,
+                parent_key,
+                spec.report.as_ref().map(|r| (**r).clone()),
+            );
+            let mut nodes: Vec<Rc<CompactionNode>> = Vec::with_capacity(t.nodes.len() - spec.w + 1);
+            nodes.extend(t.nodes[..spec.s].iter().cloned());
+            nodes.push(parent);
+            nodes.extend(t.nodes[spec.s + spec.w..].iter().cloned());
+            new_tilings.push(Tiling { nodes });
+        }
+
+        if new_tilings.is_empty() {
+            // 全數 dedup:本輪無新解讀 → 收斂
             break;
         }
         diag.rounds_run = round;
@@ -780,7 +1170,10 @@ pub fn run_shadow(
     }
 
     diag.tiling_count = pool.len();
-    diag.w1_violations = w1_violations;
+    diag.w1_violations = counters.w1_violations;
+    diag.w5_rejected_windows = counters.w5_rejected_windows;
+    diag.q3_windows = counters.q3_windows;
+    diag.q3_flips = counters.q3_flips;
 
     // 不變量檢查(I1–I5;I6 = 收集去重,下方以 HashSet 保證)
     let tiling_slices: Vec<&[Rc<CompactionNode>]> =
@@ -977,7 +1370,7 @@ mod tests {
     #[test]
     fn shadow_impulse_chain_aggregates_with_zero_invariant_violations() {
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &cfg());
         assert_eq!(diag.base_tiling_len, 5);
         assert!(diag.rounds_run >= 1, "應至少發生一輪聚合");
         assert!(!diag.timed_out);
@@ -998,7 +1391,7 @@ mod tests {
         let mut classified = impulse_chain();
         classified.push(cm(25, 30, 121.0, 109.0, Down, &[Three]));
         classified.push(cm(30, 55, 109.0, 139.0, Up, &[Five]));
-        let diag = run_shadow(&classified, &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &cfg());
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0);
         assert!(diag.rounds_run >= 2, "round 2 應發生(rounds_run = {})", diag.rounds_run);
@@ -1018,7 +1411,7 @@ mod tests {
         classified.push(cm(30, 55, 109.0, 139.0, Up, &[Five]));
         let mut c = cfg();
         c.max_compaction_levels = 1;
-        let diag = run_shadow(&classified, &[], &c);
+        let diag = run_shadow(&classified, &[], &[], &c);
         assert_eq!(diag.rounds_run, 1);
         assert!(diag.level_cap_hit, "round 1 仍有聚合但被上限截斷 → level_cap_hit");
     }
@@ -1026,7 +1419,7 @@ mod tests {
     #[test]
     fn shadow_converges_without_cap_hit_when_no_more_aggregation() {
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &cfg());
         assert!(
             !diag.level_cap_hit,
             "零聚合收斂(Round 3 暫停)不得標 level_cap_hit"
@@ -1038,7 +1431,7 @@ mod tests {
         let classified = impulse_chain();
         let mut c = cfg();
         c.round_beam_size = 2;
-        let diag = run_shadow(&classified, &[], &c);
+        let diag = run_shadow(&classified, &[], &[], &c);
         assert!(diag.tiling_count <= 2, "pool 超過 round_beam_size 應被 beam 截斷");
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0);
@@ -1049,7 +1442,7 @@ mod tests {
         use MonowaveDirection::Up;
         use StructureLabel::Five;
         let classified = vec![cm(0, 5, 100.0, 110.0, Up, &[Five])];
-        let diag = run_shadow(&classified, &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &cfg());
         assert_eq!(diag.base_tiling_len, 1);
         assert_eq!(diag.rounds_run, 0);
         assert!(diag.node_count_by_level.is_empty());
@@ -1067,7 +1460,7 @@ mod tests {
             cm(15, 20, 116.0, 109.0, Down, &[Five, Three]),
             cm(20, 25, 109.0, 121.0, Up, &[Five, Three]),
         ];
-        let diag = run_shadow(&classified, &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &cfg());
         // degree-1 節點應同時含 Impulse 路徑與 Triangle 路徑(+ Zigzag/Flat 子窗)
         let level1 = diag.node_count_by_level.get("1").copied().unwrap_or(0);
         assert!(level1 >= 4, "多解視窗應產多個 degree-1 節點,got {}", level1);
@@ -1150,6 +1543,185 @@ mod tests {
         assert_eq!(c_ok.total(), 0, "覆蓋完整 → 零違反");
     }
 
+    // G2.2:W5 端點泛化 / W6 分岔 / Q3 雙軌 tests ---------------------------
+
+    /// 對整條 base tiling 當單一視窗直測階梯(單元級,不經 round 迴圈)
+    fn ladder_on(
+        classified: &[ClassifiedMonowave],
+        bars: &[crate::output::OhlcvBar],
+    ) -> (Vec<AcceptedKind>, LadderCounters) {
+        let base = build_base_tiling(classified);
+        let mut counters = LadderCounters::default();
+        let mut cache = HashMap::new();
+        let out = try_ladder(&base.nodes, bars, &mut counters, &mut cache);
+        (out.kinds, counters)
+    }
+
+    #[test]
+    fn w5_rejects_essential_violation_impulse_window() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        // R4 違反:W3 mag(6)< W2 mag(7)→ Ch5 essential fail →
+        // :5 族(Impulse)被 W5 閘下,整窗無 kind → 唯一視窗拒絕計數
+        let classified = vec![
+            cm(0, 5, 100.0, 110.0, Up, &[Five]),
+            cm(5, 10, 110.0, 103.0, Down, &[Three]),
+            cm(10, 15, 103.0, 109.0, Up, &[Five]),
+            cm(15, 20, 109.0, 105.0, Down, &[Three]),
+            cm(20, 25, 105.0, 113.0, Up, &[Five]),
+        ];
+        let (kinds, counters) = ladder_on(&classified, &[]);
+        assert!(kinds.is_empty(), "essential 違反 → 無 kind:{:?}", kinds);
+        assert_eq!(counters.w5_rejected_windows, 1);
+    }
+
+    #[test]
+    fn w5_passes_clean_impulse_and_attaches_true_rule_counts() {
+        use StructureLabel::Five;
+        // 乾淨 Impulse 鏈 → overall_pass;passed 經 default_passed_rules 同源
+        // 推導非空(D-3 修復:Level-N rules 欄真值,beam 鍵 2 可比)
+        let base = build_base_tiling(&impulse_chain());
+        let mut counters = LadderCounters::default();
+        let mut cache = HashMap::new();
+        let out = try_ladder(&base.nodes, &[], &mut counters, &mut cache);
+        assert!(out
+            .kinds
+            .iter()
+            .any(|k| matches!(k.pattern, NeelyPatternType::Impulse) && k.base == Five));
+        let report = out.report.expect("接受視窗必附 ValidationReport");
+        assert!(report.overall_pass);
+        assert!(
+            !report.passed.is_empty(),
+            "passed 反推不應為空(5-wave essentials 通過)"
+        );
+        assert_eq!(counters.w5_rejected_windows, 0);
+    }
+
+    #[test]
+    fn w6_terminal_impulse_accepted_for_overlapping_threes() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        // D-5 修復存在性:全 :3、W1/W4 範圍重疊、W2/W4 不完全回測、W3 非最短
+        // → Terminal Impulse(:5,Diagonal 表徵);兩線發散但 e 未逐波擴大
+        // → Triangle 不接受
+        let classified = vec![
+            cm(0, 5, 100.0, 110.0, Up, &[Three]),
+            cm(5, 10, 110.0, 103.0, Down, &[Three]),
+            cm(10, 15, 103.0, 114.0, Up, &[Three]),
+            cm(15, 20, 114.0, 106.0, Down, &[Three]),
+            cm(20, 25, 106.0, 115.0, Up, &[Three]),
+        ];
+        let (kinds, counters) = ladder_on(&classified, &[]);
+        assert_eq!(counters.w5_rejected_windows, 0);
+        assert!(
+            kinds.iter().any(|k| matches!(k.pattern, NeelyPatternType::Diagonal { .. })
+                && k.base == Five),
+            "Terminal Impulse(:5)應被接受:{:?}",
+            kinds
+        );
+        assert!(
+            !kinds
+                .iter()
+                .any(|k| matches!(k.pattern, NeelyPatternType::Triangle { .. })),
+            "發散且未逐波擴大 → 非 Triangle:{:?}",
+            kinds
+        );
+    }
+
+    #[test]
+    fn w6_contracting_triangle_survives_w5_family_gate() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::Three;
+        // 收斂震盪(W3 < W2 → R4 fail → overall_pass = false):
+        // :3 族 Triangle 不受衝動 essentials 閘 → Contracting 存活;
+        // 同窗 Terminal 端點條件雖成立,:5 族被 W5 閘下 → 族別閘門的直接驗證
+        let classified = vec![
+            cm(0, 5, 100.0, 110.0, Up, &[Three]),
+            cm(5, 10, 110.0, 102.0, Down, &[Three]),
+            cm(10, 15, 102.0, 108.0, Up, &[Three]),
+            cm(15, 20, 108.0, 103.0, Down, &[Three]),
+            cm(20, 25, 103.0, 105.5, Up, &[Three]),
+        ];
+        let (kinds, counters) = ladder_on(&classified, &[]);
+        assert!(
+            kinds.iter().any(|k| matches!(
+                k.pattern,
+                NeelyPatternType::Triangle {
+                    sub_kind: TriangleKind::Contracting
+                }
+            )),
+            "收斂 + e 不破線 → Contracting Triangle:{:?}",
+            kinds
+        );
+        assert!(
+            !kinds
+                .iter()
+                .any(|k| matches!(k.pattern, NeelyPatternType::Diagonal { .. })),
+            ":5 族 Terminal 應被 W5(R4 fail)閘下:{:?}",
+            kinds
+        );
+        assert_eq!(counters.w5_rejected_windows, 0, "視窗仍有 :3 kind → 非整窗拒絕");
+    }
+
+    #[test]
+    fn q3_bars_wick_flips_retracement_verdict() {
+        use chrono::Duration;
+        // impulse_chain 的線性路徑 bars(高低 = 收盤路徑,零影線),唯 bar 8 加
+        // 下影線 98 < a.start(100)→ bars 版 b 完全回測 true vs 端點版 false → flip
+        let classified = impulse_chain();
+        let base_date = date("2026-01-01");
+        let path = |i: usize| -> f64 {
+            let segs: [(usize, usize, f64, f64); 5] = [
+                (0, 5, 100.0, 110.0),
+                (5, 10, 110.0, 104.0),
+                (10, 15, 104.0, 116.0),
+                (15, 20, 116.0, 109.0),
+                (20, 25, 109.0, 121.0),
+            ];
+            for (s, e, ps, pe) in segs {
+                if i >= s && i <= e {
+                    return ps + (pe - ps) * ((i - s) as f64) / ((e - s) as f64);
+                }
+            }
+            121.0
+        };
+        let bars: Vec<crate::output::OhlcvBar> = (0..26)
+            .map(|i| {
+                let p = path(i);
+                let low = if i == 8 { 98.0 } else { p };
+                crate::output::OhlcvBar {
+                    date: base_date + Duration::days(i as i64),
+                    open: p,
+                    high: p,
+                    low,
+                    close: p,
+                    volume: None,
+                }
+            })
+            .collect();
+        let (_, counters) = ladder_on(&classified, &bars);
+        assert_eq!(counters.q3_windows, 1, "5-窗應完成一次雙軌比對");
+        assert_eq!(counters.q3_flips, 1, "影線使回測判定翻轉");
+
+        // 對照組:無影線 → 比對進行但無翻轉
+        let bars_clean: Vec<crate::output::OhlcvBar> = (0..26)
+            .map(|i| {
+                let p = path(i);
+                crate::output::OhlcvBar {
+                    date: base_date + Duration::days(i as i64),
+                    open: p,
+                    high: p,
+                    low: p,
+                    close: p,
+                    volume: None,
+                }
+            })
+            .collect();
+        let (_, counters_clean) = ladder_on(&classified, &bars_clean);
+        assert_eq!(counters_clean.q3_windows, 1);
+        assert_eq!(counters_clean.q3_flips, 0, "零影線 → 端點版與 bars 版一致");
+    }
+
     #[test]
     fn dense_ambiguous_chain_hits_branch_cap_and_stays_bounded() {
         use MonowaveDirection::{Down, Up};
@@ -1170,7 +1742,7 @@ mod tests {
         }
         let c = cfg();
         let started = std::time::Instant::now();
-        let diag = run_shadow(&classified, &[], &c);
+        let diag = run_shadow(&classified, &[], &[], &c);
         assert!(
             started.elapsed().as_secs() < 10,
             "60 段稠密鏈必須在秒級完成(護欄失效 = 分支爆炸)"
@@ -1225,7 +1797,7 @@ mod tests {
             pattern_isolation_anchors: Vec::new(),
             triplexity_detected: false,
         };
-        let diag = run_shadow(&classified, &[old], &cfg());
+        let diag = run_shadow(&classified, &[old], &[], &cfg());
         assert_eq!(diag.old_forest_scenarios, 1);
         assert_eq!(
             diag.old_forest_matched, 1,
@@ -1238,7 +1810,7 @@ mod tests {
     fn dedup_same_aggregation_reached_twice_counted_once() {
         // impulse_chain 的 Zigzag [0..3] 在多輪間可被重複生成;seen dedup 應保唯一
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &cfg());
+        let diag = run_shadow(&classified, &[], &[], &cfg());
         // node_count_by_level 以 canonical 去重;Impulse+2 Zigzag = 3(不因分支重複膨脹)
         assert_eq!(diag.node_count_by_level.get("1"), Some(&3));
     }

@@ -104,6 +104,15 @@ pub fn classify(
     // Stage 8 (three_rounds::apply) 之後由 lib.rs::compute 套 post-classifier 寫入(類似
     // power_rating::apply_to_forest 模式)。
 
+    // G2.2:passed 清單先行推導(report.passed ∪ default_passed_rules 反推),
+    // 供 passed_rules 與 rules_passed_count 同源填值
+    let derived_passed: Vec<RuleId> = report
+        .passed
+        .iter()
+        .cloned()
+        .chain(default_passed_rules(candidate, report))
+        .collect();
+
     Some(Scenario {
         id: candidate.id.clone(),
         wave_tree,
@@ -115,14 +124,13 @@ pub fn classify(
         power_rating: PowerRating::Neutral, // Stage 10a Power Rating 查表後填
         max_retracement: None,               // Stage 10a 補
         post_pattern_behavior: PostBehavior::Unconstrained,
-        passed_rules: report
-            .passed
-            .iter()
-            .cloned()
-            .chain(default_passed_rules(candidate, report))
-            .collect(),
+        passed_rules: derived_passed.clone(),
         deferred_rules: report.deferred.clone(),
-        rules_passed_count: report.passed.len(),
+        // G2.2 修復(compaction v2「Level-N 規則欄真值」附帶):count 與 passed_rules
+        // 同源 — 原 `report.passed.len()` 恆 0(validator Pass 分支不記 passed,
+        // 清單靠 default_passed_rules 反推),兩欄長期不一致,BeamSearch 鍵 2 與
+        // 下游排序鍵在 production 全 0 失效
+        rules_passed_count: derived_passed.len(),
         deferred_rules_count: report.deferred.len(),
         invalidation_triggers: Vec::<Trigger>::new(), // Stage 10c triggers 補
         expected_fib_zones: Vec::<FibZone>::new(),    // Stage 10b Fibonacci 補
@@ -577,7 +585,9 @@ fn format_wave_node_label(
 
 /// 預設 passed rule list(report.passed 目前 PR-3b 沒填,本 helper 從 deferred / failed 反推)。
 /// P4 / P5 補完整 validator 後可移除。
-fn default_passed_rules(
+/// G2.2:開 pub(crate) 供 compaction::round_engine 的 W5 端點泛化共用同一推導
+/// (shadow Level-N 的 rules 計數與 Level-0 同源,beam 鍵 2 才可比)。
+pub(crate) fn default_passed_rules(
     candidate: &WaveCandidate,
     report: &ValidationReport,
 ) -> Vec<RuleId> {
@@ -832,6 +842,22 @@ mod tests {
         assert!(matches!(scenario.complexity_level, ComplexityLevel::Intermediate));
         assert_eq!(scenario.id, "c5-mw0-mw4");
         assert_eq!(scenario.wave_tree.children.len(), 5);
+    }
+
+    #[test]
+    fn rules_passed_count_matches_passed_rules_len() {
+        // G2.2 修復回歸鎖:count 與 passed_rules 同源 — 原 `report.passed.len()`
+        // 恆 0(validator Pass 分支不記 passed),兩欄長期不一致,
+        // BeamSearch 鍵 2 與下游排序鍵在 production 全 0 失效
+        let classified = make_5wave_impulse_classified();
+        let candidate = make_candidate_5wave_starting_at(0);
+        let report = make_impulse_report();
+        let scenario = classify(&candidate, &report, &classified).expect("應產生 Scenario");
+        assert_eq!(scenario.rules_passed_count, scenario.passed_rules.len());
+        assert!(
+            scenario.rules_passed_count > 0,
+            "5-wave 過驗 candidate 的 passed 反推不應為 0"
+        );
     }
 
     #[test]

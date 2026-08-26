@@ -48,9 +48,24 @@ timed_out: boolean,
 w1_violations: number, 
 /**
  * round 內新分支 materialize 上限(round_beam_size × 8)截斷的輪數。
- * 工程護欄非 Neely 語意;> 0 = 該檔枚舉受截斷,Gate 觀測項(A-8 精神)
+ * 工程護欄非 Neely 語意;> 0 = 該檔枚舉受截斷,Gate 觀測項(A-8 精神)。
+ * G2.2 起截斷前先依 beam 鍵近似分數全窗排序,無時間軸偏置
  */
 round_branch_cap_hits: number, 
+/**
+ * G2.2 W5:被 Ch5 端點重驗(overall_pass = false)拒絕的唯一視窗數
+ * (§4.1 失敗記錄的 shadow 計數版;完整 RuleRejection 留 G2.4 切換)
+ */
+w5_rejected_windows: number, 
+/**
+ * G2.2 Q3 雙軌實驗(§12):完成端點版 vs bars 反查版比對的唯一 5-窗數
+ */
+q3_windows: number, 
+/**
+ * Q3:Overlap / 回測判定翻轉的視窗數;翻轉率 = q3_flips / q3_windows,
+ * > 5%(spec 初始門檻)→ 落 bars 反查
+ */
+q3_flips: number, 
 /**
  * degree_level → 節點數(canonical 去重後;key 為字串供 JSONB 直取)
  */
