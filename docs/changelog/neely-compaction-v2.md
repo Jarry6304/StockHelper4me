@@ -1,7 +1,7 @@
 # neely_core Compaction v2 — Tiling-Round 引擎(G2.x 系列)
 
-> 進度:G2.0 ✅ / G2.1 ✅(六檔 gate 實測收案)/ **G2.2 實作落地**(Q3 翻轉率
-> 待本機六檔量測定案)/ G2.3、G2.4 未開工。
+> 進度:G2.0 ✅ / G2.1 ✅ / **G2.2 gate 五檔實測過 + Q3 拍板收案(bars 反查
+> 落地)**,唯 Q1(Running 覆核)未收 / G2.3、G2.4 未開工。
 
 > 規格:`m3Spec/neely_compaction_v2.md`(r3 draft,2026-08-26)。
 > 現行 Compaction 三層缺陷(D-1 ~ D-6)正式記錄後,分 G2.0 ~ G2.4 五個里程碑
@@ -145,11 +145,14 @@ beam / `level_cap_hit`(A-8)全落地;**shadow 雙軌**啟動 — 新引擎每次
   (b) W4 S&B 於 round-1 對 monowave 視窗生效,而舊 Stage 3 的 Level-0 candidates
   從未受 S&B 過濾 → 語意差屬 §9.3 允許清單之外,r4 需增補該清單或重議 W4 的
   round-1 適用性(W5/W6 補上後重量再定)
-- **(C) 揭露 G2.0 的 production 效果**:五檔 forest(13–20)全為 Level-0,
-  `children>0 且 rules>0` 為 0 — **P1 後 old-engine 的 Level-N 聚合實測歸零**
-  (重疊滑窗清單相鄰項無法成鏈,D-1 假聚合徹底消失,對齊「枚舉不完整但產出皆
-  合法」設計);連帶 P3 Σ 外流與下游 top-scenario 翻轉疑慮在 G2.4 切換前實務上
-  不發生(serving forest 無 Level-N 可翻)
+- **(C) 揭露 G2.0 的 production 效果**(依據於 G2.2 修正,結論不變):
+  當日以「`children>0 且 rules>0` = 0」推論「forest 全 Level-0」— 該推論**無效**,
+  因 (C)=0 的真因是 classifier `rules_passed_count` 恆 0 的既有 bug(G2.2 修),
+  Level-0 的 wave_tree 本來就有 children。正確量測 = **深度 ≥ 2 scenario 數**
+  (只有 old-engine Level-N 才有孫節點):G2.2 複測新 binary 五檔 depth2+ 全 0、
+  舊 production binary 的 2330 歷史列 depth2+ = 6 — **「P1 後 old-engine Level-N
+  歸零、且 pre-P1 確實產過假聚合」由此確證**。P3 Σ 下游翻轉疑慮在 G2.4 切換前
+  實務不發生的結論維持
 
 ---
 
@@ -175,15 +178,37 @@ beam / `level_cap_hit`(A-8)全落地;**shadow 雙軌**啟動 — 新引擎每次
   閘門語意直測)/ Q3 影線翻轉正反組 / classifier count 回歸鎖)
 - `cargo test --workspace`:**674 passed / 0 failed**;ts codegen 全綠
 
-### 待本機(G2.2 收案條件)
+### G2.2 gate 五檔實測 + Q3 拍板(2026-08-26 本機)
 
-1. **Q3 量測**:重跑六檔 `tw_cores run --stock-id ... --write` 後讀
-   `shadow_compaction` 的 `q3_flips / q3_windows` — 翻轉率 ≤ 5% → 端點版定案;
-   > 5% → 落 bars 反查(W4 time 基準一併重議)。
-2. **W5 拒絕率 / cap 命中觀測**:`w5_rejected_windows`、`level_cap_hit` 與
-   `round_branch_cap_hits` 相對 G2.1 基線的變化(預期:接受變稀,cap 命中下降)。
-3. **Q1(Running 類)**:production 抽 Running 樣本人工覆核 net_direction 語意
-   (spec §12,G2.2 結束前定案)。
+| stock | inv | w1 | q3_win | q3_flip | w5_rej | levels |
+|---|---|---|---|---|---|---|
+| 0050 | 0 | 0 | 2 | 2 | 2 | 1:9 |
+| 1312 | 0 | 0 | 3 | 0 | 3 | 1:10 |
+| 2330 | 0 | 0 | 9 | 2 | 4 | 1:16 / 2:1 |
+| 3363 | 0 | 0 | 2 | 0 | 1 | 1:12 |
+| 6547 | 0 | 0 | 2 | 2 | 1 | 1:11 |
+
+- **引擎 gate:五檔 I1–I6 = 0 / w1 = 0 → 過** ✅;W5 把關後 degree-1 節點
+  9–16(G2.1 為 16–35,接受如預期變稀);shadow 10.5–13.6 ms/檔仍可忽略。
+- **Q3 拍板:q3_windows Σ=18、q3_flips Σ=6 → 翻轉率 33.3% ≫ 5% → 依 spec
+  「即於 G2.2 落 bars 反查」定案**。已落地(同日):`CompactionNode.true_range`
+  (葉建構時掃 bars 一次,parent 取 children 聯集,internal-only 不進 wire)、
+  W6 分岔的回測 / W1-W4 Overlap / e 觸線改以 `judge_range`(真實極值,無 bars
+  退端點)判定;**W4 time 基準一併轉 duration_bars**(G2.1 拍板保留的重議點 —
+  端點日曆日的舊引擎 parity 理由已隨舊 Level-N 消亡失效);`q3_windows/q3_flips`
+  保留為**殘差觀測**(端點 vs bars 分歧率,供 Gate 報告與 r4 佐證)。
+  spec §12 Q3 據此收案,r4 修訂時同步定稿。
+- **查詢陷阱(runbook 必記)**:`structural_snapshots` PK 含 `params_hash`,
+  例行排程與手動 run 在同一 snapshot_date 各留一列,`DISTINCT ON ... ORDER BY
+  snapshot_date DESC` 對同日多列挑選非決定性(首輪誤讀舊 binary 列)—
+  **verify 一律 `ORDER BY stock_id, created_at DESC`**。
+
+### 待本機(G2.2 尾項)
+
+1. **bars 判準複測**:下次六檔 run 讀 `q3_flips`(現在語意 = 殘差)與 W6 產出
+   變化,確認 bars 判準落地後 Terminal / Triangle 分布合理。
+2. **Q1(Running 類)**:production 抽 Running 樣本人工覆核 net_direction 語意
+   (spec §12,G2.2 結束前定案)— G2.2 唯一未收項。
 
 ### G2.2 已知邊界(留後續)
 

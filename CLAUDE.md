@@ -241,10 +241,12 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 ## 下次 session 優先序
 
 1. **neely Compaction v2(G2.x 系列,進行中)**:規格 `m3Spec/neely_compaction_v2.md`(r3);
-   G2.0 止血 + G2.1 tiling-round shadow 引擎已收案(含 2026-08-26 六檔 gate 實測
-   I1–I6 零違反),歷程與 G2.2 設計輸入(branch cap 視窗偏置 / W4 round-1 語意差)
-   見 `docs/changelog/neely-compaction-v2.md`。當前:G2.2(W5 端點泛化 + W6 分岔
-   判別 + Q3 六檔雙軌實驗);TAIEX 於 `price_daily_fwd` 無供料另列 backlog。
+   G2.0 / G2.1 / G2.2 主體已收案(六檔 gate 實測 I1–I6 零違反;**Q3 拍板:
+   flip 33.3% > 5% → bars 反查已落地,W4 time 轉 bars**),歷程與 r4 spec 待修點
+   (§4.3 族別閘門明文 / §9.3 允許清單 / Q3 定稿)見
+   `docs/changelog/neely-compaction-v2.md`。餘項:Q1 Running 覆核(G2.2 尾)→
+   G2.3(邊界重評 / Complexity 真算 / kind 細分);TAIEX 於 `price_daily_fwd`
+   無供料另列 backlog。
 2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地
    (2026-06-11,`GET /waves/summary`;見 docs/changelog/v2-wave-endpoint.md),

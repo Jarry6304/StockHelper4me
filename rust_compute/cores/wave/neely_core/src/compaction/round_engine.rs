@@ -82,6 +82,11 @@ pub struct CompactionNode {
     pub net_direction: MonowaveDirection,
     /// §5.4 canonical_key,建構時預算(節點不可變,Rc 共享)
     pub canonical: String,
+    /// **Q3 拍板(2026-08-26 六檔實測 flip 33.3% > 5% → 落 bars 反查)**:
+    /// 節點範圍的真實 (low, high) — 葉於 base tiling 建構時掃 bars 一次,
+    /// parent 取 children 聯集;bars 不可用 → None(判定退端點版)。
+    /// 消費點:W6 分岔的回測 / Overlap / 觸線判定
+    pub true_range: Option<(f64, f64)>,
 }
 
 /// `:5` 族 label(W2 slot 匹配用;含 Neely extension 變體)。
@@ -121,8 +126,20 @@ impl CompactionNode {
         (self.end_price - self.start_price).abs()
     }
 
-    fn time_days(&self) -> f64 {
-        (self.end_date - self.start_date).num_days() as f64
+    /// W4 time 維度:duration_bars(Q3 拍板連動 — bars 為判準後,time 同步
+    /// 轉交易時間基準;端點日曆日的舊引擎 parity 理由已隨舊 Level-N 消亡失效)
+    fn duration_bars(&self) -> f64 {
+        (self.end_bar.saturating_sub(self.start_bar) + 1) as f64
+    }
+
+    /// 判定用範圍:真實 high/low(Q3 拍板)優先,無 bars 退端點
+    fn judge_range(&self) -> (f64, f64) {
+        self.true_range.unwrap_or_else(|| {
+            (
+                self.start_price.min(self.end_price),
+                self.start_price.max(self.end_price),
+            )
+        })
     }
 }
 
@@ -176,7 +193,19 @@ struct BaseTiling {
     leading_dropped: usize,
 }
 
-fn build_base_tiling(classified: &[ClassifiedMonowave]) -> BaseTiling {
+/// 葉範圍的真實 (low, high):掃 bars 一次(Q3 拍板成本,spec §12 已列);
+/// bars 缺 / 範圍越界 → None(判定退端點)。
+fn leaf_true_range(bars: &[OhlcvBar], start_bar: usize, end_bar: usize) -> Option<(f64, f64)> {
+    if bars.is_empty() || start_bar > end_bar || end_bar >= bars.len() {
+        return None;
+    }
+    let slice = &bars[start_bar..=end_bar];
+    let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+    let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+    Some((lo, hi))
+}
+
+fn build_base_tiling(classified: &[ClassifiedMonowave], bars: &[OhlcvBar]) -> BaseTiling {
     // 兩段式:先聚出「葉 spec」(Neutral 併前節點延伸端點),再一次建 Rc 節點
     struct LeafSpec {
         start_bar: usize,
@@ -240,6 +269,7 @@ fn build_base_tiling(classified: &[ClassifiedMonowave]) -> BaseTiling {
                 label: NodeLabel::LeafCandidates(s.candidates),
                 degree_level: 0,
                 canonical: leaf_canonical(s.start_bar, s.end_bar),
+                true_range: leaf_true_range(bars, s.start_bar, s.end_bar),
                 start_bar: s.start_bar,
                 end_bar: s.end_bar,
                 start_date: s.start_date,
@@ -318,13 +348,14 @@ fn w3_alternating(window: &[Rc<CompactionNode>]) -> bool {
 }
 
 /// W4:S&B — 每相鄰對 price 或 time 其一之比 ∈ [0.382, 2.618]。
-/// price 取端點差絕對值(零幅度退 time 單維,沿用現行 Option 語意)。
+/// price 取端點差絕對值(零幅度退 time 單維,沿用現行 Option 語意);
+/// time 取 duration_bars(Q3 拍板連動,交易時間基準)。
 fn w4_similarity_balance(window: &[Rc<CompactionNode>]) -> bool {
     for i in 1..window.len() {
         let (a, b) = (&window[i - 1], &window[i]);
         let (pa, pb) = (a.price_magnitude(), b.price_magnitude());
         let price_ok = pa > PRICE_EPS && pb > PRICE_EPS && ratio_in(pa, pb, SB_MIN_RATIO, SB_MAX_RATIO);
-        let time_ok = ratio_in(a.time_days(), b.time_days(), SB_MIN_RATIO, SB_MAX_RATIO);
+        let time_ok = ratio_in(a.duration_bars(), b.duration_bars(), SB_MIN_RATIO, SB_MAX_RATIO);
         if !(price_ok || time_ok) {
             return false;
         }
@@ -489,11 +520,13 @@ fn line_at(x1: f64, y1: f64, x2: f64, y2: f64, x: f64) -> f64 {
     }
 }
 
-/// 修正波 corr 未完全回測前波 prev(端點版):corr 端點未越過 prev 起點。
+/// 修正波 corr 未完全回測前波 prev:corr 的判定極值(Q3 拍板 — 真實影線;
+/// 無 bars 退端點)未越過 prev 起點。
 fn not_fully_retraced(prev: &CompactionNode, corr: &CompactionNode) -> bool {
+    let (corr_lo, corr_hi) = corr.judge_range();
     match prev.net_direction {
-        MonowaveDirection::Up => corr.end_price > prev.start_price,
-        MonowaveDirection::Down => corr.end_price < prev.start_price,
+        MonowaveDirection::Up => corr_lo > prev.start_price,
+        MonowaveDirection::Down => corr_hi < prev.start_price,
         MonowaveDirection::Neutral => false,
     }
 }
@@ -530,13 +563,20 @@ fn w6_fork_threes_five(window: &[Rc<CompactionNode>]) -> Vec<AcceptedKind> {
     let gap_early = (ac(x_early) - bd(x_early)).abs();
     let gap_late = (ac(x_late) - bd(x_late)).abs();
 
-    // Contracting:收斂 + e 不破 a-c 線
+    // Contracting:收斂 + e 不破 a-c 線(觸線以判定極值檢查,Q3 拍板)
     let e_breach = {
         let line_val = ac(e.end_bar as f64);
         let tol = line_val.abs() * 0.05;
         let bd_side = bd(x_early) - ac(x_early); // b/d 所在側
-        let e_side = e.end_price - line_val;
-        bd_side * e_side < 0.0 && e_side.abs() > tol
+        let (e_lo, e_hi) = e.judge_range();
+        if bd_side < 0.0 {
+            // b/d 在線下 → 破線 = e 極值越到線上超容差
+            e_hi - line_val > tol
+        } else if bd_side > 0.0 {
+            line_val - e_lo > tol
+        } else {
+            false
+        }
     };
     if gap_late < gap_early && !e_breach {
         out.push(AcceptedKind {
@@ -557,10 +597,10 @@ fn w6_fork_threes_five(window: &[Rc<CompactionNode>]) -> Vec<AcceptedKind> {
         });
     }
 
-    // Terminal Impulse
+    // Terminal Impulse(Overlap 以判定範圍檢查,Q3 拍板)
     let w3_not_shortest = !(mc < ma && mc < me);
-    let (a_lo, a_hi) = endpoint_range(a);
-    let (d_lo, d_hi) = endpoint_range(d);
+    let (a_lo, a_hi) = a.judge_range();
+    let (d_lo, d_hi) = d.judge_range();
     let w1_w4_overlap = a_lo <= d_hi && d_lo <= a_hi;
     if not_fully_retraced(a, b) && not_fully_retraced(c, d) && w3_not_shortest && w1_w4_overlap {
         out.push(AcceptedKind {
@@ -575,37 +615,14 @@ fn w6_fork_threes_five(window: &[Rc<CompactionNode>]) -> Vec<AcceptedKind> {
 }
 
 // ---------------------------------------------------------------------------
-// Q3 雙軌實驗(§12;G2.2 六檔量測)
+// Q3 儀表(§12;2026-08-26 六檔實測 flip 33.3% > 5% → bars 反查定案)
 // ---------------------------------------------------------------------------
 
-/// 節點範圍的真實 (low, high):以 bar_indices 掃 bars(O(bars),spec 已列成本);
-/// 結果快取供重疊視窗共享。範圍越界 / bars 不足 → None(該窗不比對)。
-fn true_range(
-    n: &CompactionNode,
-    bars: &[OhlcvBar],
-    cache: &mut HashMap<(usize, usize), (f64, f64)>,
-) -> Option<(f64, f64)> {
-    let key = (n.start_bar, n.end_bar);
-    if let Some(v) = cache.get(&key) {
-        return Some(*v);
-    }
-    if n.start_bar > n.end_bar || n.end_bar >= bars.len() {
-        return None;
-    }
-    let slice = &bars[n.start_bar..=n.end_bar];
-    let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-    let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-    cache.insert(key, (lo, hi));
-    Some((lo, hi))
-}
-
-/// Q3:5-窗的 Overlap(W1/W4 範圍)與 W2/W4 回測判定 — 端點版 vs bars 反查版。
-/// 回 Some(是否翻轉);bars 不可用 → None(不計)。
-fn q3_compare(
-    window: &[Rc<CompactionNode>],
-    bars: &[OhlcvBar],
-    cache: &mut HashMap<(usize, usize), (f64, f64)>,
-) -> Option<bool> {
+/// Q3 儀表(拍板後保留為**殘差觀測**):判準已為 bars 反查(w6_fork /
+/// not_fully_retraced 消費 `judge_range`),此處量測端點版 vs bars 版的
+/// Overlap / 回測判定殘餘分歧,供 Gate 報告與 spec r4 佐證。
+/// 回 Some(是否分歧);節點無 bars 反查 → None(不計)。
+fn q3_compare(window: &[Rc<CompactionNode>]) -> Option<bool> {
     debug_assert_eq!(window.len(), 5);
     let (a, b, c, d, _e) = (&window[0], &window[1], &window[2], &window[3], &window[4]);
 
@@ -613,13 +630,21 @@ fn q3_compare(
     let (a_lo, a_hi) = endpoint_range(a);
     let (d_lo, d_hi) = endpoint_range(d);
     let ep_overlap = a_lo <= d_hi && d_lo <= a_hi;
-    let ep_b_full = !not_fully_retraced(a, b);
-    let ep_d_full = !not_fully_retraced(c, d);
+    let ep_b_full = match a.net_direction {
+        MonowaveDirection::Up => b.end_price <= a.start_price,
+        MonowaveDirection::Down => b.end_price >= a.start_price,
+        MonowaveDirection::Neutral => false,
+    };
+    let ep_d_full = match c.net_direction {
+        MonowaveDirection::Up => d.end_price <= c.start_price,
+        MonowaveDirection::Down => d.end_price >= c.start_price,
+        MonowaveDirection::Neutral => false,
+    };
 
-    // bars 反查版
-    let (abl, abh) = true_range(a, bars, cache)?;
-    let (dbl, dbh) = true_range(d, bars, cache)?;
-    let (bbl, bbh) = true_range(b, bars, cache)?;
+    // bars 反查版(判準)
+    let (abl, abh) = a.true_range?;
+    let (dbl, dbh) = d.true_range?;
+    let (bbl, bbh) = b.true_range?;
     let bars_overlap = abl <= dbh && dbl <= abh;
     let bars_b_full = match a.net_direction {
         MonowaveDirection::Up => bbl <= a.start_price,
@@ -673,12 +698,7 @@ impl LadderOutcome {
 /// 的 W3 短於 W2 即 R4 fail),一律硬閘會使 W6 分岔成死碼、D-5 不可修 —
 /// 對齊 validator 自身「變體規則 Fail 是資訊性,交 Classifier」語意,
 /// `:3` 族不受衝動 essentials 閘,ValidationReport 仍附掛節點供下游參考。
-fn try_ladder(
-    window: &[Rc<CompactionNode>],
-    bars: &[OhlcvBar],
-    counters: &mut LadderCounters,
-    range_cache: &mut HashMap<(usize, usize), (f64, f64)>,
-) -> LadderOutcome {
+fn try_ladder(window: &[Rc<CompactionNode>], counters: &mut LadderCounters) -> LadderOutcome {
     if !w1_adjacency(window) {
         counters.w1_violations += 1;
         return LadderOutcome::empty();
@@ -714,9 +734,9 @@ fn try_ladder(
         .collect();
     report.passed = derived;
 
-    // Q3 雙軌(5-窗且 bars 可用;量測不受閘門結果影響)
-    if window.len() == 5 && !bars.is_empty() {
-        if let Some(flipped) = q3_compare(window, bars, range_cache) {
+    // Q3 殘差觀測(5-窗且節點有 bars 反查;量測不受閘門結果影響)
+    if window.len() == 5 {
+        if let Some(flipped) = q3_compare(window) {
             counters.q3_windows += 1;
             if flipped {
                 counters.q3_flips += 1;
@@ -767,12 +787,19 @@ fn make_parent(
     let last = window.last().expect("non-empty window");
     let degree = window.iter().map(|n| n.degree_level).max().unwrap_or(0) + 1;
     let net = window_net_direction(window);
+    // parent 真實範圍 = children 聯集(任一 child 無 bars 反查 → None,判定退端點)
+    let true_range = window
+        .iter()
+        .try_fold((f64::MAX, f64::MIN), |(lo, hi), n| {
+            n.true_range.map(|(l, h)| (lo.min(l), hi.max(h)))
+        });
     let children: Vec<Rc<CompactionNode>> = window.to_vec();
     Rc::new(CompactionNode {
         kind: NodeKind::Pattern(kind.pattern.clone()),
         label: NodeLabel::Fixed(kind.base),
         degree_level: degree,
         canonical,
+        true_range,
         start_bar: first.start_bar,
         end_bar: last.end_bar,
         start_date: first.start_date,
@@ -1015,7 +1042,7 @@ pub fn run_shadow(
     let start = Instant::now();
     let timeout = std::time::Duration::from_secs(cfg.compaction_timeout_secs);
 
-    let base = build_base_tiling(classified);
+    let base = build_base_tiling(classified, bars);
     let mut diag = ShadowCompactionDiagnostics {
         engine: "tiling-round-g2.2".to_string(),
         base_tiling_len: base.nodes.len(),
@@ -1056,7 +1083,6 @@ pub fn run_shadow(
     // W5/Q3 計數在 memo miss 時累計 = 唯一視窗語意)
     let mut memo: HashMap<String, Rc<LadderOutcome>> = HashMap::new();
     let mut counters = LadderCounters::default();
-    let mut range_cache: HashMap<(usize, usize), (f64, f64)> = HashMap::new();
 
     // 工程護欄:round 內 materialize 的新分支上限(beam 只保 round_beam_size,
     // 超額 materialize 無意義;無上限實測 600-monowave 檔 3.1GB)。
@@ -1083,12 +1109,7 @@ pub fn run_shadow(
                     let outcome = match memo.get(&memo_key) {
                         Some(o) => Rc::clone(o),
                         None => {
-                            let o = Rc::new(try_ladder(
-                                window,
-                                bars,
-                                &mut counters,
-                                &mut range_cache,
-                            ));
+                            let o = Rc::new(try_ladder(window, &mut counters));
                             memo.insert(memo_key, Rc::clone(&o));
                             o
                         }
@@ -1342,7 +1363,7 @@ mod tests {
             cm(5, 7, 110.0, 111.0, Neutral, &[Three]),
             cm(7, 12, 111.0, 104.0, Down, &[Three]),
         ];
-        let base = build_base_tiling(&classified);
+        let base = build_base_tiling(&classified, &[]);
         assert_eq!(base.nodes.len(), 2, "Neutral 併入前節點");
         assert_eq!(base.bridged, 1);
         assert_eq!(base.leading_dropped, 0);
@@ -1361,7 +1382,7 @@ mod tests {
             cm(0, 3, 100.0, 100.5, Neutral, &[Three]),
             cm(3, 8, 100.5, 110.0, Up, &[Five]),
         ];
-        let base = build_base_tiling(&classified);
+        let base = build_base_tiling(&classified, &[]);
         assert_eq!(base.nodes.len(), 1);
         assert_eq!(base.leading_dropped, 1);
         assert_eq!(base.bridged, 0);
@@ -1476,6 +1497,7 @@ mod tests {
             label: NodeLabel::LeafCandidates(vec![Five]),
             degree_level: 0,
             canonical: leaf_canonical(0, 5),
+            true_range: None,
             start_bar: 0,
             end_bar: 5,
             start_date: date("2026-01-01"),
@@ -1492,6 +1514,7 @@ mod tests {
             label: NodeLabel::LeafCandidates(vec![Three]),
             degree_level: 3, // 葉 degree 應為 0 → I4
             canonical: leaf_canonical(9, 12),
+            true_range: None,
             start_bar: 9,
             end_bar: 12,
             start_date: date("2026-01-10"),
@@ -1519,6 +1542,7 @@ mod tests {
             label: NodeLabel::LeafCandidates(vec![Five]),
             degree_level: 0,
             canonical: leaf_canonical(0, 5),
+            true_range: None,
             start_bar: 0,
             end_bar: 5,
             start_date: date("2026-01-01"),
@@ -1550,10 +1574,9 @@ mod tests {
         classified: &[ClassifiedMonowave],
         bars: &[crate::output::OhlcvBar],
     ) -> (Vec<AcceptedKind>, LadderCounters) {
-        let base = build_base_tiling(classified);
+        let base = build_base_tiling(classified, bars);
         let mut counters = LadderCounters::default();
-        let mut cache = HashMap::new();
-        let out = try_ladder(&base.nodes, bars, &mut counters, &mut cache);
+        let out = try_ladder(&base.nodes, &mut counters);
         (out.kinds, counters)
     }
 
@@ -1580,10 +1603,9 @@ mod tests {
         use StructureLabel::Five;
         // 乾淨 Impulse 鏈 → overall_pass;passed 經 default_passed_rules 同源
         // 推導非空(D-3 修復:Level-N rules 欄真值,beam 鍵 2 可比)
-        let base = build_base_tiling(&impulse_chain());
+        let base = build_base_tiling(&impulse_chain(), &[]);
         let mut counters = LadderCounters::default();
-        let mut cache = HashMap::new();
-        let out = try_ladder(&base.nodes, &[], &mut counters, &mut cache);
+        let out = try_ladder(&base.nodes, &mut counters);
         assert!(out
             .kinds
             .iter()
@@ -1661,6 +1683,60 @@ mod tests {
             kinds
         );
         assert_eq!(counters.w5_rejected_windows, 0, "視窗仍有 :3 kind → 非整窗拒絕");
+    }
+
+    #[test]
+    fn bars_wick_suppresses_terminal_when_b_fully_retraces_intraday() {
+        use chrono::Duration;
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::Three;
+        // Q3 拍板判準測試:端點版 b 未完全回測(103 > 100)→ Terminal 成立;
+        // bars 版 b 段影線 99 < a.start(100)→ 盤中已完全回測 → Terminal 不成立
+        let classified = vec![
+            cm(0, 5, 100.0, 110.0, Up, &[Three]),
+            cm(5, 10, 110.0, 103.0, Down, &[Three]),
+            cm(10, 15, 103.0, 114.0, Up, &[Three]),
+            cm(15, 20, 114.0, 106.0, Down, &[Three]),
+            cm(20, 25, 106.0, 115.0, Up, &[Three]),
+        ];
+        let base_date = date("2026-01-01");
+        let path = |i: usize| -> f64 {
+            let segs: [(usize, usize, f64, f64); 5] = [
+                (0, 5, 100.0, 110.0),
+                (5, 10, 110.0, 103.0),
+                (10, 15, 103.0, 114.0),
+                (15, 20, 114.0, 106.0),
+                (20, 25, 106.0, 115.0),
+            ];
+            for (s, e, ps, pe) in segs {
+                if i >= s && i <= e {
+                    return ps + (pe - ps) * ((i - s) as f64) / ((e - s) as f64);
+                }
+            }
+            115.0
+        };
+        let bars: Vec<crate::output::OhlcvBar> = (0..26)
+            .map(|i| {
+                let p = path(i);
+                let low = if i == 8 { 99.0 } else { p };
+                crate::output::OhlcvBar {
+                    date: base_date + Duration::days(i as i64),
+                    open: p,
+                    high: p,
+                    low,
+                    close: p,
+                    volume: None,
+                }
+            })
+            .collect();
+        let (kinds, _) = ladder_on(&classified, &bars);
+        assert!(
+            !kinds
+                .iter()
+                .any(|k| matches!(k.pattern, NeelyPatternType::Diagonal { .. })),
+            "bars 判準下 b 盤中完全回測 → Terminal 不成立:{:?}",
+            kinds
+        );
     }
 
     #[test]
