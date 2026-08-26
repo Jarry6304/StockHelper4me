@@ -1299,7 +1299,7 @@ pub fn run_shadow(
 
     let base = build_base_tiling(classified, bars);
     let mut diag = ShadowCompactionDiagnostics {
-        engine: "tiling-round-g2.3".to_string(),
+        engine: "tiling-round-g2.4".to_string(),
         base_tiling_len: base.nodes.len(),
         neutral_bridged: base.bridged,
         leading_neutral_dropped: base.leading_dropped,
@@ -1325,6 +1325,7 @@ pub fn run_shadow(
         triplexity_nodes: 0,
         degree_map: HashMap::new(),
         degree_clamped_levels: 0,
+        degree1_node_keys: Vec::new(),
         anchors_union_total: 0,
         anchors_overlap_total: 0,
         elapsed_us: 0,
@@ -1349,6 +1350,9 @@ pub fn run_shadow(
     // W5/Q3 計數在 memo miss 時累計 = 唯一視窗語意)
     let mut memo: HashMap<String, Rc<LadderOutcome>> = HashMap::new();
     let mut counters = LadderCounters::default();
+    // 凍結收集(I6「全 tilings」,G2.4 修正):materialize 時累積,
+    // canonical 去重、Rc 共享;beam / branch cap 不限縮收集
+    let mut forest_nodes: HashMap<String, Rc<CompactionNode>> = HashMap::new();
 
     // 工程護欄:round 內 materialize 的新分支上限(beam 只保 round_beam_size,
     // 超額 materialize 無意義;無上限實測 600-monowave 檔 3.1GB)。
@@ -1401,14 +1405,19 @@ pub fn run_shadow(
         }
 
         // ── 階段 2:依分數降序 materialize(seen dedup;至多 branch_cap)
+        //
+        // **G2.4 收集語意修正(Gate v3 第一輪揭露)**:§7.1 I6 收集的是
+        // 「全 tilings」— 每個階梯接受的視窗解讀在概念上都屬某條 tiling,
+        // branch cap 與 beam 只是限制**深化探索**的工程護欄,不得限縮收集。
+        // 原實作僅從最終 beam pool 收集 → 全市場召回率 10.7%(分子被 beam
+        // 截斷)。改為 materialize 時累積收集(canonical 去重、Rc 共享),
+        // cap 之外的接受解讀照收、僅不展開 tiling 分支;凍結側護欄
+        // (forest_max_size 200 / BeamSearchFallback)依 §7.1 步驟 4 於
+        // 切換時把關,shadow 期全量觀測。
         specs.sort_by(|a, b| b.score.cmp(&a.score));
         let mut new_tilings: Vec<Tiling> = Vec::new();
         let mut branch_capped = false;
         for spec in &specs {
-            if new_tilings.len() >= branch_cap {
-                branch_capped = true;
-                break;
-            }
             let t = &pool[spec.tiling_idx];
             let window = &t.nodes[spec.s..spec.s + spec.w];
             let parent_key = pattern_canonical(
@@ -1418,22 +1427,34 @@ pub fn run_shadow(
                 window[spec.w - 1].end_bar,
                 window,
             );
+            // 收集(I6;同 canonical 跨 tiling 共享同一 Rc 節點)
+            let parent = match forest_nodes.get(&parent_key) {
+                Some(p) => Rc::clone(p),
+                None => {
+                    let p = make_parent(
+                        window,
+                        &spec.kind,
+                        parent_key.clone(),
+                        spec.report.as_ref().map(|r| (**r).clone()),
+                    );
+                    collect_pattern_nodes(&p, &mut forest_nodes);
+                    p
+                }
+            };
+            if new_tilings.len() >= branch_cap {
+                branch_capped = true;
+                continue;
+            }
             let key = spliced_tiling_key(&t.nodes, spec.s, spec.w, &parent_key);
             if !seen.insert(key) {
                 continue;
             }
-            // 新 tiling:視窗換 parent,其餘保留(Rc 指標串,不深拷貝)
-            let parent = make_parent(
-                window,
-                &spec.kind,
-                parent_key,
-                spec.report.as_ref().map(|r| (**r).clone()),
-            );
             // §6.1 邊界波重評(G2.3):parent 對其 tiling 中真實前後鄰居判定
             // (advisory 三檔,不拒絕;同節點跨 tiling 鄰居不同 → 逐 splice 計)
             let prev = spec.s.checked_sub(1).map(|i| &t.nodes[i]);
             let next = t.nodes.get(spec.s + spec.w);
             boundary_reassess(prev, &parent, next, &mut diag);
+            // 新 tiling:視窗換 parent,其餘保留(Rc 指標串,不深拷貝)
             let mut nodes: Vec<Rc<CompactionNode>> = Vec::with_capacity(t.nodes.len() - spec.w + 1);
             nodes.extend(t.nodes[..spec.s].iter().cloned());
             nodes.push(parent);
@@ -1467,19 +1488,14 @@ pub fn run_shadow(
     diag.q3_windows = counters.q3_windows;
     diag.q3_flips = counters.q3_flips;
 
-    // 不變量檢查(I1–I5;I6 = 收集去重,下方以 HashSet 保證)
+    // 不變量檢查(I1–I5;I6 = 收集去重,materialize 時以 canonical HashMap 保證)
     let tiling_slices: Vec<&[Rc<CompactionNode>]> =
         pool.iter().map(|t| t.nodes.as_slice()).collect();
     let counters = check_invariants(&tiling_slices, base_range);
     diag.invariant_violations = counters.to_map();
 
-    // 凍結收集(I6):全 tilings 中 degree ≥ 1 節點,canonical 去重
-    let mut forest_nodes: HashMap<String, Rc<CompactionNode>> = HashMap::new();
-    for t in &pool {
-        for n in &t.nodes {
-            collect_pattern_nodes(n, &mut forest_nodes);
-        }
-    }
+    // 凍結收集(I6)已於 materialize 累積(全 tilings 語意,G2.4 修正);
+    // 此處僅統計 + 產 §9.3 diff 用鍵
     for n in forest_nodes.values() {
         *diag
             .node_count_by_level
@@ -1551,6 +1567,13 @@ pub fn run_shadow(
             (n.start_bar, n.end_bar, tag)
         })
         .collect();
+    // §9.3 逐檔 diff 資料源(G2.4):degree-1 鍵序列化進 diagnostics
+    let mut key_strs: Vec<String> = new_keys
+        .iter()
+        .map(|(s, e, tag)| format!("{}-{}:{}", s, e, tag))
+        .collect();
+    key_strs.sort();
+    diag.degree1_node_keys = key_strs;
     for sc in old_forest {
         if let Some(key) = old_scenario_key(sc, &start_map, &end_map) {
             if new_keys.contains(&key) {
@@ -2150,6 +2173,27 @@ mod tests {
         );
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0, "護欄截斷不得產生不變量違反");
+        assert_eq!(
+            diag.degree1_node_keys.len(),
+            *diag.node_count_by_level.get("1").unwrap_or(&0),
+            "degree-1 diff 鍵數應等於 degree-1 收集數"
+        );
+        // G2.4 收集語意修正:branch cap / beam 不得限縮收集(I6 全 tilings)。
+        // 縮 beam 至 1(cap = 8):materialize 每輪僅 8 分支、pool 收斂 1 條,
+        // 但 round-1 接受的唯一解讀遠超 8 — 收集數必須大於 cap
+        let mut c_small = cfg();
+        c_small.round_beam_size = 1;
+        let diag_small = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &c_small);
+        let collected_small: usize = diag_small.node_count_by_level.values().sum();
+        assert!(
+            diag_small.round_branch_cap_hits >= 1,
+            "beam=1 稠密鏈必觸 cap"
+        );
+        assert!(
+            collected_small > 8,
+            "cap=8 之外的接受解讀仍應被收集:collected={}",
+            collected_small
+        );
     }
 
     #[test]
@@ -2555,7 +2599,7 @@ mod tests {
         let classified = impulse_chain();
         let bounds = [pb(0, 2), pb(3, 4)];
         let diag = run_shadow(&classified, &[], &[], &bounds, Timeframe::Daily, &cfg());
-        assert_eq!(diag.engine, "tiling-round-g2.3");
+        assert_eq!(diag.engine, "tiling-round-g2.4");
         assert_eq!(diag.anchors_union_total, 4);
         assert_eq!(diag.anchors_overlap_total, 6);
         // §6.3:空 bars → ceiling "no data" = SubMicro;max_level 1 錨定 →

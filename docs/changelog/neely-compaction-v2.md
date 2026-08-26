@@ -376,3 +376,40 @@ shadow 引擎與 diagnostics,serving forest 不受影響。
    Scenario 23 欄)、serving forest 改吃 tiling-round、刪 `exhaustive.rs` 遞迴 +
    `three_rounds.rs` 弱比對路徑、`beam_width` 移除(附錄 A)、structure_label
    新格式 + fusion 字串 parse 移除(Q6 一個 release 條款自此起算)。
+
+### P0 Gate v3 第一輪(2026-08-26 本機全市場)+ 收集語意修正
+
+全市場 2192 檔(run-all wall 480 min — DB-bound 已知議題,neely 無關,見下):
+
+| 門檻 | 結果 |
+|---|---|
+| I1–I6 / w1 | **0 / 0(2192 檔)✅** |
+| Terminal Impulse 存在(D-5) | **191 顆 ✅** |
+| forest proxy p99 ≤ 40 | p50=11 / p95=20 / p99=24 ✅ |
+| §9.3 召回率 ≥ 98% | **10.68% ❌** → 根因分析見下,引擎修正後複測 |
+| runtime | shadow Σ=49.5s 全市場(p50 14.4ms / p99 78.7ms)— stage_8 舊路徑經 G2.0 後近 no-op(Σ=0.2s),以其為分母無意義;公平判準改「shadow vs neely 全程占比」(腳本已改),實質過 |
+| RSS | diagnostics `peak_memory_mb` 從未填值(全 0)→ 工作管理員觀測;欄位填值列 backlog |
+
+觀測:level_cap_hit 94.8%(A-8 動態化議題的量測依據)、branch cap 1303 檔、
+q3 殘差 31.3%、§6.1 Info 16.7%/Warn 11.0%、A-10 高估 80.6%、
+pattern 分布健康(Flat 七變體/Running/Triangle/Terminal/Combination 細分全出值);
+engines 混 1 檔 g2.1 = TAIEX 1900-01-01 殘列(既有 backlog,可刪)。
+
+**召回 10.68% 根因(讀碼確證)**:實作僅從**最終 beam pool(32 tilings)**收集
+forest — 違背 spec §7.1 I6「收集**全 tilings**」語意。每個階梯接受的視窗在概念上
+都屬某條 tiling,branch cap / beam 是限制**深化探索**的工程護欄,不得限縮收集;
+收集被截斷使新 degree-1 median 僅 11 顆/檔 vs 舊 forest ~17.7 顆/檔,分子結構性
+塌陷。**修正(engine tag → `tiling-round-g2.4`)**:收集改於 materialize 時累積
+(canonical 去重、同 canonical 跨 tiling 共享同一 Rc 節點),cap 之外的接受解讀
+照收、僅不展開 tiling 分支;凍結側護欄(forest_max_size 200 / BeamSearchFallback)
+依 §7.1 步驟 4 於切換時把關。鎖測試:beam=1(cap=8)稠密鏈收集數 > cap。
+
+**§9.3 diff 工具**:diagnostics 加 `degree1_node_keys`(`"s-e:tag"` 排序序列,
+shadow 期專用);gate 腳本加 `--stocks`(六檔複測)與 `--diff <stock>`
+(召回缺口四分類:exact / tag 變體差 / bar 錯位 ≤3(Neutral 橋接嫌疑)/ 缺席)。
+殘餘缺口需逐檔 diff 定 (a)/(b) 允許類別或 r4 新增類別(W7 全相鄰對已預告;
+Neutral 橋接 bar 錯位為新嫌疑)。
+
+驗證:`cargo test -p neely_core` 463 passed / workspace 688 passed / ts 重生。
+複測程序:六檔 rerun → `--stocks` 聚合看召回方向 → `--diff` 分類殘餘 →
+全市場 rerun(建議先跑 `maintain_facts_stats.sql` 解 DB 慢)。

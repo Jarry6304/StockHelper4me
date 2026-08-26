@@ -404,6 +404,11 @@ pub struct ShadowCompactionDiagnostics {
     pub degree_map: HashMap<String, String>,
     /// §6.3:超出 11 級下界被夾至 SubMicro 的 level 數(記 diagnostics)
     pub degree_clamped_levels: usize,
+    /// G2.4 Gate v3 §9.3 逐檔 diff 資料源:degree-1 節點鍵
+    /// `"{start_bar}-{end_bar}:{pattern_tag}"`(排序後);召回缺口分類
+    /// (bar 錯位 / tag 變體差 / 視窗缺席)由 verify 腳本離線比對。
+    /// shadow 期專用,切換時隨本結構移除
+    pub degree1_node_keys: Vec<String>,
     /// G2.3 A-10:收集 forest 節點以「覆蓋葉 union」語意(PatternBound 完整
     /// 落於節點覆蓋 monowave 範圍內)計得的 anchors 總數
     pub anchors_union_total: usize,
