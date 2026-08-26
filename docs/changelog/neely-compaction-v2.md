@@ -1,7 +1,7 @@
 # neely_core Compaction v2 — Tiling-Round 引擎(G2.x 系列)
 
-> 進度:G2.0 ✅ / G2.1 ✅ / **G2.2 gate 五檔實測過 + Q3 拍板收案(bars 反查
-> 落地)**,唯 Q1(Running 覆核)未收 / G2.3、G2.4 未開工。
+> 進度:G2.0 ✅ / G2.1 ✅ / G2.2 ✅(gate 五檔實測過 + Q3 拍板 + **Q1 全市場
+> 抽樣收案**)/ G2.3 進行中 / G2.4 未開工。
 
 > 規格:`m3Spec/neely_compaction_v2.md`(r3 draft,2026-08-26)。
 > 現行 Compaction 三層缺陷(D-1 ~ D-6)正式記錄後,分 G2.0 ~ G2.4 五個里程碑
@@ -207,8 +207,8 @@ beam / `level_cap_hit`(A-8)全落地;**shadow 雙軌**啟動 — 新引擎每次
 
 1. **bars 判準複測**:下次六檔 run 讀 `q3_flips`(現在語意 = 殘差)與 W6 產出
    變化,確認 bars 判準落地後 Terminal / Triangle 分布合理。
-2. **Q1(Running 類)**:production 抽 Running 樣本人工覆核 net_direction 語意
-   (spec §12,G2.2 結束前定案)— G2.2 唯一未收項。
+2. **Q1(Running 類)**:~~production 抽 Running 樣本人工覆核~~ **已收案**
+   (2026-08-26 全市場抽樣 + 讀碼確證,見下方「Q1 收案」節)。
 
 ### G2.2 已知邊界(留後續)
 
@@ -216,3 +216,51 @@ beam / `level_cap_hit`(A-8)全落地;**shadow 雙軌**啟動 — 新引擎每次
 - W5 拒絕的完整 RuleRejection 記錄(§4.1):shadow 期以計數觀測,G2.4 切換時進
   `NeelyDiagnostics.rejections`。
 - Alternation complexity 軸(degree_level 差)與邊界重評 / Complexity 真算:G2.3(§6)。
+
+---
+
+## Q1(Running 類 net_direction)收案(2026-08-26)
+
+spec §12 Q1:「Running 類形態 net_direction 與首子波異向,W3 交替與
+initial_direction 語意」。全市場 production 抽樣 + 程式碼確證後**定案為雙軌定義**,
+實作免改(G2.2 已是正確寫法)。
+
+### 抽樣(2026-08-26 本機,`verify_q1_running.py`,latest per stock / created_at DESC)
+
+- 2192 檔 / forest 40095 scenarios;方法自檢全過:`initial_direction ==
+  首 monowave 方向` anomaly = 0、wave_tree 端點反查 unresolved = 0。
+- **Running 類僅 16 筆**(全 `RunningCorrection`,無 Combination Running;佔 forest
+  0.04%),**net 與首子波 16/16 同向、0 翻轉**;全型態對照組 net≠first 僅 1.0%。
+- 樣態規律:first=Up 者一律 power=StrongBearish、first=Down 者一律 StrongBullish
+  (符號鏈之「wave-a 逆勢」假設的直接展現,見下)。
+
+### 確證(讀碼)
+
+- 數學:a-b-c 視窗(b>a、c<a)net 與首子波**異向 ⟺ B > A+C ⟺ 教科書真 Running**
+  (c 未退回 a 起點)。production 0 翻轉的真義:**現行 16 筆無一是真 Running 幾何**,
+  全為「b 過衝 + c 偏短但已退越 a 起點」的偽 Running(detector 發現,見下)。
+- `power_rating/table.rs lookup_power_rating` 的 ± 號建立在「initial_direction =
+  wave-a = 逆勢」假設上:真 Running 的 net = 大勢方向,若改餵 net 會把 ±3 最強評級
+  **精準反向**(漲勢中 running 被標 StrongBearish)。→ 符號鏈輸入不可改 net。
+
+### 定案(雙軌)
+
+| 鏈 | 方向定義 | 依據 |
+|---|---|---|
+| 符號鏈(`Scenario.initial_direction` → Power Rating → max_retracement / post_behavior → fusion direction) | **首子波方向**;Level-N = 首**子節點**之 net_direction | 符號表的逆勢假設;`round_engine.rs synth_window` 已如此實作(`window[0].net_direction`),免改 |
+| 幾何鏈(W3 交替、tiling 建構) | 節點自身 net_direction | 照現行實作;真 Running 節點 net 與大勢同向會被 W3 拒收 — production 現為 0 筆真 Running,例外條款寫進 r4 當**條件式設計**(等 detector 修正後才有觸發對象),不先寫死碼 |
+
+### r4 spec 待修清單(本次追加)
+
+1. §7.2 `initial_direction` 列由「節點 net_direction」更正為「**首子節點方向**
+   (幾何鏈才用父節點 net)」。
+2. §4.2 W3 列的「例外見 Q1」改為條件式 Running 例外註記(掛 detector 修正 backlog)。
+3. §12 Q1 收案移入 §10 ADR(建議 **A-11**)。
+
+### 附帶發現:`is_running_correction` proxy 與語意不符(獨立拍板項,不入 G2.3)
+
+`classifier/flat_classifier.rs is_running_correction` 用 `b>a AND c<a` 當
+「c 不退至 a 起點」的 proxy — 正確條件是 **B > A+C**。現行 production 16 筆
+偽 Running 全憑此拿到 ±3 最強評級(雜訊);修正後會落回 Flat
+Irregular*/IrregularFailure(−1/−2)。**影響 serving forest / MCP / fusion 多空
+判讀,需獨立拍板 + 重跑,不順路塞進 G2.3。**
