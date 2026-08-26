@@ -117,7 +117,33 @@ beam / `level_cap_hit`(A-8)全落地;**shadow 雙軌**啟動 — 新引擎每次
   少節點早退 / 多義葉多解 / 不變量檢查器壞輸入 + I1 覆蓋條款 / §9.3 召回 / dedup /
   稠密鏈 branch cap 有界);`cargo test --workspace`:**668 passed / 0 failed**;
   ts 契約經 `codegen/generate.sh` Track A 重生(`cargo test --features ts` 全綠)
-- 六檔 + 全市場 shadow 觀測(I1–I6 計數、level_cap_hit / round_branch_cap_hits
-  命中率、召回率、stage_8s 耗時)留 user 本機 production run:讀
-  `snapshot->'diagnostics'->'shadow_compaction'`(structural_snapshots 的 payload
-  欄是 `snapshot`,無獨立 diagnostics 欄)
+- 六檔 + 全市場 shadow 觀測:讀 `snapshot->'diagnostics'->'shadow_compaction'`
+  (structural_snapshots 的 payload 欄是 `snapshot`,無獨立 diagnostics 欄)
+
+### G2.1 gate 六檔實測(2026-08-26 本機,bars ~991-996)
+
+| stock | base | rounds | cap_hit | branch_caps | levels | 召回 | shadow ms(舊 s8 ms) |
+|---|---|---|---|---|---|---|---|
+| 0050 | 151 | 4 | T | 3 | 1:23 / 2:1 | 0/15 | 7.6(0.0) |
+| 1312 | 140 | 4 | T | 3 | 1:22 / 2:1 | 0/20 | 8.8(0.1) |
+| 2330 | 179 | 4 | T | 3 | 1:35 | 3/20 | 6.0(0.1) |
+| 3363 | 149 | 4 | T | 3 | 1:19 / 2:2 | 1/14 | 8.5(0.0) |
+| 6547 | 127 | 4 | T | 0 | 1:16 | 3/13 | 8.2(0.0) |
+
+- **gate 判定:五檔 I1–I6 = 0 / w1_violations = 0 / 無逾時 → G2.1 gate 收案** ✅。
+  TAIEX 載到 0 bars(`price_daily_fwd` 無 `_index_taiex_` 列 — 指數不在 Silver
+  fwd 供料路徑,既有現況非本 PR 造成;另列 backlog,gate 以五檔個股認定)
+- **A-8 量測**:`level_cap_hit` 5/5(G2.1 無 W5/W6 階梯接受稠密,100% 觸 4 輪頂);
+  `round_branch_cap_hits` 4 檔 3 輪命中(6547 為 0)。shadow 6.0–8.8 ms/檔 vs 舊
+  stage 8 0.0–0.1 ms → 全市場 2172 檔推估 +~20s,遠低於 Gate v3 的 2× 門檻
+- **召回 7/82(8.5%)— 預期低,兩個結構性因素記為 G2.2 設計輸入**:
+  (a) branch cap 偏向先枚舉視窗 → 時間軸晚段行情的視窗未被探索,召回數字受工程
+  護欄混淆,G2.2 應改為「先枚舉後依 beam 鍵選 materialize」或視窗輪替;
+  (b) W4 S&B 於 round-1 對 monowave 視窗生效,而舊 Stage 3 的 Level-0 candidates
+  從未受 S&B 過濾 → 語意差屬 §9.3 允許清單之外,r4 需增補該清單或重議 W4 的
+  round-1 適用性(W5/W6 補上後重量再定)
+- **(C) 揭露 G2.0 的 production 效果**:五檔 forest(13–20)全為 Level-0,
+  `children>0 且 rules>0` 為 0 — **P1 後 old-engine 的 Level-N 聚合實測歸零**
+  (重疊滑窗清單相鄰項無法成鏈,D-1 假聚合徹底消失,對齊「枚舉不完整但產出皆
+  合法」設計);連帶 P3 Σ 外流與下游 top-scenario 翻轉疑慮在 G2.4 切換前實務上
+  不發生(serving forest 無 Level-N 可翻)
