@@ -243,16 +243,20 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 
 ## 下次 session 優先序
 
-1. **neely Compaction v2(G2.x 系列,進行中)**:規格 `m3Spec/neely_compaction_v2.md`(r3);
-   G2.0–G2.3 + G2.4 前半(契約協調 §7.3/§7.4 + Gate 工具)已收案;P0 Gate v3
-   三輪實測:inv/w1 全 0、Terminal 存在、W5 端點泛化零回歸,**§9.3 召回缺口
-   全數歸因**(w2_label 58.8% = I5 修正 / w4 / w7 / Neutral 對齊 / A-9 —
-   98% 對 label-blind 舊引擎結構上不可達)。**待拍板:召回門檻 (A) r4 允許
-   類別 + 未歸因缺口 = 0(推薦)vs (B) 放寬 W2 回退 I5(不推薦)** →
-   拍板後 r4 §9.3 修訂 + Gate 報告入 docs/benchmarks/ → 切換刪舊(獨立 PR)。
-   歷程與 r4 全部待修點見 `docs/changelog/neely-compaction-v2.md`;
+1. **neely Compaction v2 — 切換刪舊 PR(G2.4 後半,下一步)**:規格
+   `m3Spec/neely_compaction_v2.md` 已 **r4**(2026-08-27):召回門檻拍板
+   **(A)** 落地(§9.3 允許類別 (a)–(h) + 硬門檻「未歸因缺口 = 0」)、
+   Q1→A-11 / Q3 定稿、§4.3 族別閘門明文;P0 Gate v3 四輪實測收案
+   (全市場 2192 檔 inv/w1 全 0、缺口 33,699 筆 100% 歸因、3 筆稀有
+   stage 逐筆定案),報告
+   `docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`。
+   **切換刪舊依 spec 獨立 PR**(等 shadow PR merge 後重開分支):§7.1/§7.2
+   凍結流程(CompactionNode→Scenario 23 欄)、serving 改吃 tiling-round、
+   刪 `exhaustive.rs`/`three_rounds.rs`、`beam_width` 移除、structure_label
+   新格式(Q6 起算);凍結側 forest p99≤40 + RSS/抽驗/前端三項手動檢視於該
+   PR 驗。歷程見 `docs/changelog/neely-compaction-v2.md`;
    `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級)獨立拍板項;
-   TAIEX 於 `price_daily_fwd` 無供料另列 backlog。
+   TAIEX 於 `price_daily_fwd` 無供料另列 backlog(`_index_taiex_` 殘列可刪)。
 2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地
    (2026-06-11,`GET /waves/summary`;見 docs/changelog/v2-wave-endpoint.md),

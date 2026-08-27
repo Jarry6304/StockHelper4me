@@ -529,7 +529,25 @@ w5 = **6218**;stale engine 1 檔確認即 `_index_taiex_` 殘列(既有 backlog)
 **→ (A) 定義「未歸因缺口 = 0」全數閉合**:12 個 stage 類別全部映射至
 spec 明訂修正(I5 / W4 bars / W7 / A-9 細分 / D-5 分岔 / G2.2 硬閘)或
 量測鍵(端點 + 內部葉數);`accepted_but_not_collected` 全市場 = 0。
-待 user 拍板 (A)/(B) 後進 r4 §9.3 修訂 + docs/benchmarks/ Gate 報告。
+
+### 拍板 (A) + r4 spec 落地 + Gate 報告(2026-08-27,user 拍板)
+
+**user 拍板 (A)**((B) 放寬 W2 回退 I5 否決)。同日落地:
+
+- **spec r4**(`m3Spec/neely_compaction_v2.md`):§9.3 重寫(硬門檻
+  「未歸因缺口 = 0」+ 允許類別 (a)–(h) + 量測鍵正規化「端點或內部葉數」
+  + 98% 歷史註記);§9.2 runtime 判準改 shadow 占比 ≤ 2×、forest p99≤40
+  明文凍結側(proxy 觀測 + 張力註記);§4.3 增補 W5 族別閘門明文;
+  §7.2 `initial_direction` 定稿「首子節點方向」;§4.2 W3 條件式 Running
+  例外;**Q1 → ADR A-11**、Q3 收案定稿(附錄 C 同步);§12 存續僅 Q6。
+- **Gate 報告**:`docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`
+  (格式沿用 P0 Gate v2;四輪歷程 + 歸因全表 + 稀有案例逐筆定案 + 觀測項)。
+
+**Gate v3 依 r4 門檻:硬性自動項全過**;凍結側 forest p99≤40 與三項
+手動檢視(RSS / Level-1 抽驗 / 前端六檔)移至切換刪舊 PR 驗收。
+下一步 = **G2.4 後半切換刪舊(spec §3.3 獨立 PR)**:§7.1/§7.2 凍結流程、
+serving 改吃 tiling-round、刪 `exhaustive.rs`/`three_rounds.rs`、
+`beam_width` 移除、structure_label 新格式 + fusion parse 移除(Q6 起算)。
 
 觀測項對照第一輪:forest proxy p50=26/p95=53/p99=69(收集修正後全量,
 vs 第一輪限縮收集的 11/20/24 — 量級符合修正預期);level_cap_hit 94.8% 持平;

@@ -1,12 +1,34 @@
 # neely_core Compaction v2 — Tiling-Round 引擎規格
 
-**狀態**:r3 draft(2026-08-26)
+**狀態**:r4(2026-08-27)
 **取代對象**:`compaction/exhaustive.rs` v3.7 遞迴迴圈 + `compaction/three_rounds.rs` 弱比對聚合
 **上位文件**:`m3Spec/neely_core_architecture.md` r6(下稱 architecture)、`m3Spec/neely_rules.md`(下稱 rules)
 **參照實作**:`rust_compute/cores/wave/traditional_core/`(v3 fractal round 引擎,生產驗證)
 **本文件不含實作程式碼**;型別以合約表呈現,實作於 G2.x 各 PR 落地。
 
 ---
+
+## r4 修訂摘要(P0 Gate v3 四輪實測 + 召回門檻拍板 (A),2026-08-27)
+
+- **§9.3 重寫(拍板 (A))**:召回率降為觀測指標,硬門檻改「**召回驗屍
+  未歸因缺口 = 0**」;允許類別自 (a)/(b) 擴為 (a)–(h)(I5 label 閉合 /
+  W4 bars 基準 / 量測鍵 / W7 全相鄰對 / A-9 tag 細分 / D-5 分岔 /
+  G2.2 `:5` 族硬閘);量測鍵正規化從「端點對齊」擴義為「端點或內部葉數
+  對齊」。依據:全市場 33,699 筆缺口 12 類 stage 全數歸因(changelog
+  Gate 第一~四輪)。
+- **§9.2 修訂**:runtime 門檻判準改「shadow(切換後取代 stage_8)相對
+  neely 全程占比 ≤ 2×」(stage_8 經 G2.0 後近 no-op,舊分母無意義;
+  run-all wall time 受 DB 狀態影響僅附註);forest_size p99 ≤ 40 明文
+  適用於**凍結後 serving forest**(§7.1 護欄後),shadow 收集全量
+  proxy 為觀測項 — 併明文其與召回投影之張力(密集檔舊 forest > 40)。
+- **§4.3 增補**:W5 閘門按 I5 族別明文(`:5` 族 `overall_pass` 硬閘;
+  `:3` 族 essentials 資訊性交 W6)— G2.2 實作詮釋入格。
+- **Q1 收案 → ADR A-11**(§10):雙軌定案 — 符號鏈 = 首子節點方向、
+  幾何鏈 = 節點 net_direction;§7.2 `initial_direction` 列與 §4.2 W3
+  列(條件式 Running 例外)同步定稿。
+- **Q3 定稿**(§12 → 收案註記):G2.2 六檔雙軌實驗翻轉率 33.3% ≫ 5%,
+  bars 反查(true_range/judge_range)已落地;q3 殘差留觀測。
+- §12 存續開放題僅 Q6(structure_label parse 移除,綁切換 PR)。
 
 ## r3 修訂摘要
 
@@ -207,7 +229,7 @@ flowchart TD
 |---|---|---|
 | W1 | 相鄰性 | I2 全視窗成立。tiling 建構已保證,此處為 `debug_assert` 級防衛;違反 = 引擎 bug,panic(debug)/ 記 Engineering rejection(release) |
 | W2 | label 序列 | 視窗 children 的 base_label 序列必須匹配下表(rules Ch7 line 1803-1811 + rules Ch4 Figure 4-3);monowave 葉(degree 0)的 base_label 取其 Stage 0 Pre-Constructive 候選集合,**任一候選匹配即過**(候選多義性延後到 W5/W6 消解) |
-| W3 | 方向交替 | 相鄰節點 net direction 交替(Up/Down;Neutral 節點不進聚合視窗)。net direction = end_price − start_price 符號;例外見 Q1(Running 類) |
+| W3 | 方向交替 | 相鄰節點 net direction 交替(Up/Down;Neutral 節點不進聚合視窗)。net direction = end_price − start_price 符號。**條件式 Running 例外(r4,A-11)**:真 Running(B > A+C ⟺ net 與首子波異向)節點 net 與大勢同向、會被本階拒收 — production 現為 0 筆真 Running(`is_running_correction` proxy 語意不符,detector 修正列獨立拍板),例外條款**於 detector 修正落地後才啟用**,現階段不寫死碼 |
 | W4 | S&B | 每相鄰對 price magnitude 或 time duration 其一之比 ∈ [0.382, 2.618](rules line 1189-1197)。price 取節點端點差絕對值;沿用現行 `Option` 語意:price 不可得時退 time 單維 |
 | W5 | Ch5 Validator | 端點價格版規則重驗,規則適用表見 §4.3 |
 | W6 | Classifier | 定 pattern_type 與變體;**含 D-5 修復**:3-3-3-3-3 分岔判別見 §4.4 |
@@ -229,6 +251,12 @@ flowchart TD
 ### 4.3 W5 規則適用表(Level-N)
 
 原則:**bar 級概念不上樓,價格結構規則全上樓**。「波」的介面泛化為端點結構(start/end date、start/end price、duration_bars),monowave 與聚合節點同構餵入。
+
+**閘門按 I5 族別(r4 明文,G2.2 實作詮釋入格)**:Ch5 Essential R1–R7 是
+衝動建構規則 — `:5` 族 kind(Impulse / Terminal)以 `overall_pass` **硬閘**;
+`:3` 族(Zigzag / Flat / Triangle / Combination)essentials 天生不成立
+(Triangle 之 W3 < W2 即 R4 fail),一律硬閘會使 §4.4 W6 分岔成死碼、
+D-5 不可修 — 對齊 validator 自身「變體規則 Fail 資訊性,交 Classifier」語意。
 
 | 規則群 | Level-N 適用 | 調整 |
 |---|---|---|
@@ -369,7 +397,7 @@ tiling 首/末 parent 無對應鄰居 → 該側跳過(記 diagnostics)。
 | id | `cmp{level}-b{start_bar}-b{end_bar}-{pattern_tag}`(可重現、不含隨機) | 格式變更 |
 | wave_tree | 凍結全嵌套(children 遞迴);I3 保證 | **語意升級**(現行單層) |
 | pattern_type | W6 產出 | 不變 |
-| initial_direction | 節點 net_direction(**定義變更**:現行取首子波方向;Running 類淨向與首子波可異向 → Q1 裁決前先用 net) | 定義變更 |
+| initial_direction | **首子節點方向**(Level-N = 首子節點之 net_direction;A-11 雙軌定案 — 本欄屬符號鏈,Power Rating ± 號建立在「initial_direction = wave-a = 逆勢」假設上,不得餵父節點 net;幾何鏈(W3)才用節點自身 net_direction) | 定案(A-11) |
 | compacted_base_label | I5 表 | 不變 |
 | structure_label | 人讀字串,格式:`{Pattern} L{degree_level} [{child labels}]`;**下游禁止再 parse 此欄**(§7.4) | 格式變更 |
 | complexity_level | §6.2 真算 | 修復 |
@@ -448,7 +476,7 @@ tiling 首/末 parent 無對應鄰居 → 該側跳過(記 diagnostics)。
 
 ### 9.1 範圍
 
-沿用 P0 Gate 慣例:六檔實測(沿用既有清單)+ 全市場 production run(≈1264 檔);shadow 雙軌期間新舊同跑。
+沿用 P0 Gate 慣例:六檔實測(沿用既有清單)+ 全市場 production run(現行 universe ~2192 檔);shadow 雙軌期間新舊同跑。
 
 ### 9.2 門檻表
 
@@ -456,19 +484,49 @@ tiling 首/末 parent 無對應鄰居 → 該側跳過(記 diagnostics)。
 |---|---|---|
 | 不變量 | I1–I6 violation = 0(post_validator 新增檢查器,production 統計輸出) | 硬性,任一違反紅燈 |
 | Terminal Impulse | 全市場至少可觀察到 Terminal `:5` 聚合樣本(D-5 修復存在性證明);六檔人工覆核誤報率 | 硬性(存在)+ 檢視(質) |
-| forest_size | p99 ≤ 40(現行 16;巢狀允許成長,cap 200 內留 5× 餘量) | 硬性 |
-| runtime | 全市場 wall time ≤ 2× 現行 neely baseline(Gate 前先量 baseline 入 docs/benchmarks;traditional 7.7s 為量級參照非門檻) | 硬性 |
+| forest_size | p99 ≤ 40(現行 16;巢狀允許成長,cap 200 內留 5× 餘量)。**適用於凍結後 serving forest**(§7.1 步驟 4 護欄後);shadow 期收集全量 proxy(護欄前)為觀測項(r4;第四輪實測 proxy p99=69,forest_max_size 200 內)。與 §9.3 召回投影之張力:密集檔舊 forest 可 > 40(實測 1213 = 46),召回歸因不受此門檻約束 — 兩者量測對象不同(歸因看接受階梯,p99 看凍結產出) | 硬性(凍結側) |
+| runtime | **shadow(切換後取代 stage_8)相對 neely 全程占比 ≤ 2×**(r4:stage_8 經 G2.0 後近 no-op(Σ=0.2s),以其為分母無意義;run-all 總 wall time 受 DB 狀態影響僅附註。第四輪實測占比 86.3% 過);baseline 計時仍入 docs/benchmarks(traditional 7.7s 為量級參照非門檻) | 硬性 |
 | Level-N rules | 抽樣 Level-1 Impulse 100 例,R7(W3 非最短)、Overlap 判定與端點手算一致 | 抽驗 |
 | 記憶體 | 峰值 RSS 相對現行 ≤ 1.5× | 硬性 |
 | level_cap_hit | 全市場命中率寫入 Gate 報告(A-8 觀測項,無硬門檻;為 max_compaction_levels 動態化提供量測) | 觀測 |
 | 前端 | 六檔巢狀 wave_tree 於 Plotly 正確展開;波標密度可讀(視覺檢視紀錄入 changelog) | 檢視 |
 | fusion | track1 讀新 `wave_count` 欄,舊字串 parse 路徑回歸不破 | 硬性 |
 
-### 9.3 shadow 比對規則
+### 9.3 shadow 比對規則(r4 重寫 — 拍板 (A),2026-08-27)
 
-- 投影定義:新引擎 forest 之 degree_level = 1 節點,依 (start_bar, end_bar, pattern_type) 對舊 forest scenario 匹配。
-- 門檻:舊 forest 召回率 ≥ 98%;缺口逐檔 diff 報告,允許之差異來源僅限:(a) beam/dedup 時序,(b) 舊引擎產出但違反 I1/I2 之聚合(此類為修復,非回歸)。
+- 投影定義:新引擎 forest 之 degree_level = 1 節點,依 (start_bar, end_bar,
+  pattern_tag) 對舊 forest scenario 匹配;舊 scenario 日期經 monowave 端點
+  反查 bar。**量測鍵正規化**:對齊基準為新引擎 base tiling 之葉邊界 —
+  「端點或內部葉數」任一因 Neutral 橋接合成而異者,屬量測鍵差
+  (解讀可能以稍異邊界/葉數存在),非接受階梯拒絕。
+- **硬門檻:召回驗屍未歸因缺口 = 0** — 每筆未召回舊 scenario 對 base 葉
+  序列對齊視窗、重放接受階梯記第一拒絕階段(`recall_miss_by_stage`),
+  全部缺口必須落入下列允許類別;任何無法歸因之缺口 = 紅燈。
+  召回率本身為觀測指標(入報告,不設數字門檻)。
+- 允許類別(r4;(a)/(b) 為 r1 原有,(c)–(h) 依 Gate v3 四輪 33,699 筆
+  全數歸因增列):
+  - (a) beam/dedup 時序;(b) 舊引擎違反 I1/I2 之聚合(修復非回歸);
+  - (c) **I5 label 閉合**(W2):舊引擎候選生成 label-blind,新階梯依
+    Stage 0 候選集把關(§2.2 I5 明訂;實測佔缺口 61.4%);
+  - (d) **W4 bars 基準**:S&B time 維度轉 duration_bars(Q3 連動)+
+    round-1 對 Level-0 視窗生效之語意差(17.8%);
+  - (e) **量測鍵**(Neutral 橋接對齊):端點無對齊葉邊界
+    (no_aligned_start/end)或內部葉數 ∉ {3,5,7,11}(len_mismatch)
+    (14.4% + 0.0%);
+  - (f) **W7 全相鄰對**(Fib²):舊引擎僅首尾邊界對(4.1%);
+  - (g) **A-9 tag 細分**:視窗被接受但變體名細分後不同(tag_diff,2.0%);
+  - (h) **量化硬閘**:D-5 分岔兩組條件皆不滿足(w6)與 G2.2 `:5` 族
+    `overall_pass` 硬閘含 synth 端點量測差(w5;舊引擎
+    `rules_passed_count` 恆 0 時代之接受)(0.2% + 0.003%)。
+- `accepted_but_not_collected` 永不允許(= 收集 bug,違 §7.1 I6);
+  第四輪全市場實測 = 0。
+- Gate 報告必附:歸因分布全表 + 稀有 stage(≤50 筆)案例鍵
+  (`recall_miss_examples`,`"stage:s-e:tag"`)逐筆定案紀錄。
 - 新增率不設上限,但 Level-N(N≥2)分布寫入 Gate 報告供 architecture §13.3 metadata 對齊延伸。
+- 歷史註記:r1–r3 之「召回率 ≥ 98%」門檻係假設新舊階梯語意相近;Gate v3
+  實測證明修正後階梯 vs label-blind 舊引擎結構上不可達 98%(全市場
+  13.42%),且缺口 100% 歸因於 spec 明訂修正 — 門檻據此改寫,
+  放寬 W2 回退 I5 之替代案(B)否決。
 
 ### 9.4 產出物
 
@@ -490,6 +548,7 @@ tiling 首/末 parent 無對應鄰居 → 該側跳過(記 diagnostics)。
 | A-8 | Q2:max_compaction_levels 常數 vs 依 degree_ceiling 動態 | **裁決**:常數 4 定案 + `level_cap_hit` 可觀察性旗標(§5.2);動態化待 Gate 量測命中率後另議 |
 | A-9 | Q4:7/11 視窗 x-wave 位置與 CombinationKind 細分 | **裁決**:位置慣例維持;kind 細分排入 G2.3,依 rules Ch8 Table A/B 對映既有 11-variant enum,與 monowave 級判定同源(§4.2.1) |
 | A-10 | Q5:pattern_isolation_anchors union vs 重算 | **裁決**:取覆蓋葉 union(資訊性欄位寧多勿漏,§7.2) |
+| A-11 | Q1:Running 類 net_direction 與首子波異向時 initial_direction 語意 | **裁決(雙軌)**:符號鏈(initial_direction → Power Rating → max_retracement / post_behavior → fusion direction)= **首子節點方向**(± 號的 wave-a 逆勢假設);幾何鏈(W3 交替、tiling 建構)= 節點自身 net_direction。全市場抽樣 2192 檔 Running 類 16 筆 net vs 首子波 0 翻轉 + 讀碼確證(changelog Q1 收案節);真 Running 例外為條件式設計(§4.2 W3),掛 `is_running_correction` detector 修正(獨立拍板) |
 
 ## 十一、非目標(YAGNI)
 
@@ -501,15 +560,15 @@ tiling 首/末 parent 無對應鄰居 → 該側跳過(記 diagnostics)。
 
 ## 十二、開放問題
 
-Q2 / Q4 / Q5 已於 r2 裁決收案,移入 §10(A-8 ~ A-10)。存續三題**沿用原編號不重排**(§4.2 / §4.3 / §4.4 / §7.2 / §7.4 交叉引用穩定優先)。
+Q2 / Q4 / Q5 已於 r2 裁決收案(A-8 ~ A-10);**Q1 / Q3 已於 r4 收案**
+(Q1 → A-11 雙軌定案;Q3 → G2.2 六檔雙軌實驗翻轉率 33.3% ≫ 5%,依 r3
+定案機制落 bars 反查:`true_range` / `judge_range`、W4 time 轉
+duration_bars,`q3_windows/q3_flips` 留殘差觀測 — changelog G2.2 節)。
+編號**沿用不重排**(交叉引用穩定優先)。存續開放題僅一:
 
 | 編號 | 問題 | 現行裁定(可推翻) | 決議期限 | 影響層級(附錄 C) |
 |---|---|---|---|---|
-| Q1 | Running 類形態 net_direction 與首子波異向,W3 交替與 initial_direction 語意 | 先用 net_direction;Running 樣本於 Gate 抽出人工覆核後定案 | G2.2 結束前 | 高 |
-| Q3 | Level-N 節點僅有端點價,真實 high/low 極值(Overlap、Triangle 觸線)是否需反查 bars 精化 | **G2.2 內六檔雙軌實驗**:端點版 vs bars 反查版並跑,量 Overlap / 回測判定翻轉率;翻轉率 > 5%(初始門檻)→ 即於 G2.2 落 bars 反查(成本:每視窗 O(bars) 掃描),否則端點版定案、Gate v3 僅確認性抽驗 | G2.2 結束前 | 高 |
-| Q6 | fusion structure_label 字串 parse 移除時程 | deprecated 一個 release;跨 repo PR 同週合併 | G2.4 前 | 中 |
-
-**決議順序:Q3 → Q1 → Q6**,與附錄 C 影響評級一致。Q3、Q1 同落 G2.2:Q3 居首,其結論是 W5 端點介面與 §4.4 分岔判別(D-5 修復)的實作前提;Q1 於 W5/W6 定稿前定案(Power Rating 符號鏈,附錄 C);Q6 無設計不確定性,期限貼 G2.4 部署順序。r2 之殘餘風險(Q3 於 Gate 期才定案的重工暴險)已由本序收掉。
+| Q6 | fusion structure_label 字串 parse 移除時程 | deprecated 一個 release(G2.4 前半起算);切換刪舊 PR 落新格式 | 切換 PR | 中 |
 
 ---
 
@@ -542,8 +601,8 @@ Neely 規則常數(Fib 比率、S&B 0.382–2.618、Fib² 0.236–4.236、三檔
 
 | 題 | 狀態 | 失效模式(若裁決錯誤) | 傳染性 | 可逆成本 | 層級 |
 |---|---|---|---|---|---|
-| Q3 | 開放 | 端點雙重去極值(monowave mid-price 一次、Level-N 端點再一次)→ W5 回測/Overlap 誤判 → §4.4 Terminal/Triangle 誤分 → base_label 錯 | **最強**:經 I5 逐級向上;shadow 比對基準同步污染;D-5 修復品質完全繫於此 | 低:G2.2 雙軌實驗內定案,無 Gate 期重工暴險(r3) | 高 |
-| Q1 | 開放 | Running 視窗接受/拒絕翻轉(結構可達性);Power Rating Bullish/Bearish **符號反向**(initial_direction 欄之原始用途)→ max_retracement / post_behavior 方向語意 → fusion direction → 多空判讀顛倒 | 中:結構面限 Running 族;符號錯沿 direction 鏈直通 MCP / 前端 | 低:定義切換重跑 | 高 |
+| Q3 | **已收案(r4)**:實驗翻轉率 33.3% → bars 反查落地 | 端點雙重去極值(monowave mid-price 一次、Level-N 端點再一次)→ W5 回測/Overlap 誤判 → §4.4 Terminal/Triangle 誤分 → base_label 錯 | **最強**:經 I5 逐級向上;shadow 比對基準同步污染;D-5 修復品質完全繫於此 | 低:G2.2 雙軌實驗內定案,無 Gate 期重工暴險(r3) | 高 |
+| Q1 | **已裁決 A-11(r4)**:雙軌定案 | Running 視窗接受/拒絕翻轉(結構可達性);Power Rating Bullish/Bearish **符號反向**(initial_direction 欄之原始用途)→ max_retracement / post_behavior 方向語意 → fusion direction → 多空判讀顛倒 | 中:結構面限 Running 族;符號錯沿 direction 鏈直通 MCP / 前端 | 低:定義切換重跑 | 高 |
 | Q6 | 開放 | 運行時炸鏈:label 新格式先於 fusion 改讀上線 → `wave_count_from_label` 全市場解析失敗,Track1 → Golden L3 → forecast_log 下游中斷(非靜默,當日可見) | 廣但零結構傳染 | 極低:expand–migrate–contract 部署順序 | 中 |
 | Q2 | **已裁決 A-8** | 靜默缺漏:ceiling 允許高階但引擎止於 4 層,不觸紅燈 | 無(枚舉不全,非結構錯) | 極低 | 中低 → 以 `level_cap_hit` 可觀察性收案 |
 | Q4 | **已裁決 A-9** | Combination 族 Power / post_behavior 查表取通用值而非精確值;Double/Triple 之分(reverse_logic 中段/末段依據)不受影響 | 局部,限 Combination 族 | 低 | 低中 → 細分排入 G2.3 |
