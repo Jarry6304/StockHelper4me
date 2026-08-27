@@ -12,48 +12,18 @@
 //   - **Nested context**:本 PR 偵測 scenario A 範圍涵蓋於 scenario B (Triangle) 內
 //     → A.in_triangle_context = true,供 Power Rating 套 in_triangle = 0 例外
 
-use crate::output::{
-    NeelyPatternType, Round3PauseInfo, Scenario, StructureLabel,
-};
+use crate::output::{Round3PauseInfo, Scenario, StructureLabel};
 
-/// Stage 8 後處理主入口:對 forest 套 Three Rounds nested context + Round 3 偵測。
+/// Stage 8.5 主入口:Round 3 暫停偵測(m3Spec/neely_compaction_v2.md §5.3:
+/// 判定規則沿用,輸入 = 凍結後 forest 末端狀態)。
 ///
-/// 步驟:
-///   1. nested context:對每對 (scenario_a, scenario_b) 檢查 a 是否完全涵蓋於 b 的時間範圍
-///      且 b 為 Triangle → a.in_triangle_context = true
-///   2. Round 3 偵測:若 forest 中無任何 scenario.compacted_base_label 為 Five (= :L5/:L3 對應)
-///      或 Three(若為 Three 但 wave_count < 5,即 Zigzag/Flat 仍視 :L 標)→
-///      標 awaiting_l_label;否則無動作
+/// nested Triangle context 不再於此推導 — compaction v2 §7.2 語意收緊:
+/// `in_triangle_context` = 節點被 Triangle 節點**真包含**(同 tiling 血緣),
+/// 由 round_engine 凍結時填值;原「日期範圍重疊即算」近似廢除。
 ///
 /// 回傳 Round3PauseInfo(若觸發暫停)。
 pub fn apply(forest: &mut [Scenario]) -> Option<Round3PauseInfo> {
-    apply_nested_triangle_context(forest);
     detect_round3_pause(forest)
-}
-
-/// Step 1:nested context 偵測。
-///
-/// 對每個 scenario A,若存在另一 scenario B (Triangle) 使得:
-///   B.start ≤ A.start AND A.end ≤ B.end AND A.id != B.id
-/// → A.in_triangle_context = true
-fn apply_nested_triangle_context(forest: &mut [Scenario]) {
-    // 蒐集 Triangle scenario 的範圍(避免 double mutable borrow)
-    let triangle_ranges: Vec<(String, chrono::NaiveDate, chrono::NaiveDate)> = forest
-        .iter()
-        .filter(|s| matches!(s.pattern_type, NeelyPatternType::Triangle { .. }))
-        .map(|s| (s.id.clone(), s.wave_tree.start, s.wave_tree.end))
-        .collect();
-
-    for scenario in forest.iter_mut() {
-        let a_start = scenario.wave_tree.start;
-        let a_end = scenario.wave_tree.end;
-        let nested = triangle_ranges
-            .iter()
-            .any(|(t_id, t_start, t_end)| {
-                t_id != &scenario.id && *t_start <= a_start && a_end <= *t_end
-            });
-        scenario.in_triangle_context = nested;
-    }
 }
 
 /// Step 2:Round 3 暫停偵測。
@@ -218,9 +188,10 @@ mod tests {
     }
 
     #[test]
-    fn nested_zigzag_inside_triangle_marks_in_triangle_context() {
+    fn apply_does_not_touch_frozen_in_triangle_context() {
+        // compaction v2 §7.2:in_triangle_context 由凍結血緣填值,
+        // Stage 8.5 不得覆寫(原日期重疊近似已廢除)
         let mut forest = vec![
-            // 外層 Triangle:0..30
             make_scenario(
                 "t1",
                 0,
@@ -230,17 +201,6 @@ mod tests {
                 },
                 StructureLabel::Three,
             ),
-            // 內層 Zigzag:5..15(完全涵蓋於 Triangle 範圍內)
-            make_scenario(
-                "z1",
-                5,
-                15,
-                NeelyPatternType::Zigzag {
-                    sub_kind: ZigzagKind::Single,
-                },
-                StructureLabel::Three,
-            ),
-            // 外層 Impulse:0..30(同範圍但不是 Triangle)
             make_scenario(
                 "i1",
                 0,
@@ -249,16 +209,9 @@ mod tests {
                 StructureLabel::Five,
             ),
         ];
+        forest[1].in_triangle_context = true; // 模擬凍結填值
         apply(&mut forest);
-        // Triangle (t1) 自身:不應 in_triangle_context = true(自己不能 nest 自己)
-        let t1 = forest.iter().find(|s| s.id == "t1").unwrap();
-        assert!(!t1.in_triangle_context);
-        // Zigzag (z1):被 Triangle 涵蓋 → true
-        let z1 = forest.iter().find(|s| s.id == "z1").unwrap();
-        assert!(z1.in_triangle_context);
-        // Impulse (i1):同範圍但 Triangle 也是 0..30,t1.start ≤ i1.start AND i1.end ≤ t1.end
-        // → 也算 nested(同範圍邊界 inclusive)
-        let i1 = forest.iter().find(|s| s.id == "i1").unwrap();
-        assert!(i1.in_triangle_context);
+        assert!(!forest[0].in_triangle_context);
+        assert!(forest[1].in_triangle_context, "凍結值不得被 Stage 8.5 覆寫");
     }
 }

@@ -47,7 +47,7 @@ class Track1View:
     power_rating: str | None         # StrongBullish / Bullish / Neutral / ...
     direction: str                   # "bullish" / "bearish" / "neutral"
     effective_degree: str | None     # SubMinuette / Minute / Minor / ...
-    wave_count: int                  # 從 structure_label "N-wave" parse
+    wave_count: int                  # Scenario 結構化欄(compaction v2 §7.4)
     fib_lines: list[FibLine] = field(default_factory=list)
     invalidation_price: float | None = None  # 失效價(若有)
     invalidated: bool = False        # 現價已跌破 invalidation?

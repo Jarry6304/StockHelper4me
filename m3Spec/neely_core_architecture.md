@@ -873,7 +873,7 @@ pub struct Scenario {
     pub id: String,
     pub wave_tree: WaveNode,
     pub pattern_type: NeelyPatternType,
-    pub structure_label: String,            // 例:"5-3-5 Zigzag in W4 of larger Impulse"
+    pub structure_label: String,            // 例:"Zigzag:Single L1 [:5 :3 :5]"(compaction v2 Q6 格式;下游禁 parse)
     pub complexity_level: ComplexityLevel,
 
     // === 群 2:Pre-Constructive + Three Rounds 狀態 ===
@@ -1451,15 +1451,16 @@ P0 Gate 六檔實測時應記錄「資料不足」的拒絕比例,作為 warmup 
   "snapshot": {
     "scenario_forest": [
       {
-        "id": "S001",
+        "id": "cmp1-b0-b78-Impulse",
         "pattern_type": { "kind": "impulse", "extension": "wave3_extended" },
         "wave_count": 5,
+        "structure_label": "Impulse L1 [:5 :3 :5 :3 :5]",
         "wave_tree": {
-          "label": "5-wave Up", "start": "2026-01-06", "end": "2026-04-30",
+          "label": "Impulse L1\u2191", "start": "2026-01-06", "end": "2026-04-30",
           "degree_level": 1, "base_label": "Five",
           "children": [
-            { "label": "W1:L5", "start": "2026-01-06", "end": "2026-02-02",
-              "degree_level": 0, "base_label": "L5", "children": [] }
+            { "label": "W1 :5\u2191", "start": "2026-01-06", "end": "2026-02-02",
+              "degree_level": 0, "base_label": "Five", "children": [] }
           ]
         },
         "power_rating": "strongly_favor_continuation",

@@ -420,13 +420,10 @@ def _format_primary_scenario(scenario: dict | None) -> dict[str, Any]:
     else:
         pattern_label = "Unknown"
 
-    # v3.28 修(2026-05-17):wave_count 從 structure_label parse(`"5-wave from mw27..."`)
+    # compaction v2 §7.4 / Q6:wave_count 讀結構化欄(structure_label 新格式
+    # `{Pattern} L{degree} [...]` 僅供顯示,字串 parse 已移除)
     label = scenario.get("structure_label") or scenario.get("id") or ""
-    wave_count = 0
-    import re
-    m = re.search(r"(\d+)-wave", label)
-    if m:
-        wave_count = int(m.group(1))
+    wave_count = int(scenario.get("wave_count") or 0)
 
     # v3.35:degree + span surface
     degree = _compute_scenario_effective_degree(scenario)

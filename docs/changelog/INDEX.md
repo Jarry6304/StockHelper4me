@@ -4,6 +4,8 @@
 
 | 版本 | 日期 | 一句話 | 檔案 |
 |---|---|---|---|
+| NEELY-CMP-G2.4b | 2026-08-27 | 切換刪舊:serving = tiling-round 凍結(§7.1/§7.2)、刪 exhaustive/three_rounds、beam_width 移除、structure_label 新格式 + fusion parse 移除(Q6);neely 1.1.0 | neely-compaction-v2.md |
+| NEELY-CMP-G2.4a | 2026-08-26 | G2.4 前半契約協調(wave_count/degree_level/base_label 欄 + Gate v3 工具)+ P0 Gate v3 四輪實測收案 + 拍板 (A)(spec r4,報告入 docs/benchmarks) | neely-compaction-v2.md |
 | NEELY-CMP-G2.3 | 2026-08-26 | 邊界重評(D-4)/ Complexity 真算 / Degree 對映 / anchors union(A-10)/ Combination 細分(A-9)+ Q1 收案 | neely-compaction-v2.md |
 | NEELY-CMP-G2.2 | 2026-08-26 | W5 端點泛化(族別閘門)+ W6 分岔(D-5)+ Q3 雙軌儀表 + classifier count 恆 0 bug 修 | neely-compaction-v2.md |
 | NEELY-CMP-G2.1 | 2026-08-25 | tiling-round 引擎骨架(CompactionNode/round 迴圈/dedup/beam/level_cap_hit)+ shadow 雙軌啟動 | neely-compaction-v2.md |
