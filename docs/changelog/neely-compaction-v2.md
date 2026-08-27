@@ -1,10 +1,11 @@
 # neely_core Compaction v2 — Tiling-Round 引擎(G2.x 系列)
 
 > 進度:G2.0 ✅ / G2.1 ✅ / G2.2 ✅(gate 五檔實測過 + Q3 拍板 + Q1 全市場
-> 抽樣收案)/ G2.3 ✅(gate 五檔實測過)/ **G2.4 前半 ✅(契約協調 + Gate 工具;
-> 後半切換刪舊等本機 P0 Gate v3 全門檻)**。
+> 抽樣收案)/ G2.3 ✅(gate 五檔實測過)/ G2.4 前半 ✅(契約協調 + Gate 工具)/
+> P0 Gate v3 四輪收案 + 拍板 (A) ✅ / **G2.4 後半 ✅(切換刪舊,serving =
+> tiling-round;本機驗收 runbook 見文末)**。
 
-> 規格:`m3Spec/neely_compaction_v2.md`(r3 draft,2026-08-26)。
+> 規格:`m3Spec/neely_compaction_v2.md`(r4,2026-08-27)。
 > 現行 Compaction 三層缺陷(D-1 ~ D-6)正式記錄後,分 G2.0 ~ G2.4 五個里程碑
 > 以 tiling-round 引擎取代 `compaction/exhaustive.rs` 遞迴迴圈 +
 > `compaction/three_rounds.rs` 弱比對聚合;本檔逐里程碑記錄落地內容。
@@ -552,3 +553,72 @@ serving 改吃 tiling-round、刪 `exhaustive.rs`/`three_rounds.rs`、
 觀測項對照第一輪:forest proxy p50=26/p95=53/p99=69(收集修正後全量,
 vs 第一輪限縮收集的 11/20/24 — 量級符合修正預期);level_cap_hit 94.8% 持平;
 branch cap 1299 檔;Q3 殘差 31.5% 持平;A-10 高估 77.5%。
+
+---
+
+## G2.4 後半 — 切換刪舊(2026-08-27,shadow PR #134 merge 後獨立 PR)
+
+spec r4 §3.3/§7 履行:serving forest 改由 tiling-round 引擎凍結產出,
+舊路徑刪除。neely_core **1.0.1 → 1.1.0**。
+
+| 項 | 內容 |
+|---|---|
+| **§7.1 凍結流程** | `round_engine::run()` 取代 `run_shadow()`:round 迴圈後收集節點(I6 全 tilings、canonical 去重)逐一凍結為 Scenario(決定性排序;id `cmp{level}-b{s}-b{e}-{tag}`,同鍵多子樹 `-vN` 消歧)→ forest_max_size 200 / BeamSearchFallback 護欄原樣(凍結預填引擎查表 power,排序鍵非退化) |
+| **§7.2 逐欄凍結** | wave_tree 一比一凍結(聚合節點 label `{tag} L{n}{↑↓}`,葉 base = slot 推定);initial_direction = **首子節點方向**(A-11);structure_label 新格式 **`{Pattern} L{degree} [{child slots}]`**(Q6);passed/deferred 取 W5 報告真值;structural_facts 以子節點合成視窗餵既有量值版 fns(輸入泛化);complexity = §6.2 真算對映(0/1→Simple、2→Intermediate、3→Complex);in_triangle_context = **Triangle 真包含血緣**(掃收集樹,日期重疊近似廢除 — `three_rounds::apply` 同步移除 nested 步驟,只留 Round3 暫停);anchors = **A-10 union**(lib.rs 舊重疊迴圈刪);monowave_structure_labels = 覆蓋葉全域 index 集(Pass 2 refill 相容);§6.1 Info/Warning 凍結掛 AdvisoryFinding(`Ch4_Round2_Compaction`,cap 4/節點) |
+| **W5 RuleRejection**(§4.1) | 拒絕視窗完整 `report.failed` 進 `NeelyDiagnostics.rejections`(cap 64/檔)— §15.1 Level-N 覆蓋恢復 |
+| **pipeline 重排** | Stage 5/6/7 視窗級路徑移除(D2 收編:Classifier→W6、Post-Constructive→W6 後把關);Stage 7 complexity 凍結後套用;Stage 7.5 advisory 凍結後照跑;Stage 3/4 保留為**資訊性路徑**(detour 註記 + Level-0 拒絕診斷,不 materialize scenario;`classifier::classify` Level-0 入口轉 test-only,後續清理候選);Stage 8.5 只覆寫 Round3Pause |
+| **Stage 10b/10c 價位反查** | 聚合節點/橋接葉 (start,end) 不對應單一 monowave → `price_lookup_series` = monowave series + 引擎端點合成項(`CompactionV2Result.node_endpoints`),triggers/fibonacci 簽名不動 |
+| **刪除** | `compaction/exhaustive.rs`、`compaction/three_rounds.rs`(§3.3 弱比對路徑);`compact()`/`CompactionResult`;`beam_width`(candidates cap 改 `round_beam_size × 10` 承接);shadow 專用欄(old_forest_* / recall_* / degree1_node_keys / anchors 對照計數) |
+| **診斷換欄** | `NeelyDiagnostics.shadow_compaction` → **`compaction_v2: CompactionV2Diagnostics`**(engine tag `tiling-round-v2`);compaction_paths = 收集數(護欄前);ts 契約重生(刪 ShadowCompactionDiagnostics.ts、增 CompactionV2Diagnostics.ts) |
+| **Python(Q6)** | `_picker.wave_count_from_label` 刪除;track1 / `_forecast` / wave_impulse_screen 只讀結構化 `wave_count` 欄;architecture §14.1 範例同步新格式 |
+| **Gate 工具** | `verify_compaction_v2_gate.py` 改凍結側:硬門檻 inv/w1/Terminal/**真 forest p99≤40**/runtime 占比 ≤2×;召回比對段隨 shadow 收案移除 |
+
+### 驗證(2026-08-27 sandbox)
+
+- `cargo test -p neely_core` 434 passed(舊路徑測試隨檔移除;新增凍結
+  §7.2 欄位測試 / A-10 union 掛載測試 / Round3 不覆寫凍結值測試)
+- `cargo test --workspace` **659 passed / 0 failed**;`cargo build --release
+  -p tw_cores` 過;ts codegen 全綠
+- Python:fusion / cross_cores / mcp_server 測試 **663 passed**
+  (track1 fixture 改結構化 wave_count;picker 測試改「已移除」鎖)
+
+### 本機驗收(切換 PR 驗;runbook)
+
+1. rebuild → 六檔 `run-all --write --stocks "0050,2330,3363,6547,1312,1213"`
+2. `verify_compaction_v2_gate.py --stocks "..."` → inv/w1/Terminal/forest
+   p99≤40/runtime 全 PASS
+3. 全市場 run-all(或等排程)→ gate 全市場 PASS;RSS 工作管理員觀測 ≤1.5×
+4. 手動:Level-1 Impulse 抽樣 R7/Overlap 端點手算;前端六檔巢狀 wave_tree
+   Plotly 展開 + 波標密度檢視(serving forest 語意:每檔以 degree-1 為主、
+   Level-N 巢狀,無 Level-0 monowave 視窗 scenario — quality_caveat 邏輯照舊)
+
+### 切換後六檔驗收(2026-08-27 本機)+ forest p99 門檻拍板題
+
+六檔 rebuild + run-all + gate(凍結側,engine `tiling-round-v2`):
+
+| 門檻 | 結果 |
+|---|---|
+| I1–I6 / w1 | **0 / 0 ✅** |
+| Terminal 存在 | 1 顆(Diagonal:Ending)✅ |
+| runtime 占比 | 90.6% ≤ 2× ✅ |
+| **凍結側 forest p99 ≤ 40** | **FAIL — p50=27 / p95=59 / p99=59;僅 2330 = 59 超標** |
+
+觀測:Level 分布 1:141 / 2:52 / 3:1;overflow(forest_max_size 200)= 0;
+W5 拒絕 11 視窗(RuleRejection 已進 diagnostics.rejections)✅;
+Q3 殘差 38.1%;引擎 p50=10ms。neely 全程 ~1.3s/run(vs G2.3 期 ~0.4s)—
+DB contention 主嫌(同場 traditional 69.8s、slow statement 密集),
+留全市場 wall time 觀察。
+
+**p99 門檻張力成真(r4 §9.2 已預告)**:§9.2 的 40 = 舊 Level-0 forest
+p99(16)× 2.5 餘量;(A) 拍板後凍結 = 收集全量(I6),全市場收集 proxy
+p99=69 即凍結側預期值 — 40 對密集檔結構上不可達,與召回 98% 同構。
+**拍板題(下輪 spec 修訂)**:
+- **(A) 推薦**:先全市場(排程自動)拿凍結側真分布 → p99 門檻重校
+  (候選:p99 ≤ 100 = forest_max_size 200 的 2× 餘量;或硬門檻改
+  「overflow 觸發率 = 0」+ p99 轉觀測)。
+- (B) 不推薦:縮收集追 40 — 違 §7.1 I6 與召回拍板 (A) 的收集語意。
+
+**附帶操作項(全市場切換 rerun 前拍板)**:facts 為 ON CONFLICT DO
+NOTHING — 舊引擎 forest 的 neely facts 仍留表中,切換後新舊 fact 敘述
+並存;依 Round N 慣例建議 DELETE neely_core facts + 全市場 rerun +
+`maintain_facts_stats.sql`(六檔實測本輪 neely facts_new = 225)。

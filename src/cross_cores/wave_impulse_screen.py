@@ -64,7 +64,6 @@ from fusion._picker import (
     pattern_type_label as _pattern_type_label,
     power_rating_label as _power_rating_label,
     power_rating_strength as _power_rating_strength,
-    wave_count_from_label as _wave_count_from_label,
 )
 # B1:_DEGREE_RANK / _effective_degree 已收斂到 _picker(對齊 Rust canonical)。
 # track1.py 留兩支讀取面工具:_extract_all_invalidation_thresholds(A-3 閘門全 trigger 解析)

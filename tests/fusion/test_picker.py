@@ -4,7 +4,7 @@
 helpers 後的 unit tests。
 
 範圍:純 helper coverage(coerce_date / power_rating_* / pattern_type_label /
-wave_count_from_label / direction_from_power)。
+direction_from_power)。
 
 Out of scope:
 - effective_degree / DEGREE_RANK / pick_primary(track1 vs _forecast 仍有
@@ -33,7 +33,6 @@ from fusion._picker import (  # noqa: E402
     power_rating_label,
     power_rating_sign,
     power_rating_strength,
-    wave_count_from_label,
 )
 
 
@@ -203,29 +202,14 @@ class TestPatternTypeLabel:
 
 
 # ════════════════════════════════════════════════════════════
-# wave_count_from_label
+# wave_count_from_label 已依 compaction v2 Q6 移除(structure_label
+# 新格式 `{Pattern} L{degree} [...]`;wave_count 讀 Scenario 結構化欄)
 # ════════════════════════════════════════════════════════════
 
 
-class TestWaveCountFromLabel:
-
-    def test_5_wave(self):
-        assert wave_count_from_label("5-wave from mw27 to mw31") == 5
-
-    def test_3_wave(self):
-        assert wave_count_from_label("3-wave Zigzag in W4") == 3
-
-    def test_7_wave(self):
-        assert wave_count_from_label("7-wave Combination") == 7
-
-    def test_no_match(self):
-        assert wave_count_from_label("Impulse pattern") == 0
-
-    def test_none_input(self):
-        assert wave_count_from_label(None) == 0
-
-    def test_empty_string(self):
-        assert wave_count_from_label("") == 0
+def test_wave_count_from_label_removed():
+    import fusion._picker as picker
+    assert not hasattr(picker, "wave_count_from_label")
 
 
 # ════════════════════════════════════════════════════════════
@@ -240,7 +224,6 @@ def test_track1_imports_picker():
         _pattern_type_label,
         _power_rating_label,
         _power_rating_strength,
-        _wave_count_from_label,
         _coerce_date,
     )
     # 行為對齊 picker 共用版本
@@ -248,7 +231,6 @@ def test_track1_imports_picker():
     assert _pattern_type_label("Impulse") == "Impulse"
     assert _power_rating_label("Bullish") == "Bullish"
     assert _power_rating_strength("StrongBullish") == 3
-    assert _wave_count_from_label("5-wave") == 5
     assert _coerce_date("2026-05-25") == date(2026, 5, 25)
 
 
@@ -259,7 +241,6 @@ def test_wave_impulse_screen_imports_picker():
         _pattern_type_label,
         _power_rating_label,
         _power_rating_strength,
-        _wave_count_from_label,
     )
     assert _direction_from_power("Bullish") == "bullish"
 

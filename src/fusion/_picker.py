@@ -34,8 +34,9 @@ __all__ = [
     # Power rating
     "power_rating_label", "power_rating_strength", "power_rating_sign",
     "direction_from_power",
-    # Pattern / wave
-    "pattern_type_label", "wave_count_from_label",
+    # Pattern / wave(wave_count_from_label 已依 compaction v2 Q6 移除 —
+    # structure_label 新格式 `{Pattern} L{degree} [...]`,wave_count 讀結構化欄)
+    "pattern_type_label",
     # Degree (B1 canonical)
     "DEGREE_ORDER", "DEGREE_RANK",
     "degree_rank", "classify_degree_by_years", "effective_degree",
@@ -151,22 +152,6 @@ def pattern_type_label(pattern_type: Any) -> str | None:
         return pattern_type
     return None
 
-
-def wave_count_from_label(label: str | None) -> int:
-    """從 structure_label 字串 regex 抽 `(\\d+)-wave`。回 0 if 無 match。
-
-    例:"5-wave from mw27 to mw31" → 5
-
-    **DEPRECATED(G2.4 契約協調,compaction v2 §7.4 / Q6)**:Scenario 已有
-    結構化 `wave_count` 欄,消費端應優先讀該欄、本函式僅作舊 snapshot
-    fallback;一個 release 後移除(屆時 structure_label 格式亦改
-    `{Pattern} L{degree_level} [...]`,本 regex 不再匹配)。
-    """
-    if not label:
-        return 0
-    import re
-    m = re.search(r"(\d+)-wave", label)
-    return int(m.group(1)) if m else 0
 
 
 # ────────────────────────────────────────────────────────────

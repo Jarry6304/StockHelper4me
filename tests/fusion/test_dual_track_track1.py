@@ -39,7 +39,8 @@ def _make_scenario(
     power="StrongBullish",
     rules_passed=5,
     span_days=200,
-    structure_label="5-wave from mw1 to mw5",
+    structure_label="Impulse L1 [:5 :3 :5 :3 :5]",
+    wave_count=5,
     fib_zones=None,
     invalidation_triggers=None,
 ):
@@ -48,6 +49,7 @@ def _make_scenario(
         "power_rating": power,
         "rules_passed_count": rules_passed,
         "structure_label": structure_label,
+        "wave_count": wave_count,
         "wave_tree": {
             "start": str(date(2024, 1, 1)),
             "end": str(date(2024, 1, 1) + timedelta(days=span_days)),
@@ -411,7 +413,7 @@ class TestReadTrack1:
         assert t1.pattern_type == "Impulse"
         assert t1.direction == "bullish"
         assert t1.effective_degree == "Minute"
-        assert t1.wave_count == 5  # 從 structure_label "5-wave ..." parse
+        assert t1.wave_count == 5  # Scenario 結構化欄(compaction v2 §7.4 / Q6)
         assert len(t1.fib_lines) == 2
         # 升序
         assert t1.fib_lines[0].price == 90.0

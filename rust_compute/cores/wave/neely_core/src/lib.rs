@@ -10,7 +10,8 @@
 //                       (其他章節 domain-specific enums,§十四 禁止抽象)
 //   - **Stage 1**:Monowave Detection — **Hybrid OHLC ((H+L)/2 mid_price)** + Wilder ATR-filtered reversal
 //   - **Stage 2**:Rule of Neutrality(個股 ATR / TAIEX %)+ Rule of Proportion metrics
-//   - **Stage 3**:Bottom-up Candidate Generator(滑窗 wave_count ∈ {3,5} + alternation filter + beam_width cap)
+//   - **Stage 3**:Bottom-up Candidate Generator(滑窗 + alternation filter + round_beam_size×10 cap;
+//                  切換後為資訊性路徑 — detour 註記與 Level-0 拒絕診斷,不 materialize scenario)
 //   - **Stage 3.5**:Pattern Isolation 6-step procedure + Zigzag DETOUR Test(Phase 3)
 //   - **Stage 0** (Phase 2):Ch3 Pre-Constructive Logic 200+ branch if-else
 //                            + StructureLabel candidates 落地
@@ -25,11 +26,10 @@
 //   - **Stage 8**:Three Rounds nested parent context(Triangle 內部 in_triangle_context)
 //                  + Round 3 暫停偵測(`awaiting_l_label` / `round3_pause`)+ Forest 上限保護
 //                  (BeamSearchFallback 雙重排序 PowerRating level + rules_passed_count;Phase 8 / P0 Gate v2)
-//   - **Stage 8 / Compaction**:v3.7 遞迴迴圈(exhaustive::compact 逐 level 跑
-//                  three_rounds::aggregate_one_level 弱比對)+ G2.0 止血
-//                  (m3Spec/neely_compaction_v2.md §8:P1 相鄰性硬檢查 / P3 Σ(children) 計數);
-//                  缺陷 D-4 / D-5 未修、D-1~D-3 止血非根治 — 完整缺陷表見 v2 規格 §1.2,
-//                  tiling-round 引擎(G2.1+)為取代路徑
+//   - **Stage 8 / Compaction**:Compaction v2 tiling-round 引擎(G2.4 切換,
+//                  m3Spec/neely_compaction_v2.md r4 §5/§7:base tiling → W1–W7 階梯 →
+//                  round 迴圈 → §7.1 凍結 + forest_max_size 護欄);
+//                  v3.7 exhaustive/three_rounds 弱比對路徑已依 §3.3 刪除
 //   - **Stage 9a**:Missing Wave 完整偵測(P2 MissingWaveBundle + MissingWavePosition 分類;Phase 9)
 //   - **Stage 9b**:Ch12 Emulation 完整偵測(4 種 EmulationKind;Phase 9)
 //   - **Stage 10a**:Ch10 Power Rating r5 查表(±3..±3 7 級,寫死);
@@ -128,10 +128,10 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "1.0.1",
+        "1.1.0",
         core_registry::CoreKind::Wave,
         "P0",
-        "Neely Wave Core(P0 Gate 通過 1.0.1 / NEoWave 完整體系 + Phase 13-19 spec alignment + stage_elapsed_us μs 精度 + circular bootstrap fix)",
+        "Neely Wave Core(NEoWave 完整體系;Compaction v2 tiling-round serving — P0 Gate v3 收案切換,spec r4)",
     )
 }
 
@@ -259,7 +259,13 @@ impl WaveCore for NeelyCore {
         //     fallback,打破新 listing 股票永遠跑不到 Phase 4 的 circular miss
         // (3)P0 Gate runbook §6.1.1 補完 troubleshooting + §8 六檔限定 metadata SQL
         //     寫進 docs/benchmarks/neely_p0_gate_followup.sql)
-        "1.0.1"
+        // 1.0.1 → 1.1.0(Compaction v2 切換 — 2026-08-27,P0 Gate v3 收案後:
+        // serving forest 改由 tiling-round 引擎凍結產出(spec r4 §5/§7),
+        // 刪 exhaustive/three_rounds 舊路徑;structure_label 新格式
+        // `{Pattern} L{degree} [{child slots}]`(Q6);diagnostics 換欄
+        // shadow_compaction → compaction_v2。
+        // Gate 報告:docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md)
+        "1.1.0"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -340,42 +346,44 @@ impl WaveCore for NeelyCore {
             }
         }
 
-        // ── Stage 5:Classifier(M3 PR-4)
-        let stage_5_start = Instant::now();
-        let mut scenarios: Vec<_> = wave_candidates
-            .iter()
-            .zip(validation_reports.iter())
-            .filter_map(|(cand, rep)| classifier::classify(cand, rep, &classified))
-            .collect();
-        stage_elapsed.insert(
-            "stage_5_classifier".to_string(),
-            stage_5_start.elapsed().as_micros() as u64,
+        // ── Stage 8:Compaction v2 tiling-round 引擎(G2.4 切換後 serving;
+        //    m3Spec/neely_compaction_v2.md §3.3 D2 / §5 / §7)。
+        //    Stage 5/6/7 之視窗級角色已收編入階梯(Classifier → W6、
+        //    Post-Constructive → W6 後把關、Complexity → 凍結後套用);
+        //    Stage 3/4 保留為資訊性路徑(detour 註記 + Level-0 拒絕診斷),
+        //    不再 materialize scenario。
+        let stage_8_start = Instant::now();
+        let compaction_v2 = compaction::round_engine::run(
+            &classified,
+            &input.bars,
+            &pattern_bounds,
+            input.timeframe,
+            cfg,
         );
-
-        // ── Stage 6:Post-Constructive Validator(Phase 6 PR — Ch6 兩階段確認)
-        //    對齊 m3Spec/neely_rules.md §Ch6(1763-1797 行)
-        let stage_6_start = Instant::now();
-        scenarios.retain(|s| post_validator::post_validate(s, &classified).pattern_complete);
         stage_elapsed.insert(
-            "stage_6_post_validator".to_string(),
-            stage_6_start.elapsed().as_micros() as u64,
+            "stage_8_compaction".to_string(),
+            stage_8_start.elapsed().as_micros() as u64,
         );
+        // §4.1:W5 拒絕視窗的完整 RuleRejection 併入 diagnostics(Level-N 覆蓋)
+        all_rejections.extend(compaction_v2.w5_rejections.iter().cloned());
+        let compaction_timeout_flag = compaction_v2.diagnostics.timed_out;
+        let mut forest = compaction_v2.forest;
 
-        // ── Stage 7:Complexity Rule 篩選(M3 PR-4)
+        // ── Stage 7:Complexity Rule 篩選(§7.1 步驟 3:輸入改凍結後 forest)
         let stage_7_start = Instant::now();
-        scenarios = complexity::apply_complexity_rule(scenarios);
+        forest = complexity::apply_complexity_rule(forest);
         stage_elapsed.insert(
             "stage_7_complexity".to_string(),
             stage_7_start.elapsed().as_micros() as u64,
         );
 
-        // ── Stage 7.5:Channeling + Ch9 Advanced Rules(Phase 7 PR)
-        //    對齊 m3Spec/neely_rules.md §Ch5 Channeling + §Ch9 Basic Neely Extensions
-        //    諮詢性 stage — 寫 AdvisoryFinding 進 scenario.advisory_findings,不過濾 scenarios
+        // ── Stage 7.5:Channeling + Ch9 Advanced Rules(凍結後照跑,§4.3)
+        //    諮詢性 stage — 追加 AdvisoryFinding 進 scenario.advisory_findings
+        //    (§6.1 邊界重評 finding 已於凍結掛載),不過濾 scenarios
         let stage_7_5_start = Instant::now();
-        advanced_rules::run(&mut scenarios, &classified);
+        advanced_rules::run(&mut forest, &classified);
         // Phase 17:StructuralFacts 3 sub-fields(post-Stage 7.5,需 advisory_findings + bars)
-        for scenario in scenarios.iter_mut() {
+        for scenario in forest.iter_mut() {
             scenario.structural_facts.channeling =
                 classifier::structural_facts::channeling(&scenario.advisory_findings);
             scenario.structural_facts.gap_count = classifier::structural_facts::gap_count(
@@ -394,36 +402,6 @@ impl WaveCore for NeelyCore {
             "stage_7_5_advanced_rules".to_string(),
             stage_7_5_start.elapsed().as_micros() as u64,
         );
-
-        // ── Stage 8:Compaction(v3.7 遞迴迴圈 + G2.0 止血 + Forest 上限保護;
-        //    m3Spec/neely_compaction_v2.md §8)
-        // v4.4a:提前構建 monowave_series 給 compaction(Level-0 magnitude 真實 lookup)
-        let monowave_series_for_compaction: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
-        let stage_8_start = Instant::now();
-        let compaction_result = compaction::compact(scenarios, &monowave_series_for_compaction, cfg);
-        stage_elapsed.insert(
-            "stage_8_compaction".to_string(),
-            stage_8_start.elapsed().as_micros() as u64,
-        );
-
-        // ── Stage 8s:Compaction v2 tiling-round 引擎 shadow 雙軌(G2.1;
-        //    m3Spec/neely_compaction_v2.md §3.3)。僅寫 diagnostics,serving forest
-        //    不受影響;Gate v3 通過後一個 PR 內切換並刪舊路徑。
-        let stage_8s_start = Instant::now();
-        let shadow_compaction = compaction::round_engine::run_shadow(
-            &classified,
-            &compaction_result.forest,
-            &input.bars,
-            &pattern_bounds,
-            input.timeframe,
-            cfg,
-        );
-        stage_elapsed.insert(
-            "stage_8s_compaction_v2_shadow".to_string(),
-            stage_8s_start.elapsed().as_micros() as u64,
-        );
-
-        let mut forest = compaction_result.forest;
 
         // v4.7.1 G1.1:Compaction-after pattern_isolation validation(spec Step 5)
         // 對 Stage 3.5 isolated bounds 重對 forest scenarios 邊界匹配 → 設 validated=true
@@ -455,51 +433,16 @@ impl WaveCore for NeelyCore {
             }
         }
 
-        // ── Stage 8.5:Three Rounds nested context + Round 3 暫停偵測(Phase 8 PR)
-        //    對齊 m3Spec/neely_rules.md §Three Rounds + §Ch10 三角內 Power = 0 例外
+        // ── Stage 8.5:Round 3 暫停偵測(§5.3:判定規則沿用 three_rounds::apply,
+        //    輸入 = 凍結後 forest 末端狀態)。in_triangle_context(真包含血緣)、
+        //    pattern_isolation_anchors(A-10 union)、round_state(Round2)已於
+        //    凍結填值;此處僅依 pause 結果覆寫 Round3Pause。
         let stage_8_5_start = Instant::now();
         let round3_pause = three_rounds::apply(&mut forest);
-        // Phase 15:依 three_rounds 結果 + pattern_bounds 寫入 Scenario 群 2 fields
-        // round_state 推導:awaiting → Round3Pause / compacted_base reassigned → Round2 / else → Round1
         for scenario in forest.iter_mut() {
-            scenario.round_state = if scenario.awaiting_l_label {
-                output::RoundState::Round3Pause
-            } else {
-                // Phase 6 Compaction Reassessment 已重派 compacted_base_label;
-                // 若已重派且非預設 → Round2;else Round1。
-                // 簡化:當 forest 來自 Stage 8 後,compaction 已走過 → 視為 Round2;
-                //       對齊 spec §Ch4 「Round 2 = Compaction 後重評」。
-                output::RoundState::Round2
-            };
-            // pattern_isolation_anchors:從 pattern_bounds 過濾覆蓋 scenario 的 anchors
-            // 此處用 wave_tree.start/end 邊界對 PatternBound start_idx/end_idx 範圍比對
-            // (PatternBound 以 monowave index 計;classified 已有完整序列,wave_tree 是
-            // monowave date range)
-            scenario.pattern_isolation_anchors = pattern_bounds
-                .iter()
-                .filter(|pb| {
-                    // 若 scenario 對應的 monowave_idx 範圍與 PatternBound 範圍重疊 → 包含
-                    let pb_start_date = classified
-                        .get(pb.start_idx)
-                        .map(|m| m.monowave.start_date);
-                    let pb_end_date = classified
-                        .get(pb.end_idx)
-                        .map(|m| m.monowave.end_date);
-                    matches!(
-                        (pb_start_date, pb_end_date),
-                        (Some(s), Some(e))
-                            if s <= scenario.wave_tree.end
-                                && scenario.wave_tree.start <= e
-                    )
-                })
-                .map(|pb| output::PatternIsolationAnchor {
-                    start_idx: pb.start_idx,
-                    end_idx: pb.end_idx,
-                    start_label: pb.start_label,
-                    end_label: pb.end_label,
-                    validated: pb.validated,
-                })
-                .collect();
+            if scenario.awaiting_l_label {
+                scenario.round_state = output::RoundState::Round3Pause;
+            }
         }
         stage_elapsed.insert(
             "stage_8_5_three_rounds".to_string(),
@@ -529,6 +472,34 @@ impl WaveCore for NeelyCore {
         // 提前構建 monowave_series — Stage 10b/10c 需要從中反查 W1/W2 prices
         let monowave_series: Vec<_> = classified.iter().map(|c| c.monowave.clone()).collect();
 
+        // Stage 10b/10c 價位反查序列:monowave series + 節點端點合成項(§7.2
+        // 「W1/W2 價位取子節點端點」— 聚合節點與 Neutral 橋接合成葉的
+        // (start,end) 不對應單一 monowave,(日期精確比對必然 miss)以引擎
+        // 端點對照補合成 Monowave;僅供價位 lookup,不進 wire 輸出)
+        let existing_spans: std::collections::HashSet<(NaiveDate, NaiveDate)> = monowave_series
+            .iter()
+            .map(|m| (m.start_date, m.end_date))
+            .collect();
+        let mut price_lookup_series = monowave_series.clone();
+        for ((s, e), (sp, ep)) in &compaction_v2.node_endpoints {
+            if !existing_spans.contains(&(*s, *e)) {
+                price_lookup_series.push(output::Monowave {
+                    start_date: *s,
+                    end_date: *e,
+                    start_price: *sp,
+                    end_price: *ep,
+                    direction: if ep > sp {
+                        output::MonowaveDirection::Up
+                    } else if ep < sp {
+                        output::MonowaveDirection::Down
+                    } else {
+                        output::MonowaveDirection::Neutral
+                    },
+                    bar_indices: (0, 0),
+                });
+            }
+        }
+
         // ── Stage 10a:Power Rating 查表(M3 PR-6)
         let stage_10a_start = Instant::now();
         power_rating::apply_to_forest(&mut forest);
@@ -537,17 +508,18 @@ impl WaveCore for NeelyCore {
             stage_10a_start.elapsed().as_micros() as u64,
         );
 
-        // ── Stage 10b:Fibonacci 投影(Phase 10 — Internal + External 從 monowave price 投影)
+        // ── Stage 10b:Fibonacci 投影(W1 價位經 price_lookup_series 反查 —
+        //    含節點端點合成項,§7.2 輸入泛化)
         let stage_10b_start = Instant::now();
-        fibonacci::apply_to_forest(&mut forest, &monowave_series);
+        fibonacci::apply_to_forest(&mut forest, &price_lookup_series);
         stage_elapsed.insert(
             "stage_10b_fibonacci".to_string(),
             stage_10b_start.elapsed().as_micros() as u64,
         );
 
-        // ── Stage 10c:Invalidation Triggers 生成(Phase 10 — 從 monowave price 填實際 W1/W2 break level)
+        // ── Stage 10c:Invalidation Triggers 生成(W1/W2 break level 同上)
         let stage_10c_start = Instant::now();
-        triggers::apply_to_forest(&mut forest, &monowave_series);
+        triggers::apply_to_forest(&mut forest, &price_lookup_series);
         stage_elapsed.insert(
             "stage_10c_triggers".to_string(),
             stage_10c_start.elapsed().as_micros() as u64,
@@ -612,17 +584,17 @@ impl WaveCore for NeelyCore {
                 validator_reject_count,
                 rejections: all_rejections,
                 forest_size,
-                compaction_paths: compaction_result.compaction_paths,
-                overflow_triggered: compaction_result.overflow_triggered,
-                compaction_timeout: compaction_result.timeout_triggered,
+                compaction_paths: compaction_v2.collected_paths,
+                overflow_triggered: compaction_v2.overflow_triggered,
+                compaction_timeout: compaction_v2.diagnostics.timed_out,
                 stage_elapsed_us: stage_elapsed,
                 elapsed_ms,
-                shadow_compaction: Some(shadow_compaction),
+                compaction_v2: Some(compaction_v2.diagnostics),
                 ..Default::default()
             },
             rule_book_references: Vec::new(),
             insufficient_data: input.bars.len() < warmup,
-            compaction_timeout: compaction_result.timeout_triggered,
+            compaction_timeout: compaction_timeout_flag,
             pattern_bounds,
             detour_annotations,
             round3_pause,
@@ -685,7 +657,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "1.0.1");
+        assert_eq!(core.version(), "1.1.0");
     }
 
     // -------------------------------------------------------------
@@ -731,8 +703,6 @@ mod tests {
             "stage_3_candidates",
             "stage_3_5_pattern_isolation",
             "stage_4_validator",
-            "stage_5_classifier",
-            "stage_6_post_validator",
             "stage_7_complexity",
             "stage_7_5_advanced_rules",
             "stage_8_compaction",

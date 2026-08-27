@@ -14,8 +14,8 @@
 // Stage 3 也**不**檢查 R1-R7 等 Neely 規則 — 那是 Stage 4 Validator 的事
 // (neely §十)。
 //
-// beam_width 上限保護:候選數量超過 cfg.beam_width × 10 時 cap 住,避免 Stage 4
-// Validator 跑爆。實際 cap 值 P0 Gate 校準後可能調整。
+// 上限保護:候選數量超過 cfg.round_beam_size × 10 時 cap 住,避免 Stage 4
+// Validator 跑爆(compaction v2 §3.3 D2:cap 由 round_beam_size 承接)。
 //
 // 留後續 PR(對齊 m3Spec/neely_core_architecture.md §三):
 //   - generator.rs 進階:5-wave-of-3 嵌套(Combination 類型需要)
@@ -43,7 +43,8 @@ pub struct WaveCandidate {
 }
 
 /// 單一視窗 candidate 數量上限保護倍數。
-/// 實際 cap = `cfg.beam_width * BEAM_CAP_MULTIPLIER`,P0 Gate 校準後可能調。
+/// 實際 cap = `cfg.round_beam_size * BEAM_CAP_MULTIPLIER`(compaction v2 §3.3 D2:
+/// 舊 `beam_width` 移除後由 round_beam_size 承接)。
 const BEAM_CAP_MULTIPLIER: usize = 10;
 
 /// 從 Stage 2 classified monowaves 產生 wave candidates。
@@ -52,7 +53,7 @@ const BEAM_CAP_MULTIPLIER: usize = 10;
 ///   1. 過濾 Neutral
 ///   2. 對 wave_count ∈ {3, 5, 7, 11} 滑動取窗
 ///   3. 視窗內 direction 必須交替(Up-Down-Up... 或 Down-Up-Down...)
-///   4. 達 beam_width × 10 上限即停止繼續產生
+///   4. 達 round_beam_size × 10 上限即停止繼續產生
 pub fn generate_candidates(
     classified: &[ClassifiedMonowave],
     cfg: &NeelyEngineConfig,
@@ -69,7 +70,7 @@ pub fn generate_candidates(
         .map(|(i, _)| i)
         .collect();
 
-    let cap = cfg.beam_width.saturating_mul(BEAM_CAP_MULTIPLIER).max(1);
+    let cap = cfg.round_beam_size.saturating_mul(BEAM_CAP_MULTIPLIER).max(1);
     let mut candidates: Vec<WaveCandidate> = Vec::new();
 
     // 對每個 wave_count(3 / 5 / 7 / 11)滑窗
@@ -296,7 +297,7 @@ mod tests {
     fn beam_width_cap_limits_candidates() {
         // 製造大量 alternating monowaves,驗 P1a per-wave-count cap 生效
         let cfg = NeelyEngineConfig {
-            beam_width: 2, // cap = 2 × 10 = 20(每個 wave_count 各 20 額度)
+            round_beam_size: 2, // cap = 2 × 10 = 20(每個 wave_count 各 20 額度)
             ..NeelyEngineConfig::default()
         };
         // 30 個 alternating monowaves → 理論 wc=3 視窗 28 + wc=5 26 + wc=7 24 + wc=11 20 = 98;
@@ -313,7 +314,7 @@ mod tests {
         let cands = generate_candidates(&cms, &cfg);
         assert!(
             cands.len() <= 80,
-            "per-wave-count cap:每 wave_count ≤ beam_width × 10 = 20,4 個 wave_count 總計 ≤ 80,實際 {}",
+            "per-wave-count cap:每 wave_count ≤ round_beam_size × 10 = 20,4 個 wave_count 總計 ≤ 80,實際 {}",
             cands.len()
         );
         // 各 wave_count 各自不超過 cap

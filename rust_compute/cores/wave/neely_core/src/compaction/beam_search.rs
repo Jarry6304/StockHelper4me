@@ -3,7 +3,7 @@
 // 對齊 m3Spec/neely_core_architecture.md §十二(Forest 上限保護機制)。
 //
 // 觸發條件:
-//   - exhaustive Compaction 後 forest.len() > cfg.forest_max_size
+//   - Compaction v2 凍結後 forest.len() > cfg.forest_max_size(§7.1 步驟 4)
 //   - cfg.overflow_strategy == OverflowStrategy::BeamSearchFallback { k }
 //
 // 演算法:

@@ -37,7 +37,6 @@ from fusion._picker import (
     pattern_type_label as _pattern_type_label,
     power_rating_label as _power_rating_label,
     power_rating_strength as _power_rating_strength,
-    wave_count_from_label as _wave_count_from_label,
 )
 
 # B1:track1 既有 _DEGREE_RANK 名稱保留為 alias(wave_impulse_screen 等 caller
@@ -354,10 +353,9 @@ def read_track1(
     power_label = _power_rating_label(primary.get("power_rating"))
     degree = _effective_degree(primary)
     structure_label = primary.get("structure_label") or primary.get("id")
-    # G2.4 契約協調(compaction v2 §7.4):優先讀結構化 wave_count 欄;
-    # 舊 snapshot 無此欄時退 structure_label 字串 parse(deprecated,一個
-    # release 後移除 — spec Q6)
-    wave_count = primary.get("wave_count") or _wave_count_from_label(structure_label)
+    # compaction v2 §7.4 / Q6:wave_count 只讀結構化欄(字串 parse 已移除;
+    # structure_label 新格式 `{Pattern} L{degree} [...]` 僅供顯示)
+    wave_count = int(primary.get("wave_count") or 0)
 
     # Fib zones — primary 優先,fallback flat_fib_zones
     zones = primary.get("expected_fib_zones") or []

@@ -1,25 +1,26 @@
-// round_engine.rs — Compaction v2 tiling-round 引擎(G2.3:重評 / 真算 / 細分)
+// round_engine.rs — Compaction v2 tiling-round 引擎(G2.4 切換後 serving 路徑)
 //
-// 對齊 m3Spec/neely_compaction_v2.md:
+// 對齊 m3Spec/neely_compaction_v2.md(r4):
 //   §2.2 不變量 I1–I6 / §3.1 目標架構 / §4 try_all_neely 七階梯 / §4.4 W6 分岔 /
-//   §5 round 引擎 / §6 Round 2 Reassessment / §9.3 shadow 比對 / §12 Q1/Q3 收案。
+//   §5 round 引擎 / §6 Round 2 Reassessment / §7 凍結流程(§7.1/§7.2)。
 //
-// G2.1(骨架)+ G2.2(全階梯)+ G2.3(本輪)已落地:
+// 構成:
 //   - 基礎設施:Rc 節點、base tiling(Neutral 合成葉橋接)、round 迴圈、dedup、
 //     beam、`level_cap_hit`(A-8)
-//   - 階梯:W1(I2 防衛)/ W2(I5 閉合表 + **A-9 Flat 七變體 / CombinationKind
-//     細分,與 classifier 量值版核心同源**)/ W3(交替)/ W4(S&B)/
-//     W5(Ch5 Validator 端點泛化,§4.3)/ W6(3-3-3-3-3 分岔判別,§4.4,
-//     D-5 修復 — Terminal Impulse 以 Diagonal 表徵)/ W7(Fib² 全相鄰對)
+//   - 階梯:W1(I2 防衛)/ W2(I5 閉合表 + A-9 Flat 七變體 / CombinationKind
+//     細分,與 classifier 量值版核心同源)/ W3(交替)/ W4(S&B)/
+//     W5(Ch5 Validator 端點泛化,§4.3 族別閘門)/ W6(3-3-3-3-3 分岔判別,
+//     §4.4,D-5 — Terminal Impulse 以 Diagonal 表徵)/ W7(Fib² 全相鄰對)
 //   - **§6.1 邊界波重評**(D-4):真鄰居 magnitude 三檔判定(Pass / Info /
-//     Warning),不拒絕聚合;shadow 期計數觀測
+//     Warning),不拒絕聚合;Info/Warning 於凍結掛 AdvisoryFinding(Ch4_Round2)
 //   - **§6.2 Complexity 真算 + Triplexity**、**§6.3 Degree ceiling 錨定對映**、
-//     **A-10 anchors union vs 現行 overlap 近似**(收集 forest 統計)
-//   - Q3 bars 反查為判準(2026-08-26 拍板;q3_* 保留為殘差觀測);Q1 雙軌定案
-//     (符號鏈 = 首子波 → `synth_window` 之 `window[0].net_direction`;
-//     幾何鏈 = 節點 net → W3)
-//   - **shadow 雙軌**(§3.3):輸出僅寫 `NeelyDiagnostics.shadow_compaction`,
-//     serving forest 完全不受影響;Gate v3 通過後才切換
+//     **A-10 anchors union**(凍結填 `pattern_isolation_anchors`)
+//   - Q3 bars 反查為判準(q3_* 保留為殘差觀測);Q1 → A-11 雙軌定案
+//     (符號鏈 = 首子節點 → `initial_direction`;幾何鏈 = 節點 net → W3)
+//   - **§7.1 凍結**:收集(I6 全 tilings、degree ≥ 1、canonical 去重)→
+//     每節點一 Scenario(§7.2 逐欄)→ 護欄(forest_max_size /
+//     BeamSearchFallback)原樣。shadow 雙軌與 §9.3 召回比對機制已隨
+//     P0 Gate v3 收案(2026-08-27,docs/benchmarks)移除
 //
 // 工程注意:
 //   - W5 端點介面:每視窗合成 ClassifiedMonowave(端點價 / duration_bars /
@@ -40,9 +41,11 @@ use crate::classifier;
 use crate::config::NeelyEngineConfig;
 use crate::monowave::{ClassifiedMonowave, ProportionMetrics};
 use crate::output::{
-    Certainty, Degree, DiagonalKind, MonowaveDirection, NeelyPatternType, OhlcvBar, PatternBound,
-    RuleId, Scenario, ShadowCompactionDiagnostics, StructureLabel, StructureLabelCandidate,
-    TriangleKind, WaveNode, ZigzagKind,
+    AdvisoryFinding, AdvisorySeverity, Certainty, ComplexityLevel, CompactionV2Diagnostics,
+    Degree, DiagonalKind, MonowaveDirection, MonowaveStructureLabels, NeelyPatternType, OhlcvBar,
+    PatternBound, PatternIsolationAnchor, PostBehavior, RoundState, RuleId, RuleRejection,
+    Scenario, StructuralFacts, StructureLabel, StructureLabelCandidate, TriangleKind, WaveNode,
+    ZigzagKind,
 };
 use crate::power_rating;
 use crate::validator::{self, ValidationReport};
@@ -698,35 +701,63 @@ fn boundary_tier(a_mag: f64, b_mag: f64) -> Option<BoundaryTier> {
     }
 }
 
+/// 單一 parent 節點掛載的 §6.1 AdvisoryFinding 上限(同節點跨 tiling 鄰居
+/// 不同,逐 splice 判定;去重後仍設硬上限防 JSONB 膨脹)。
+const BOUNDARY_FINDINGS_CAP: usize = 4;
+
 /// §6.1:聚合成功後,parent 於其 tiling 取真實前後鄰居 m(−1) / m(+1),
 /// 對 (|m(−1)|, parent 首子波) 與 (parent 末子波, |m(+1)|) 各判一次。
-/// shadow 期以計數觀測;凍結時之 AdvisoryFinding 掛載屬 tiling 語境
-/// (同節點跨 tiling 鄰居不同),留 G2.4 收集階段處理。
+/// Info / Warning 記 AdvisoryFinding(Ch4_Round2)於凍結時掛載對應 Scenario
+/// (依 parent canonical 收集;同節點跨 tiling 鄰居不同 → 訊息去重 + 上限)。
 fn boundary_reassess(
     prev: Option<&Rc<CompactionNode>>,
     parent: &Rc<CompactionNode>,
     next: Option<&Rc<CompactionNode>>,
-    diag: &mut ShadowCompactionDiagnostics,
+    diag: &mut CompactionV2Diagnostics,
+    findings: &mut HashMap<String, Vec<AdvisoryFinding>>,
 ) {
     let sides = [
         (
+            "prev-neighbor vs first sub-wave",
             prev.map(|p| p.price_magnitude()),
             parent.children.first().map(|c| c.price_magnitude()),
         ),
         (
+            "last sub-wave vs next-neighbor",
             parent.children.last().map(|c| c.price_magnitude()),
             next.map(|n| n.price_magnitude()),
         ),
     ];
-    for (a, b) in sides {
+    for (side, a, b) in sides {
         match (a, b) {
             (Some(a), Some(b)) => match boundary_tier(a, b) {
                 Some(tier) => {
                     diag.boundary_pairs_checked += 1;
-                    match tier {
-                        BoundaryTier::Pass => {}
-                        BoundaryTier::Info => diag.boundary_advisory_info += 1,
-                        BoundaryTier::Warning => diag.boundary_advisory_warning += 1,
+                    let severity = match tier {
+                        BoundaryTier::Pass => continue,
+                        BoundaryTier::Info => {
+                            diag.boundary_advisory_info += 1;
+                            AdvisorySeverity::Info
+                        }
+                        BoundaryTier::Warning => {
+                            diag.boundary_advisory_warning += 1;
+                            AdvisorySeverity::Warning
+                        }
+                    };
+                    let message = format!(
+                        "boundary reassessment ({}): magnitude ratio {:.3} outside S&B [0.382, 2.618]",
+                        side,
+                        a / b
+                    );
+                    let entry = findings.entry(parent.canonical.clone()).or_default();
+                    if entry.len() < BOUNDARY_FINDINGS_CAP
+                        && !entry.iter().any(|f| f.message == message)
+                    {
+                        entry.push(AdvisoryFinding {
+                            rule_id: RuleId::Ch4_Round2_Compaction,
+                            severity,
+                            message,
+                        });
                     }
                 }
                 None => diag.boundary_sides_skipped += 1,
@@ -915,14 +946,18 @@ fn q3_compare(window: &[Rc<CompactionNode>]) -> Option<bool> {
 // 階梯組裝
 // ---------------------------------------------------------------------------
 
-/// 唯一視窗計數(memo 命中不重計;§4.1 失敗記錄的 shadow 版 — 完整 RuleRejection
-/// 留 G2.4 切換時進 NeelyDiagnostics.rejections,shadow 期以計數觀測)。
+/// 每檔收錄的 W5 拒絕 RuleRejection 上限(§4.1;唯一視窗語意,防 JSONB 膨脹)。
+const W5_REJECTION_RECORDS_CAP: usize = 64;
+
+/// 唯一視窗計數(memo 命中不重計)。W5 拒絕視窗的完整 RuleRejection(§4.1)
+/// 收錄至 `w5_rejection_records`,由 caller 併入 `NeelyDiagnostics.rejections`。
 #[derive(Debug, Default)]
 struct LadderCounters {
     w1_violations: usize,
     w5_rejected_windows: usize,
     q3_windows: usize,
     q3_flips: usize,
+    w5_rejection_records: Vec<RuleRejection>,
 }
 
 struct LadderOutcome {
@@ -1001,8 +1036,15 @@ fn try_ladder(window: &[Rc<CompactionNode>], counters: &mut LadderCounters) -> L
         .filter(|k| k.base != StructureLabel::Five || report.overall_pass)
         .collect();
     if kinds.is_empty() {
-        // 視窗曾有候選但全數被 W5 擋下 → 唯一視窗拒絕計數(§4.1 shadow 版)
+        // 視窗曾有候選但全數被 W5 擋下 → 唯一視窗拒絕計數 + 完整 RuleRejection
+        // (§4.1「完整保留拒絕原因」的 Level-N 覆蓋;上限防膨脹)
         counters.w5_rejected_windows += 1;
+        for rej in &report.failed {
+            if counters.w5_rejection_records.len() >= W5_REJECTION_RECORDS_CAP {
+                break;
+            }
+            counters.w5_rejection_records.push(rej.clone());
+        }
         return LadderOutcome::empty();
     }
     LadderOutcome {
@@ -1254,8 +1296,27 @@ pub fn check_invariants(
 }
 
 // ---------------------------------------------------------------------------
-// Shadow 主入口(§5.2 主迴圈 + §9.3 比對計數)
+// 主入口(§5.2 主迴圈 + §7 凍結)
 // ---------------------------------------------------------------------------
+
+/// Compaction v2 切換版結果(§7.1 凍結流程產物)。
+pub struct CompactionV2Result {
+    /// 凍結後 serving forest(§7.2 逐欄;forest_max_size 護欄後)
+    pub forest: Vec<Scenario>,
+    pub diagnostics: CompactionV2Diagnostics,
+    /// 節點端點價對照:(start_date, end_date) → (start_price, end_price)。
+    /// 聚合節點與 Neutral 橋接合成葉的 (start,end) 不對應單一 monowave,
+    /// Stage 10b/10c 的價位反查改以此表為第一優先(§7.2「W1/W2 價位取
+    /// 子節點端點」),monowave 精確比對退為 fallback
+    pub node_endpoints: HashMap<(NaiveDate, NaiveDate), (f64, f64)>,
+    /// W5 拒絕視窗的完整 RuleRejection(§4.1;caller 併入
+    /// `NeelyDiagnostics.rejections`)
+    pub w5_rejections: Vec<RuleRejection>,
+    /// forest_max_size 護欄觸發(§7.1 步驟 4)
+    pub overflow_triggered: bool,
+    /// 收集節點數(護欄剪枝前;`NeelyDiagnostics.compaction_paths`)
+    pub collected_paths: usize,
+}
 
 /// round 內 splice 候選(輕量 spec;兩階段生成的第一階段產物,不 materialize)。
 struct SpliceSpec {
@@ -1282,24 +1343,23 @@ fn splice_score(
     (power, passed, degree)
 }
 
-/// 跑 tiling-round 引擎(shadow):產 diagnostics,不動 serving forest。
-/// `old_forest` 供 §9.3 召回計數;`bars` 供 Q3 bars 反查判準(空 = 退端點);
-/// `pattern_bounds` 供 A-10 anchors union 觀測;`timeframe` 供 §6.3 Degree
+/// 跑 tiling-round 引擎並凍結 serving forest(§5.2 主迴圈 + §7.1/§7.2)。
+/// `bars` 供 Q3 bars 反查判準(空 = 退端點);`pattern_bounds` 供 A-10 anchors
+/// union(凍結填 `pattern_isolation_anchors`);`timeframe` 供 §6.3 Degree
 /// ceiling 錨定(與 Stage 11 同式推導)。
-pub fn run_shadow(
+pub fn run(
     classified: &[ClassifiedMonowave],
-    old_forest: &[Scenario],
     bars: &[OhlcvBar],
     pattern_bounds: &[PatternBound],
     timeframe: Timeframe,
     cfg: &NeelyEngineConfig,
-) -> ShadowCompactionDiagnostics {
+) -> CompactionV2Result {
     let start = Instant::now();
     let timeout = std::time::Duration::from_secs(cfg.compaction_timeout_secs);
 
     let base = build_base_tiling(classified, bars);
-    let mut diag = ShadowCompactionDiagnostics {
-        engine: "tiling-round-g2.4".to_string(),
+    let mut diag = CompactionV2Diagnostics {
+        engine: "tiling-round-v2".to_string(),
         base_tiling_len: base.nodes.len(),
         neutral_bridged: base.bridged,
         leading_neutral_dropped: base.leading_dropped,
@@ -1315,8 +1375,6 @@ pub fn run_shadow(
         node_count_by_level: HashMap::new(),
         node_count_by_pattern: HashMap::new(),
         invariant_violations: InvariantCounters::default().to_map(),
-        old_forest_scenarios: old_forest.len(),
-        old_forest_matched: 0,
         boundary_pairs_checked: 0,
         boundary_advisory_info: 0,
         boundary_advisory_warning: 0,
@@ -1325,18 +1383,24 @@ pub fn run_shadow(
         triplexity_nodes: 0,
         degree_map: HashMap::new(),
         degree_clamped_levels: 0,
-        degree1_node_keys: Vec::new(),
-        recall_miss_by_stage: HashMap::new(),
-        recall_miss_examples: Vec::new(),
-        anchors_union_total: 0,
-        anchors_overlap_total: 0,
         elapsed_us: 0,
     };
 
     if base.nodes.len() < 3 {
         diag.tiling_count = usize::from(!base.nodes.is_empty());
         diag.elapsed_us = start.elapsed().as_micros() as u64;
-        return diag;
+        return CompactionV2Result {
+            forest: Vec::new(),
+            diagnostics: diag,
+            node_endpoints: base
+                .nodes
+                .iter()
+                .map(|l| ((l.start_date, l.end_date), (l.start_price, l.end_price)))
+                .collect(),
+            w5_rejections: Vec::new(),
+            overflow_triggered: false,
+            collected_paths: 0,
+        };
     }
 
     // I1 覆蓋條款依據:base tiling 的 [t₀, t_N](beam 可能淘汰 base tiling,先存)
@@ -1346,7 +1410,7 @@ pub fn run_shadow(
         .zip(base.nodes.last())
         .map(|(f, l)| (f.start_date, l.end_date));
     let base_key = tiling_key(&base.nodes);
-    // 召回驗屍(G2.4)需要 base 葉序列;Rc clone 廉價
+    // 端點對照表需要 base 葉序列(pool 所有權移轉前留存;Rc clone 廉價)
     let base_leaves: Vec<Rc<CompactionNode>> = base.nodes.clone();
     let mut pool: Vec<Tiling> = vec![Tiling { nodes: base.nodes }];
     let mut seen: HashSet<String> = HashSet::from([base_key]);
@@ -1354,9 +1418,11 @@ pub fn run_shadow(
     // W5/Q3 計數在 memo miss 時累計 = 唯一視窗語意)
     let mut memo: HashMap<String, Rc<LadderOutcome>> = HashMap::new();
     let mut counters = LadderCounters::default();
-    // 凍結收集(I6「全 tilings」,G2.4 修正):materialize 時累積,
-    // canonical 去重、Rc 共享;beam / branch cap 不限縮收集
+    // 凍結收集(I6「全 tilings」):materialize 時累積,canonical 去重、
+    // Rc 共享;beam / branch cap 不限縮收集
     let mut forest_nodes: HashMap<String, Rc<CompactionNode>> = HashMap::new();
+    // §6.1 Info/Warning → 凍結掛 AdvisoryFinding(依 parent canonical 收集)
+    let mut boundary_findings: HashMap<String, Vec<AdvisoryFinding>> = HashMap::new();
 
     // 工程護欄:round 內 materialize 的新分支上限(beam 只保 round_beam_size,
     // 超額 materialize 無意義;無上限實測 600-monowave 檔 3.1GB)。
@@ -1457,7 +1523,7 @@ pub fn run_shadow(
             // (advisory 三檔,不拒絕;同節點跨 tiling 鄰居不同 → 逐 splice 計)
             let prev = spec.s.checked_sub(1).map(|i| &t.nodes[i]);
             let next = t.nodes.get(spec.s + spec.w);
-            boundary_reassess(prev, &parent, next, &mut diag);
+            boundary_reassess(prev, &parent, next, &mut diag, &mut boundary_findings);
             // 新 tiling:視窗換 parent,其餘保留(Rc 指標串,不深拷貝)
             let mut nodes: Vec<Rc<CompactionNode>> = Vec::with_capacity(t.nodes.len() - spec.w + 1);
             nodes.extend(t.nodes[..spec.s].iter().cloned());
@@ -1495,11 +1561,10 @@ pub fn run_shadow(
     // 不變量檢查(I1–I5;I6 = 收集去重,materialize 時以 canonical HashMap 保證)
     let tiling_slices: Vec<&[Rc<CompactionNode>]> =
         pool.iter().map(|t| t.nodes.as_slice()).collect();
-    let counters = check_invariants(&tiling_slices, base_range);
-    diag.invariant_violations = counters.to_map();
+    let inv = check_invariants(&tiling_slices, base_range);
+    diag.invariant_violations = inv.to_map();
 
-    // 凍結收集(I6)已於 materialize 累積(全 tilings 語意,G2.4 修正);
-    // 此處僅統計 + 產 §9.3 diff 用鍵
+    // 收集節點統計(I6 已於 materialize 累積,全 tilings 語意)
     for n in forest_nodes.values() {
         *diag
             .node_count_by_level
@@ -1533,155 +1598,88 @@ pub fn run_shadow(
     diag.degree_map = degree_map;
     diag.degree_clamped_levels = clamped;
 
-    // A-10(G2.3):anchors 語意收緊觀測 — union(PatternBound 完整含於節點
-    // 覆蓋 monowave 範圍)vs 現行「日期範圍重疊即算」近似,收緊幅度供 Gate。
-    if !pattern_bounds.is_empty() {
-        let mw_bar_ranges: Vec<(usize, usize)> =
-            classified.iter().map(|c| c.monowave.bar_indices).collect();
-        for n in forest_nodes.values() {
-            for pb in pattern_bounds {
-                let (Some(pb_s), Some(pb_e)) =
-                    (mw_bar_ranges.get(pb.start_idx), mw_bar_ranges.get(pb.end_idx))
-                else {
-                    continue;
-                };
-                if pb_s.0 >= n.start_bar && pb_e.1 <= n.end_bar {
-                    diag.anchors_union_total += 1;
-                }
-                if pb_s.0 <= n.end_bar && n.start_bar <= pb_e.1 {
-                    diag.anchors_overlap_total += 1;
-                }
+    // ── §7.1 凍結 ──────────────────────────────────────────────────────
+    // in_triangle_context(§7.2 語意收緊):被任一 Triangle 節點**真包含**
+    // (樹血緣)才為 true — 標記所有 Triangle 節點的嚴格子孫 canonical
+    let mut in_triangle: HashSet<String> = HashSet::new();
+    for n in forest_nodes.values() {
+        if matches!(
+            &n.kind,
+            NodeKind::Pattern(NeelyPatternType::Triangle { .. })
+        ) {
+            for c in &n.children {
+                mark_subtree(c, &mut in_triangle);
             }
         }
     }
-
-    // §9.3 shadow 召回計數:舊 forest scenario 依 (start_bar, end_bar, pattern_tag)
-    // 對新引擎 **degree_level = 1** 節點匹配(spec §9.3 投影定義,精確 = 1 非 ≥ 1)。
-    // 舊 forest 內 Level ≥ 2 聚合結構上不可能被 degree-1 投影命中,屬 Gate 缺口
-    // diff 報告的預期類別。門檻在 Gate v3 全階梯後才適用,此處僅計數。
-    let (start_map, end_map) = build_date_bar_maps(classified);
-    let new_keys: HashSet<(usize, usize, String)> = forest_nodes
-        .values()
-        .filter(|n| n.degree_level == 1)
-        .map(|n| {
-            let tag = match &n.kind {
-                NodeKind::Pattern(pt) => pattern_tag(pt),
-                NodeKind::Leaf => "Leaf".to_string(),
-            };
-            (n.start_bar, n.end_bar, tag)
-        })
-        .collect();
-    // §9.3 逐檔 diff 資料源(G2.4):degree-1 鍵序列化進 diagnostics
-    let mut key_strs: Vec<String> = new_keys
-        .iter()
-        .map(|(s, e, tag)| format!("{}-{}:{}", s, e, tag))
-        .collect();
-    key_strs.sort();
-    diag.degree1_node_keys = key_strs;
-    // 召回驗屍(G2.4 Gate 第一輪揭露 absent 80-98% → 逐階段歸因):
-    // 每個未召回舊 scenario 對 base 葉序列找對齊視窗,重放階梯記第一個拒絕者
-    let leaf_start_idx: HashMap<usize, usize> = base_leaves
+    // 葉 → classified index 反查(monowave_structure_labels 用;Neutral 橋接
+    // 合成葉沿用其首 directional 段的 index — start_bar 不因橋接改變)
+    let leaf_classified_idx: HashMap<usize, usize> = classified
         .iter()
         .enumerate()
-        .map(|(i, n)| (n.start_bar, i))
+        .filter(|(_, c)| c.monowave.direction != MonowaveDirection::Neutral)
+        .map(|(i, c)| (c.monowave.bar_indices.0, i))
         .collect();
-    for sc in old_forest {
-        if let Some(key) = old_scenario_key(sc, &start_map, &end_map) {
-            if new_keys.contains(&key) {
-                diag.old_forest_matched += 1;
-                continue;
-            }
-            let (sb, eb, tag) = key;
-            let cat: &str = match leaf_start_idx.get(&sb) {
-                None => "no_aligned_start",
-                Some(&i) => {
-                    let mut j = i;
-                    let mut found = false;
-                    while j < base_leaves.len() && base_leaves[j].end_bar <= eb {
-                        if base_leaves[j].end_bar == eb {
-                            found = true;
-                            break;
-                        }
-                        j += 1;
-                    }
-                    if !found {
-                        "no_aligned_end"
-                    } else if !matches!(j - i + 1, 3 | 5 | 7 | 11) {
-                        "len_mismatch"
-                    } else {
-                        recall_autopsy_stage(&base_leaves[i..=j], &tag)
-                    }
-                }
-            };
-            *diag
-                .recall_miss_by_stage
-                .entry(cat.to_string())
-                .or_insert(0) += 1;
-            // 稀有/關鍵 stage 記案例鍵供離線驗屍(大宗類別已由分布歸因,不記)
-            const EXAMPLE_STAGES: [&str; 7] = [
-                "no_aligned_start",
-                "w1",
-                "w3",
-                "w5",
-                "w6",
-                "len_mismatch",
-                "accepted_but_not_collected",
-            ];
-            if EXAMPLE_STAGES.contains(&cat) && diag.recall_miss_examples.len() < 8 {
-                diag.recall_miss_examples
-                    .push(format!("{}:{}-{}:{}", cat, sb, eb, tag));
-            }
+    let mw_bar_ranges: Vec<(usize, usize)> =
+        classified.iter().map(|c| c.monowave.bar_indices).collect();
+
+    // 決定性排序後逐節點凍結(§7.2 id 可重現;同 (level,span,tag) 多子樹分解
+    // 以 -vN 尾碼消歧,N 依 canonical 序)
+    let mut nodes: Vec<&Rc<CompactionNode>> = forest_nodes.values().collect();
+    nodes.sort_by(|a, b| {
+        (a.start_bar, a.end_bar, a.degree_level, a.canonical.as_str())
+            .cmp(&(b.start_bar, b.end_bar, b.degree_level, b.canonical.as_str()))
+    });
+    let mut id_seen: HashMap<String, usize> = HashMap::new();
+    let mut frozen: Vec<Scenario> = Vec::with_capacity(nodes.len());
+    for n in &nodes {
+        if let Some(sc) = freeze_scenario(
+            n,
+            classified,
+            &leaf_classified_idx,
+            &mw_bar_ranges,
+            pattern_bounds,
+            &in_triangle,
+            &boundary_findings,
+            &mut id_seen,
+        ) {
+            frozen.push(sc);
         }
+    }
+    let collected_paths = frozen.len();
+
+    // §7.1 步驟 4 護欄(原樣):forest_max_size → BeamSearchFallback 雙重排序
+    // (凍結已預填 power_rating 引擎查表值,排序鍵非退化;Stage 10a 照跑覆寫)
+    let mut overflow_triggered = false;
+    let forest = if frozen.len() > cfg.forest_max_size {
+        match cfg.overflow_strategy {
+            crate::config::OverflowStrategy::BeamSearchFallback { k } => {
+                overflow_triggered = true;
+                super::beam_search::keep_top_k_by_power_rating(frozen, k)
+            }
+            crate::config::OverflowStrategy::Unbounded => frozen,
+        }
+    } else {
+        frozen
+    };
+
+    // 端點對照(collected nodes + base 葉;Stage 10b/10c 價位反查)
+    let mut node_endpoints: HashMap<(NaiveDate, NaiveDate), (f64, f64)> = HashMap::new();
+    for n in forest_nodes.values() {
+        node_endpoints.insert((n.start_date, n.end_date), (n.start_price, n.end_price));
+    }
+    for l in &base_leaves {
+        node_endpoints.insert((l.start_date, l.end_date), (l.start_price, l.end_price));
     }
 
     diag.elapsed_us = start.elapsed().as_micros() as u64;
-    diag
-}
-
-/// 召回驗屍(G2.4):對齊視窗重放接受階梯,回第一個拒絕階段;
-/// 全過但 tag 不同 → "tag_diff";全過且 tag 相同 → "accepted_but_not_collected"
-/// (= 收集 bug 指標,理論上不可達 — round 1 枚舉涵蓋全部 base 視窗)。
-/// 不動 LadderCounters(驗屍不計入唯一視窗統計)。
-fn recall_autopsy_stage(window: &[Rc<CompactionNode>], want_tag: &str) -> &'static str {
-    if !w1_adjacency(window) {
-        return "w1";
-    }
-    if !w3_alternating(window) {
-        return "w3";
-    }
-    if !w4_similarity_balance(window) {
-        return "w4";
-    }
-    if !w7_internal_extreme(window) {
-        return "w7";
-    }
-    let rows = w2_label_rows(window);
-    if rows.is_empty() {
-        return "w2_label";
-    }
-    let mut proposed: Vec<AcceptedKind> = Vec::new();
-    for row in rows {
-        match row {
-            RowMatch::Direct(k) => proposed.push(k),
-            RowMatch::ThreesFive => proposed.extend(w6_fork_threes_five(window)),
-        }
-    }
-    if proposed.is_empty() {
-        return "w6";
-    }
-    let (synth, candidate) = synth_window(window);
-    let report = validator::validate_candidate(&candidate, &synth);
-    let kinds: Vec<&AcceptedKind> = proposed
-        .iter()
-        .filter(|k| k.base != StructureLabel::Five || report.overall_pass)
-        .collect();
-    if kinds.is_empty() {
-        return "w5";
-    }
-    if kinds.iter().any(|k| pattern_tag(&k.pattern) == want_tag) {
-        "accepted_but_not_collected"
-    } else {
-        "tag_diff"
+    CompactionV2Result {
+        forest,
+        diagnostics: diag,
+        node_endpoints,
+        w5_rejections: counters.w5_rejection_records,
+        overflow_triggered,
+        collected_paths,
     }
 }
 
@@ -1698,32 +1696,261 @@ fn collect_pattern_nodes(
     }
 }
 
-fn build_date_bar_maps(
-    classified: &[ClassifiedMonowave],
-) -> (HashMap<NaiveDate, usize>, HashMap<NaiveDate, usize>) {
-    let mut start_map = HashMap::new();
-    let mut end_map = HashMap::new();
-    for cm in classified {
-        let mw = &cm.monowave;
-        start_map.entry(mw.start_date).or_insert(mw.bar_indices.0);
-        end_map.entry(mw.end_date).or_insert(mw.bar_indices.1);
+// ---------------------------------------------------------------------------
+// §7 凍結(CompactionNode → Scenario;§7.2 逐欄語意表)
+// ---------------------------------------------------------------------------
+
+/// 標記子樹全部節點 canonical(in_triangle_context 血緣判定用)。
+fn mark_subtree(n: &CompactionNode, out: &mut HashSet<String>) {
+    out.insert(n.canonical.clone());
+    for c in &n.children {
+        mark_subtree(c, out);
     }
-    (start_map, end_map)
 }
 
-/// 舊 forest scenario → (start_bar, end_bar, pattern_tag);wave_tree 日期經
-/// monowave 端點反查 bar(同 three_rounds `find_price_at_date` 的雙向偏好)。
-fn old_scenario_key(
-    sc: &Scenario,
-    start_map: &HashMap<NaiveDate, usize>,
-    end_map: &HashMap<NaiveDate, usize>,
-) -> Option<(usize, usize, String)> {
-    let tree: &WaveNode = &sc.wave_tree;
-    let start_bar = start_map
-        .get(&tree.start)
-        .or_else(|| end_map.get(&tree.start))?;
-    let end_bar = end_map.get(&tree.end).or_else(|| start_map.get(&tree.end))?;
-    Some((*start_bar, *end_bar, pattern_tag(&sc.pattern_type)))
+/// 節點樹的葉(in-order;monowave_structure_labels「覆蓋葉之全域 index 集」用)。
+fn collect_leaves<'a>(n: &'a CompactionNode, out: &mut Vec<&'a CompactionNode>) {
+    match &n.kind {
+        NodeKind::Leaf => out.push(n),
+        NodeKind::Pattern(_) => {
+            for c in &n.children {
+                collect_leaves(c, out);
+            }
+        }
+    }
+}
+
+fn direction_arrow(d: MonowaveDirection) -> char {
+    match d {
+        MonowaveDirection::Up => '↑',
+        MonowaveDirection::Down => '↓',
+        MonowaveDirection::Neutral => '·',
+    }
+}
+
+/// 葉在 parent 形態第 idx slot 的 base label(I5 表推定;§7.3「slot 推定」)。
+fn leaf_slot_base(pt: &NeelyPatternType, idx: usize) -> StructureLabel {
+    if five_slot_indices(pt).contains(&idx) {
+        StructureLabel::Five
+    } else {
+        StructureLabel::Three
+    }
+}
+
+fn slot_str(l: StructureLabel) -> &'static str {
+    if is_impulsive_label(l) {
+        ":5"
+    } else {
+        ":3"
+    }
+}
+
+/// §7.1 步驟 2:WaveNode 樹由 CompactionNode 樹一比一凍結。
+/// 聚合節點 base = Fixed label(I5);葉 base = parent 形態 slot 推定(§7.3)。
+fn freeze_wave_node(
+    n: &CompactionNode,
+    parent_pt: Option<&NeelyPatternType>,
+    idx_in_parent: usize,
+) -> WaveNode {
+    let arrow = direction_arrow(n.net_direction);
+    match &n.kind {
+        NodeKind::Pattern(pt) => WaveNode {
+            label: format!("{} L{}{}", pattern_tag(pt), n.degree_level, arrow),
+            start: n.start_date,
+            end: n.end_date,
+            degree_level: n.degree_level,
+            base_label: match &n.label {
+                NodeLabel::Fixed(l) => *l,
+                NodeLabel::LeafCandidates(_) => StructureLabel::Three,
+            },
+            children: n
+                .children
+                .iter()
+                .enumerate()
+                .map(|(i, c)| freeze_wave_node(c, Some(pt), i))
+                .collect(),
+        },
+        NodeKind::Leaf => {
+            let base = parent_pt
+                .map(|pt| leaf_slot_base(pt, idx_in_parent))
+                .unwrap_or(StructureLabel::Three);
+            WaveNode {
+                label: format!("W{} {}{}", idx_in_parent + 1, slot_str(base), arrow),
+                start: n.start_date,
+                end: n.end_date,
+                degree_level: 0,
+                base_label: base,
+                children: Vec::new(),
+            }
+        }
+    }
+}
+
+/// §6.2 Complexity level → 3-variant wire enum(0/1 Polywave 以下 → Simple、
+/// 2 Multiwave → Intermediate、3 Macrowave → Complex)。
+fn complexity_enum(level: usize) -> ComplexityLevel {
+    match level {
+        0 | 1 => ComplexityLevel::Simple,
+        2 => ComplexityLevel::Intermediate,
+        _ => ComplexityLevel::Complex,
+    }
+}
+
+/// §7.2:單一收集節點 → Scenario(23 欄)。
+/// Stage 7.5 / 10a / 10b / 10c 於凍結後照跑補 advisory(Ch5/Ch9)/ power /
+/// fib zones / triggers;此處填凍結真值與 classify-time 同源欄。
+#[allow(clippy::too_many_arguments)]
+fn freeze_scenario(
+    node: &Rc<CompactionNode>,
+    classified: &[ClassifiedMonowave],
+    leaf_classified_idx: &HashMap<usize, usize>,
+    mw_bar_ranges: &[(usize, usize)],
+    pattern_bounds: &[PatternBound],
+    in_triangle: &HashSet<String>,
+    boundary_findings: &HashMap<String, Vec<AdvisoryFinding>>,
+    id_seen: &mut HashMap<String, usize>,
+) -> Option<Scenario> {
+    let NodeKind::Pattern(pt) = &node.kind else {
+        return None; // 收集節點皆 pattern(degree ≥ 1);防衛
+    };
+    let tag = pattern_tag(pt);
+    // §7.2 id:`cmp{level}-b{start_bar}-b{end_bar}-{pattern_tag}`(可重現、
+    // 不含隨機);同鍵多子樹分解以 -vN 尾碼消歧(N 依凍結決定性序)
+    let base_id = format!(
+        "cmp{}-b{}-b{}-{}",
+        node.degree_level, node.start_bar, node.end_bar, tag
+    );
+    let n_dup = id_seen
+        .entry(base_id.clone())
+        .and_modify(|c| *c += 1)
+        .or_insert(1);
+    let id = if *n_dup == 1 {
+        base_id
+    } else {
+        format!("{}-v{}", base_id, n_dup)
+    };
+
+    // A-11 符號鏈:initial_direction = 首**子節點**方向(± 號的 wave-a 逆勢假設)
+    let initial_direction = node
+        .children
+        .first()
+        .map(|c| c.net_direction)
+        .unwrap_or(node.net_direction);
+    let compacted_base = match &node.label {
+        NodeLabel::Fixed(l) => *l,
+        NodeLabel::LeafCandidates(_) => StructureLabel::Three,
+    };
+
+    let wave_tree = freeze_wave_node(node, None, 0);
+    // structure_label 新格式(Q6 起算):`{Pattern} L{degree} [{child slots}]`
+    let slots: Vec<&str> = wave_tree
+        .children
+        .iter()
+        .map(|c| slot_str(c.base_label))
+        .collect();
+    let structure_label = format!("{} L{} [{}]", tag, node.degree_level, slots.join(" "));
+
+    // W5 報告(try_ladder 已同源推導 passed;§7.2「Level-N 為真值」)
+    let (passed, deferred) = node
+        .validation
+        .as_ref()
+        .map(|v| (v.passed.clone(), v.deferred.clone()))
+        .unwrap_or_default();
+
+    // structural_facts:子節點端點合成視窗餵既有量值版 fns(輸入泛化,§7.2)
+    let (synth, candidate) = synth_window(&node.children);
+    let structural_facts = StructuralFacts {
+        fibonacci_alignment: classifier::structural_facts::fibonacci_alignment(
+            &candidate, &synth,
+        ),
+        alternation: node.validation.as_ref().and_then(|r| {
+            classifier::structural_facts::alternation(&candidate, &synth, r)
+        }),
+        time_relationship: classifier::structural_facts::time_relationship(&candidate, &synth),
+        overlap_pattern: classifier::structural_facts::overlap_pattern(&candidate, &synth),
+        extension_subdivision_pair: classifier::structural_facts::extension_subdivision_pair(
+            &candidate, &synth,
+        ),
+        // channeling / volume_alignment / gap_count 於 Stage 7.5 後補(需 bars)
+        channeling: None,
+        volume_alignment: None,
+        gap_count: 0,
+    };
+
+    // monowave_structure_labels:聚合節點記覆蓋葉之全域 classified index 集
+    // (葉層 Pre-Constructive 候選沿用;Pass 2 refill 依 classified_index)
+    let mut leaves: Vec<&CompactionNode> = Vec::new();
+    collect_leaves(node, &mut leaves);
+    let monowave_structure_labels: Vec<MonowaveStructureLabels> = leaves
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| {
+            leaf_classified_idx
+                .get(&l.start_bar)
+                .map(|&ci| MonowaveStructureLabels {
+                    monowave_index: i,
+                    classified_index: ci,
+                    labels: classified[ci].structure_label_candidates.clone(),
+                    pass1_only_labels: Vec::new(),
+                })
+        })
+        .collect();
+
+    // A-10:anchors = 覆蓋葉 union 語意(PatternBound 完整含於節點覆蓋
+    // monowave bar 範圍);「日期範圍重疊即算」近似廢除(§7.2)
+    let pattern_isolation_anchors: Vec<PatternIsolationAnchor> = pattern_bounds
+        .iter()
+        .filter(|pb| {
+            matches!(
+                (mw_bar_ranges.get(pb.start_idx), mw_bar_ranges.get(pb.end_idx)),
+                (Some(s), Some(e)) if s.0 >= node.start_bar && e.1 <= node.end_bar
+            )
+        })
+        .map(|pb| PatternIsolationAnchor {
+            start_idx: pb.start_idx,
+            end_idx: pb.end_idx,
+            start_label: pb.start_label,
+            end_label: pb.end_label,
+            validated: pb.validated,
+        })
+        .collect();
+
+    // power_rating 凍結預填(引擎同表查值,護欄排序鍵非退化);
+    // Stage 10a 照跑覆寫(含 in_triangle_context 例外),§7.2
+    let power = power_rating::table::lookup_power_rating(pt, initial_direction, false);
+
+    Some(Scenario {
+        id,
+        wave_count: node.children.len(),
+        wave_tree,
+        pattern_type: pt.clone(),
+        initial_direction,
+        compacted_base_label: compacted_base,
+        structure_label,
+        complexity_level: complexity_enum(node_complexity(node)),
+        power_rating: power,
+        max_retracement: None,
+        post_pattern_behavior: PostBehavior::Unconstrained,
+        rules_passed_count: passed.len(),
+        deferred_rules_count: deferred.len(),
+        passed_rules: passed,
+        deferred_rules: deferred,
+        invalidation_triggers: Vec::new(),
+        expected_fib_zones: Vec::new(),
+        structural_facts,
+        advisory_findings: boundary_findings
+            .get(&node.canonical)
+            .cloned()
+            .unwrap_or_default(),
+        in_triangle_context: in_triangle.contains(&node.canonical),
+        awaiting_l_label: false,
+        monowave_structure_labels,
+        // §5.3:凍結節點已完成 Round 2(AcceptedPattern 建構 + §6.1 重評);
+        // Round3Pause 由 Stage 8.5 依 forest 末端狀態覆寫
+        round_state: RoundState::Round2,
+        pattern_isolation_anchors,
+        triplexity_detected: triplexity_detected(node),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1832,7 +2059,7 @@ mod tests {
     #[test]
     fn shadow_impulse_chain_aggregates_with_zero_invariant_violations() {
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
         assert_eq!(diag.base_tiling_len, 5);
         assert!(diag.rounds_run >= 1, "應至少發生一輪聚合");
         assert!(!diag.timed_out);
@@ -1853,7 +2080,7 @@ mod tests {
         let mut classified = impulse_chain();
         classified.push(cm(25, 30, 121.0, 109.0, Down, &[Three]));
         classified.push(cm(30, 55, 109.0, 139.0, Up, &[Five]));
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0);
         assert!(diag.rounds_run >= 2, "round 2 應發生(rounds_run = {})", diag.rounds_run);
@@ -1873,7 +2100,7 @@ mod tests {
         classified.push(cm(30, 55, 109.0, 139.0, Up, &[Five]));
         let mut c = cfg();
         c.max_compaction_levels = 1;
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &c);
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &c).diagnostics;
         assert_eq!(diag.rounds_run, 1);
         assert!(diag.level_cap_hit, "round 1 仍有聚合但被上限截斷 → level_cap_hit");
     }
@@ -1881,7 +2108,7 @@ mod tests {
     #[test]
     fn shadow_converges_without_cap_hit_when_no_more_aggregation() {
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
         assert!(
             !diag.level_cap_hit,
             "零聚合收斂(Round 3 暫停)不得標 level_cap_hit"
@@ -1893,7 +2120,7 @@ mod tests {
         let classified = impulse_chain();
         let mut c = cfg();
         c.round_beam_size = 2;
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &c);
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &c).diagnostics;
         assert!(diag.tiling_count <= 2, "pool 超過 round_beam_size 應被 beam 截斷");
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0);
@@ -1904,7 +2131,7 @@ mod tests {
         use MonowaveDirection::Up;
         use StructureLabel::Five;
         let classified = vec![cm(0, 5, 100.0, 110.0, Up, &[Five])];
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
         assert_eq!(diag.base_tiling_len, 1);
         assert_eq!(diag.rounds_run, 0);
         assert!(diag.node_count_by_level.is_empty());
@@ -1922,7 +2149,7 @@ mod tests {
             cm(15, 20, 116.0, 109.0, Down, &[Five, Three]),
             cm(20, 25, 109.0, 121.0, Up, &[Five, Three]),
         ];
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
         // degree-1 節點應同時含 Impulse 路徑與 Triangle 路徑(+ Zigzag/Flat 子窗)
         let level1 = diag.node_count_by_level.get("1").copied().unwrap_or(0);
         assert!(level1 >= 4, "多解視窗應產多個 degree-1 節點,got {}", level1);
@@ -2259,7 +2486,8 @@ mod tests {
         }
         let c = cfg();
         let started = std::time::Instant::now();
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &c);
+        let res = run(&classified, &[], &[], Timeframe::Daily, &c);
+        let diag = res.diagnostics;
         assert!(
             started.elapsed().as_secs() < 10,
             "60 段稠密鏈必須在秒級完成(護欄失效 = 分支爆炸)"
@@ -2273,16 +2501,16 @@ mod tests {
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0, "護欄截斷不得產生不變量違反");
         assert_eq!(
-            diag.degree1_node_keys.len(),
-            *diag.node_count_by_level.get("1").unwrap_or(&0),
-            "degree-1 diff 鍵數應等於 degree-1 收集數"
+            res.collected_paths,
+            diag.node_count_by_level.values().sum::<usize>(),
+            "凍結 scenario 數(護欄前)應等於收集節點數"
         );
         // G2.4 收集語意修正:branch cap / beam 不得限縮收集(I6 全 tilings)。
         // 縮 beam 至 1(cap = 8):materialize 每輪僅 8 分支、pool 收斂 1 條,
         // 但 round-1 接受的唯一解讀遠超 8 — 收集數必須大於 cap
         let mut c_small = cfg();
         c_small.round_beam_size = 1;
-        let diag_small = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &c_small);
+        let diag_small = run(&classified, &[], &[], Timeframe::Daily, &c_small).diagnostics;
         let collected_small: usize = diag_small.node_count_by_level.values().sum();
         assert!(
             diag_small.round_branch_cap_hits >= 1,
@@ -2296,62 +2524,49 @@ mod tests {
     }
 
     #[test]
-    fn old_forest_recall_matches_by_bar_range_and_pattern() {
-        use crate::output::{
-            ComplexityLevel, PostBehavior, PowerRating, RoundState, StructuralFacts,
-        };
+    fn freeze_produces_spec_72_scenarios() {
+        use crate::output::RoundState;
         let classified = impulse_chain();
-        // 造一個舊 forest scenario:日期範圍 = 新引擎 Zigzag [0..3](bar 0..15)
-        let old = Scenario {
-            wave_count: 0,
-            id: "old-zz".to_string(),
-            wave_tree: WaveNode {
-                degree_level: 0,
-                base_label: crate::output::StructureLabel::Three,
-                label: "zz".to_string(),
-                start: date("2026-01-01"),
-                end: date("2026-01-16"),
-                children: Vec::new(),
-            },
-            pattern_type: NeelyPatternType::Zigzag {
-                sub_kind: ZigzagKind::Single,
-            },
-            initial_direction: MonowaveDirection::Up,
-            compacted_base_label: StructureLabel::Three,
-            structure_label: "zz".to_string(),
-            complexity_level: ComplexityLevel::Simple,
-            power_rating: PowerRating::Neutral,
-            max_retracement: None,
-            post_pattern_behavior: PostBehavior::Unconstrained,
-            passed_rules: Vec::new(),
-            deferred_rules: Vec::new(),
-            rules_passed_count: 0,
-            deferred_rules_count: 0,
-            invalidation_triggers: Vec::new(),
-            expected_fib_zones: Vec::new(),
-            structural_facts: StructuralFacts::default(),
-            advisory_findings: Vec::new(),
-            in_triangle_context: false,
-            awaiting_l_label: false,
-            monowave_structure_labels: Vec::new(),
-            round_state: RoundState::Round1,
-            pattern_isolation_anchors: Vec::new(),
-            triplexity_detected: false,
-        };
-        let diag = run_shadow(&classified, &[old], &[], &[], Timeframe::Daily, &cfg());
-        assert_eq!(diag.old_forest_scenarios, 1);
-        assert_eq!(
-            diag.old_forest_matched, 1,
-            "同 (bar 範圍, pattern) 的舊 scenario 應被召回;levels={:?}",
-            diag.node_count_by_level
-        );
+        let res = run(&classified, &[], &[], Timeframe::Daily, &cfg());
+        assert!(!res.forest.is_empty(), "impulse_chain 應凍結出 scenario");
+        assert_eq!(res.collected_paths, res.forest.len(), "未觸護欄時凍結數 = 收集數");
+        for sc in &res.forest {
+            // §7.2 id:cmp{level}-b{s}-b{e}-{tag}(可重現)
+            assert!(
+                sc.id.starts_with(&format!("cmp{}-b", sc.wave_tree.degree_level)),
+                "id 格式:{}",
+                sc.id
+            );
+            // §7.4:wave_count = 頂層 children 數
+            assert_eq!(sc.wave_count, sc.wave_tree.children.len());
+            assert!(sc.wave_tree.degree_level >= 1, "收集節點 degree ≥ 1");
+            // structure_label 新格式(Q6):`{Pattern} L{degree} [...]`
+            assert!(
+                sc.structure_label.contains(&format!(" L{} [", sc.wave_tree.degree_level)),
+                "structure_label 新格式:{}",
+                sc.structure_label
+            );
+            // §5.3:凍結節點已完成 Round 2
+            assert!(matches!(sc.round_state, RoundState::Round2));
+            // A-11 符號鏈:initial_direction = 首子節點方向
+            assert!(!sc.wave_tree.children.is_empty());
+        }
+        // 端點對照涵蓋每個凍結 scenario 的 (start, end)(Stage 10b/10c 反查用)
+        for sc in &res.forest {
+            assert!(
+                res.node_endpoints
+                    .contains_key(&(sc.wave_tree.start, sc.wave_tree.end)),
+                "凍結 scenario 端點必須在對照表:{}",
+                sc.id
+            );
+        }
     }
 
     #[test]
     fn dedup_same_aggregation_reached_twice_counted_once() {
         // impulse_chain 的 Zigzag [0..3] 在多輪間可被重複生成;seen dedup 應保唯一
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
         // node_count_by_level 以 canonical 去重;Impulse+2 Zigzag = 3(不因分支重複膨脹)
         assert_eq!(diag.node_count_by_level.get("1"), Some(&3));
     }
@@ -2517,7 +2732,7 @@ mod tests {
     #[test]
     fn boundary_reassess_counts_on_impulse_chain() {
         let classified = impulse_chain();
-        let diag = run_shadow(&classified, &[], &[], &[], Timeframe::Daily, &cfg());
+        let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
         assert_eq!(diag.boundary_pairs_checked, 2);
         assert_eq!(diag.boundary_sides_skipped, 4);
         assert_eq!(diag.boundary_advisory_info, 0);
@@ -2679,10 +2894,10 @@ mod tests {
         assert_eq!(clamped, 1);
     }
 
-    // ── G2.3:A-10 anchors union vs 現行 overlap 近似 ────────────────────
+    // ── A-10:anchors union 語意(凍結填 pattern_isolation_anchors)────────
 
     #[test]
-    fn a10_anchors_union_tighter_than_overlap() {
+    fn a10_anchors_union_on_frozen_scenarios() {
         use StructureLabel::Three;
         let pb = |s: usize, e: usize| PatternBound {
             start_idx: s,
@@ -2693,20 +2908,37 @@ mod tests {
             forced_corrective: false,
         };
         // forest = Impulse [bars 0..25] + Zigzag [0..15] + Zigzag [10..25]
-        // pb(0,2) = bars 0..15:union 含於 Impulse + Z1(2);overlap 加 Z2(3)
-        // pb(3,4) = bars 15..25:union 含於 Impulse + Z2(2);overlap 加 Z1(3)
+        // pb(0,2) = bars 0..15:union 語意含於 Impulse + Z1;Z2(bars 10..25)
+        // 僅重疊不包含 → 不得掛載(舊「日期重疊即算」近似廢除,§7.2)
         let classified = impulse_chain();
         let bounds = [pb(0, 2), pb(3, 4)];
-        let diag = run_shadow(&classified, &[], &[], &bounds, Timeframe::Daily, &cfg());
-        assert_eq!(diag.engine, "tiling-round-g2.4");
-        assert_eq!(diag.anchors_union_total, 4);
-        assert_eq!(diag.anchors_overlap_total, 6);
+        let res = run(&classified, &[], &bounds, Timeframe::Daily, &cfg());
+        let diag = &res.diagnostics;
+        assert_eq!(diag.engine, "tiling-round-v2");
+        let total_anchors: usize = res
+            .forest
+            .iter()
+            .map(|s| s.pattern_isolation_anchors.len())
+            .sum();
+        assert_eq!(total_anchors, 4, "union 語意:兩 bound 各掛 2 個 scenario");
+        // 全跨度 Impulse 完整包含兩個 bound
+        let impulse = res
+            .forest
+            .iter()
+            .find(|s| matches!(s.pattern_type, NeelyPatternType::Impulse))
+            .expect("五段鏈應凍結出 Impulse");
+        assert_eq!(impulse.pattern_isolation_anchors.len(), 2);
         // §6.3:空 bars → ceiling "no data" = SubMicro;max_level 1 錨定 →
         // level 1 = SubMicro、level 0 超下界夾 SubMicro(clamped 1)
         assert_eq!(diag.degree_map.get("1").map(String::as_str), Some("SubMicro"));
         assert_eq!(diag.degree_clamped_levels, 1);
-        // §6.2:degree-1 節點(children 全葉)complexity 全 1
+        // §6.2:degree-1 節點(children 全葉)complexity 全 1;凍結後
+        // complexity_level 對映 Simple
         assert_eq!(diag.complexity_count_by_level.get("1"), Some(&3));
         assert_eq!(diag.triplexity_nodes, 0);
+        assert!(res
+            .forest
+            .iter()
+            .all(|s| matches!(s.complexity_level, crate::output::ComplexityLevel::Simple)));
     }
 }
