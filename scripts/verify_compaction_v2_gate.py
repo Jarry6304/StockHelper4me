@@ -215,6 +215,8 @@ def main() -> int:
     recall_num = 0
     recall_den = 0
     miss_by_stage = Counter()
+    miss_stage_stocks: dict = {}  # stage -> 前幾檔 stock_id(稀有 stage 定位用)
+    engine_stocks: dict = {}  # engine -> 前幾檔 stock_id(stale engine 定位用)
     low_recall: list[tuple[str, int, int]] = []
     inv_stocks: list[str] = []
 
@@ -224,7 +226,11 @@ def main() -> int:
         if not d:
             missing += 1
             continue
-        engines[d.get("engine", "?")] += 1
+        eng = d.get("engine", "?")
+        engines[eng] += 1
+        lst = engine_stocks.setdefault(eng, [])
+        if len(lst) < 10:
+            lst.append(stock_id)
         inv = sum((d.get("invariant_violations") or {}).values())
         inv_total += inv
         if inv:
@@ -252,6 +258,9 @@ def main() -> int:
         q3_flips += d.get("q3_flips", 0)
         for k, v in (d.get("recall_miss_by_stage") or {}).items():
             miss_by_stage[k] += v
+            slst = miss_stage_stocks.setdefault(k, [])
+            if len(slst) < 8:
+                slst.append(stock_id)
         den = d.get("old_forest_scenarios", 0)
         num = d.get("old_forest_matched", 0)
         recall_num += num
@@ -273,6 +282,11 @@ def main() -> int:
     print()
     print(f"stocks: {stocks}(no shadow diagnostics: {missing})")
     print(f"engines: {dict(engines)}")
+    if len(engines) > 1:
+        modal_engine = engines.most_common(1)[0][0]
+        for eng, cnt in engines.items():
+            if eng != modal_engine:
+                print(f"  - stale engine {eng}({cnt} 檔,前 10):{engine_stocks.get(eng, [])}")
     print()
     print("## 硬性門檻")
     gates: list[tuple[str, bool, str]] = [
@@ -322,7 +336,10 @@ def main() -> int:
         print()
         print("## §9.3 召回驗屍(未召回舊 scenario 的第一個拒絕階段)")
         for k, v in miss_by_stage.most_common():
-            print(f"- {k}: {v} ({v / total_miss:.1%})")
+            locate = ""
+            if v <= 50:  # 稀有 stage 直接給檔號,免掃全表找案例
+                locate = f" — 檔:{miss_stage_stocks.get(k, [])}"
+            print(f"- {k}: {v} ({v / total_miss:.1%}){locate}")
     print()
     print("## Pattern 分布(top 15)")
     for k, v in pattern_counts.most_common(15):
