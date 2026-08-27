@@ -77,9 +77,9 @@ pub fn classify(
         mi[mi.len() - 1]
     );
 
-    let wave_tree = build_wave_tree(candidate, classified);
-
     let compacted_base = compaction_base_label(&pattern_type);
+
+    let wave_tree = build_wave_tree(candidate, classified, &pattern_type, compacted_base);
 
     // Phase 15:Scenario 群 2 fields 從現有 pipeline output 萃取
     let monowave_structure_labels = build_monowave_structure_labels(candidate, classified);
@@ -104,8 +104,19 @@ pub fn classify(
     // Stage 8 (three_rounds::apply) 之後由 lib.rs::compute 套 post-classifier 寫入(類似
     // power_rating::apply_to_forest 模式)。
 
+    // G2.2:passed 清單先行推導(report.passed ∪ default_passed_rules 反推),
+    // 供 passed_rules 與 rules_passed_count 同源填值
+    let derived_passed: Vec<RuleId> = report
+        .passed
+        .iter()
+        .cloned()
+        .chain(default_passed_rules(candidate, report))
+        .collect();
+
     Some(Scenario {
         id: candidate.id.clone(),
+        // G2.4 §7.4:結構化 wave 數(= wave_tree 頂層 children 數;fusion 改讀此欄)
+        wave_count: candidate.wave_count,
         wave_tree,
         pattern_type,
         initial_direction,
@@ -115,14 +126,13 @@ pub fn classify(
         power_rating: PowerRating::Neutral, // Stage 10a Power Rating 查表後填
         max_retracement: None,               // Stage 10a 補
         post_pattern_behavior: PostBehavior::Unconstrained,
-        passed_rules: report
-            .passed
-            .iter()
-            .cloned()
-            .chain(default_passed_rules(candidate, report))
-            .collect(),
+        passed_rules: derived_passed.clone(),
         deferred_rules: report.deferred.clone(),
-        rules_passed_count: report.passed.len(),
+        // G2.2 修復(compaction v2「Level-N 規則欄真值」附帶):count 與 passed_rules
+        // 同源 — 原 `report.passed.len()` 恆 0(validator Pass 分支不記 passed,
+        // 清單靠 default_passed_rules 反推),兩欄長期不一致,BeamSearch 鍵 2 與
+        // 下游排序鍵在 production 全 0 失效
+        rules_passed_count: derived_passed.len(),
         deferred_rules_count: report.deferred.len(),
         invalidation_triggers: Vec::<Trigger>::new(), // Stage 10c triggers 補
         expected_fib_zones: Vec::<FibZone>::new(),    // Stage 10b Fibonacci 補
@@ -313,10 +323,16 @@ fn classify_3wave_segment(
             sub_kind: ZigzagKind::Single,
         };
     }
-    let a_mag = classified[mi[0]].metrics.magnitude;
-    let b_mag = classified[mi[1]].metrics.magnitude;
-    let c_mag = classified[mi[2]].metrics.magnitude;
+    classify_3wave_mags(
+        classified[mi[0]].metrics.magnitude,
+        classified[mi[1]].metrics.magnitude,
+        classified[mi[2]].metrics.magnitude,
+    )
+}
 
+/// 量值版 3-wave 分類核心 — monowave 級與 Level-N 節點級(compaction v2
+/// round_engine,A-9 同源要求)共用;「波」介面泛化為 a/b/c magnitude。
+pub(crate) fn classify_3wave_mags(a_mag: f64, b_mag: f64, c_mag: f64) -> NeelyPatternType {
     // 1. Running Correction 上提頂層(spec r5 line 1161 + spec line 2035)
     if flat_classifier::is_running_correction(a_mag, b_mag, c_mag) {
         return NeelyPatternType::RunningCorrection;
@@ -383,7 +399,7 @@ fn x_wave_is_large(
 /// Table A(小 x-wave):允許 Zigzag 構成段。
 /// Table B(大 x-wave):構成段只能 Flat —— 任一為 Zigzag → None
 /// (對齊 m3Spec/neely_rules.md Ch8 Table B 修正:大 x-wave 場景不可出現 Zigzag)。
-fn map_double_combination(
+pub(crate) fn map_double_combination(
     kind_a: &NeelyPatternType,
     kind_b: &NeelyPatternType,
     large_x: bool,
@@ -445,7 +461,7 @@ fn classify_11wave_combination(
 /// Table A(小 x-wave):允許 Zigzag 構成段。
 /// Table B(大 x-wave):構成段只能 Flat —— 任一為 Zigzag → None
 /// (對齊 m3Spec/neely_rules.md Ch8 Table B 修正)。
-fn map_triple_combination(
+pub(crate) fn map_triple_combination(
     kind_a: &NeelyPatternType,
     kind_b: &NeelyPatternType,
     kind_c: &NeelyPatternType,
@@ -498,7 +514,12 @@ fn classify_complexity(candidate: &WaveCandidate) -> ComplexityLevel {
     }
 }
 
-fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave]) -> WaveNode {
+fn build_wave_tree(
+    candidate: &WaveCandidate,
+    classified: &[ClassifiedMonowave],
+    pattern: &NeelyPatternType,
+    root_base: StructureLabel,
+) -> WaveNode {
     let mi = &candidate.monowave_indices;
     let start = classified[mi[0]].monowave.start_date;
     let end = classified[mi[mi.len() - 1]].monowave.end_date;
@@ -526,6 +547,11 @@ fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave])
                 label,
                 start: mw.start_date,
                 end: mw.end_date,
+                // G2.4 §7.3:葉 = monowave leg(degree 0);base 取 Stage 0
+                // Primary 候選,無 Primary 依 pattern slot 推定
+                degree_level: 0,
+                base_label: leg_base_label(idx, classified)
+                    .unwrap_or_else(|| slot_base_label(pattern, i)),
                 children: Vec::new(),
             }
         })
@@ -535,7 +561,39 @@ fn build_wave_tree(candidate: &WaveCandidate, classified: &[ClassifiedMonowave])
         label,
         start,
         end,
+        // G2.4 §7.3:Level-0 scenario 的 root = 形態層(degree 1 over monowave legs)
+        degree_level: 1,
+        base_label: root_base,
         children,
+    }
+}
+
+/// G2.4 §7.3 helper:leg 的 Stage 0 Primary 結構標籤(無 Primary → None)。
+fn leg_base_label(
+    classified_idx: usize,
+    classified: &[ClassifiedMonowave],
+) -> Option<StructureLabel> {
+    use crate::output::Certainty;
+    classified[classified_idx]
+        .structure_label_candidates
+        .iter()
+        .find(|c| matches!(c.certainty, Certainty::Primary))
+        .map(|c| c.label)
+}
+
+/// G2.4 §7.3 helper:依 pattern 的 `:5` slot 位置推定 leg base(無 Primary 時
+/// 的 fallback;Triangle / Combination / Diagonal children 全 `:3`)。
+fn slot_base_label(pattern: &NeelyPatternType, leg_idx: usize) -> StructureLabel {
+    let five_slots: &[usize] = match pattern {
+        NeelyPatternType::Impulse => &[0, 2, 4],
+        NeelyPatternType::Zigzag { .. } => &[0, 2],
+        NeelyPatternType::Flat { .. } | NeelyPatternType::RunningCorrection => &[2],
+        _ => &[],
+    };
+    if five_slots.contains(&leg_idx) {
+        StructureLabel::Five
+    } else {
+        StructureLabel::Three
     }
 }
 
@@ -577,7 +635,9 @@ fn format_wave_node_label(
 
 /// 預設 passed rule list(report.passed 目前 PR-3b 沒填,本 helper 從 deferred / failed 反推)。
 /// P4 / P5 補完整 validator 後可移除。
-fn default_passed_rules(
+/// G2.2:開 pub(crate) 供 compaction::round_engine 的 W5 端點泛化共用同一推導
+/// (shadow Level-N 的 rules 計數與 Level-0 同源,beam 鍵 2 才可比)。
+pub(crate) fn default_passed_rules(
     candidate: &WaveCandidate,
     report: &ValidationReport,
 ) -> Vec<RuleId> {
@@ -832,6 +892,22 @@ mod tests {
         assert!(matches!(scenario.complexity_level, ComplexityLevel::Intermediate));
         assert_eq!(scenario.id, "c5-mw0-mw4");
         assert_eq!(scenario.wave_tree.children.len(), 5);
+    }
+
+    #[test]
+    fn rules_passed_count_matches_passed_rules_len() {
+        // G2.2 修復回歸鎖:count 與 passed_rules 同源 — 原 `report.passed.len()`
+        // 恆 0(validator Pass 分支不記 passed),兩欄長期不一致,
+        // BeamSearch 鍵 2 與下游排序鍵在 production 全 0 失效
+        let classified = make_5wave_impulse_classified();
+        let candidate = make_candidate_5wave_starting_at(0);
+        let report = make_impulse_report();
+        let scenario = classify(&candidate, &report, &classified).expect("應產生 Scenario");
+        assert_eq!(scenario.rules_passed_count, scenario.passed_rules.len());
+        assert!(
+            scenario.rules_passed_count > 0,
+            "5-wave 過驗 candidate 的 passed 反推不應為 0"
+        );
     }
 
     #[test]

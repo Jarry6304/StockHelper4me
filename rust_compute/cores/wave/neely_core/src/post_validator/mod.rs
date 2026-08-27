@@ -703,8 +703,11 @@ mod tests {
     fn make_minimal_scenario() -> Scenario {
         let date = NaiveDate::parse_from_str("2026-01-01", "%Y-%m-%d").unwrap();
         Scenario {
+            wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: "test".to_string(),
                 start: date,
                 end: date,

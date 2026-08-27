@@ -94,8 +94,11 @@ mod tests {
     fn make_scenario(pattern: NeelyPatternType) -> Scenario {
         let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         Scenario {
+            wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {
+                degree_level: 0,
+                base_label: crate::output::StructureLabel::Three,
                 label: "test".to_string(),
                 start: date,
                 end: date,

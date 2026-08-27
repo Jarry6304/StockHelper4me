@@ -364,3 +364,25 @@ cd ..
 
 ---
 
+
+## DB 維護實測 — facts stats 修復 + 索引觀察(2026-08-27)
+
+背景:2026-08-26 全市場 `run-all --write` 爆到 **480 min**(歷史量級 ~2.5h),
+行程 CPU 佔用僅 ~9%(concurrency 8)→ DB-bound;非 neely 回歸
+(shadow 全市場 Σ 僅 49.5s,見 neely-compaction-v2.md Gate 節)。
+
+跑 `scripts/maintain_facts_stats.sql`(psql 不在 PATH,psycopg runner;
+**陷阱**:`\echo` 等 psql 專用行須逐行剝除,且不可用「語句塊以 `--` 開頭」
+判斷跳過 — 首輪誤跳最關鍵的 `ANALYZE facts` / `VACUUM facts`):
+
+- **主嫌確認**:`facts`(23.7M rows)`last_autoanalyze = 2026-08-22`,
+  **五天未更新** — 對齊 v3.19 root cause(stats 過期 → `uq_facts_dedup`
+  ON CONFLICT 選錯 plan → worker 排隊)。ANALYZE + VACUUM 已補
+  (2026-08-27 08:22);dead tuples 非因素(facts 0%、snapshots 7.9%)。
+- **觀察項 1**:`uq_facts_dedup` **2702 MB**(同表 pkey 僅 508 MB;寬鍵
+  6 欄含 md5 解釋部分,5× 差距有 bloat 嫌疑)— 若排程仍慢,
+  `REINDEX INDEX CONCURRENTLY uq_facts_dedup`(不長鎖)是下一步。
+- **觀察項 2(drop 拍板項)**:兩顆 `idx_scan = 0` 零使用索引 —
+  `idx_facts_metadata_gin` 557 MB、`idx_facts_severity_date` 158 MB,
+  純寫入負擔。
+- 驗收:下一次排程 run-all wall time(預期回 ~2.5h 量級)。

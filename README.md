@@ -8,7 +8,7 @@
 
 | 指標 | 值 |
 |---|---|
-| Rust | 50 crates / 647 tests |
+| Rust | 50 crates / 688 tests |
 | Python | 973 tests passed |
 | MCP | 14 public tools |
 | Universe | ~2,172 stocks × 41 cores |
@@ -30,6 +30,7 @@
 | **`m3Spec/`** | M3 Cores 層 spec(13 份,涵蓋 indicator / pattern / chip / fundamental / environment / neely / agg layer)|
 |   `m3Spec/neely_core_architecture.md` | Neely Wave Core(P0)架構,r6(v3.6 RuleId enum 76 variants)|
 |   `m3Spec/neely_rules.md` | Neely 25+ 條規則 + Three Rounds + Power Rating 完整對照表 |
+|   `m3Spec/neely_compaction_v2.md` | Compaction v2 tiling-round 引擎規格 r3(G2.x 進行中;歷程 `docs/changelog/neely-compaction-v2.md`)|
 |   `m3Spec/cores_overview.md` | 各 Core 共用設計 + 「禁止抽象」原則 + dirty queue 契約 |
 |   `m3Spec/aggregation_layer.md` | Aggregation Layer 規格 r3(v3.8 per-timeframe lookback)|
 | `docs/api_pipeline_reference.md` | collector.toml entry × Bronze schema × code path 索引 |

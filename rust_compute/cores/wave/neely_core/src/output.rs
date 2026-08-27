@@ -328,6 +328,105 @@ pub struct NeelyDiagnostics {
     pub elapsed_ms: u64,
     /// 峰值記憶體(P0 Gate 校準用)
     pub peak_memory_mb: u64,
+    /// G2.1(m3Spec/neely_compaction_v2.md §3.3):Compaction v2 tiling-round 引擎
+    /// shadow 雙軌診斷。serving forest 不受影響;G2.4 切換刪舊後本欄退役。
+    /// JSONB 加欄相容:舊消費端忽略未知欄。
+    pub shadow_compaction: Option<ShadowCompactionDiagnostics>,
+}
+
+/// Compaction v2 shadow 雙軌診斷(G2.1;m3Spec/neely_compaction_v2.md §3.3 / §9.3)。
+///
+/// tiling-round 引擎(`compaction::round_engine`)每次 compute 隨行,僅寫本結構:
+/// - I1–I6 不變量違反計數(§2.2;任一 > 0 = 引擎 bug,Gate v3 紅燈)
+/// - `level_cap_hit`(A-8:輪數上限造成的枚舉缺漏,由靜默轉可觀察)
+/// - §9.3 shadow 比對計數(舊 forest scenario 依 (start_bar, end_bar, pattern) 被
+///   新引擎節點命中數;召回率門檻於 Gate v3 全階梯後才適用,此處僅計數)
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
+pub struct ShadowCompactionDiagnostics {
+    /// 引擎版本 tag(例 "tiling-round-g2.1")
+    pub engine: String,
+    /// base tiling 節點數(非 Neutral monowaves + 合成葉)
+    pub base_tiling_len: usize,
+    /// Neutral 段併入前一 directional 節點的次數(§5.2 合成葉橋接)
+    pub neutral_bridged: usize,
+    /// 開頭 Neutral 無前節點可併,直接排除的數量(記 diagnostics,§5.2)
+    pub leading_neutral_dropped: usize,
+    /// 實際發生聚合的輪數
+    pub rounds_run: usize,
+    /// 收斂後 tiling pool 大小(beam 截斷後)
+    pub tiling_count: usize,
+    /// A-8:觸 max_compaction_levels 上限跳出(非零聚合收斂)
+    pub level_cap_hit: bool,
+    /// shadow 引擎自身逾時(不影響 serving `compaction_timeout`)
+    pub timed_out: bool,
+    /// W1/I2 防衛在 release 記到的違反數(> 0 = 引擎 bug)
+    pub w1_violations: usize,
+    /// round 內新分支 materialize 上限(round_beam_size × 8)截斷的輪數。
+    /// 工程護欄非 Neely 語意;> 0 = 該檔枚舉受截斷,Gate 觀測項(A-8 精神)。
+    /// G2.2 起截斷前先依 beam 鍵近似分數全窗排序,無時間軸偏置
+    pub round_branch_cap_hits: usize,
+    /// G2.2 W5:被 Ch5 端點重驗(overall_pass = false)拒絕的唯一視窗數
+    /// (§4.1 失敗記錄的 shadow 計數版;完整 RuleRejection 留 G2.4 切換)
+    pub w5_rejected_windows: usize,
+    /// G2.2 Q3 雙軌實驗(§12):完成端點版 vs bars 反查版比對的唯一 5-窗數
+    pub q3_windows: usize,
+    /// Q3:Overlap / 回測判定翻轉的視窗數;翻轉率 = q3_flips / q3_windows,
+    /// > 5%(spec 初始門檻)→ 落 bars 反查
+    pub q3_flips: usize,
+    /// degree_level → 節點數(canonical 去重後;key 為字串供 JSONB 直取)
+    pub node_count_by_level: HashMap<String, usize>,
+    /// G2.4 Gate v3:pattern tag → 節點數(canonical 去重後)— §9.2 Terminal
+    /// Impulse 存在性門檻與形態分布報告的資料源
+    pub node_count_by_pattern: HashMap<String, usize>,
+    /// I1–I6 違反計數(key "I1".."I6")
+    pub invariant_violations: HashMap<String, usize>,
+    /// §9.3:舊 forest scenario 總數
+    pub old_forest_scenarios: usize,
+    /// §9.3:依 (start_bar, end_bar, pattern_tag) 被新引擎 **degree_level = 1**
+    /// 節點命中的舊 scenario 數(spec 投影定義;舊 Level ≥ 2 聚合屬預期缺口類別)
+    pub old_forest_matched: usize,
+    /// G2.3 §6.1 邊界波重評(D-4):完成比對的 (parent 首/末子波, 真鄰居) 對數
+    pub boundary_pairs_checked: usize,
+    /// §6.1:比值落 [0.236, 0.382) ∪ (2.618, 4.236] 的 Advisory(Info)數
+    pub boundary_advisory_info: usize,
+    /// §6.1:比值落 [0.236, 4.236] 外的 Advisory(Warning)數(不拒絕聚合)
+    pub boundary_advisory_warning: usize,
+    /// §6.1:tiling 首/末 parent 無對應鄰居(或零幅度不可比)跳過的側數
+    pub boundary_sides_skipped: usize,
+    /// G2.3 §6.2 Complexity 真算:complexity level(0..=3)→ 節點數
+    /// (canonical 去重後收集 forest;取代硬寫 Complex 的分布觀測)
+    pub complexity_count_by_level: HashMap<String, usize>,
+    /// §6.2:子樹內出現 ≥ 3 種不同 Complexity Level 之 Impulse 段的節點數
+    pub triplexity_nodes: usize,
+    /// G2.3 §6.3 Degree 對映(ceiling 錨定):degree_level → Degree 名
+    /// (輸出展示用;不回饋任何接受條件)
+    pub degree_map: HashMap<String, String>,
+    /// §6.3:超出 11 級下界被夾至 SubMicro 的 level 數(記 diagnostics)
+    pub degree_clamped_levels: usize,
+    /// G2.4 Gate v3 §9.3 逐檔 diff 資料源:degree-1 節點鍵
+    /// `"{start_bar}-{end_bar}:{pattern_tag}"`(排序後);召回缺口分類
+    /// (bar 錯位 / tag 變體差 / 視窗缺席)由 verify 腳本離線比對。
+    /// shadow 期專用,切換時隨本結構移除
+    pub degree1_node_keys: Vec<String>,
+    /// G2.4 Gate v3 召回驗屍:每個未召回的舊 forest scenario 重放接受階梯,
+    /// 記第一個拒絕階段 → 計數(key:no_aligned_start / no_aligned_end /
+    /// len_mismatch / w1 / w3 / w4 / w7 / w2_label / w6 / w5 / tag_diff /
+    /// accepted_but_not_collected)。r4 §9.3 門檻/允許清單拍板的量化依據;
+    /// shadow 期專用
+    pub recall_miss_by_stage: HashMap<String, usize>,
+    /// 稀有拒絕階段案例定位(Gate 第四輪:len_mismatch/w5 全市場僅 3 筆,
+    /// 純計數無從驗屍):稀有/關鍵 stage(no_aligned_start / w1 / w3 / w5 /
+    /// w6 / len_mismatch / accepted_but_not_collected)記
+    /// `"{stage}:{start_bar}-{end_bar}:{pattern_tag}"`,cap 8/檔;shadow 期專用
+    pub recall_miss_examples: Vec<String>,
+    /// G2.3 A-10:收集 forest 節點以「覆蓋葉 union」語意(PatternBound 完整
+    /// 落於節點覆蓋 monowave 範圍內)計得的 anchors 總數
+    pub anchors_union_total: usize,
+    /// A-10 對照組:現行「日期範圍重疊即算」近似語意計得的 anchors 總數
+    /// (收緊幅度 = overlap − union,Gate 觀測)
+    pub anchors_overlap_total: usize,
+    pub elapsed_us: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -359,6 +458,11 @@ pub struct RuleReference {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct Scenario {
     pub id: String,
+
+    /// G2.4 契約協調(compaction v2 §7.4):結構化 wave 數 = wave_tree 頂層
+    /// children 數。fusion track1 改讀此欄;`structure_label` 字串 parse
+    /// (`wave_count_from_label`)標 deprecated,一個 release 後移除(Q6)。
+    pub wave_count: usize,
 
     pub wave_tree: WaveNode,
     pub pattern_type: NeelyPatternType,
@@ -546,13 +650,23 @@ pub enum AdvisorySeverity {
     Strong,
 }
 
-/// Wave Tree(階層化波浪結構)。具體欄位於後續 PR 補完。
+/// Wave Tree(階層化波浪結構)。
+///
+/// **G2.4 契約協調(compaction v2 §7.3)**:加 `degree_level` / `base_label`
+/// 兩欄(JSONB 加欄不刪欄,舊消費端忽略未知欄)— 巢狀展示與 MCP 語意必需。
+/// 現行(切換前)引擎為 best-effort 填值:root = 形態層(degree 1 起)、
+/// 葉 = monowave leg(degree 0,label 取 Stage 0 Primary 候選,無則依 slot);
+/// tiling-round 引擎切換後由 CompactionNode 凍結為真值。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct WaveNode {
     pub label: String,
     pub start: NaiveDate,
     pub end: NaiveDate,
+    /// 葉(monowave leg)= 0;parent = max(children) + 1(compaction v2 I4)
+    pub degree_level: usize,
+    /// `:3` / `:5` 前端標示(compaction v2 I5;葉為 Stage 0 標籤或 slot 推定)
+    pub base_label: StructureLabel,
     pub children: Vec<WaveNode>,
 }
 
@@ -686,7 +800,7 @@ pub enum TriangleKind {
     Limiting,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub enum CombinationKind {
     /// Table A 小 x-wave 組合:(5-3-5) + x + (5-3-5) = Double Zigzag

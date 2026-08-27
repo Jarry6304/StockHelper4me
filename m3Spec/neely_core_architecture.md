@@ -1453,6 +1453,15 @@ P0 Gate 六檔實測時應記錄「資料不足」的拒絕比例,作為 warmup 
       {
         "id": "S001",
         "pattern_type": { "kind": "impulse", "extension": "wave3_extended" },
+        "wave_count": 5,
+        "wave_tree": {
+          "label": "5-wave Up", "start": "2026-01-06", "end": "2026-04-30",
+          "degree_level": 1, "base_label": "Five",
+          "children": [
+            { "label": "W1:L5", "start": "2026-01-06", "end": "2026-02-02",
+              "degree_level": 0, "base_label": "L5", "children": [] }
+          ]
+        },
         "power_rating": "strongly_favor_continuation",
         "rules_passed_count": 18,
         "deferred_rules_count": 1,

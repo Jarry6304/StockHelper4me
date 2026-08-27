@@ -173,6 +173,8 @@ Rust / 計算層:
 
 - Sandbox 連不到 finmindtrade.com,API 實測都得 user 本機跑;DB-bound 測試(psql / production verify)同理
 - PowerShell nested quotes 很差:inline SQL 走 `psql $env:DATABASE_URL -c "..."`,不用 `python -c`
+- PowerShell 未引號逗號串會拆成陣列且數字化(`--stocks 0050,2330` → `50` 掉檔)— CLI 逗號參數一律加引號;
+  `.sql` 檔餵 psycopg 前須剝 `\` 開頭的 psql 專用行(`\echo`/`\timing` 非 SQL)且勿以 `--` 開頭判斷整句
 - `python src/main.py refresh` 的 Silver 7c 強制 full-rebuild(v4.30 Option B;dirty queue 對 price_daily 新 close 不觸發)
 - weekly snapshots production 累積比 daily 慢 → cross_tf 類欄位短期 0 屬累積動態,非 bug(v4.28 retract 教訓)
 - neely 對急漲股無有效 scenario 是 spec 合法行為(§7.2);看 `quality_caveat.is_usable`,不要硬改引擎
@@ -194,8 +196,8 @@ V2 WAVE 欄是 placeholder(spec CL4),真實端點留 production 拍版 (a)/(b)/(
 全市場 2171 stocks × 40 cores ~2.5h,P0-Gate forest max 69/70/58 ≪ 200 全過。
 詳見 docs/changelog/v4.30-v4.38.md §v4.37。
 
-當前狀態(2026-06-10 實測):alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 647 passed;
-Python `pytest tests/` 526 passed / 1 skipped;MCP 14 public tools;universe ~2172 stocks × 41 cores;
+當前狀態:alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 688 passed(2026-08-26 實測);
+Python `pytest tests/` 526 passed / 1 skipped(2026-06-10 實測);MCP 14 public tools;universe ~2172 stocks × 41 cores;
 collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`。
 
 ## helper 腳本清單
@@ -213,6 +215,7 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 | `scripts/test_pipeline.ps1` / `.sh` | 5-phase 測試流水線(Environment / Sandbox / Schema / Production / MCP) |
 | `scripts/verify_mcp_toolkit_v4_29.py` | 全覆蓋 public MCP tool 健康度(payload budget,退碼 0/1) |
 | `scripts/verify_traditional_forest.py` | Traditional P0-Gate forest 分布 + 覆蓋驗收(免 psql) |
+| `scripts/verify_compaction_v2_gate.py` | Compaction v2 P0 Gate v3 全市場聚合(§9.2 硬門檻退碼 0/1) |
 | `scripts/verify_golden_l3_v4_32.ps1` | Golden L3 物化 + serving 驗證流水線 |
 | `scripts/recalibrate_kalman.ps1` + `install_recalibrate_task.ps1` | Phase 3b Kalman 校準(週排程增量) |
 | `scripts/split_claude_md.py` | 一次性:CLAUDE.md → docs/changelog/ 拆分(P0-1,已執行) |
@@ -240,16 +243,34 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 
 ## 下次 session 優先序
 
-1. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
+1. **neely Compaction v2 — 切換刪舊 PR(G2.4 後半,下一步)**:規格
+   `m3Spec/neely_compaction_v2.md` 已 **r4**(2026-08-27):召回門檻拍板
+   **(A)** 落地(§9.3 允許類別 (a)–(h) + 硬門檻「未歸因缺口 = 0」)、
+   Q1→A-11 / Q3 定稿、§4.3 族別閘門明文;P0 Gate v3 四輪實測收案
+   (全市場 2192 檔 inv/w1 全 0、缺口 33,699 筆 100% 歸因、3 筆稀有
+   stage 逐筆定案),報告
+   `docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`。
+   **切換刪舊依 spec 獨立 PR**(等 shadow PR merge 後重開分支):§7.1/§7.2
+   凍結流程(CompactionNode→Scenario 23 欄)、serving 改吃 tiling-round、
+   刪 `exhaustive.rs`/`three_rounds.rs`、`beam_width` 移除、structure_label
+   新格式(Q6 起算);凍結側 forest p99≤40 + RSS/抽驗/前端三項手動檢視於該
+   PR 驗。歷程見 `docs/changelog/neely-compaction-v2.md`;
+   `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級)獨立拍板項;
+   TAIEX 於 `price_daily_fwd` 無供料另列 backlog(`_index_taiex_` 殘列可刪)。
+2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地
    (2026-06-11,`GET /waves/summary`;見 docs/changelog/v2-wave-endpoint.md),
    production verify 留本機 runbook。③ **漸進收攏 spec 拍版**(波浪引擎歷史段定型 +
    尾端錨定;討論稿 `m3Spec/proposal_progressive_settlement.md`,拍版前不動 Rust;
    表現層止血已落地,見 docs/changelog/wave-view-tuning.md)。
-2. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
-3. **wall time / PG contention 觀察**:run-all 全市場 ~37 min(tpex universe 後);爆了先跑
-   `scripts/maintain_facts_stats.sql` 再用 `diagnose_slow_tw_cores.sql` 取證
-   (2330 單股 smoke 已見 chip 表查詢 1-6.4s slow statement)。
+3. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
+4. **wall time / PG contention 觀察**:2026-08-26 全市場 run-all 爆到 480 min
+   (CPU 佔用 ~9%,DB-bound)— 主嫌 facts stats 五天未 autoanalyze,已跑
+   maintain(實測紀錄見 process-logs);後續觀察項:`uq_facts_dedup` 2.7GB
+   (pkey 僅 508MB,REINDEX CONCURRENTLY 候選)+ 兩顆零使用索引
+   `idx_facts_metadata_gin` 557MB / `idx_facts_severity_date` 158MB(drop 拍板項)。
+   爆了先跑 `scripts/maintain_facts_stats.sql` 再用 `diagnose_slow_tw_cores.sql`
+   取證(chip 表查詢 1-6.4s slow statement 既載)。
 
 > 架構整備 P0-P2 已全收案(2026-06-10,含本機 production verify);
 > 紀錄與驗證結果見 `docs/changelog/architecture-p0-p2.md`。

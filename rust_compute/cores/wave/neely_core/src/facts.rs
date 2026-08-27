@@ -144,8 +144,11 @@ mod tests {
         let date = NaiveDate::parse_from_str("2026-01-05", "%Y-%m-%d").unwrap();
         let scenarios = (0..num_scenarios)
             .map(|i| Scenario {
+                wave_count: 0,
                 id: format!("s{}", i),
                 wave_tree: WaveNode {
+                    degree_level: 0,
+                    base_label: crate::output::StructureLabel::Three,
                     label: "test".to_string(),
                     start: date,
                     end: date,
@@ -202,6 +205,7 @@ mod tests {
                 stage_elapsed_us: HashMap::new(),
                 elapsed_ms: 0,
                 peak_memory_mb: 0,
+                shadow_compaction: None,
             },
             rule_book_references: Vec::new(),
             insufficient_data: false,

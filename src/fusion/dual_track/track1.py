@@ -354,7 +354,10 @@ def read_track1(
     power_label = _power_rating_label(primary.get("power_rating"))
     degree = _effective_degree(primary)
     structure_label = primary.get("structure_label") or primary.get("id")
-    wave_count = _wave_count_from_label(structure_label)
+    # G2.4 契約協調(compaction v2 §7.4):優先讀結構化 wave_count 欄;
+    # 舊 snapshot 無此欄時退 structure_label 字串 parse(deprecated,一個
+    # release 後移除 — spec Q6)
+    wave_count = primary.get("wave_count") or _wave_count_from_label(structure_label)
 
     # Fib zones — primary 優先,fallback flat_fib_zones
     zones = primary.get("expected_fib_zones") or []
