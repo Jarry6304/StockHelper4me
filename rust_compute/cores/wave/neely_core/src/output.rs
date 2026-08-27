@@ -415,6 +415,11 @@ pub struct ShadowCompactionDiagnostics {
     /// accepted_but_not_collected)。r4 §9.3 門檻/允許清單拍板的量化依據;
     /// shadow 期專用
     pub recall_miss_by_stage: HashMap<String, usize>,
+    /// 稀有拒絕階段案例定位(Gate 第四輪:len_mismatch/w5 全市場僅 3 筆,
+    /// 純計數無從驗屍):稀有/關鍵 stage(no_aligned_start / w1 / w3 / w5 /
+    /// w6 / len_mismatch / accepted_but_not_collected)記
+    /// `"{stage}:{start_bar}-{end_bar}:{pattern_tag}"`,cap 8/檔;shadow 期專用
+    pub recall_miss_examples: Vec<String>,
     /// G2.3 A-10:收集 forest 節點以「覆蓋葉 union」語意(PatternBound 完整
     /// 落於節點覆蓋 monowave 範圍內)計得的 anchors 總數
     pub anchors_union_total: usize,

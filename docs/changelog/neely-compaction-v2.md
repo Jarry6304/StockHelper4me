@@ -500,8 +500,16 @@ shadow Σ=24.4s(p50 10.8ms,占 neely 全程 86.3%);召回 5222/38921 = 13.42%
 
 **殘餘尾巴(拍板前收)**:`len_mismatch` ×2、`w5` ×1 — 六檔未出現的
 新 stage;w5 那 1 筆與「W5 端點泛化零回歸」主張相抵,須逐筆驗屍歸類
-((A) 的「未歸因缺口 = 0」門檻下這 3 筆必須有明確處置)。gate 腳本已加
-「稀有 stage(≤50 筆)印所屬檔號」定位;複跑一次即得檔號 → `--diff` 分類。
+((A) 的「未歸因缺口 = 0」門檻下這 3 筆必須有明確處置)。定位(gate 腳本
+「稀有 stage(≤50 筆)印檔號」):len_mismatch = **00892/00893**、
+w5 = **6218**;stale engine 1 檔確認即 `_index_taiex_` 殘列(既有 backlog)。
+語意預判(讀碼):len_mismatch = 對齊視窗葉數不在階梯文法 {3,5,7,11}
+(Neutral 橋接內部合併或舊 9 波文法嫌疑);w5 = proposed 全 `:5` 族且
+量化 Ch5 `overall_pass` 拒 — 舊引擎 `rules_passed_count` 恆 0 bug 時代
+接受、G2.2 硬閘後拒的嫌疑大於端點泛化回歸,取視窗手驗定案。
+診斷加 **`recall_miss_examples`**(稀有/關鍵 stage 記
+`"stage:s-e:tag"`,cap 8/檔;shadow 期專用)+ gate 腳本印案例鍵;
+三檔 `run-all --write --stocks "00892,00893,6218"` 重算後直讀。
 
 觀測項對照第一輪:forest proxy p50=26/p95=53/p99=69(收集修正後全量,
 vs 第一輪限縮收集的 11/20/24 — 量級符合修正預期);level_cap_hit 94.8% 持平;

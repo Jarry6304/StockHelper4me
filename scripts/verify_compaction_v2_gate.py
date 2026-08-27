@@ -216,6 +216,7 @@ def main() -> int:
     recall_den = 0
     miss_by_stage = Counter()
     miss_stage_stocks: dict = {}  # stage -> 前幾檔 stock_id(稀有 stage 定位用)
+    miss_examples: list = []  # (stock_id, "stage:s-e:tag") — 稀有 stage 案例鍵
     engine_stocks: dict = {}  # engine -> 前幾檔 stock_id(stale engine 定位用)
     low_recall: list[tuple[str, int, int]] = []
     inv_stocks: list[str] = []
@@ -261,6 +262,9 @@ def main() -> int:
             slst = miss_stage_stocks.setdefault(k, [])
             if len(slst) < 8:
                 slst.append(stock_id)
+        for ex in d.get("recall_miss_examples") or []:
+            if len(miss_examples) < 24:
+                miss_examples.append((stock_id, ex))
         den = d.get("old_forest_scenarios", 0)
         num = d.get("old_forest_matched", 0)
         recall_num += num
@@ -340,6 +344,12 @@ def main() -> int:
             if v <= 50:  # 稀有 stage 直接給檔號,免掃全表找案例
                 locate = f" — 檔:{miss_stage_stocks.get(k, [])}"
             print(f"- {k}: {v} ({v / total_miss:.1%}){locate}")
+        if miss_examples:
+            print()
+            print("### 稀有 stage 案例鍵(stock: stage:start_bar-end_bar:tag;需該檔以含"
+                  " recall_miss_examples 之 binary 重算)")
+            for sid, ex in miss_examples:
+                print(f"  {sid}: {ex}")
     print()
     print("## Pattern 分布(top 15)")
     for k, v in pattern_counts.most_common(15):

@@ -1327,6 +1327,7 @@ pub fn run_shadow(
         degree_clamped_levels: 0,
         degree1_node_keys: Vec::new(),
         recall_miss_by_stage: HashMap::new(),
+        recall_miss_examples: Vec::new(),
         anchors_union_total: 0,
         anchors_overlap_total: 0,
         elapsed_us: 0,
@@ -1616,6 +1617,20 @@ pub fn run_shadow(
                 .recall_miss_by_stage
                 .entry(cat.to_string())
                 .or_insert(0) += 1;
+            // 稀有/關鍵 stage 記案例鍵供離線驗屍(大宗類別已由分布歸因,不記)
+            const EXAMPLE_STAGES: [&str; 7] = [
+                "no_aligned_start",
+                "w1",
+                "w3",
+                "w5",
+                "w6",
+                "len_mismatch",
+                "accepted_but_not_collected",
+            ];
+            if EXAMPLE_STAGES.contains(&cat) && diag.recall_miss_examples.len() < 8 {
+                diag.recall_miss_examples
+                    .push(format!("{}:{}-{}:{}", cat, sb, eb, tag));
+            }
         }
     }
 
