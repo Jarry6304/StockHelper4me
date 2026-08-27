@@ -511,6 +511,26 @@ w5 = **6218**;stale engine 1 檔確認即 `_index_taiex_` 殘列(既有 backlog)
 `"stage:s-e:tag"`,cap 8/檔;shadow 期專用)+ gate 腳本印案例鍵;
 三檔 `run-all --write --stocks "00892,00893,6218"` 重算後直讀。
 
+**三筆驗屍定案(2026-08-27,案例鍵實測)**:
+- `len_mismatch` ×2:00892 `268-336` / 00893 `234-299`,皆
+  `Triangle:Contracting`(同質半導體 ETF,走勢相關)— 起訖 bar 皆對齊
+  base 葉邊界但夾住葉數 ∉ {3,5,7,11} = 舊 5-monowave Triangle 在新 base
+  tiling 下被 **Neutral 橋接內部合併**改變葉數。即 `no_aligned_end` 的
+  內部版 → **歸 (e) 量測鍵**(r4 措辭從「端點對齊」擴義為「端點或內部
+  葉數對齊」即涵蓋)。
+- `w5` ×1:6218 `183-197:Diagonal:Ending`(15 bars Terminal)— 舊引擎
+  於 `rules_passed_count` 恆 0 時代以原始 monowave 量測接受;新階梯對
+  `synth_window` 合成端點跑量化 Ch5(Q3 bars 基準連動),邊界個案翻面。
+  非 W5 端點泛化回歸(六檔 w5=0 仍成立),為 **G2.2 `:5` 族硬閘 +
+  合成端點量測差之全市場唯一單例**(1/38,921 = 0.003%)。
+- 附註:三檔子集 gate 的「Terminal 存在 FAIL」為子集雜訊(該門檻是
+  全市場存在性;全市場 363 顆 PASS 不變)。
+
+**→ (A) 定義「未歸因缺口 = 0」全數閉合**:12 個 stage 類別全部映射至
+spec 明訂修正(I5 / W4 bars / W7 / A-9 細分 / D-5 分岔 / G2.2 硬閘)或
+量測鍵(端點 + 內部葉數);`accepted_but_not_collected` 全市場 = 0。
+待 user 拍板 (A)/(B) 後進 r4 §9.3 修訂 + docs/benchmarks/ Gate 報告。
+
 觀測項對照第一輪:forest proxy p50=26/p95=53/p99=69(收集修正後全量,
 vs 第一輪限縮收集的 11/20/24 — 量級符合修正預期);level_cap_hit 94.8% 持平;
 branch cap 1299 檔;Q3 殘差 31.5% 持平;A-10 高估 77.5%。
