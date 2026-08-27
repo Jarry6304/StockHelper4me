@@ -173,6 +173,8 @@ Rust / 計算層:
 
 - Sandbox 連不到 finmindtrade.com,API 實測都得 user 本機跑;DB-bound 測試(psql / production verify)同理
 - PowerShell nested quotes 很差:inline SQL 走 `psql $env:DATABASE_URL -c "..."`,不用 `python -c`
+- PowerShell 未引號逗號串會拆成陣列且數字化(`--stocks 0050,2330` → `50` 掉檔)— CLI 逗號參數一律加引號;
+  `.sql` 檔餵 psycopg 前須剝 `\` 開頭的 psql 專用行(`\echo`/`\timing` 非 SQL)且勿以 `--` 開頭判斷整句
 - `python src/main.py refresh` 的 Silver 7c 強制 full-rebuild(v4.30 Option B;dirty queue 對 price_daily 新 close 不觸發)
 - weekly snapshots production 累積比 daily 慢 → cross_tf 類欄位短期 0 屬累積動態,非 bug(v4.28 retract 教訓)
 - neely 對急漲股無有效 scenario 是 spec 合法行為(§7.2);看 `quality_caveat.is_usable`,不要硬改引擎
@@ -242,13 +244,15 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 ## 下次 session 優先序
 
 1. **neely Compaction v2(G2.x 系列,進行中)**:規格 `m3Spec/neely_compaction_v2.md`(r3);
-   G2.0–G2.3 已收案(gate 實測 I1–I6 零違反;Q3 拍板 bars 反查落地;**Q1 收案:
-   雙軌定案 — 符號鏈首子波 / 幾何鏈 net**;G2.3 = 邊界重評 D-4 / Complexity 真算 /
-   Degree 對映 / anchors union A-10 / Combination 細分 A-9),歷程與 r4 spec 待修點
-   (§4.3 族別閘門明文 / §7.2 initial_direction 列 / §9.3 允許清單 / Q1、Q3 定稿)見
-   `docs/changelog/neely-compaction-v2.md`。餘項:G2.3 本機 gate 觀測 → G2.4
-   (契約協調 + P0 Gate v3 + 切換刪舊);`is_running_correction` proxy 語意不符
-   (偽 Running 持 ±3 評級)獨立拍板項;TAIEX 於 `price_daily_fwd` 無供料另列 backlog。
+   G2.0–G2.3 + G2.4 前半(契約協調 §7.3/§7.4 + Gate 工具)已收案;P0 Gate v3
+   三輪實測:inv/w1 全 0、Terminal 存在、W5 端點泛化零回歸,**§9.3 召回缺口
+   全數歸因**(w2_label 58.8% = I5 修正 / w4 / w7 / Neutral 對齊 / A-9 —
+   98% 對 label-blind 舊引擎結構上不可達)。**待拍板:召回門檻 (A) r4 允許
+   類別 + 未歸因缺口 = 0(推薦)vs (B) 放寬 W2 回退 I5(不推薦)** →
+   拍板後 r4 §9.3 修訂 + Gate 報告入 docs/benchmarks/ → 切換刪舊(獨立 PR)。
+   歷程與 r4 全部待修點見 `docs/changelog/neely-compaction-v2.md`;
+   `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級)獨立拍板項;
+   TAIEX 於 `price_daily_fwd` 無供料另列 backlog。
 2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地
    (2026-06-11,`GET /waves/summary`;見 docs/changelog/v2-wave-endpoint.md),
@@ -256,9 +260,13 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
    尾端錨定;討論稿 `m3Spec/proposal_progressive_settlement.md`,拍版前不動 Rust;
    表現層止血已落地,見 docs/changelog/wave-view-tuning.md)。
 3. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
-4. **wall time / PG contention 觀察**:run-all 全市場 ~37 min(tpex universe 後);爆了先跑
-   `scripts/maintain_facts_stats.sql` 再用 `diagnose_slow_tw_cores.sql` 取證
-   (2330 單股 smoke 已見 chip 表查詢 1-6.4s slow statement)。
+4. **wall time / PG contention 觀察**:2026-08-26 全市場 run-all 爆到 480 min
+   (CPU 佔用 ~9%,DB-bound)— 主嫌 facts stats 五天未 autoanalyze,已跑
+   maintain(實測紀錄見 process-logs);後續觀察項:`uq_facts_dedup` 2.7GB
+   (pkey 僅 508MB,REINDEX CONCURRENTLY 候選)+ 兩顆零使用索引
+   `idx_facts_metadata_gin` 557MB / `idx_facts_severity_date` 158MB(drop 拍板項)。
+   爆了先跑 `scripts/maintain_facts_stats.sql` 再用 `diagnose_slow_tw_cores.sql`
+   取證(chip 表查詢 1-6.4s slow statement 既載)。
 
 > 架構整備 P0-P2 已全收案(2026-06-10,含本機 production verify);
 > 紀錄與驗證結果見 `docs/changelog/architecture-p0-p2.md`。

@@ -468,3 +468,12 @@ w5=0 與 accepted_but_not_collected=0 排除引擎缺陷假說。
 全市場歸因分布:今晚排程 refresh 以 g2.4 binary 自動全市場重跑,
 翌日 `verify_compaction_v2_gate.py` 直讀即得,無需手動 run(建議排程前跑
 `maintain_facts_stats.sql` 解前夜 480 min DB-bound)。
+
+### Runtime 附註 — 480 min wall time 定性(2026-08-27)
+
+2026-08-26 全市場 run-all 480 min 非 neely 回歸:shadow 全市場 Σ=49.5s、
+CPU 佔用 ~9%(DB-bound);主嫌 = `facts` stats 五天未 autoanalyze
+(v3.19 已知 root cause),`maintain_facts_stats.sql` 已補跑,索引觀察項
+(`uq_facts_dedup` 2.7GB bloat 嫌疑 / 兩顆零使用索引)與實測紀錄見
+`docs/changelog/process-logs.md` §DB 維護實測(2026-08-27)。
+Gate 報告 runtime 欄以「shadow vs neely 全程占比」為據,wall time 僅附註。
