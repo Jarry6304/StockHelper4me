@@ -591,3 +591,34 @@ spec r4 §3.3/§7 履行:serving forest 改由 tiling-round 引擎凍結產出,
 4. 手動:Level-1 Impulse 抽樣 R7/Overlap 端點手算;前端六檔巢狀 wave_tree
    Plotly 展開 + 波標密度檢視(serving forest 語意:每檔以 degree-1 為主、
    Level-N 巢狀,無 Level-0 monowave 視窗 scenario — quality_caveat 邏輯照舊)
+
+### 切換後六檔驗收(2026-08-27 本機)+ forest p99 門檻拍板題
+
+六檔 rebuild + run-all + gate(凍結側,engine `tiling-round-v2`):
+
+| 門檻 | 結果 |
+|---|---|
+| I1–I6 / w1 | **0 / 0 ✅** |
+| Terminal 存在 | 1 顆(Diagonal:Ending)✅ |
+| runtime 占比 | 90.6% ≤ 2× ✅ |
+| **凍結側 forest p99 ≤ 40** | **FAIL — p50=27 / p95=59 / p99=59;僅 2330 = 59 超標** |
+
+觀測:Level 分布 1:141 / 2:52 / 3:1;overflow(forest_max_size 200)= 0;
+W5 拒絕 11 視窗(RuleRejection 已進 diagnostics.rejections)✅;
+Q3 殘差 38.1%;引擎 p50=10ms。neely 全程 ~1.3s/run(vs G2.3 期 ~0.4s)—
+DB contention 主嫌(同場 traditional 69.8s、slow statement 密集),
+留全市場 wall time 觀察。
+
+**p99 門檻張力成真(r4 §9.2 已預告)**:§9.2 的 40 = 舊 Level-0 forest
+p99(16)× 2.5 餘量;(A) 拍板後凍結 = 收集全量(I6),全市場收集 proxy
+p99=69 即凍結側預期值 — 40 對密集檔結構上不可達,與召回 98% 同構。
+**拍板題(下輪 spec 修訂)**:
+- **(A) 推薦**:先全市場(排程自動)拿凍結側真分布 → p99 門檻重校
+  (候選:p99 ≤ 100 = forest_max_size 200 的 2× 餘量;或硬門檻改
+  「overflow 觸發率 = 0」+ p99 轉觀測)。
+- (B) 不推薦:縮收集追 40 — 違 §7.1 I6 與召回拍板 (A) 的收集語意。
+
+**附帶操作項(全市場切換 rerun 前拍板)**:facts 為 ON CONFLICT DO
+NOTHING — 舊引擎 forest 的 neely facts 仍留表中,切換後新舊 fact 敘述
+並存;依 Round N 慣例建議 DELETE neely_core facts + 全市場 rerun +
+`maintain_facts_stats.sql`(六檔實測本輪 neely facts_new = 225)。
