@@ -1,0 +1,22 @@
+# neely_only.toml — 只跑 neely_core 的 Workflow 子集。
+#
+# 用途:neely 引擎修正後單獨重生 neely facts / snapshots,免跑全 2.5h
+# run-all(其他 cores 輸入未變,facts 已 ON CONFLICT 寫好)。
+# 先清舊敘述:DELETE FROM facts WHERE source_core = 'neely_core';
+#
+# 用法(repo root):
+#   .\rust_compute\target\release\tw_cores.exe run-all --write `
+#       --workflow workflows/neely_only.toml
+#
+# 機制:CoreFilter 只把 enabled=true 的 core 放進 set;未列出的 core
+# is_enabled()=false → run-all dispatch 全 skip。
+
+[workflow]
+name        = "neely_only"
+description = "只跑 neely_core(引擎修正後單獨重生)"
+version     = "1.0.0"
+
+[[cores]]
+name     = "neely_core"
+enabled  = true
+priority = "P2"
