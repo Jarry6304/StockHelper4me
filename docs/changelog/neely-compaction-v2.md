@@ -659,3 +659,34 @@ max 131 留 34% 餘量。
 Level-1 抽樣 / 前端六檔 + 密集檔 MCP payload budget 順檢)、user 從 UI
 建切換 PR;獨立 backlog 不變(is_running_correction 語意、TAIEX 殘列、
 peak_memory_mb 填值、A-8 level_cap 動態化量測)。
+
+### 三項手動檢視 + 抽驗揭露 W5 閘門缺口(2026-08-28)
+
+三項手動檢視流水線(本機)結果:
+
+- **RSS**:tw_cores 六檔單程 peak WorkingSet **218 MB** ≪ 1.5× 門檻 ✅
+- **MCP payload**:`verify_mcp_toolkit_v4_29.py` PASS WITH WARNINGS
+  (indicators 105KB 為既有 soft warning,非 compaction 新增)✅
+- **前端六檔**:API 全 200(quarterly resonance 404 一筆 = 該檔無季線
+  資料,屬正常);巢狀 wave_tree 目視由 user 確認
+- **Level-1 Impulse 抽驗**(`scripts/sample_level1_impulse.py`,全體
+  1232 個 degree-1 Impulse):首跑 FAIL(R7 35 / Overlap 874)→ 腳本
+  判準與 validator 不同源,修正後(R7 補 Ch9 容差、Overlap 改 W4 終點
+  vs W2 終點;main 已併)複跑:**R7 全過**(35 筆 raw fail 全數落
+  Ch9 容忍,gap < 10%)、**Overlap 殘 70 筆真不一致** → 揭露引擎缺口。
+
+**根因(W5 族別閘門承載不了 Overlap_Trending)**:兩條 Overlap 規則互為
+排他補集,`both_overlaps_failed` 對非 Neutral 5-窗永不成立 → `:5` 族只閘
+`overall_pass` 時,Trending row 的 Overlap_Trending 實質從未被強制。tiling
+視窗端點共享(I2)下「W4 進 W2 區」與 R5 回測條款同一條幾何線:W4 小幅
+跨線(gap < 10%)經 **Ch9 Exception 豁免 essential** 後 `overall_pass`
+成立,`[:5 :3 :5 :3 :5]` 帶 Terminal 幾何仍凍結成 Trending Impulse
+(70/1232 = 5.7%)。Level-0 classifier 慣例(Trending fail → 非 Impulse)
+在切換時未被階梯繼承 — Ch9 只豁免接受性,不改寫 Trending/Terminal 分類。
+
+**修正**:`try_ladder` 族別閘門對 `Impulse` kind 另要求 Overlap_Trending
+未 fail(W2 row 表「Trending Impulse」語意;兩組皆不滿足 → 視窗拒絕,
+與 §4.4 對齊)。單元測試
+`w5_rejects_trending_impulse_with_w4_in_w2_zone`(自證 overall_pass 前提,
+確保擋的是新閘非 essential 硬閘)。workspace 全綠。**需全市場重跑**
+(DELETE neely facts → run-all → gate + 抽驗複跑)後收案。

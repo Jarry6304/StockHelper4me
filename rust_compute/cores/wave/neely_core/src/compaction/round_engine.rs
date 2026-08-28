@@ -1030,10 +1030,29 @@ fn try_ladder(window: &[Rc<CompactionNode>], counters: &mut LadderCounters) -> L
         }
     }
 
-    // 族別閘門::5 族要求 overall_pass
+    // 族別閘門::5 族要求 overall_pass;Trending Impulse row 另要求
+    // Overlap_Trending 未 fail。兩條 Overlap 規則互為排他補集,
+    // both_overlaps_failed 對非 Neutral 5-窗永不成立,單靠 overall_pass
+    // 承載不了 §4.3 適用表的 Overlap_Trending:tiling 視窗端點共享下
+    // 「W4 進 W2 區」與 R5 回測條款同一條幾何線,小幅跨線經 Ch9 容差
+    // 豁免 essential 後仍會凍結成 Impulse。Ch9 只豁免接受性,不改寫
+    // Trending/Terminal 分類(Level-0 classifier 同慣例:Trending fail
+    // → 非 Impulse);[:5 :3 :5 :3 :5] 帶 Terminal 幾何依 §4.4
+    // 「兩組條件皆不滿足 → 視窗拒絕」語意拒絕。
+    let trending_overlap_failed = report
+        .failed
+        .iter()
+        .any(|rej| matches!(rej.rule_id, RuleId::Ch5_Overlap_Trending));
     let kinds: Vec<AcceptedKind> = proposed
         .into_iter()
-        .filter(|k| k.base != StructureLabel::Five || report.overall_pass)
+        .filter(|k| {
+            let five_gate = k.base != StructureLabel::Five || report.overall_pass;
+            if matches!(k.pattern, NeelyPatternType::Impulse) {
+                five_gate && !trending_overlap_failed
+            } else {
+                five_gate
+            }
+        })
         .collect();
     if kinds.is_empty() {
         // 視窗曾有候選但全數被 W5 擋下 → 唯一視窗拒絕計數 + 完整 RuleRejection
@@ -2285,6 +2304,38 @@ mod tests {
             "passed 反推不應為空(5-wave essentials 通過)"
         );
         assert_eq!(counters.w5_rejected_windows, 0);
+    }
+
+    #[test]
+    fn w5_rejects_trending_impulse_with_w4_in_w2_zone() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        // W4 終點 103.5 小幅跨 W3 起點 104(overshoot 0.5,gap 4.2% < 10%)
+        // → R5 經 Ch9 容差豁免、overall_pass 成立,但 Overlap_Trending fail
+        // →[:5 :3 :5 :3 :5] row 的 Trending Impulse 語意不成立,視窗拒絕
+        let classified = vec![
+            cm(0, 5, 100.0, 110.0, Up, &[Five]),
+            cm(5, 10, 110.0, 104.0, Down, &[Three]),
+            cm(10, 15, 104.0, 116.0, Up, &[Five]),
+            cm(15, 20, 116.0, 103.5, Down, &[Three]),
+            cm(20, 25, 103.5, 118.0, Up, &[Five]),
+        ];
+        // 測試前提自證:validator 本身接受(Ch9)且 Trending overlap fail —
+        // 確保擋下來的是新閘,不是 essential 硬閘
+        let base = build_base_tiling(&classified, &[]);
+        let (synth, candidate) = synth_window(&base.nodes);
+        let report = validator::validate_candidate(&candidate, &synth);
+        assert!(report.overall_pass, "前提:R5 小幅跨線應被 Ch9 容忍");
+        assert!(
+            report
+                .failed
+                .iter()
+                .any(|r| matches!(r.rule_id, RuleId::Ch5_Overlap_Trending)),
+            "前提:Overlap_Trending 應 fail"
+        );
+        let (kinds, counters) = ladder_on(&classified, &[]);
+        assert!(kinds.is_empty(), "Trending overlap fail → 無 kind:{:?}", kinds);
+        assert_eq!(counters.w5_rejected_windows, 1);
     }
 
     #[test]
