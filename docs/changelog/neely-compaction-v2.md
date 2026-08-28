@@ -645,3 +645,17 @@ DELETE neely facts → 全市場 run-all(v2 binary)→ ANALYZE → gate:
 00830=87 / 2012=85 / …)— 舊門檻 40 出自 Level-0 forest 形狀(p99=16 ×
 2.5),對 (A) 全量收集語意不適用;forest_max_size 200 全市場零觸發、
 max 131 留 34% 餘量。
+
+### forest p99 門檻拍板 (A) 落地(2026-08-28,user 拍板)
+
+**spec r4 → r5**:§9.2 forest_size 改雙門檻 — 硬性「overflow
+(forest_max_size 200 護欄)觸發率 = 0」+「凍結側 p99 ≤ 100(= cap 的
+一半,分布警戒線)」;舊 40 為 Level-0 形狀遺產,正式作廢。gate 腳本
+同步(overflow 升硬門檻、p99 閾值 100、>100 檔列前十);Gate 報告
+(docs/benchmarks)補凍結側收案節。**依 r5 門檻:全市場自動項全 PASS**
+(overflow 0/2191、p99=69)。
+
+**Compaction v2 至此自動驗收全數收案**。殘留:三項手動檢視(RSS /
+Level-1 抽樣 / 前端六檔 + 密集檔 MCP payload budget 順檢)、user 從 UI
+建切換 PR;獨立 backlog 不變(is_running_correction 語意、TAIEX 殘列、
+peak_memory_mb 填值、A-8 level_cap 動態化量測)。

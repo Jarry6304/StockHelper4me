@@ -1,12 +1,23 @@
 # neely_core Compaction v2 — Tiling-Round 引擎規格
 
-**狀態**:r4(2026-08-27)
+**狀態**:r5(2026-08-28)
 **取代對象**:`compaction/exhaustive.rs` v3.7 遞迴迴圈 + `compaction/three_rounds.rs` 弱比對聚合
 **上位文件**:`m3Spec/neely_core_architecture.md` r6(下稱 architecture)、`m3Spec/neely_rules.md`(下稱 rules)
 **參照實作**:`rust_compute/cores/wave/traditional_core/`(v3 fractal round 引擎,生產驗證)
 **本文件不含實作程式碼**;型別以合約表呈現,實作於 G2.x 各 PR 落地。
 
 ---
+
+## r5 修訂摘要(切換後全市場凍結側驗收 + forest p99 門檻拍板 (A),2026-08-28)
+
+- **§9.2 forest_size 門檻重校(拍板 (A))**:舊「p99 ≤ 40」出自 Level-0
+  forest 形狀(P0 Gate v2 實測 p99=16 × 2.5 餘量),對 §7.1 全量收集
+  (I6)語意不適用 — 與 §9.3 召回 98% 同構的遺產門檻。改**雙門檻**:
+  硬性「**overflow(forest_max_size 200 護欄)觸發率 = 0**」+
+  「**凍結側 p99 ≤ 100**」(= cap 的一半,分布警戒線)。
+  依據:切換後全市場 2191 檔實測 p50=26 / p95=53 / p99=69 / max=131,
+  overflow 0 觸發(changelog 切換後全市場驗收節);縮收集追 40 之
+  替代案否決(違 I6 與召回拍板)。
 
 ## r4 修訂摘要(P0 Gate v3 四輪實測 + 召回門檻拍板 (A),2026-08-27)
 
@@ -484,7 +495,7 @@ tiling 首/末 parent 無對應鄰居 → 該側跳過(記 diagnostics)。
 |---|---|---|
 | 不變量 | I1–I6 violation = 0(post_validator 新增檢查器,production 統計輸出) | 硬性,任一違反紅燈 |
 | Terminal Impulse | 全市場至少可觀察到 Terminal `:5` 聚合樣本(D-5 修復存在性證明);六檔人工覆核誤報率 | 硬性(存在)+ 檢視(質) |
-| forest_size | p99 ≤ 40(現行 16;巢狀允許成長,cap 200 內留 5× 餘量)。**適用於凍結後 serving forest**(§7.1 步驟 4 護欄後);shadow 期收集全量 proxy(護欄前)為觀測項(r4;第四輪實測 proxy p99=69,forest_max_size 200 內)。與 §9.3 召回投影之張力:密集檔舊 forest 可 > 40(實測 1213 = 46),召回歸因不受此門檻約束 — 兩者量測對象不同(歸因看接受階梯,p99 看凍結產出) | 硬性(凍結側) |
+| forest_size | **雙門檻(r5 拍板 (A))**:① **overflow(forest_max_size 200 / BeamSearchFallback 護欄)觸發率 = 0** — 護欄存在為極端保險,常態觸發 = 分布異常;② **凍結側 p99 ≤ 100**(= cap 的一半,分布警戒線)。歷史:r1–r4 之「p99 ≤ 40」出自 Level-0 forest 形狀(P0 Gate v2 p99=16 × 2.5),對 §7.1 全量收集(I6)不適用;切換後全市場實測 p50=26 / p95=53 / p99=69 / max=131、overflow 0/2191(2026-08-28)。縮收集追 40 否決(違 I6 與 §9.3 拍板) | 硬性(凍結側) |
 | runtime | **shadow(切換後取代 stage_8)相對 neely 全程占比 ≤ 2×**(r4:stage_8 經 G2.0 後近 no-op(Σ=0.2s),以其為分母無意義;run-all 總 wall time 受 DB 狀態影響僅附註。第四輪實測占比 86.3% 過);baseline 計時仍入 docs/benchmarks(traditional 7.7s 為量級參照非門檻) | 硬性 |
 | Level-N rules | 抽樣 Level-1 Impulse 100 例,R7(W3 非最短)、Overlap 判定與端點手算一致 | 抽驗 |
 | 記憶體 | 峰值 RSS 相對現行 ≤ 1.5× | 硬性 |
