@@ -7,11 +7,12 @@
 驗收報告(shadow 期的 §9.3 召回比對已隨 P0 Gate v3 收案移除 —
 docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md)。
 
-硬性門檻(任一失敗 exit 1):
+硬性門檻(r5 §9.2;任一失敗 exit 1):
   - I1–I6 violation 總和 = 0;w1_violations 總和 = 0
   - Terminal Impulse 存在性:全市場 node_count_by_pattern 含 Diagonal:* > 0
-  - **凍結側 forest_size p99 ≤ 40**(§9.2;真 scenario_forest 長度,
-    護欄 forest_max_size 200 / BeamSearchFallback 之後)
+  - forest_size 雙門檻:**overflow(forest_max_size 護欄)觸發率 = 0** +
+    **凍結側 p99 ≤ 100**(真 scenario_forest 長度;40 舊門檻為 Level-0
+    形狀遺產,r5 拍板 (A) 重校)
   - runtime:引擎耗時相對 neely 全程占比 ≤ 2×(stage_8 已為引擎本體)
 
 用法:
@@ -110,7 +111,7 @@ def main() -> int:
         stocks += 1
         neely_total_ms += neely_ms or 0
         forest_sizes.append(forest_len or 0)
-        if forest_len and forest_len > 40:
+        if forest_len and forest_len > 100:
             big_forest.append((stock_id, forest_len))
         if overflow:
             overflow_stocks += 1
@@ -173,9 +174,11 @@ def main() -> int:
          f"total={inv_total}" + (f" stocks={inv_stocks[:10]}" if inv_stocks else "")),
         ("w1_violations = 0", w1_total == 0, f"total={w1_total}"),
         ("Terminal Impulse 存在", terminal_nodes > 0, f"Diagonal:* nodes={terminal_nodes}"),
-        ("凍結側 forest_size p99 <= 40", p99_forest <= 40,
+        ("overflow(forest_max_size 護欄)= 0", overflow_stocks == 0,
+         f"{overflow_stocks}/{stocks} 檔觸發;max forest={forest_sizes[-1] if forest_sizes else 0}"),
+        ("凍結側 forest_size p99 <= 100", p99_forest <= 100,
          f"p50={pctile(forest_sizes, 0.5)} p95={pctile(forest_sizes, 0.95)} p99={p99_forest}"
-         + (f";> 40 檔(前 10):{sorted(big_forest, key=lambda t: -t[1])[:10]}" if big_forest else "")),
+         + (f";> 100 檔(前 10):{sorted(big_forest, key=lambda t: -t[1])[:10]}" if big_forest else "")),
         ("runtime 引擎占比 <= 2x", runtime_ratio <= 2.0,
          f"engine Σ={shadow_total_s:.1f}s vs neely 全程 Σ={neely_total_s:.1f}s"
          f"(占比 {runtime_ratio:.1%};run-all wall time 受 DB 狀態影響僅附註)"),
@@ -193,8 +196,7 @@ def main() -> int:
     print("## 觀測項")
     if stocks:
         print(f"- level_cap_hit 率:{cap_hits}/{stocks} = {cap_hits / stocks:.1%}")
-    print(f"- branch cap 命中檔數:{branch_cap_stocks};timed_out:{timed_out};"
-          f"overflow(forest_max_size 護欄):{overflow_stocks}")
+    print(f"- branch cap 命中檔數:{branch_cap_stocks};timed_out:{timed_out}")
     if elapsed_ms:
         print(f"- 引擎耗時 ms:p50={pctile(elapsed_ms, 0.5):.1f} p99={pctile(elapsed_ms, 0.99):.1f} "
               f"total={shadow_total_s:.1f}s")

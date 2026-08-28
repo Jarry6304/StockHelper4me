@@ -243,16 +243,17 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 
 ## 下次 session 優先序
 
-1. **neely Compaction v2 — 切換刪舊已落地(G2.4 後半,本機驗收中)**:
-   serving forest 改由 tiling-round 引擎凍結產出(spec r4 §7.1/§7.2;
-   neely_core **1.1.0**),刪 `exhaustive.rs`/`three_rounds.rs`、`beam_width`
-   移除、structure_label 新格式 `{Pattern} L{degree} [...]` + fusion/MCP
-   字串 parse 移除(Q6)、diagnostics 換欄 `compaction_v2`。**本機驗收
-   runbook**(見 changelog G2.4 後半節):rebuild → 六檔 run-all →
-   `verify_compaction_v2_gate.py`(凍結側:inv/w1/Terminal/forest p99≤40/
-   runtime 占比)→ 全市場 → RSS/抽驗/前端三項手動檢視。P0 Gate v3
-   四輪 + 拍板 (A) 報告:
+1. **neely Compaction v2 — 切換收案(spec r5,自動驗收全過)**:
+   serving forest 已由 tiling-round 引擎凍結產出(neely_core **1.1.0**,
+   engine `tiling-round-v2`);全市場凍結側驗收全過(inv/w1 全 0、
+   Terminal 363、overflow 0/2191、p99=69、runtime 91.4%;wall 147.6 min,
+   facts 已清舊重生 84,532)。forest p99 門檻拍板 **(A)** 落地(r5 §9.2
+   雙門檻:overflow=0 + p99≤100;40 為 Level-0 形狀遺產作廢)。報告:
    `docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`。
+   **殘留**:① 三項手動檢視 — RSS ≤1.5×(工作管理員)/ Level-1 Impulse
+   抽樣手算 / 前端六檔巢狀 wave_tree + 密集檔(00702=131)MCP payload
+   (`verify_mcp_toolkit_v4_29.py`);② user 從 UI 對
+   `claude/neely-core-compaction-v2-1lq62g` 建切換 PR。
    歷程見 `docs/changelog/neely-compaction-v2.md`;
    `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級)獨立拍板項;
    TAIEX 於 `price_daily_fwd` 無供料另列 backlog(`_index_taiex_` 殘列可刪)。

@@ -103,3 +103,29 @@ Impulse 1,716;Diagonal:Ending 363;Combination 細分出值(A-9)。
   serving 改吃 tiling-round、刪 `exhaustive.rs` / `three_rounds.rs`、
   `beam_width` 移除、structure_label 新格式(Q6 起算)。凍結側
   forest_size p99 ≤ 40 與三項手動檢視於該 PR 驗。
+
+---
+
+## 切換後凍結側驗收(2026-08-28 補記)
+
+G2.4 後半切換(neely_core 1.1.0,engine `tiling-round-v2`)後,DELETE
+neely facts → 全市場 run-all → gate(凍結側,真 scenario_forest):
+
+| 項 | 全市場實測(2191 檔) | 判定 |
+|---|---|---|
+| I1–I6 / w1 | 全 0 | ✅ |
+| Terminal Impulse | 363 顆 | ✅ |
+| runtime 引擎占比 | 91.4%(≤ 2×) | ✅ |
+| **overflow(forest_max_size 200)** | **0/2191 觸發**;max = 131(00702) | ✅ |
+| 凍結側 forest 分布 | p50=26 / p95=53 / **p99=69** — 與 shadow 期收集 proxy 完全一致(凍結 = 收集,零失真) | (A) 拍板後 ✅ |
+| W5 RuleRejection(§4.1) | 3512 唯一視窗全數入 diagnostics.rejections | ✅ |
+| wall time | **147.6 min**(vs 維護前夜 480 min — facts stats 修復在真實負載確認) | 附註 |
+| facts 重生 | DELETE 舊引擎敘述 → v2 全量重生 84,532 筆 | 附註 |
+
+**forest p99 門檻拍板 (A)(2026-08-28,user 拍板;spec r5 §9.2)**:
+「p99 ≤ 40」係 Level-0 forest 形狀遺產(P0 Gate v2 p99=16 × 2.5),對
+§7.1 全量收集(I6)不適用 — 改雙門檻「overflow 觸發率 = 0」+「凍結側
+p99 ≤ 100(= cap 的一半)」;實測 0 觸發 / 69,兩項皆過。縮收集追 40
+否決(違 I6 與召回拍板)。**至此 §9.2 自動門檻全數收案**;殘留三項手動
+檢視(RSS ≤1.5× / Level-1 Impulse 抽樣 / 前端六檔巢狀 wave_tree,建議
+併跑 verify_mcp_toolkit_v4_29.py 確認密集檔 payload budget)。
