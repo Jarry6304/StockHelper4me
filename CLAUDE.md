@@ -250,10 +250,9 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
    facts 已清舊重生 84,532)。forest p99 門檻拍板 **(A)** 落地(r5 §9.2
    雙門檻:overflow=0 + p99≤100;40 為 Level-0 形狀遺產作廢)。報告:
    `docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`。
-   **殘留**:① 三項手動檢視 — RSS ≤1.5×(工作管理員)/ Level-1 Impulse
-   抽樣手算 / 前端六檔巢狀 wave_tree + 密集檔(00702=131)MCP payload
-   (`verify_mcp_toolkit_v4_29.py`);② user 從 UI 對
-   `claude/neely-core-compaction-v2-1lq62g` 建切換 PR。
+   **殘留**(本機,不擋 serving):三項手動檢視 — RSS ≤1.5×(工作管理員)/
+   Level-1 Impulse 抽樣手算 / 前端六檔巢狀 wave_tree + 密集檔(00702=131)
+   MCP payload(`verify_mcp_toolkit_v4_29.py`)。
    歷程見 `docs/changelog/neely-compaction-v2.md`;
    `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級)獨立拍板項;
    TAIEX 於 `price_daily_fwd` 無供料另列 backlog(`_index_taiex_` 殘列可刪)。
