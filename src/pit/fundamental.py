@@ -79,7 +79,7 @@ def asof_business_indicator(
     conn,
     asof_t: date,
     lookback_months: int = 24,
-    market: str = "TW",
+    market: str = "tw",
 ) -> list[dict[str, Any]]:
     """As-of-T view of business indicator(月頻,market-level)。
 
