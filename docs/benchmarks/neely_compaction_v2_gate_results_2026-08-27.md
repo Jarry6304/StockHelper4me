@@ -129,3 +129,27 @@ p99 ≤ 100(= cap 的一半)」;實測 0 觸發 / 69,兩項皆過。縮收集追
 否決(違 I6 與召回拍板)。**至此 §9.2 自動門檻全數收案**;殘留三項手動
 檢視(RSS ≤1.5× / Level-1 Impulse 抽樣 / 前端六檔巢狀 wave_tree,建議
 併跑 verify_mcp_toolkit_v4_29.py 確認密集檔 payload budget)。
+
+## §9.2 抽驗 → Overlap 閘修正複驗(2026-08-28 補記,neely_core 1.1.1)
+
+Level-1 Impulse 抽驗(`scripts/sample_level1_impulse.py`,判準與 validator
+同源)揭露:W5 族別閘門只閘 `overall_pass` 時,兩條 Overlap 規則互為排他
+補集使 `both_overlaps_failed` 永不成立 — Trending row 的 Overlap_Trending
+從未被強制,W4 小幅進 W2 區(R5 經 Ch9 容差豁免)的視窗凍結成 Impulse
+(70/1232)。修正(Impulse kind 另要求 Overlap_Trending 未 fail)後
+neely 單核重跑複驗:
+
+| 項 | 修正前 | 修正後 | 判定 |
+|---|---|---|---|
+| I1–I6 / w1 | 全 0 | 全 0 | ✅ |
+| Terminal Impulse | 363 | 360(tiling 連動) | ✅ |
+| overflow / max forest | 0 / 131 | 0 / 131 | ✅ |
+| 凍結側 p50/p95/p99 | 26/53/69 | 26/53/**68** | ✅ |
+| runtime 占比 | 91.4% | 92.4% | ✅ |
+| degree-1 Impulse | 1232 | **1162**(−70,精確吻合) | — |
+| 抽驗 R7 / Overlap | 35 Ch9 豁免後仍 70 Overlap 不一致 | **1162/1162 雙全過** | ✅ |
+| W5 拒絕唯一視窗 | 3512 | 3618(+106) | — |
+
+三項手動檢視:RSS peak 218MB(≪1.5×)✅ / MCP payload PASS WITH
+WARNINGS(indicators 105KB 既有)✅ / 前端六檔 API 全 200 ✅。
+**§9.2 全數收案**(自動 + 抽驗 + 手動)。

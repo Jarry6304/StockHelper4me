@@ -128,7 +128,7 @@ pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "1.1.0",
+        "1.1.1",
         core_registry::CoreKind::Wave,
         "P0",
         "Neely Wave Core(NEoWave 完整體系;Compaction v2 tiling-round serving — P0 Gate v3 收案切換,spec r4)",
@@ -265,7 +265,10 @@ impl WaveCore for NeelyCore {
         // `{Pattern} L{degree} [{child slots}]`(Q6);diagnostics 換欄
         // shadow_compaction → compaction_v2。
         // Gate 報告:docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md)
-        "1.1.0"
+        // 1.1.0 → 1.1.1(2026-08-28 — Trending Impulse row 補 Overlap_Trending 閘:
+        // W4 進 W2 區(Terminal 幾何)的 [:5 :3 :5 :3 :5] 視窗不再凍結為 Impulse;
+        // §9.2 Level-1 抽驗揭露,詳 docs/changelog/neely-compaction-v2.md)
+        "1.1.1"
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -657,7 +660,7 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "1.1.0");
+        assert_eq!(core.version(), "1.1.1");
     }
 
     // -------------------------------------------------------------

@@ -37,7 +37,9 @@ def main() -> int:
         print("usage: run_sql_file.py <path/to/file.sql>")
         return 2
     path = sys.argv[1]
-    with open(path, encoding="utf-8") as f:
+    # utf-8-sig:剝 BOM — Windows PowerShell 5.1 的 Set-Content -Encoding UTF8
+    # 寫檔帶 BOM,PG 對 "﻿DELETE" 報 syntax error
+    with open(path, encoding="utf-8-sig") as f:
         raw_lines = f.readlines()
 
     # 剝 psql 專用行與純註解行,保留其餘原樣(含縮排)

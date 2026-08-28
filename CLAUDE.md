@@ -243,18 +243,16 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 
 ## 下次 session 優先序
 
-1. **neely Compaction v2 — 切換收案(spec r5,自動驗收全過)**:
-   serving forest 已由 tiling-round 引擎凍結產出(neely_core **1.1.0**,
-   engine `tiling-round-v2`);全市場凍結側驗收全過(inv/w1 全 0、
-   Terminal 363、overflow 0/2191、p99=69、runtime 91.4%;wall 147.6 min,
-   facts 已清舊重生 84,532)。forest p99 門檻拍板 **(A)** 落地(r5 §9.2
-   雙門檻:overflow=0 + p99≤100;40 為 Level-0 形狀遺產作廢)。報告:
-   `docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`。
-   **殘留**(本機,不擋 serving):三項手動檢視 — RSS ≤1.5×(工作管理員)/
-   Level-1 Impulse 抽樣手算 / 前端六檔巢狀 wave_tree + 密集檔(00702=131)
-   MCP payload(`verify_mcp_toolkit_v4_29.py`)。
-   歷程見 `docs/changelog/neely-compaction-v2.md`;
-   `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級)獨立拍板項;
+1. **neely Compaction v2 — 已收案(2026-08-28,neely_core 1.1.1)**:
+   切換(1.1.0)後 §9.2 Level-1 抽驗揭露 Trending row 的 Overlap_Trending
+   閘缺口 → 修正(1.1.1)複驗全過:gate(inv/w1 全 0、Terminal 360、
+   overflow 0/2191、p99=68、runtime 92.4%)+ 抽驗 1162/1162 + RSS 218MB
+   + MCP payload PASS。報告:
+   `docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`;
+   歷程 `docs/changelog/neely-compaction-v2.md`。**殘留手尾**(本機):
+   DELETE neely facts + `workflows/neely_only.toml` 單核重跑
+   (首次 DELETE 因 PS BOM 未執行,runner 已改 utf-8-sig)。獨立拍板項:
+   `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級);
    TAIEX 於 `price_daily_fwd` 無供料另列 backlog(`_index_taiex_` 殘列可刪)。
 2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地

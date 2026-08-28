@@ -690,3 +690,29 @@ peak_memory_mb 填值、A-8 level_cap 動態化量測)。
 `w5_rejects_trending_impulse_with_w4_in_w2_zone`(自證 overall_pass 前提,
 確保擋的是新閘非 essential 硬閘)。workspace 全綠。**需全市場重跑**
 (DELETE neely facts → run-all → gate + 抽驗複跑)後收案。
+
+### Overlap 閘修正複驗全過 — Compaction v2 收案(2026-08-28,neely_core 1.1.1)
+
+Overlap_Trending 閘修正 + `workflows/neely_only.toml` 單核重跑
+(neely 單核 wall 128.4s,6573/6573 ok)後複驗:
+
+- **gate 全 PASS**:inv/w1 全 0、Terminal 360、overflow 0/2192(max 131)、
+  凍結側 p50=26 / p95=53 / **p99=68**、runtime 占比 92.4%
+- **Level-1 抽驗全 PASS**:degree-1 Impulse 1232 → **1162**(−70,與抽驗
+  揭露筆數精確吻合);R7 1162/1162(35 筆 raw fail 全數 Ch9 容忍)、
+  Overlap 1162/1162
+- 修正漣漪(方向皆符預期):Impulse 節點 1716 → 1629(−87,含高階);
+  Diagonal:Ending 363 → 360(tiling 連動);W5 拒絕 3512 → 3618(+106);
+  Zigzag 等 `:3` 族小幅重分配
+- 版本 **1.1.0 → 1.1.1**(閘修正後批次標記,便於 source_version 驗證)
+
+**手尾**:該輪 DELETE neely facts 未生效 — Windows PowerShell 5.1
+`Set-Content -Encoding UTF8` 寫 BOM,PG 對 `﻿ DELETE` 報 syntax
+error,run-all 以 ON CONFLICT 疊加(facts_new 20,883,舊敘述未清)。
+`run_sql_file.py` 改 `utf-8-sig` 讀檔;收案末步 = DELETE
+`source_core = 'neely_core'` + neely_only 重跑(1.1.1 全量重生)。
+
+三項手動檢視至此全數通過(RSS 218MB / 抽驗 / 前端 API 全 200 +
+MCP payload PASS WITH WARNINGS 既有項)。**Compaction v2 就此收案**;
+獨立拍板項與 backlog 照舊(is_running_correction / TAIEX 殘列 /
+peak_memory_mb / A-8 動態化 / facts 零使用索引 drop)。
