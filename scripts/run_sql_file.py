@@ -53,24 +53,32 @@ def main() -> int:
 
     conn = psycopg.connect(load_dsn())
     conn.autocommit = True  # VACUUM / ANALYZE 不可在 transaction 內
+    # VACUUM VERBOSE 等 server 訊息直印(否則長句看似無聲卡住)
+    conn.add_notice_handler(
+        lambda d: print(f"   [notice] {d.message_primary}", flush=True)
+    )
     rc = 0
-    for stmt in statements:
+    for i, stmt in enumerate(statements, 1):
         head = " ".join(stmt.split())[:80]
+        print(f"[{i}/{len(statements)}] {head} ...", flush=True)
         start = time.monotonic()
         try:
             with conn.cursor() as cur:
                 cur.execute(stmt)
                 if cur.description is not None:
                     cols = [d.name for d in cur.description]
-                    print(f"-- {head}")
-                    print("   " + " | ".join(cols))
+                    print("   " + " | ".join(cols), flush=True)
                     for row in cur.fetchall():
-                        print("   " + " | ".join(str(v) for v in row))
+                        print("   " + " | ".join(str(v) for v in row), flush=True)
+        except KeyboardInterrupt:
+            print(f"[interrupted] {head} — 使用者中斷,後續語句未執行", flush=True)
+            conn.close()
+            return 130
         except Exception as e:  # noqa: BLE001 — 維護腳本逐句報錯不中斷
-            print(f"[err] {head} — {e}")
+            print(f"[err] {head} — {e}", flush=True)
             rc = 1
             continue
-        print(f"[ok] {head} ({time.monotonic() - start:.1f}s)")
+        print(f"[ok] ({time.monotonic() - start:.1f}s)", flush=True)
     conn.close()
     return rc
 

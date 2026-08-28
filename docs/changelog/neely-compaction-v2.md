@@ -622,3 +622,26 @@ p99=69 即凍結側預期值 — 40 對密集檔結構上不可達,與召回 98%
 NOTHING — 舊引擎 forest 的 neely facts 仍留表中,切換後新舊 fact 敘述
 並存;依 Round N 慣例建議 DELETE neely_core facts + 全市場 rerun +
 `maintain_facts_stats.sql`(六檔實測本輪 neely facts_new = 225)。
+
+### 切換後全市場驗收(2026-08-28 本機)— p99 門檻拍板數據到齊
+
+DELETE neely facts → 全市場 run-all(v2 binary)→ ANALYZE → gate:
+
+- **wall time 147.6 min(8855s)**(vs 前夜 480 min — facts stats 維護成效
+  在真實負載確認;traditional 11142s 占近七成、neely 2025s)
+- neely 6573/6573 全 ok;facts_new **84,532**(DELETE 後 v2 全量重生,
+  舊引擎敘述清除完成);錯誤全屬既有類別(kalman_forecast 新股 bars 不足、
+  traditional/vwap 缺 Silver 供料),與 neely 無關
+- gate(2192 檔;1 檔無 compaction_v2 = `_index_taiex_` 殘列):
+  inv/w1 全 0 ✅、Terminal 363 ✅、runtime 占比 91.4% ✅、
+  **overflow(forest_max_size 200)= 0/2191**;
+  **凍結側 forest p50=26 / p95=53 / p99=69、max=131(00702)**,
+  與 shadow 期收集 proxy 完全一致(凍結 = 收集,語意確認)
+- W5 拒絕 3512 唯一視窗(RuleRejection 全數入 diagnostics.rejections)
+- ANALYZE 三表完成(facts dead_pct 6.45% < 10%,VACUUM 依腳本自身門檻
+  免跑);`run_sql_file.py` 補 notice 直印 + flush + 中斷處理
+
+**p99 拍板題數據**:>40 共 114 檔(前十:00702=131 / 6910=116 / 00762=91 /
+00830=87 / 2012=85 / …)— 舊門檻 40 出自 Level-0 forest 形狀(p99=16 ×
+2.5),對 (A) 全量收集語意不適用;forest_max_size 200 全市場零觸發、
+max 131 留 34% 餘量。
