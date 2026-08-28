@@ -196,8 +196,9 @@ V2 WAVE 欄是 placeholder(spec CL4),真實端點留 production 拍版 (a)/(b)/(
 全市場 2171 stocks × 40 cores ~2.5h,P0-Gate forest max 69/70/58 ≪ 200 全過。
 詳見 docs/changelog/v4.30-v4.38.md §v4.37。
 
-當前狀態:alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 688 passed(2026-08-26 實測);
-Python `pytest tests/` 526 passed / 1 skipped(2026-06-10 實測);MCP 14 public tools;universe ~2172 stocks × 41 cores;
+當前狀態:alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 660 passed(2026-08-28 實測,
+Compaction v2 切換刪舊後);Python `pytest tests/` 1037 passed / 2 xfailed(2026-08-28 實測;`test_syspath`
+於 sandbox editable install 環境 fail 屬環境項,本機 .venv 不受影響);MCP 14 public tools;universe ~2172 stocks × 41 cores;
 collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`。
 
 ## helper 腳本清單
