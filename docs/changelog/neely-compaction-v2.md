@@ -716,3 +716,9 @@ error,run-all 以 ON CONFLICT 疊加(facts_new 20,883,舊敘述未清)。
 MCP payload PASS WITH WARNINGS 既有項)。**Compaction v2 就此收案**;
 獨立拍板項與 backlog 照舊(is_running_correction / TAIEX 殘列 /
 peak_memory_mb / A-8 動態化 / facts 零使用索引 drop)。
+
+**收案末步完成(2026-08-28)**:DELETE neely facts(runner utf-8-sig 修後
+生效)→ neely_only 單核重跑 wall 122.7s、6573/6573 ok、facts_new
+**84,370**(1.1.1 全量重生;vs 修正前引擎 84,532,−162 = 被拒 Impulse
+場景敘述差;events 89,176 與前輪同,差額為 uq_facts_dedup 同 run 內去重)。
+**Compaction v2 正式關案。**

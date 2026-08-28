@@ -249,9 +249,9 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
    overflow 0/2191、p99=68、runtime 92.4%)+ 抽驗 1162/1162 + RSS 218MB
    + MCP payload PASS。報告:
    `docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`;
-   歷程 `docs/changelog/neely-compaction-v2.md`。**殘留手尾**(本機):
-   DELETE neely facts + `workflows/neely_only.toml` 單核重跑
-   (首次 DELETE 因 PS BOM 未執行,runner 已改 utf-8-sig)。獨立拍板項:
+   歷程 `docs/changelog/neely-compaction-v2.md`。facts 已 DELETE + 以
+   1.1.1 全量重生(84,370 筆,`workflows/neely_only.toml` 單核 ~2 min)。
+   獨立拍板項:
    `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級);
    TAIEX 於 `price_daily_fwd` 無供料另列 backlog(`_index_taiex_` 殘列可刪)。
 2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
