@@ -18,7 +18,7 @@
 | 1 | M0:Ch6 閘接回 ladder + Running b>a+c(neely 1.2.0) | ✅ |
 | 2 | E1 assumptions/E4 ambiguity/E2 robust + reverse_logic 退場(neely 1.3.0) | ✅ |
 | 3 | J1 wave_judgments 表 + anchor_key + dossier 讀路徑切換 | ✅ |
-| 4 | 判讀驗證器 + CLI/POST 寫路徑 + neely-judgment skill | ⬜ |
+| 4 | 判讀驗證器 + CLI/POST 寫路徑 + neely-judgment skill | ✅ |
 | 5 | S3 下游(track1/emitter/V2/wave_impulse)+ J2 diff + refresh hook + 前端 | ⬜ |
 | 6 | 收尾(CLAUDE.md 輪替 / runbook 定稿) | ⬜ |
 
@@ -114,3 +114,26 @@ report clone push `passed`(memo 共享 `Rc<ValidationReport>` 不可變,beam 鍵
   舊契約);新 `test_judgment_anchor_key`(golden)/`test_judgment_dossier`(15)/
   `test_dossier`(tool-level + payload 雙釘);web `/waves` additive 斷言;
   **pytest 全套 1036 passed / 2 xfailed**(基線 1037;淨 -1 = 舊契約測試汰換)
+
+## Phase 4 紀錄(M3:驗證器 + 寫路徑 + skill)
+
+- **驗證器**(`src/fusion/judgment/validate.py`,§2 階段 4 / §10 全項):候選集約束
+  (拒絕附 `legal_keys`)、`single` ⇒ 恰 1 preferred 且 robust ≠ false(null = 未知放行)、
+  `contested` ⇒ 1 preferred + ≥1 alternate、`no_fit` ⇒ accepted=[] + 非空 no_fit_reason
+  (落 `rationale.no_fit_reason`;缺口表 = `confidence_class='no_fit'` 查詢,不另開表)、
+  `as_of ≤ snapshot_date`(§11)、invalidation 禁空;PIT 錨定
+  (snapshot_date/params_hash/engine_version/assumption_hash)提交時從 dossier 拷貝;
+  accepted 候選 triggers 併入 `invalidation.recorded_triggers`(J2 用記錄值不重算)
+- **CLI**:`python src/main.py judgment submit --file j.json [--judged-by]` /
+  `judgment list --stocks` / `judgment diff [--stocks]`(diff 實作 Phase 5 接);
+  submit 拒絕時印合法 anchor_key 清單,退碼 1
+- **POST /judgments**(web API 首個寫端點,2026-08-30 拍版):同一套驗證器;
+  422 帶 `{error, legal_anchor_keys}`;CORS methods 加 POST(app 門面文案同步
+  「除 /judgments 外全唯讀」)
+- **skill**:`.claude/skills/neely-judgment/`(**repo 首個 project skill**,
+  jarry-skill-ref 格式)— SKILL.md(7 步 protocol mermaid + 禁止清單)+
+  `references/qualitative-rules.md`(Emulation 7 型 / Missing Wave 最少資料點表 /
+  Proportion / Neutrality Aspect-2 / Reverse Logic 人類語意 / Localized Change,
+  全部引 m3Spec/neely_rules.md 行號)+ `dossier-reading.md` + `output-schema.json`
+  (與驗證器以測試互鎖)
+- tests:validate 逐規則 14 + POST 3 + schema 互鎖 2;**pytest 全套 1053 passed / 2 xfailed**

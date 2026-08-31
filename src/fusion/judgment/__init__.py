@@ -23,8 +23,11 @@ from .db import (
     insert_judgment,
 )
 from .dossier import CANDIDATES_CAP, LIVE_EDGE_BARS, build_dossier
+from .validate import JudgmentValidationError, validate_judgment
 
 __all__ = [
+    "JudgmentValidationError",
+    "validate_judgment",
     "anchor_key",
     "scenario_anchor_key",
     "pattern_tag",

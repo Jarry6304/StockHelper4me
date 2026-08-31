@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "wave_judgment",
+  "description": "判讀 JSON(wave_judgment_loop §5/§7;驗證器 src/fusion/judgment/validate.py 與本檔以測試互鎖)",
+  "type": "object",
+  "required": ["stock_id", "timeframe", "as_of", "judged_by", "accepted", "rationale", "invalidation", "confidence_class"],
+  "properties": {
+    "stock_id": { "type": "string", "minLength": 1 },
+    "timeframe": { "enum": ["daily", "weekly", "monthly"] },
+    "as_of": { "type": "string", "format": "date", "description": "判讀所見最後 bar;必須 ≤ dossier snapshot_ref.snapshot_date" },
+    "judged_by": { "type": "string", "pattern": "^(human|llm:.+)$" },
+    "accepted": {
+      "type": "array",
+      "description": "限定 dossier candidates[].anchor_key;no_fit 時必為 []",
+      "items": {
+        "type": "object",
+        "required": ["anchor_key", "role"],
+        "properties": {
+          "anchor_key": { "type": "string", "minLength": 1 },
+          "role": { "enum": ["preferred", "alternate"] }
+        }
+      }
+    },
+    "degree_read": { "type": ["string", "null"], "description": "monthly→weekly→daily 讀出的 degree(protocol 步 1)" },
+    "rationale": {
+      "type": "object",
+      "required": ["rule_refs", "notes"],
+      "properties": {
+        "rule_refs": { "type": "array", "items": { "type": "string" }, "description": "引擎規則結果 + qualitative 規則逐條;非 no_fit 不可為空" },
+        "emulation_considered": { "type": "array", "items": { "type": "string" } },
+        "prior_judgment_id": { "type": ["integer", "null"] },
+        "minimal_change": { "type": ["string", "null"] },
+        "notes": { "type": "string", "description": "第一段 = assumptions 影響聲明(protocol 步 0)" }
+      }
+    },
+    "invalidation": {
+      "type": "object",
+      "required": ["price_levels"],
+      "description": "非 no_fit 時 price_levels 或 time_limit_bar 至少一項;與候選 invalidation_triggers 一致或更嚴",
+      "properties": {
+        "price_levels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["level", "meaning"],
+            "properties": {
+              "level": { "type": "number" },
+              "meaning": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "time_limit_bar": { "type": ["string", "null"], "format": "date" }
+      }
+    },
+    "confidence_class": { "enum": ["single", "contested", "no_fit"] },
+    "no_fit_reason": { "type": ["string", "null"], "description": "no_fit 時必填:缺什麼(引擎缺口回饋)" },
+    "supersedes_id": { "type": ["integer", "null"], "description": "取代的前次判讀 id(重判時填)" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "confidence_class": { "const": "no_fit" } } },
+      "then": {
+        "properties": {
+          "accepted": { "maxItems": 0 },
+          "no_fit_reason": { "type": "string", "minLength": 1 }
+        },
+        "required": ["no_fit_reason"]
+      }
+    },
+    {
+      "if": { "properties": { "confidence_class": { "const": "single" } } },
+      "then": { "properties": { "accepted": { "minItems": 1, "maxItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "confidence_class": { "const": "contested" } } },
+      "then": { "properties": { "accepted": { "minItems": 2 } } }
+    }
+  ]
+}

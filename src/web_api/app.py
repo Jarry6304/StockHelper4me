@@ -1,7 +1,8 @@
 """FastAPI app factory — 壓縮中介層 + routers(每請求 sync conn,無 pool / 無 lifespan)。
 
 跑:`uvicorn web_api.app:app`(需 `pip install -e ".[web]"` + DATABASE_URL)。
-全端點唯讀 / 切片,零 compute(對齊 m3Spec/read-api.md)。handler 為 sync(FastAPI
+除 `POST /judgments`(判讀錨定,v4.39)外全端點唯讀 / 切片,零 compute
+(對齊 m3Spec/read-api.md + wave_judgment_loop §8)。handler 為 sync(FastAPI
 threadpool)+ 每請求 sync psycopg conn(fusion.raw.get_connection)→ 完全不碰 asyncio
 event loop(Windows ProactorEventLoop / Python 3.14 安全)。
 """
@@ -12,7 +13,7 @@ from fastapi import FastAPI
 
 from web_api.compression import add_compression
 from web_api.cors import add_cors
-from web_api.routers import market, screens, series, stocks, waves_summary
+from web_api.routers import judgments, market, screens, series, stocks, waves_summary
 
 
 def create_app() -> FastAPI:
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(market.router)
     app.include_router(screens.router)
     app.include_router(waves_summary.router)
+    app.include_router(judgments.router)  # v4.39 首個寫端點(判讀錨定)
     return app
 
 

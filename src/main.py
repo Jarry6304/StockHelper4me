@@ -224,6 +224,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="full_rebuild 時往回幾天(預設由 builder 決定,magic_formula = 30)",
     )
 
+    # ── judgment 子命令(wave_judgment_loop:判讀提交 / 查詢 / J2 錨定 diff)
+    judgment_parser = subparsers.add_parser(
+        "judgment",
+        help="波浪判讀迴路(m3Spec/wave_judgment_loop.md:submit / list / diff)",
+    )
+    judgment_subparsers = judgment_parser.add_subparsers(dest="judgment_command", required=True)
+    judgment_submit_parser = judgment_subparsers.add_parser(
+        "submit",
+        help="提交判讀 JSON(驗證候選集約束後 INSERT wave_judgments)",
+    )
+    judgment_submit_parser.add_argument("--file", required=True, help="判讀 JSON 檔路徑(- = stdin)")
+    judgment_submit_parser.add_argument("--judged-by", help="覆寫 judged_by('human' / 'llm:<model>')")
+    judgment_list_parser = judgment_subparsers.add_parser(
+        "list",
+        help="列出判讀歷史(supersedes 鏈全列,新到舊)",
+    )
+    judgment_list_parser.add_argument("--stocks", required=True, help="股票代號(單檔)")
+    judgment_list_parser.add_argument("--timeframe", choices=["daily", "weekly", "monthly"])
+    judgment_list_parser.add_argument("--limit", type=int, default=20)
+    judgment_diff_parser = judgment_subparsers.add_parser(
+        "diff",
+        help="J2 錨定 diff:對全部 active 判讀比對最新 forest(run-all 後跑)",
+    )
+    judgment_diff_parser.add_argument("--stocks", help="限縮股票(逗號分隔);不指定 = 全部 active")
+
     # ── golden 子命令(Golden L3 fusion 物化:levels/resonance/climate → structural_snapshots)
     golden_parser = subparsers.add_parser(
         "golden",
@@ -612,6 +637,11 @@ def main() -> None:
         _run_golden_fusion(args, config)
         return
 
+    # judgment 指令(wave_judgment_loop:submit / list / diff)
+    if args.command == "judgment":
+        _run_judgment(args)
+        return
+
     # refresh 指令(一鍵手動更新最新資料)
     if args.command == "refresh":
         asyncio.run(_run_refresh(args, config, stock_list_cfg))
@@ -955,6 +985,113 @@ def _run_golden_fusion(args, config) -> None:
             print()
     finally:
         db.close()
+
+
+# =============================================================================
+# 子命令:judgment(wave_judgment_loop:submit / list / diff)
+# =============================================================================
+
+
+def _run_judgment(args) -> None:
+    """judgment 子命令 dispatcher(m3Spec/wave_judgment_loop.md §2)。
+
+    - submit:讀判讀 JSON → build dossier → 驗證(候選集約束)→ INSERT。
+      拒絕時列出合法 anchor_key 清單,退碼 1。
+    - list:supersedes 鏈全列(新到舊)。
+    - diff:J2 錨定 diff(run-all 後跑;refresh chain 亦掛此步)。
+    """
+    import json as _json
+    import sys as _sys
+    from datetime import date as _date
+
+    from fusion.raw._db import get_connection
+
+    if args.judgment_command == "submit":
+        from fusion.judgment import (
+            JudgmentValidationError, build_dossier, insert_judgment, validate_judgment,
+        )
+
+        raw = (
+            _sys.stdin.read() if args.file == "-"
+            else Path(args.file).read_text(encoding="utf-8")
+        )
+        judgment = _json.loads(raw)
+        if getattr(args, "judged_by", None):
+            judgment["judged_by"] = args.judged_by
+
+        conn = get_connection()
+        try:
+            as_of_str = judgment.get("as_of")
+            as_of = (
+                _date.fromisoformat(str(as_of_str)) if as_of_str else _date.today()
+            )
+            dossier = build_dossier(
+                conn, stock_id=str(judgment.get("stock_id") or ""), as_of=as_of,
+            )
+            try:
+                row = validate_judgment(judgment, dossier)
+            except JudgmentValidationError as e:
+                print(f"[judgment] 拒絕:{e}")
+                if e.legal_keys:
+                    print("[judgment] 合法 anchor_key:")
+                    for k in e.legal_keys:
+                        print(f"  - {k}")
+                _sys.exit(1)
+            new_id = insert_judgment(conn, row)
+            print(
+                f"[judgment] 已寫入 id={new_id}({row['stock_id']} {row['timeframe']} "
+                f"{row['confidence_class']},judged_by={row['judged_by']})"
+            )
+        finally:
+            conn.close()
+        return
+
+    if args.judgment_command == "list":
+        from fusion.judgment import fetch_judgments
+
+        conn = get_connection()
+        try:
+            rows = fetch_judgments(
+                conn, stock_id=args.stocks,
+                timeframe=getattr(args, "timeframe", None),
+                limit=args.limit,
+            )
+            if not rows:
+                print("[judgment] 無判讀紀錄")
+                return
+            for r in rows:
+                print(
+                    f"  #{r['id']} {r['stock_id']} {r['timeframe']} as_of={r['as_of']} "
+                    f"{r['confidence_class']} status={r['status']} by={r['judged_by']}"
+                    + (f" supersedes=#{r['supersedes_id']}" if r.get("supersedes_id") else "")
+                )
+        finally:
+            conn.close()
+        return
+
+    if args.judgment_command == "diff":
+        from fusion.judgment.diff import run_anchor_diff
+
+        stocks = (
+            [s.strip() for s in args.stocks.split(",") if s.strip()]
+            if getattr(args, "stocks", None) else None
+        )
+        conn = get_connection()
+        try:
+            summary = run_anchor_diff(conn, stock_ids=stocks)
+        finally:
+            conn.close()
+        print(
+            f"[judgment] J2 diff:checked={summary['checked']} intact={summary['intact']} "
+            f"invalidated={summary['invalidated']} absorbed={summary['absorbed']} "
+            f"vanished={summary['vanished']}(engine_regression={summary['engine_regression']})"
+        )
+        if summary["engine_regression"]:
+            logger.error(
+                "[judgment] engine_regression 告警:同 assumption_hash 下曾接受的合法候選"
+                f"消失 {summary['engine_regression']} 筆 — 引擎 bug,非市場(§J2 判定 4)"
+            )
+        return
 
 
 # =============================================================================
