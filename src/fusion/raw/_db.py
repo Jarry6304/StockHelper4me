@@ -369,3 +369,23 @@ def fetch_structural_latest(
     with conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()
+
+
+def fetch_traditional_latest(
+    conn,
+    *,
+    stock_id: str,
+    timeframe: str,
+) -> dict[str, Any] | None:
+    """traditional_snapshots 最新一筆(by computed_at;該表無 snapshot_date,
+    latest-per-(stock, timeframe, params) 語意)。dossier traditional 段用。"""
+    sql = """
+        SELECT stock_id, timeframe, forest, diagnostics, params_hash, computed_at
+        FROM traditional_snapshots
+        WHERE stock_id = %s AND timeframe = %s
+        ORDER BY computed_at DESC
+        LIMIT 1
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, [stock_id, timeframe])
+        return cur.fetchone()

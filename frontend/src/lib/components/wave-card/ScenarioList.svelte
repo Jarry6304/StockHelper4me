@@ -6,6 +6,8 @@
 
   export let scenarios: Scenario[];
   export let selectedId: string | null = null;
+  /** v4.39:active judgment 的 accepted 候選 id(高亮 ⚓)。 */
+  export let acceptedIds: string[] = [];
   /** 透傳給每張 ScenarioCard,用來算 recency。 */
   export let asOf: string | null = null;
 
@@ -28,6 +30,7 @@
     <ScenarioCard
       {scenario}
       selected={selectedId === scenario.id}
+      anchored={acceptedIds.includes(scenario.id)}
       displayId={`S${i + 1}`}
       {asOf}
       on:select={handleSelect}

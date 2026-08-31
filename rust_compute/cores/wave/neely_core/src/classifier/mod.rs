@@ -28,7 +28,7 @@
 
 use crate::candidates::WaveCandidate;
 use crate::output::{
-    compaction_base_label, CombinationKind, ComplexityLevel, DiagonalKind, FibZone,
+    compaction_base_label, Ch6Status, CombinationKind, ComplexityLevel, DiagonalKind, FibZone,
     MonowaveStructureLabels, NeelyPatternType, PostBehavior, PowerRating, RoundState,
     RuleId, Scenario, StructuralFacts, StructureLabel, Trigger, WaveNode, ZigzagKind,
 };
@@ -126,6 +126,8 @@ pub fn classify(
         power_rating: PowerRating::Neutral, // Stage 10a Power Rating 查表後填
         max_retracement: None,               // Stage 10a 補
         post_pattern_behavior: PostBehavior::Unconstrained,
+        ch6_status: Ch6Status::Deferred, // Level-0 資訊性路徑無 Ch6 評估
+        robust: true,                    // Stage 13 對 forest 覆寫;Level-0 不消費
         passed_rules: derived_passed.clone(),
         deferred_rules: report.deferred.clone(),
         // G2.2 修復(compaction v2「Level-N 規則欄真值」附帶):count 與 passed_rules
@@ -310,7 +312,7 @@ fn classify_3wave(
 ///
 /// 流程:
 ///   1. 抽 a / b / c monowave magnitudes
-///   2. 先試 `flat_classifier::is_running_correction`(b > a + c < a)→ RunningCorrection
+///   2. 先試 `flat_classifier::is_running_correction`(b > a + c)→ RunningCorrection
 ///   3. 再試 `flat_classifier::classify_flat` → FlatKind 之一
 ///   4. 都失敗(b/a < 61.8%)→ Zigzag { Single }
 fn classify_3wave_segment(
@@ -1010,11 +1012,11 @@ mod tests {
 
     #[test]
     fn three_wave_classified_as_running_correction_when_b_above_a_and_c_short() {
-        // Phase 16 r5:b > a AND c < a → RunningCorrection 上提頂層
+        // 1.2.0:b > a + c(c 終點未回到 a 起點)→ RunningCorrection 上提頂層
         let classified = vec![
             cmw(100.0, 110.0, MonowaveDirection::Up),        // a = 10
-            cmw(110.0, 97.0, MonowaveDirection::Down),       // b = 13(130% × a)
-            cmw(97.0, 105.0, MonowaveDirection::Up),         // c = 8(80% × a)
+            cmw(110.0, 97.0, MonowaveDirection::Down),       // b = 13 > a + c
+            cmw(97.0, 99.0, MonowaveDirection::Up),          // c = 2(終點 99 < a 起點 100)
         ];
         let candidate = WaveCandidate {
             id: "c3-running".to_string(),

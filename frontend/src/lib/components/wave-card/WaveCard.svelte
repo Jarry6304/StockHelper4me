@@ -3,6 +3,8 @@
   import type { ResonanceFusion } from '$contracts/fusion';
   import type { TraditionalForestOutput } from '$lib/api/traditional';
   import type { Timeframe } from '$lib/api/neely';
+  import type { ActiveJudgmentSummary, WaveDossier } from '$lib/api/waves';
+  import { buildAnchorJudgment, JudgmentRejectedError, postJudgment } from '$lib/api/judgments';
   import type { OhlcPoint } from '$lib/wave/plotly-build';
   import { createEventDispatcher } from 'svelte';
   import TopBar from './TopBar.svelte';
@@ -22,6 +24,8 @@
   export let neely: NeelyCoreOutput | null = null;
   /** Traditional (Frost & Prechter EWP) — 沒有 contracts/ 嚴格型別,用寬鬆 shape。 */
   export let traditional: TraditionalForestOutput | null = null;
+  /** 判讀證據卷宗(/waves 第三段;v4.39 additive — 缺 → 判讀功能降級隱藏)。 */
+  export let dossier: WaveDossier | null = null;
   /** Track2 統計帶來源(可選)。 */
   export let resonance: ResonanceFusion | null = null;
   /** 後復權 OHLCV(/stocks/{id}/ohlc)— 兩張波浪圖的 K 棒時間背景(可選)。 */
@@ -59,6 +63,68 @@
   // Traditional 路徑(寬鬆)— v0.1 只顯示 scenarios.length / structure_label
   $: traditionalScenarios = activeTraditional?.scenario_forest ?? [];
 
+  // ── v4.39 判讀迴路(wave_judgment_loop §8 前端行)────────────────────────
+  // active judgment 由 dossier 附載;「選取→錨定」POST 成功後以 localJudgment
+  // 蓋過(免重抓整頁)。accepted anchor_key → scenario id 的對映走 dossier
+  // 候選(候選已含 anchor_key + id,前端不重算錨定鍵)。
+  let localJudgment: ActiveJudgmentSummary | null = null;
+  let anchorPending = false;
+  let anchorError: string | null = null;
+  let anchorNotice: string | null = null;
+
+  $: tfSection = dossier?.timeframes?.[timeframe] ?? null;
+  $: activeJudgment = localJudgment ?? dossier?.active_judgment?.[timeframe] ?? null;
+  $: candidateByAnchor = new Map((tfSection?.candidates ?? []).map((c) => [c.anchor_key, c]));
+  $: acceptedEntries = activeJudgment?.accepted ?? [];
+  $: judgedScenarioId = (() => {
+    const preferred = acceptedEntries.find((a) => a.role === 'preferred');
+    if (!preferred) return null;
+    return candidateByAnchor.get(preferred.anchor_key)?.id ?? null;
+  })();
+  $: acceptedScenarioIds = acceptedEntries
+    .map((a) => candidateByAnchor.get(a.anchor_key)?.id)
+    .filter((id): id is string => typeof id === 'string');
+
+  async function onAnchor(e: CustomEvent<{ scenarioId: string }>) {
+    anchorError = null;
+    anchorNotice = null;
+    const snapshotDate = tfSection?.snapshot_ref?.snapshot_date;
+    const candidate = (tfSection?.candidates ?? []).find((c) => c.id === e.detail.scenarioId);
+    if (!candidate || !snapshotDate) {
+      anchorError = '此候選不在 dossier 候選集(live-edge)內,無法錨定';
+      return;
+    }
+    anchorPending = true;
+    try {
+      const res = await postJudgment(
+        buildAnchorJudgment({ stockId, timeframe, snapshotDate, candidate })
+      );
+      localJudgment = {
+        id: res.id,
+        as_of: snapshotDate,
+        judged_by: 'human',
+        accepted: [{ role: 'preferred', anchor_key: candidate.anchor_key }],
+        degree_read: null,
+        confidence_class: res.confidence_class,
+        invalidation: null,
+        status: res.status,
+        assumption_hash: dossier?.engine?.assumption_hash ?? null,
+        engine_version: dossier?.engine?.neely ?? null
+      };
+      anchorNotice = `已錨定判讀 #${res.id}(${res.confidence_class})`;
+    } catch (err) {
+      if (err instanceof JudgmentRejectedError) {
+        anchorError = `判讀被拒:${err.message}`;
+      } else if (err instanceof Error) {
+        anchorError = `錨定失敗:${err.message}`;
+      } else {
+        anchorError = '錨定失敗(未知錯誤)';
+      }
+    } finally {
+      anchorPending = false;
+    }
+  }
+
   // 是否顯式無法判斷(L6)
   $: shouldShowInsufficient =
     waveSource === 'neely' &&
@@ -94,6 +160,9 @@
   function onTimeframeChange(e: CustomEvent<{ timeframe: Timeframe }>) {
     timeframe = e.detail.timeframe;
     selectedScenarioId = null;
+    localJudgment = null; // 判讀是 per-timeframe 的
+    anchorError = null;
+    anchorNotice = null;
     dispatch('timeframe-change', { timeframe });
   }
 
@@ -131,12 +200,21 @@
       selectedScenarioId={state === 'detail' ? selectedScenarioId : null}
     />
 
+    {#if anchorNotice}
+      <div class="anchor-msg ok" role="status">⚓ {anchorNotice}</div>
+    {/if}
+    {#if anchorError}
+      <div class="anchor-msg err" role="alert">{anchorError}</div>
+    {/if}
+
     {#if state === 'overview'}
       <Overview
         monowaves={neelyMonowaves}
         scenarios={neelyScenarios}
         {asOf}
         {ohlcSeries}
+        {judgedScenarioId}
+        judgment={activeJudgment}
         on:expand={toDetail}
       />
     {:else}
@@ -148,7 +226,13 @@
         {selectedScenarioId}
         {resonance}
         {layers}
+        {judgedScenarioId}
+        {acceptedScenarioIds}
+        judgment={activeJudgment}
+        anchorEnabled={!!tfSection?.snapshot_ref}
+        {anchorPending}
         on:scenario-select={onScenarioSelect}
+        on:anchor={onAnchor}
       />
       <div class="collapse">
         <button type="button" on:click={toOverview} aria-label="收合到總覽">
@@ -206,6 +290,27 @@
   .collapse button:hover {
     color: var(--ink);
     border-color: var(--ink-dim);
+  }
+
+  .anchor-msg {
+    margin: 8px 14px 0;
+    padding: 6px 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    border-radius: 6px;
+  }
+
+  .anchor-msg.ok {
+    color: var(--wave);
+    background: #0c2030;
+    border: 1px solid #21466a;
+  }
+
+  .anchor-msg.err {
+    color: var(--inval);
+    background: #1c0f14;
+    border: 1px dashed #5a3340;
+    white-space: pre-wrap;
   }
 
   /* TraditionalView 取代了舊 placeholder,其樣式內含 */

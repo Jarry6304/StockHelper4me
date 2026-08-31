@@ -57,6 +57,11 @@ round_branch_cap_hits: number,
  */
 w5_rejected_windows: number, 
 /**
+ * Ch6 Stage 1 硬閘拒絕的唯一 (視窗, kind) 數(neely_ch6_gate_running_fix;
+ * 與 `w5_rejected_windows` 分計,gate 報告 Ch5/Ch6 歸因不混淆)
+ */
+ch6_rejected_kinds: number, 
+/**
  * G2.2 Q3 雙軌實驗(§12):完成端點版 vs bars 反查版比對的唯一 5-窗數
  */
 q3_windows: number, 

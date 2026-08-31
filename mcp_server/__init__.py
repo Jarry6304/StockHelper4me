@@ -8,7 +8,7 @@ Transport: stdio(本機 process)。Phase 2 再 lift 同套 tools 到 HTTP transp
 給 mobile / 多人共享。
 
 **Public tools(LLM 入口,v2 拍版:3 個高度封裝)**:
-- `neely_forecast(stock_id, date)` — NEoWave 4 時間框架預測(月 / 季 / 半年 / 年)
+- `neely_forecast(stock_id, date)` — NEoWave 證據 dossier(三 timeframe live-edge 候選 + anchor_key;無 primary)
 - `stock_health(stock_id, date)` — 個股 4 維健康度評分 + top 5 訊號
 - `market_context(date)` — 大盤環境綜合判讀 + systemic risks
 

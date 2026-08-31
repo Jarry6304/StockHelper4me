@@ -133,6 +133,8 @@ mod tests {
 
     fn make_scenario(pattern: NeelyPatternType, classified: &[ClassifiedMonowave]) -> Scenario {
         Scenario {
+            ch6_status: crate::output::Ch6Status::Deferred,
+            robust: true,
             wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {

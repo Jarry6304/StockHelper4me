@@ -30,8 +30,9 @@ DOWN** → 預期新 impulse 啟動(對齊 NEoWave「A-B-C 結束後啟動新 im
 ## 設計約束(對齊 cores_overview §四 + §十四)
 
 - 零耦合:只讀 structural_snapshots JSONB + price_daily_fwd,不 reach into Rust
-- 不抽象:per-stock 邏輯 inline 寫,picker 函式從 fusion/dual_track/track1.py
-  inline import(underscore-private 同 repo 內 OK,picker 抽 _picker.py 留下個 PR)
+- 不抽象:per-stock 邏輯 inline 寫,共用 helpers 從 fusion/_picker.py 取
+  (underscore-private 同 repo 內 OK);v4.39 起無 canonical picker fallback —
+  Step 5 走 active judgment(wave_judgment_loop §8)
 - best-guess thresholds(RECENT_DAYS=14 / RR_MIN=1.5)走 module 常數,
   production verify 後 calibrate(對齊 v3.32 F-Score 7→6 hotfix pattern)
 
@@ -66,12 +67,13 @@ from fusion._picker import (
     power_rating_strength as _power_rating_strength,
 )
 # B1:_DEGREE_RANK / _effective_degree 已收斂到 _picker(對齊 Rust canonical)。
-# track1.py 留兩支讀取面工具:_extract_all_invalidation_thresholds(A-3 閘門全 trigger 解析)
-# + _pick_primary(讀取面 picker 對齊 v3.35;寫入面 picker 走 neely_emitter._pick_primary)。
+# track1.py 留讀取面工具 _extract_all_invalidation_thresholds(A-3 閘門全 trigger
+# 解析)。v4.39(wave_judgment_loop §8):track1 舊 picker 函式已刪除 — Step 5
+# fallback 改 active judgment 的 accepted[preferred](無 → None/略過)。
 from fusion.dual_track.track1 import (  # noqa: F401
     _extract_all_invalidation_thresholds,
-    _pick_primary,
 )
+from fusion.judgment.anchor_key import scenario_anchor_key
 
 logger = logging.getLogger("collector.cross_cores.wave_impulse_screen")
 
@@ -313,6 +315,7 @@ def current_wave_position(
 def _pick_recent_correction(
     forest: list[dict], snapshot_date: date,
     *, recent_days: int = RECENT_DAYS,
+    judgment_preferred: dict | None = None,
 ) -> dict | None:
     """r3 wave_screen 專屬 picker — 找最近完成的 3-wave Zigzag/Flat correction。
 
@@ -326,12 +329,15 @@ def _pick_recent_correction(
     3. 排序 (end_date DESC, degree↓, power↓, rules↓);取最近最強
     4. 若無 recent correction → fallback 最近的 Impulse complete scenario
        (emit IMPULSE_COMPLETE observe row)
-    5. 若連 Impulse 都沒 → fallback canonical _pick_primary
+    5. 若連 Impulse 都沒 → active judgment 的 accepted[preferred](v4.39,
+       wave_judgment_loop §8;無 judgment → None,該 row 略過 — 引擎層
+       不再替讀者選 primary)
 
     這對齊 NEoWave「A-B-C 結束後啟動新 impulse」設計精神。
 
     Args:
         recent_days: 2A calibration kwarg(預設 module 常數 RECENT_DAYS=14)
+        judgment_preferred: 已對回最新 forest 的 preferred 候選(caller 解析)
     """
     if not forest:
         return None
@@ -375,8 +381,8 @@ def _pick_recent_correction(
         ), reverse=True)
         return impulses[0][1]
 
-    # Step 5:final fallback — canonical picker
-    return _pick_primary(forest)
+    # Step 5:final fallback — active judgment preferred(無 → None/略過)
+    return judgment_preferred
 
 
 def _pattern_kind_ok(scenario: dict) -> tuple[bool, str | None]:
@@ -671,6 +677,43 @@ def _fetch_structural_snapshots(
     return out
 
 
+def _fetch_active_judgments(db: Any) -> dict[tuple[str, str], dict[str, Any]]:
+    """全市場 active 判讀 per (stock_id, timeframe)(wave_judgment_loop §8)。
+
+    語意鏡射 fusion.judgment.db._ACTIVE_WHERE(status='active' 且無子列;
+    消費優先序 human 先、其次最新)— 此處走 db.query 介面(cross_cores 的
+    sync wrapper),不共用 psycopg conn helper。表不存在 / 查詢失敗 →
+    {}(judgment-aware 是 additive 行為,不阻擋 screen)。
+    """
+    sql = """
+        SELECT DISTINCT ON (w.stock_id, w.timeframe)
+               w.stock_id, w.timeframe, w.id, w.judged_by, w.accepted
+          FROM wave_judgments w
+         WHERE w.status = 'active'
+           AND NOT EXISTS (
+               SELECT 1 FROM wave_judgments c WHERE c.supersedes_id = w.id
+           )
+         ORDER BY w.stock_id, w.timeframe,
+                  (w.judged_by = 'human') DESC, w.as_of DESC, w.created_at DESC
+    """
+    try:
+        rows = db.query(sql, [])
+    except Exception as e:
+        logger.debug(f"[wave_impulse_screen] active judgments 查詢失敗(視為無): {e}")
+        return {}
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        accepted = r.get("accepted")
+        if isinstance(accepted, str):
+            import json
+            try:
+                accepted = json.loads(accepted)
+            except Exception:
+                accepted = []
+        out[(r.get("stock_id"), r.get("timeframe"))] = {**r, "accepted": accepted}
+    return out
+
+
 def _build_row(
     *,
     stock_id: str,
@@ -681,6 +724,7 @@ def _build_row(
     excluded_reason: str | None,
     snapshot_date: date | None = None,
     thresholds: ScreenThresholds = DEFAULT_THRESHOLDS,
+    judgment: dict | None = None,
 ) -> dict[str, Any]:
     """組裝 single row。r3 pivot:r3 picker 找 recent correction,phase 反映
     correction 完成度 + 方向。
@@ -719,14 +763,32 @@ def _build_row(
         return empty_row(stock_id, target_date,
                          excluded_reason="no_snapshot_date", extras=extras)
 
-    # r3 picker:找最近完成的 Zigzag/Flat → fallback Impulse → fallback _pick_primary
+    # v4.39:active judgment 的 preferred 候選對回 forest(Step 5 fallback 用)
+    judgment_preferred: dict | None = None
+    if judgment is not None:
+        preferred_key = next(
+            (a.get("anchor_key") for a in judgment.get("accepted") or []
+             if isinstance(a, dict) and a.get("role") == "preferred"),
+            None,
+        )
+        if preferred_key is not None:
+            judgment_preferred = next(
+                (s for s in forest
+                 if isinstance(s, dict) and scenario_anchor_key(s) == preferred_key),
+                None,
+            )
+
+    # r3 picker:找最近完成的 Zigzag/Flat → fallback Impulse → fallback
+    # active judgment preferred(v4.39;無 → 略過該 row)
     primary = _pick_recent_correction(
         forest, eff_snapshot_date, recent_days=thresholds.recent_days,
+        judgment_preferred=judgment_preferred,
     )
     if primary is None:
         extras["confidence_level"] = "loose"
+        reason = "empty_forest" if not forest else "no_recent_correction_no_judgment"
         return empty_row(stock_id, target_date,
-                         excluded_reason="empty_forest", extras=extras)
+                         excluded_reason=reason, extras=extras)
 
     # pattern_kind label
     _is_corr, pt_label = _pattern_kind_ok(primary)
@@ -968,6 +1030,7 @@ def compute_screen_at_date(
     universe = fetch_universe_filter(db)
     prices = _fetch_all_latest_prices(db, market=market, as_of=target_date)
     snapshots_raw = _fetch_structural_snapshots(db, market=market, as_of=target_date)
+    judgments = _fetch_active_judgments(db)
 
     if not snapshots_raw:
         return [], target_date
@@ -993,6 +1056,7 @@ def compute_screen_at_date(
                 excluded_reason=row_excluded,
                 snapshot_date=tf_snap_date,
                 thresholds=thresholds,
+                judgment=judgments.get((sid, tf)),
             )
             rows.append(row)
 

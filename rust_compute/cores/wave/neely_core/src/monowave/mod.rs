@@ -17,6 +17,7 @@ use crate::output::{Monowave, OhlcvBar, StructureLabelCandidate};
 pub mod neutrality;
 pub mod proportion;
 pub mod pure_close;
+pub mod robustness;
 
 pub use proportion::ProportionMetrics;
 pub use pure_close::{compute_atr_series, detect_monowaves};

@@ -100,6 +100,7 @@ pub mod candidates;
 pub mod ch8_xwave;
 /// v4.4c P1.4c:Ch8 Multiwave 建構偵測(對齊 m3Spec Ch8 §Multiwave 建構)
 pub mod ch8_multiwave;
+pub mod assumptions;
 pub mod classifier;
 pub mod compaction;
 pub mod complexity;
@@ -109,6 +110,7 @@ pub mod degree;
 pub mod emulation;
 pub mod facts;
 pub mod fibonacci;
+pub mod live_edge;
 pub mod missing_wave;
 pub mod monowave;
 pub mod output;
@@ -116,7 +118,6 @@ pub mod pattern_isolation;
 pub mod post_validator;
 pub mod power_rating;
 pub mod pre_constructive;
-pub mod reverse_logic;
 pub mod three_rounds;
 pub mod triggers;
 pub mod validator;
@@ -124,11 +125,15 @@ pub mod validator;
 pub use config::{NeelyCoreParams, NeelyEngineConfig, OverflowStrategy};
 pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 
+/// 引擎版本單一來源:inventory 註冊 / `WaveCore::version()` / facts
+/// `source_version` 皆引此常數(1.2.0 起收攏,防三處字面量漂移)。
+pub const VERSION: &str = "1.3.0";
+
 // inventory 註冊(對齊 m3Spec/cores_overview.md §五 Monolithic Binary 部署模型)
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "1.1.1",
+        VERSION,
         core_registry::CoreKind::Wave,
         "P0",
         "Neely Wave Core(NEoWave 完整體系;Compaction v2 tiling-round serving — P0 Gate v3 收案切換,spec r4)",
@@ -268,7 +273,21 @@ impl WaveCore for NeelyCore {
         // 1.1.0 → 1.1.1(2026-08-28 — Trending Impulse row 補 Overlap_Trending 閘:
         // W4 進 W2 區(Terminal 幾何)的 [:5 :3 :5 :3 :5] 視窗不再凍結為 Impulse;
         // §9.2 Level-1 抽驗揭露,詳 docs/changelog/neely-compaction-v2.md)
-        "1.1.1"
+        // 1.1.1 → 1.2.0(neely_ch6_gate_running_fix — Ch6 確認閘接回 ladder:
+        // post_validator 端點泛化(WaveView)後於 try_ladder W5 族別閘後 per-kind
+        // 評估,Stage 1 fail 硬閘拒絕該 kind(RuleRejection Ch6_*_Stage1 +
+        // diagnostics.ch6_rejected_kinds)、Stage 1 pass 入節點私有 passed(beam
+        // 鍵 2 反映)、live edge → Scenario.ch6_status = Deferred(additive 欄);
+        // is_running_correction 判準 b>a && c<a proxy → **b > a + c**
+        // (Level-0 / Level-N 同源,classify_3wave_mags 單一路徑))
+        // 1.2.0 → 1.3.0(wave_judgment_loop E1–E4 additive 證據欄:
+        // E1 assumptions 8 常數清單 + assumption_hash(sha256 前 16 hex,
+        // 常數原地引用不重打);E2 Scenario.robust(REVERSAL_ATR {0.3,0.5,0.7}
+        // 三組偵測端點齊在;Stage 13,multiplier 不進 config 保 params_hash);
+        // E4 live_edge_ambiguity(distinct (pattern_tag, end) @ max degree,
+        // 尾端 3 bars;Stage 14);Stage 10.5 reverse_logic 模組刪除,
+        // `reverse_logic_observation` 欄保留一版恆 None 標 deprecated)
+        VERSION
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -528,16 +547,6 @@ impl WaveCore for NeelyCore {
             stage_10c_start.elapsed().as_micros() as u64,
         );
 
-        // ── Stage 10.5:Reverse Logic 觀察(Phase 11 — Neely Extension)
-        //    對齊 m3Spec/neely_rules.md §Expansion of Possibilities(2598-2608 行)
-        //    多套合法計數 → 市場處於更大形態中段
-        let stage_10_5_start = Instant::now();
-        let reverse_logic_observation = reverse_logic::observe(&forest);
-        stage_elapsed.insert(
-            "stage_10_5_reverse_logic".to_string(),
-            stage_10_5_start.elapsed().as_micros() as u64,
-        );
-
         // ── Stage 11:Degree Ceiling 推導(Phase 12 — architecture §8.5 / §13.3)
         //    依資料時間跨度自動推導本次分析能達到的最高 Degree
         let stage_11_start = Instant::now();
@@ -555,6 +564,27 @@ impl WaveCore for NeelyCore {
             "stage_12_cross_timeframe".to_string(),
             stage_12_start.elapsed().as_micros() as u64,
         );
+
+        // ── Stage 13:E2 噪音穩健度(1.3.0)— REVERSAL_ATR {0.3, 0.7} 只重跑
+        //    偵測(分類不移動端點),wave_tree 頂層 children 端點三組齊在 → robust
+        let stage_13_start = Instant::now();
+        monowave::robustness::apply_robustness(&mut forest, &input.bars, cfg.atr_period);
+        stage_elapsed.insert(
+            "stage_13_robustness".to_string(),
+            stage_13_start.elapsed().as_micros() as u64,
+        );
+
+        // ── Stage 14:E4 live-edge 歧義(1.3.0;取代 Stage 10.5 Reverse Logic)
+        let stage_14_start = Instant::now();
+        let live_edge_ambiguity = live_edge::compute(&forest, &input.bars);
+        stage_elapsed.insert(
+            "stage_14_live_edge".to_string(),
+            stage_14_start.elapsed().as_micros() as u64,
+        );
+
+        // E1:假設清單 + hash(常數引用,零成本;snapshot 頂層)
+        let assumptions_list = assumptions::collect();
+        let assumption_hash = assumptions::hash(&assumptions_list);
 
         let forest_size = forest.len();
         let elapsed_ms = total_start.elapsed().as_millis() as u64;
@@ -603,7 +633,11 @@ impl WaveCore for NeelyCore {
             round3_pause,
             missing_wave_suspects,
             emulation_suspects,
-            reverse_logic_observation,
+            // deprecated(1.3.0):E4 取代,欄位留一版恆 None
+            reverse_logic_observation: None,
+            assumptions: assumptions_list,
+            assumption_hash,
+            live_edge_ambiguity,
             degree_ceiling,
             cross_timeframe_hints,
             flat_fib_zones,
@@ -660,7 +694,8 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "1.1.1");
+        // 字面量刻意重打:版本 bump 必須是有意識的(同步改此處與 crate::VERSION)
+        assert_eq!(core.version(), "1.3.0");
     }
 
     // -------------------------------------------------------------
@@ -715,9 +750,10 @@ mod tests {
             "stage_10a_power_rating",
             "stage_10b_fibonacci",
             "stage_10c_triggers",
-            "stage_10_5_reverse_logic",
             "stage_11_degree_ceiling",
             "stage_12_cross_timeframe",
+            "stage_13_robustness",
+            "stage_14_live_edge",
         ] {
             assert!(
                 out.diagnostics.stage_elapsed_us.contains_key(*stage_key),

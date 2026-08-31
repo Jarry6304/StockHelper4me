@@ -224,6 +224,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="full_rebuild 時往回幾天(預設由 builder 決定,magic_formula = 30)",
     )
 
+    # ── judgment 子命令(wave_judgment_loop:判讀提交 / 查詢 / J2 錨定 diff)
+    judgment_parser = subparsers.add_parser(
+        "judgment",
+        help="波浪判讀迴路(m3Spec/wave_judgment_loop.md:submit / list / diff)",
+    )
+    judgment_subparsers = judgment_parser.add_subparsers(dest="judgment_command", required=True)
+    judgment_submit_parser = judgment_subparsers.add_parser(
+        "submit",
+        help="提交判讀 JSON(驗證候選集約束後 INSERT wave_judgments)",
+    )
+    judgment_submit_parser.add_argument("--file", required=True, help="判讀 JSON 檔路徑(- = stdin)")
+    judgment_submit_parser.add_argument("--judged-by", help="覆寫 judged_by('human' / 'llm:<model>')")
+    judgment_list_parser = judgment_subparsers.add_parser(
+        "list",
+        help="列出判讀歷史(supersedes 鏈全列,新到舊)",
+    )
+    judgment_list_parser.add_argument("--stocks", required=True, help="股票代號(單檔)")
+    judgment_list_parser.add_argument("--timeframe", choices=["daily", "weekly", "monthly"])
+    judgment_list_parser.add_argument("--limit", type=int, default=20)
+    judgment_diff_parser = judgment_subparsers.add_parser(
+        "diff",
+        help="J2 錨定 diff:對全部 active 判讀比對最新 forest(run-all 後跑)",
+    )
+    judgment_diff_parser.add_argument("--stocks", help="限縮股票(逗號分隔);不指定 = 全部 active")
+
     # ── golden 子命令(Golden L3 fusion 物化:levels/resonance/climate → structural_snapshots)
     golden_parser = subparsers.add_parser(
         "golden",
@@ -355,10 +380,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="只結算指定 stock_id(逗號分隔;預設全部)",
     )
 
-    # forecast emit-neely --stocks 2330 [--asof TODAY]
+    # forecast emit-judgment --stocks 2330 [--asof TODAY]
+    # (v4.39:forward log 切到 judgment;舊 emit-neely / neely_fib 序列凍結唯讀)
     f_neely = forecast_subparsers.add_parser(
-        "emit-neely",
-        help="從 neely_core structural_snapshots 派 fib zone envelope 進 forecast_log(裁量軌 forward-only)",
+        "emit-judgment",
+        help="依 active judgment 發 fib zone envelope 進 forecast_log(source_core='judgment';無判讀不發)",
     )
     f_neely.add_argument("--stocks", required=True, help="股票清單(逗號分隔)")
     f_neely.add_argument("--asof", help="forecast_date(預設 today)")
@@ -369,7 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     f_neely.add_argument(
         "--horizon", type=int,
-        help="覆寫 horizon_days(預設由 scenario degree 推算)",
+        help="覆寫 horizon_days(預設由候選 degree 推算)",
     )
 
     # forecast manual --stock 2330 --date 2026-05-23 --horizon 63 --lower 1200 --upper 1500
@@ -610,6 +636,11 @@ def main() -> None:
     # golden 指令(Golden L3 fusion 物化 → structural_snapshots)
     if args.command == "golden":
         _run_golden_fusion(args, config)
+        return
+
+    # judgment 指令(wave_judgment_loop:submit / list / diff)
+    if args.command == "judgment":
+        _run_judgment(args)
         return
 
     # refresh 指令(一鍵手動更新最新資料)
@@ -958,6 +989,113 @@ def _run_golden_fusion(args, config) -> None:
 
 
 # =============================================================================
+# 子命令:judgment(wave_judgment_loop:submit / list / diff)
+# =============================================================================
+
+
+def _run_judgment(args) -> None:
+    """judgment 子命令 dispatcher(m3Spec/wave_judgment_loop.md §2)。
+
+    - submit:讀判讀 JSON → build dossier → 驗證(候選集約束)→ INSERT。
+      拒絕時列出合法 anchor_key 清單,退碼 1。
+    - list:supersedes 鏈全列(新到舊)。
+    - diff:J2 錨定 diff(run-all 後跑;refresh chain 亦掛此步)。
+    """
+    import json as _json
+    import sys as _sys
+    from datetime import date as _date
+
+    from fusion.raw._db import get_connection
+
+    if args.judgment_command == "submit":
+        from fusion.judgment import (
+            JudgmentValidationError, build_dossier, insert_judgment, validate_judgment,
+        )
+
+        raw = (
+            _sys.stdin.read() if args.file == "-"
+            else Path(args.file).read_text(encoding="utf-8")
+        )
+        judgment = _json.loads(raw)
+        if getattr(args, "judged_by", None):
+            judgment["judged_by"] = args.judged_by
+
+        conn = get_connection()
+        try:
+            as_of_str = judgment.get("as_of")
+            as_of = (
+                _date.fromisoformat(str(as_of_str)) if as_of_str else _date.today()
+            )
+            dossier = build_dossier(
+                conn, stock_id=str(judgment.get("stock_id") or ""), as_of=as_of,
+            )
+            try:
+                row = validate_judgment(judgment, dossier)
+            except JudgmentValidationError as e:
+                print(f"[judgment] 拒絕:{e}")
+                if e.legal_keys:
+                    print("[judgment] 合法 anchor_key:")
+                    for k in e.legal_keys:
+                        print(f"  - {k}")
+                _sys.exit(1)
+            new_id = insert_judgment(conn, row)
+            print(
+                f"[judgment] 已寫入 id={new_id}({row['stock_id']} {row['timeframe']} "
+                f"{row['confidence_class']},judged_by={row['judged_by']})"
+            )
+        finally:
+            conn.close()
+        return
+
+    if args.judgment_command == "list":
+        from fusion.judgment import fetch_judgments
+
+        conn = get_connection()
+        try:
+            rows = fetch_judgments(
+                conn, stock_id=args.stocks,
+                timeframe=getattr(args, "timeframe", None),
+                limit=args.limit,
+            )
+            if not rows:
+                print("[judgment] 無判讀紀錄")
+                return
+            for r in rows:
+                print(
+                    f"  #{r['id']} {r['stock_id']} {r['timeframe']} as_of={r['as_of']} "
+                    f"{r['confidence_class']} status={r['status']} by={r['judged_by']}"
+                    + (f" supersedes=#{r['supersedes_id']}" if r.get("supersedes_id") else "")
+                )
+        finally:
+            conn.close()
+        return
+
+    if args.judgment_command == "diff":
+        from fusion.judgment.diff import run_anchor_diff
+
+        stocks = (
+            [s.strip() for s in args.stocks.split(",") if s.strip()]
+            if getattr(args, "stocks", None) else None
+        )
+        conn = get_connection()
+        try:
+            summary = run_anchor_diff(conn, stock_ids=stocks)
+        finally:
+            conn.close()
+        print(
+            f"[judgment] J2 diff:checked={summary['checked']} intact={summary['intact']} "
+            f"invalidated={summary['invalidated']} absorbed={summary['absorbed']} "
+            f"vanished={summary['vanished']}(engine_regression={summary['engine_regression']})"
+        )
+        if summary["engine_regression"]:
+            logger.error(
+                "[judgment] engine_regression 告警:同 assumption_hash 下曾接受的合法候選"
+                f"消失 {summary['engine_regression']} 筆 — 引擎 bug,非市場(§J2 判定 4)"
+            )
+        return
+
+
+# =============================================================================
 # 子命令:refresh(一鍵手動更新最新資料)
 # =============================================================================
 
@@ -976,8 +1114,7 @@ def _run_refresh_forecast(stocks, config) -> None:
 
     from forecast._db import get_connection as _fc_get_connection
     from forecast.fusion import fuse_batch
-    from forecast.neely_emitter import emit_neely_fib
-    from fusion.raw._db import fetch_latest_close
+    from forecast.neely_emitter import emit_judgment_forecast
 
     universe = (
         [s.strip() for s in stocks.split(",") if s.strip()] if stocks else None
@@ -996,17 +1133,21 @@ def _run_refresh_forecast(stocks, config) -> None:
         asof = (row["d"] if row and row.get("d") else _date.today())
         logger.info(f"[Refresh.forecast] universe={len(universe)} asof={asof}")
 
-        # 1) emit-neely(forward 裁量軌)— per-stock graceful
+        # 1) emit-judgment(forward 裁量軌;v4.39 切 judgment,無判讀不發)
         emit_ok = 0
+        emit_written = 0
         for sid in universe:
             try:
-                pr = fetch_latest_close(conn, stock_id=sid, as_of=asof)
-                cp = float(pr["close"]) if pr and pr.get("close") is not None else None
-                emit_neely_fib(conn, sid, asof, current_price=cp)
+                res = emit_judgment_forecast(conn, sid, asof)
                 emit_ok += 1
+                if res.get("status") == "written":
+                    emit_written += 1
             except Exception as e:
-                logger.debug(f"[Refresh.forecast] emit-neely {sid} skip: {e}")
-        logger.info(f"[Refresh.forecast] emit-neely {emit_ok}/{len(universe)}")
+                logger.debug(f"[Refresh.forecast] emit-judgment {sid} skip: {e}")
+        logger.info(
+            f"[Refresh.forecast] emit-judgment written={emit_written} "
+            f"checked={emit_ok}/{len(universe)}"
+        )
 
         # 2) fuse(統計軌 latest;resonance 讀 primary_confidence=0.80 × 三 horizon)
         try:
@@ -1032,6 +1173,9 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
         4. Silver 7b(financial_statement 跨表,同 7a 走 incremental window)
         5. Cross-Stock Cores Phase 8(magic_formula 等 11 builder,latest date only)
         6. M3 Cores `tw_cores run-all --write --dirty`(只跑 dirty stock)
+        7. J2 錨定 diff(active 判讀 × 最新 forest;wave_judgment_loop §6)
+        8. Forecast forward(emit-judgment + fuse latest)
+        9. Golden L3 fusion 物化
     """
     import argparse as _argparse
     import os
@@ -1050,9 +1194,9 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
     def _record(step: str, status: str, t0: float) -> None:
         step_results.append((step, status, time.monotonic() - t0))
 
-    # Steps: Bronze + Silver 7c/7a/7b + Cross-Stock 8 + M3 cores + forecast + golden = 8 max
-    # (forecast / golden 與 M3 cores 同受 --skip-cores 控制 — 皆依賴 cores 輸出)
-    total_steps = 8 if not args.skip_cores else 5
+    # Steps: Bronze + Silver 7c/7a/7b + Cross 8 + M3 cores + J2 diff + forecast + golden = 9 max
+    # (J2 / forecast / golden 與 M3 cores 同受 --skip-cores 控制 — 皆依賴 cores 輸出)
+    total_steps = 9 if not args.skip_cores else 5
     if args.skip_bronze:
         total_steps -= 1
     cur = 0
@@ -1188,15 +1332,37 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
     else:
         logger.info("[Refresh] 跳過 M3 cores(--skip-cores)")
 
-    # Step 7: Forecast forward(Phase 3a — resonance track2 前置)
+    # Step 7: J2 錨定 diff(wave_judgment_loop §6 — run-all 後、forecast 前)
     #
-    # resonance track2 讀 forecast_log 統計軌 band。本步驟跑 emit-neely(裁量軌 forward)
-    # + fuse(統計軌 latest,全市場)。⚠️ 統計軌 _cqr band 需逐股 CQR 校準(來自歷史
-    # backtest);未做全市場校準(Phase 3b,獨立重任務,不在 daily refresh)前,fuse 多數
-    # 回 no_calibrated_inputs → resonance 仍 single_track(golden 階段會 warn)。
+    # active 判讀逐筆對最新 forest 比對 anchor_key;未命中依 invalidated /
+    # absorbed / vanished 寫 superseding 狀態列。必須在 emit-judgment 之前跑:
+    # emitter 只對「仍 active」的判讀發列,J2 先降級失效判讀避免發過期 band。
     if not args.skip_cores:
         cur += 1
-        _log_step(cur, total_steps, "Forecast forward (emit-neely + fuse latest)")
+        _log_step(cur, total_steps, "J2 錨定 diff (wave_judgments × 最新 forest)")
+        t0 = time.monotonic()
+        try:
+            judgment_args = _argparse.Namespace(
+                command="judgment",
+                judgment_command="diff",
+                stocks=stocks,
+            )
+            _run_judgment(judgment_args)
+            _record("judgment_j2_diff", "ok", t0)
+        except Exception as e:
+            logger.error(f"[Refresh] J2 錨定 diff 失敗: {e}")
+            _record("judgment_j2_diff", "failed", t0)
+
+    # Step 8: Forecast forward(Phase 3a — resonance track2 前置)
+    #
+    # resonance track2 讀 forecast_log 統計軌 band。本步驟跑 emit-judgment(裁量軌
+    # forward;有 active 判讀才發)+ fuse(統計軌 latest,全市場)。⚠️ 統計軌 _cqr band
+    # 需逐股 CQR 校準(來自歷史 backtest);未做全市場校準(Phase 3b,獨立重任務,
+    # 不在 daily refresh)前,fuse 多數回 no_calibrated_inputs → resonance 仍
+    # single_track(golden 階段會 warn)。
+    if not args.skip_cores:
+        cur += 1
+        _log_step(cur, total_steps, "Forecast forward (emit-judgment + fuse latest)")
         t0 = time.monotonic()
         try:
             _run_refresh_forecast(stocks, config)
@@ -1205,7 +1371,7 @@ async def _run_refresh(args, config, stock_list_cfg) -> None:
             logger.error(f"[Refresh] Forecast forward 失敗: {e}")
             _record("forecast_forward", "failed", t0)
 
-    # Step 8: Golden L3 fusion 物化(levels + resonance + climate → structural_snapshots)
+    # Step 9: Golden L3 fusion 物化(levels + resonance + climate → structural_snapshots)
     if not args.skip_cores:
         cur += 1
         _log_step(cur, total_steps, "Golden L3 fusion 物化 (levels/resonance/climate)")
@@ -1402,31 +1568,21 @@ def _run_forecast(args) -> None:
                 print(f"settle asof={asof} stock={tag} core={args.core or 'ALL'} -> {summary}")
             print(f"\ntotal: {grand}")
 
-    elif sub == "emit-neely":
-        from forecast.neely_emitter import emit_neely_fib
+    elif sub == "emit-judgment":
+        from forecast.neely_emitter import emit_judgment_forecast
         from forecast._db import get_connection
-        # B1:寫入面 picker 需 current_price 做 canonical_is_invalidated filter
-        from fusion.raw._db import fetch_latest_close
 
         stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
         asof = _parse_date(args.asof) or _date.today()
         with get_connection() as conn:
             for sid in stocks:
-                price_row = fetch_latest_close(conn, stock_id=sid, as_of=asof)
-                current_price = None
-                if price_row and price_row.get("close") is not None:
-                    try:
-                        current_price = float(price_row["close"])
-                    except (TypeError, ValueError):
-                        current_price = None
-                res = emit_neely_fib(
+                res = emit_judgment_forecast(
                     conn, sid, asof,
                     timeframe=args.timeframe,
                     confidence=args.confidence,
                     overwrite_horizon=args.horizon,
-                    current_price=current_price,
                 )
-                print(f"{sid} @ {asof} (price={current_price}): {res}")
+                print(f"{sid} @ {asof}: {res}")
 
     elif sub == "manual":
         from forecast.manual import write_manual_forecast

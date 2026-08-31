@@ -53,7 +53,7 @@ class Track1View(BaseModel):
     has_snapshot: bool
     pattern_type: str | None
     power_rating: str | None
-    direction: str
+    direction: str  # v4.39 起新增 "undecided" 字面值(wave_judgment_loop §8)
     effective_degree: str | None
     wave_count: int
     fib_lines: list[FibLine]
@@ -61,6 +61,12 @@ class Track1View(BaseModel):
     invalidated: bool
     fallback_to_flat_union: bool
     notes: list[str]
+    # v4.39 additive(wave_judgment_loop §8:judgment-or-aggregate)
+    source: str = "aggregate"
+    judgment_id: int | None = None
+    up_share: float | None = None
+    invalidation_band: dict[str, float] | None = None
+    ambiguity_count: int | None = None
 
 
 class Track2Band(BaseModel):
@@ -132,6 +138,9 @@ class WaveSummaryRow(BaseModel):
     # picked scenario 的 wave_tree.end 距 as_of 天數(形態年齡;>365 = V1 stale 視覺門檻;
     # None = insufficient / 無法解析)
     scenario_age_days: int | None
+    # v4.39 additive(wave_judgment_loop §8):cell 取自 active judgment 的
+    # accepted[preferred](true)或表現層預設排序(false)
+    judged: bool = False
 
 
 class WavesSummary(BaseModel):

@@ -22,7 +22,7 @@ use crate::monowave::ClassifiedMonowave;
 use crate::output::{AlternationAxis, RuleId, RuleRejection, StructureLabel};
 
 /// 一般近似容差 ±10%(architecture §4.2 第 1 檔)
-const APPROX_TOL: f64 = 0.10;
+pub(crate) const APPROX_TOL: f64 = 0.10;
 /// Fibonacci 61.8% 容差 ±4%
 const FIB_618: f64 = 0.618;
 const FIB_TOL: f64 = 0.04;

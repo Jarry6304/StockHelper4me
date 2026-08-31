@@ -38,21 +38,34 @@ class FibLine:
 
 @dataclass
 class Track1View:
-    """軌道一完整投影 — neely primary scenario 摘要 + 離散 fib 線。"""
+    """軌道一完整投影 — 判讀候選(或聚合特徵)摘要 + 離散 fib 線。
+
+    v4.39(wave_judgment_loop §8):picker 刪除。`source` 標示來源路徑;
+    judgment 路徑填 pattern/degree 等單候選欄,aggregate 路徑該些欄為
+    None/0,方向來自 `up_share`(∉ [0.4,0.6] 才有方向,否則 "undecided")。
+    additive 欄(wire 變更:direction 新增 "undecided" 字面值 — 既有消費端
+    只分 bullish/bearish/else,走 else 分支安全)。
+    """
     stock_id: str
     as_of: date
     snapshot_date: date | None       # structural_snapshots 來源日期
     has_snapshot: bool               # 是否有 SS row(無 → 軌道一不可用)
-    pattern_type: str | None         # scenario.pattern_type
+    pattern_type: str | None         # scenario.pattern_type(judgment 路徑)
     power_rating: str | None         # StrongBullish / Bullish / Neutral / ...
-    direction: str                   # "bullish" / "bearish" / "neutral"
+    direction: str                   # "bullish" / "bearish" / "neutral" / "undecided"
     effective_degree: str | None     # SubMinuette / Minute / Minor / ...
     wave_count: int                  # Scenario 結構化欄(compaction v2 §7.4)
     fib_lines: list[FibLine] = field(default_factory=list)
     invalidation_price: float | None = None  # 失效價(若有)
     invalidated: bool = False        # 現價已跌破 invalidation?
-    fallback_to_flat_union: bool = False  # primary 無 zones,用 flat_fib_zones
+    fallback_to_flat_union: bool = False  # preferred 無 zones,用 flat_fib_zones
     notes: list[str] = field(default_factory=list)
+    # ── v4.39 additive(wave_judgment_loop §8)──────────────────────────
+    source: str = "aggregate"        # "judgment" / "aggregate"
+    judgment_id: int | None = None   # wave_judgments.id(judgment 路徑)
+    up_share: float | None = None    # live 候選前瞻方向為上比例(分母 0 → None)
+    invalidation_band: dict[str, float] | None = None  # live 候選失效價 {min, max}
+    ambiguity_count: int | None = None  # 引擎 E4 live_edge_ambiguity.count
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +83,11 @@ class Track1View:
             "invalidated": self.invalidated,
             "fallback_to_flat_union": self.fallback_to_flat_union,
             "notes": self.notes,
+            "source": self.source,
+            "judgment_id": self.judgment_id,
+            "up_share": self.up_share,
+            "invalidation_band": self.invalidation_band,
+            "ambiguity_count": self.ambiguity_count,
         }
 
 

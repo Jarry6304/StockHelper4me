@@ -58,6 +58,8 @@ mod tests {
     fn make(id: &str, rating: PowerRating) -> Scenario {
         let date = NaiveDate::parse_from_str("2026-01-01", "%Y-%m-%d").unwrap();
         Scenario {
+            ch6_status: crate::output::Ch6Status::Deferred,
+            robust: true,
             wave_count: 0,
             id: id.to_string(),
             wave_tree: WaveNode {

@@ -109,8 +109,14 @@ describe('digestFromRow(/waves/summary → WaveDigest)', () => {
       sparkline: [0, 1, 0.5],
       resonance: 'strong',
       scenarioAgeDays: 12,
+      judged: false,
       isPlaceholder: false
     });
+  });
+
+  it('judged=true row → digest.judged=true(v4.39 ⚓ 記號)', () => {
+    const d = digestFromRow(realRow({ judged: true }));
+    expect(d.judged).toBe(true);
   });
 
   it('scenario_age_days 缺值/異常型別 → null(防衛)', () => {

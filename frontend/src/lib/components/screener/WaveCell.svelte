@@ -17,6 +17,9 @@
 {:else}
   <div class="wv" data-placeholder={digest.isPlaceholder ? 'true' : 'false'}>
     <Sparkline points={digest.sparkline} />
+    {#if digest.judged}
+      <span class="judged" title="cell 取自 active judgment 的 accepted[preferred](v4.39)">⚓</span>
+    {/if}
     <span
       class="wlabel"
       class:stale
@@ -42,6 +45,11 @@
     color: var(--wave);
     font-size: 11px;
     font-family: var(--mono);
+  }
+
+  .judged {
+    color: var(--wave);
+    font-size: 11px;
   }
 
   .wlabel.stale {

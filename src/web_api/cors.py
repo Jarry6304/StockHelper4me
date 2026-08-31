@@ -25,7 +25,8 @@ def add_cors(app: Any) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_parse_origins(),
-        allow_methods=["GET", "OPTIONS"],
+        # v4.39:POST 僅供 /judgments(判讀「選取→錨定」;其餘端點維持唯讀)
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
         max_age=600,
     )

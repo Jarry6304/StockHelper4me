@@ -71,6 +71,11 @@ impl RuleResult {
     }
 }
 
+/// Ch9 Exception Rule 容差(spec neely_rules.md §第 3 章 line 529 + Ch 9, p.9-7):
+/// 「單一未通過、且差距不大(< 10%)時,通常仍可套用該規則的結論」
+/// (E1 假設清單引用 → 模組層;原為 validate_candidate 內部 const)
+pub(crate) const CH9_EXCEPTION_GAP_PCT: f64 = 10.0;
+
 /// 對單一 candidate 跑完所有 18 條 Ch5 規則的彙總報告。
 #[derive(Debug, Clone, Default)]
 pub struct ValidationReport {
@@ -114,10 +119,6 @@ pub fn validate_candidate(
     results.extend(zigzag_rules::run(candidate, classified));
     results.extend(triangle_rules::run(candidate, classified));
     results.extend(wave_rules::run(candidate, classified));
-
-    /// Ch9 Exception Rule 容差(spec neely_rules.md §第 3 章 line 529 + Ch 9, p.9-7):
-    /// 「單一未通過、且差距不大(< 10%)時,通常仍可套用該規則的結論」
-    const CH9_EXCEPTION_GAP_PCT: f64 = 10.0;
 
     let mut essential_fail_gaps: Vec<f64> = Vec::new();
     let mut overlap_trending_failed = false;

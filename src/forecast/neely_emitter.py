@@ -1,29 +1,18 @@
-"""neely_fib forward-only forecast emitter.
+"""judgment forward-only forecast emitter(wave_judgment_loop §8 S3)。
 
-對齊 user v0.3 區間預測 spec phase 6 + plan 文件 phase 6。
+v4.39 起 forward log 切到 judgment:有 active judgment 才發列
+(`source_core='judgment'`,依 accepted[preferred] 候選的 expected_fib_zones);
+無判讀不發。舊 `neely_fib`(picker 序列)**凍結唯讀** — 寫路徑(picker 函式
++ `emit_neely_fib`)已刪除,歷史列供對照,否則實證量的是 picker 而非判讀。
 
-讀最新 structural_snapshots WHERE source_core='neely_core' AND timeframe=daily,
-從 primary scenario 的 expected_fib_zones 產 forecast_log row。
-
-關鍵 spec 規則(§「強制規則」):
+關鍵 spec 規則(v0.3 區間預測 §「強制規則」,不變):
   - 裁量軌 — 只 forward log,**禁回測**
   - calibrated=False(不可宣稱覆蓋率,fib 帶非統計帶)
-  - regime_tag = scenario.pattern_type → 啟動 regime-conditional scorer 分組
-  - 不進 fusion gate(只作 decision support)
+  - regime_tag = 候選 pattern_type → regime-conditional scorer 分組
+  - internal_only=True:一行外包絡壓掉離散 fib 線,禁上畫面與 MCP
+    (dual_track 直讀 wave_judgments / structural_snapshots)
 
-Picker(B1 後 — degree / strength / rules 排序 + canonical_is_invalidated filter):
-  - 排序 by (degree_rank DESC, power_rating_strength DESC, rules_passed_count DESC)
-  - effective_degree / degree_rank / canonical_is_invalidated 全部 import from
-    src/fusion/_picker.py(single source,對齊 Rust output.rs::Degree)
-  - current_price 提供時:先 canonical_is_invalidated filter 再 sort
-  - current_price=None 時:跳過 filter 但 log warning(不靜默放行失效)
-  - 寫入面 stale snapshot gate:snapshot_date 距 asof > 7 calendar days → skip
-    write + log warning(對齊 user 拍版 b1 spec)
-
-Horizon mapping(對齊 plan phase 6 NeoWave degree → 21/63/126):
-  - SubMinuette → 21(canonical bracket <1y)
-  - Minute → 63(1-3y)
-  - Minor / Intermediate / Primary / Cycle / Supercycle / GrandSupercycle → 126(cap)
+Horizon mapping(對齊 plan phase 6 NeoWave degree → 21/63/126)。
 """
 
 from __future__ import annotations
@@ -34,16 +23,10 @@ from datetime import date
 from typing import Any
 
 from forecast._db import upsert_forecast
-# B1:degree / picker / invalidation 共用 helpers single source。
-from fusion._picker import (
-    canonical_is_invalidated,
-    degree_rank as _degree_rank,
-    effective_degree as _effective_degree,
-    power_rating_strength as _power_rating_strength,
-)
+from fusion._picker import effective_degree as _effective_degree
 
 
-__all__ = ["emit_neely_fib"]
+__all__ = ["emit_judgment_forecast"]
 
 logger = logging.getLogger("forecast.neely_emitter")
 
@@ -70,54 +53,6 @@ _DEFAULT_HORIZON = 63  # if degree unknown / NULL
 
 # B1:user 拍版 stale 門檻 7 calendar days(對齊 v3.28 MCP staleness 警告)
 _DEFAULT_STALE_THRESHOLD_DAYS = 7
-
-
-def _pick_primary(
-    forest: list[dict],
-    current_price: float | None = None,
-) -> dict | None:
-    """寫入面 picker — degree-aware sort + 可選 invalidation filter。
-
-    Args:
-        forest: scenario list from structural_snapshots
-        current_price: 當下 close。提供時:先 canonical_is_invalidated filter
-            再 sort;None 時跳過 filter 但 log warning(loud bypass,不靜默)
-
-    Returns:
-        primary scenario or None(forest 空 / 全部失效)
-    """
-    if not forest:
-        return None
-
-    # B1 step 1:invalidation filter(若 current_price 可用)
-    if current_price is not None:
-        candidates = [s for s in forest if not canonical_is_invalidated(s, current_price)]
-        if not candidates:
-            logger.warning(
-                "neely_emitter._pick_primary: all %d scenarios filtered as invalidated "
-                "at current_price=%s — returning None(caller should narrate)",
-                len(forest), current_price,
-            )
-            return None
-    else:
-        logger.warning(
-            "neely_emitter._pick_primary: current_price is None — skipping invalidation "
-            "filter step(may pick already-invalidated scenario as primary)"
-        )
-        candidates = forest
-
-    # B1 step 2:degree-aware sort(對齊 v3.35 規則)
-    scored = [
-        (
-            _degree_rank(_effective_degree(s)),
-            _power_rating_strength(s.get("power_rating")),
-            int(s.get("rules_passed_count") or 0),
-            s,
-        )
-        for s in candidates
-    ]
-    scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
-    return scored[0][3]
 
 
 def _scenario_horizon_days(scenario: dict) -> int:
@@ -165,7 +100,7 @@ def _fetch_latest_neely_snapshot(
 # ─── Public API ──────────────────────────────────────────────────────────────
 
 
-def emit_neely_fib(
+def emit_judgment_forecast(
     conn,
     stock_id: str,
     asof: date,
@@ -173,32 +108,36 @@ def emit_neely_fib(
     timeframe: str = "daily",
     confidence: float = 0.60,
     overwrite_horizon: int | None = None,
-    current_price: float | None = None,
     stale_threshold_days: int = _DEFAULT_STALE_THRESHOLD_DAYS,
 ) -> dict[str, Any]:
-    """Read latest neely_core snapshot ≤ asof and emit forecast_log rows.
+    """依 active judgment 發 `source_core='judgment'` forecast_log 列。
 
-    Args:
-        conn: PG conn (dict_row factory)
-        stock_id: e.g. "2330"
-        asof: forecast_date used for the emitted rows
-        timeframe: 'daily' / 'weekly' / 'monthly' (matches structural_snapshots key)
-        confidence: NEoWave fib zones are not statistical bands — fixed nominal
-                    confidence(default 0.60 ≈ moderate)。calibrated stays False.
-        overwrite_horizon: if set, write all zones at this horizon instead of
-                           degree-derived(useful for one-off probes)。
-        current_price: B1 — 當下 close,用於 _pick_primary 的 canonical
-                       invalidation filter。None → 跳過 filter + log warning。
-        stale_threshold_days: B1 — snapshot_date 距 asof 超過此天數視為過期 →
-                             skip write + log warning。預設 7(對齊 v3.28 MCP
-                             staleness)。0 / 負數 → disable gate(intra-day 用)。
+    無 active judgment → 不發(`no_active_judgment`;§8:「無 → 不發」)。
+    preferred 候選以 anchor_key 對回最新 forest;對不回 → 不發
+    (`anchor_not_in_forest`;J2 diff 的責任區,emitter 不代判)。
 
     Returns:
-        - {status: "no_snapshot" | "stale_snapshot" | "empty_forest" |
-                   "no_fib_zones" | "malformed_zones" | "written", ...}
-        - "stale_snapshot" 多 fields:snapshot_date / asof / age_days
-        - "written" 多 fields:envelope / primary_pattern / horizon_days
+        {status: "no_active_judgment" | "no_snapshot" | "stale_snapshot" |
+                 "anchor_not_in_forest" | "no_fib_zones" | "malformed_zones" |
+                 "written", ...}
     """
+    from fusion.judgment import fetch_active_judgment, scenario_anchor_key
+
+    judgment = fetch_active_judgment(conn, stock_id=stock_id, timeframe=timeframe)
+    if judgment is None:
+        return {"status": "no_active_judgment", "zones_emitted": 0}
+
+    accepted = judgment.get("accepted") or []
+    preferred_key = next(
+        (a.get("anchor_key") for a in accepted
+         if isinstance(a, dict) and a.get("role") == "preferred"),
+        None,
+    )
+    if not preferred_key:
+        # no_fit 判讀(accepted=[])— 無錨可發
+        return {"status": "no_active_judgment", "zones_emitted": 0,
+                "judgment_id": judgment.get("id")}
+
     snap_row = _fetch_latest_neely_snapshot(conn, stock_id, asof, timeframe)
     if snap_row is None:
         return {"status": "no_snapshot", "zones_emitted": 0}
@@ -206,12 +145,12 @@ def emit_neely_fib(
     snapshot = snap_row["snapshot"]
     snapshot_date = snap_row["snapshot_date"]
 
-    # B1:stale snapshot gate(user 拍版「跳過寫入 + log 警告」)
+    # stale snapshot gate(沿用 b1 拍版:跳過寫入 + log 警告)
     if stale_threshold_days > 0 and isinstance(snapshot_date, date):
         age_days = (asof - snapshot_date).days
         if age_days > stale_threshold_days:
             logger.warning(
-                "neely_emitter.emit_neely_fib: stale snapshot for %s — "
+                "neely_emitter.emit_judgment_forecast: stale snapshot for %s — "
                 "snapshot_date=%s asof=%s age_days=%d > threshold=%d → skip write",
                 stock_id, snapshot_date, asof, age_days, stale_threshold_days,
             )
@@ -226,51 +165,32 @@ def emit_neely_fib(
             }
 
     forest = snapshot.get("scenario_forest") or []
-    primary = _pick_primary(forest, current_price=current_price)
-    if primary is None:
-        # 區分「forest 空」與「全部 filtered as invalidated」
-        status = "all_invalidated" if (forest and current_price is not None) else "empty_forest"
-        return {"status": status, "zones_emitted": 0,
+    candidate = next(
+        (s for s in forest
+         if isinstance(s, dict) and scenario_anchor_key(s) == preferred_key),
+        None,
+    )
+    if candidate is None:
+        return {"status": "anchor_not_in_forest", "zones_emitted": 0,
+                "judgment_id": judgment.get("id"),
                 "snapshot_date": str(snapshot_date)}
 
-    zones = primary.get("expected_fib_zones") or []
-    fallback_used = False
-    if not zones:
-        # v4.11 起 neely_core top-level 加 `flat_fib_zones`:全 forest scenario
-        # expected_fib_zones 去重聯集(Fusion Layer P1.1)。primary picker 選的
-        # scenario 可能沒填 zones(spec 允許);此時退而求其次用 union 仍可給
-        # LLM 看一個粗略 envelope。
-        flat = snapshot.get("flat_fib_zones") or []
-        if flat:
-            zones = flat
-            fallback_used = True
+    zones = candidate.get("expected_fib_zones") or []
     if not zones:
         return {"status": "no_fib_zones", "zones_emitted": 0,
+                "judgment_id": judgment.get("id"),
                 "snapshot_date": str(snapshot_date)}
 
-    horizon = overwrite_horizon if overwrite_horizon is not None else _scenario_horizon_days(primary)
-    pattern_type = primary.get("pattern_type")
+    horizon = (
+        overwrite_horizon if overwrite_horizon is not None
+        else _scenario_horizon_days(candidate)
+    )
+    pattern_type = candidate.get("pattern_type")
     if isinstance(pattern_type, dict):
-        # Some patterns are nested e.g. {"Triangle": {"sub_kind": "Contracting"}}
         pattern_type = next(iter(pattern_type.keys()))
     regime_tag = str(pattern_type) if pattern_type else None
 
-    n_emitted = 0
-    for zone in zones:
-        label = zone.get("label", "")
-        low = zone.get("low")
-        high = zone.get("high")
-        if low is None or high is None:
-            continue
-        # Hash includes scenario index + zone label for uniqueness within
-        # ON CONFLICT (which only keys on source_core,not zone label).
-        # We mitigate by writing one row per (stock, asof, horizon, source_core)
-        # — the LAST zone wins for that key.  Since fib zones often overlap and
-        # we want the LARGEST envelope as the visible interval, take that.
-        n_emitted += 1
-
-    # Strategy: emit the OUTER envelope of all fib zones as a single row.
-    # 對齊 spec「fib 帶非統計帶」+ forecast_log 唯一鍵限制(stock, date, horizon, source_core)。
+    # OUTER envelope(單列;對齊「fib 帶非統計帶」+ forecast_log 唯一鍵限制)
     lows = [float(z["low"]) for z in zones if z.get("low") is not None]
     highs = [float(z["high"]) for z in zones if z.get("high") is not None]
     if not lows or not highs:
@@ -279,16 +199,10 @@ def emit_neely_fib(
 
     envelope_lower = min(lows)
     envelope_upper = max(highs)
-    # Approximate centroid as mean of (low+high)/2 across zones
     midpoints = [(float(z["low"]) + float(z["high"])) / 2 for z in zones
                  if z.get("low") is not None and z.get("high") is not None]
     point = sum(midpoints) / len(midpoints) if midpoints else None
 
-    source_tag = "flat_union" if fallback_used else "primary"
-    # internal_only=True 對齊 m3Spec/dual_track_resonance.md §六 — neely_fib 行
-    # 為「一行外包絡」壓掉了離散 fib 線資訊,dual_track 軌道一直接讀
-    # structural_snapshots(完整未壓縮);本行降級為 audit / 對齊影子,**禁止
-    # 上畫面與 MCP 輸出**(B-4 機制丙)。
     upsert_forecast(
         conn,
         {
@@ -301,21 +215,22 @@ def emit_neely_fib(
             "confidence": confidence,
             "calibrated": False,
             "internal_only": True,
-            "source_core": "neely_fib",
+            "source_core": "judgment",
             "regime_tag": regime_tag,
             "params_hash": (
-                f"neely_fib|n_zones={n_emitted}|"
-                f"degree={_effective_degree(primary) or 'unk'}|"
-                f"source={source_tag}"
+                f"judgment|id={judgment.get('id')}|tf={timeframe}|"
+                f"degree={_effective_degree(candidate) or 'unk'}|"
+                f"by={judgment.get('judged_by')}"
             ),
         },
     )
     return {
         "status": "written",
+        "judgment_id": judgment.get("id"),
+        "judged_by": judgment.get("judged_by"),
         "primary_pattern": regime_tag,
         "horizon_days": horizon,
-        "zones_emitted": n_emitted,
+        "zones_emitted": len(zones),
         "envelope": (round(envelope_lower, 4), round(envelope_upper, 4)),
         "snapshot_date": str(snapshot_date),
-        "fallback_to_flat_union": fallback_used,
     }

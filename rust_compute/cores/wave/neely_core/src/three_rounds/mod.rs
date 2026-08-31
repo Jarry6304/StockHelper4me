@@ -91,6 +91,8 @@ mod tests {
     ) -> Scenario {
         let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         Scenario {
+            ch6_status: crate::output::Ch6Status::Deferred,
+            robust: true,
             wave_count: 0,
             id: id.to_string(),
             wave_tree: WaveNode {

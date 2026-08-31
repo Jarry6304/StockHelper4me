@@ -28,10 +28,13 @@ function mkScenario(
 ): Scenario {
   return {
     id: p.id ?? 'S1',
+    wave_count: p.wave_count ?? 0,
     wave_tree: {
       label: '',
       start: p.waveStart ?? '',
       end: p.waveEnd ?? '',
+      degree_level: 0,
+      base_label: 'Three' as never,
       children: []
     },
     pattern_type: 'Impulse' as never,
@@ -42,6 +45,8 @@ function mkScenario(
     power_rating: p.power_rating ?? 'Bullish',
     max_retracement: null,
     post_pattern_behavior: 'Continuation' as never,
+    ch6_status: p.ch6_status ?? 'Deferred',
+    robust: p.robust ?? true,
     passed_rules: [],
     deferred_rules: [],
     rules_passed_count: p.rules_passed_count ?? 0,

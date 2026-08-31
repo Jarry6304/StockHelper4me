@@ -245,13 +245,10 @@ def test_wave_impulse_screen_imports_picker():
     assert _direction_from_power("Bullish") == "bullish"
 
 
-def test_forecast_imports_picker():
-    """v4.26 follow-up:_forecast.py 從 _picker import _power_rating_* 3 個。"""
-    from mcp_server._forecast import (
-        _power_rating_label,
-        _power_rating_strength,
-        _power_rating_sign,
-    )
-    assert _power_rating_label("Bullish") == "Bullish"
-    assert _power_rating_strength("StrongBullish") == 3
-    assert _power_rating_sign("Bearish") == -1
+def test_dossier_imports_picker():
+    """v4.39:_forecast.py 退役;dossier builder 的失效判定仍走 _picker
+    canonical(single source of truth 接線守衛)。"""
+    from fusion._picker import canonical_is_invalidated as canonical
+    from fusion.judgment import dossier as d
+
+    assert d.canonical_is_invalidated is canonical

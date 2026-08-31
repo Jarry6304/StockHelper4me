@@ -168,9 +168,9 @@ SELECT
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_3_candidates')::int        AS s3_candidates,
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_3_5_pattern_isolation')::int AS s3_5_pi,
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_4_validator')::int         AS s4_validator,
-    -- Stage 5 / 6 / 7
-    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_5_classifier')::int        AS s5_classifier,
-    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_6_post_validator')::int    AS s6_post,
+    -- Stage 7(v4.39 起 stage_5_classifier / stage_6_post_validator 無獨立 key:
+    -- Level-N 分類與 Ch6 確認閘皆在 compaction ladder 內計時(stage_8_compaction),
+    -- 見 m3Spec/neely_ch6_gate_running_fix.md)
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_7_complexity')::int        AS s7_complexity,
     -- Stage 7.5 / 8 / 8.5
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_7_5_advanced_rules')::int  AS s7_5_adv,
@@ -182,9 +182,12 @@ SELECT
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_10a_power_rating')::int    AS s10a_pr,
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_10b_fibonacci')::int       AS s10b_fib,
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_10c_triggers')::int        AS s10c_trg,
-    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_10_5_reverse_logic')::int  AS s10_5_rl,
+    -- (v4.39:stage_10_5_reverse_logic 隨 reverse_logic 模組退場刪除)
     (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_11_degree_ceiling')::int   AS s11_dc,
-    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_12_cross_timeframe')::int  AS s12_ct
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_12_cross_timeframe')::int  AS s12_ct,
+    -- Stage 13 / 14(neely 1.3.0:E2 robustness / E4 live-edge ambiguity)
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_13_robustness')::int       AS s13_robust,
+    (snapshot->'diagnostics'->'stage_elapsed_us'->>'stage_14_live_edge')::int        AS s14_live_edge
 FROM structural_snapshots s
 WHERE core_name = 'neely_core'
   AND stock_id IN (:P0_GATE_STOCKS)

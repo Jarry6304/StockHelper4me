@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 台股資料蒐集 + 計算 pipeline:FinMind API → Postgres 17,六層架構
 (Bronze 收集 / Silver per-stock / Cross-Stock Cores / M3 Cores / Golden L3 物化 / MCP + Web API 對外)。
 雙波浪引擎並排不整合:`neely_core`(NEoWave)與 `traditional_core`(Frost & Prechter EWP,自有 loader + `traditional_snapshots`)。
-現行版本 **v4.38**(2026-06-06,Web 前端原型);版本狀態詳見下方「最近版本摘要」。
+現行版本 **v4.39**(2026-08-31,波浪判讀迴路);版本狀態詳見下方「最近版本摘要」。
 
 | 層 | 內容 | 寫入 path | 主要 module |
 |---|---|---|---|
@@ -29,7 +29,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Python 3.11+(tomllib;aiohttp + psycopg3 + alembic + numpy;`pip install -e ".[dev,mcp,web]"`)
 - Rust workspace **50 crates**(sqlx + Postgres;兩個 binary:`tw_stock_compute` S1 後復權 / `tw_cores` M3 全核)
-- PostgreSQL 17(本機 service;schema 演進走 alembic,head:`j6k7l8m9n0o1`)
+- PostgreSQL 17(本機 service;schema 演進走 alembic,head:`l8m9n0o1p2q3`)
 - FastMCP(stdio MCP server,14 public tools)+ FastAPI(唯讀 Web API)+ Streamlit dashboards
 - SvelteKit 2 + Vite + TypeScript + Plotly.js(`frontend/`,契約由 ts-rs + pydantic2ts codegen)
 - FinMind sponsor tier(`$env:FINMIND_TOKEN`;`config/collector.toml` 39 entries)
@@ -168,6 +168,7 @@ Rust / 計算層:
 | 調 EventKind 觸發率 | 對應 core 的 const + DELETE facts 重跑 | `scripts/verify_event_kind_rate.sql`(≤12/yr/stock) |
 | Web API 端點 | `src/web_api/routers/` | docs/changelog/v4.30-v4.38.md §v4.32 |
 | 前端視圖 | `frontend/src/routes/` | docs/changelog/v4.30-v4.38.md §v4.38(鐵則 L1-L8 / CL1-CL6) |
+| 波浪判讀(dossier → submit) | `.claude/skills/neely-judgment/` + `judgment submit` CLI / POST /judgments | `m3Spec/wave_judgment_loop.md` + docs/changelog/wave-judgment-loop.md |
 
 ## 已知陷阱
 
@@ -185,19 +186,26 @@ Rust / 計算層:
 
 ## 最近版本摘要
 
+**v4.39(2026-08-31)— 波浪判讀迴路(wave_judgment_loop + neely 1.2.0/1.3.0)**:
+引擎只交證據、判讀者(人/LLM)交決定、決定成 PIT 資料。neely Ch6 確認閘接回
+compaction ladder + Running 判準 `b > a + c`(1.2.0);E1 assumptions/hash、
+E2 robust、E4 live_edge_ambiguity additive 證據欄(1.3.0);`wave_judgments`
+append-only 表 + 日期樹 anchor_key + J2 錨定 diff(refresh Step 7);dossier 取代
+primary 選取(MCP `neely_forecast` 三鍵刪除;`/waves` additive `dossier` 段);
+判讀寫入 = `judgment submit` CLI + `POST /judgments`(首個寫端點)+
+`neely-judgment` skill;下游全切 judgment(track1 judgment-or-aggregate、
+forward log `source_core='judgment'`、V2 cell / wave_impulse judgment-aware、
+前端不預選 + 選取→錨定)。production 重生 + 首批判讀走
+docs/changelog/wave-judgment-loop.md runbook。
+
 **v4.38(2026-06-06)— Web 前端原型**:`frontend/` SvelteKit + Vite + TS + Plotly.js,
 2 視圖(`/stocks/[id]` V1 個股 WAVE 卡 + `/screens/[toolkit]` V2 跨股因子排行);
 消費既有 Golden L3 唯讀 API,前端零 compute;後端加 `CORSMiddleware`(`WEB_API_CORS_ORIGINS` env 覆寫);
 V2 WAVE 欄是 placeholder(spec CL4),真實端點留 production 拍版 (a)/(b)/(c)。
 詳見 docs/changelog/v4.30-v4.38.md §v4.38。
 
-**v4.37(2026-06-06)— Traditional Core production 收尾**:compaction 改 `Rc` 共享子樹殺深拷貝
-(單股 135-250s → 7.7s);`monowave_epsilon` 預設 0.03 + 4 旋鈕 env(`TRAD_*`);run-all 預設 concurrency 8;
-全市場 2171 stocks × 40 cores ~2.5h,P0-Gate forest max 69/70/58 ≪ 200 全過。
-詳見 docs/changelog/v4.30-v4.38.md §v4.37。
-
-當前狀態:alembic head `j6k7l8m9n0o1`;Rust 50 crates / `cargo test --workspace` 660 passed(2026-08-28 實測,
-Compaction v2 切換刪舊後);Python `pytest tests/` 1037 passed / 2 xfailed(2026-08-28 實測;`test_syspath`
+當前狀態:alembic head `l8m9n0o1p2q3`;Rust 50 crates / `cargo test --workspace` 666 passed(2026-08-31 實測);
+Python `pytest tests/` 1084 passed(2026-08-31 實測;`test_syspath`
 於 sandbox editable install 環境 fail 屬環境項,本機 .venv 不受影響);MCP 14 public tools;universe ~2172 stocks × 41 cores;
 collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`。
 
@@ -244,25 +252,26 @@ collector.toml 39 entries;`config/stock_list.toml` market_type `["twse","tpex"]`
 
 ## 下次 session 優先序
 
-1. **neely Compaction v2 — 已收案(2026-08-28,neely_core 1.1.1)**:
-   切換(1.1.0)後 §9.2 Level-1 抽驗揭露 Trending row 的 Overlap_Trending
-   閘缺口 → 修正(1.1.1)複驗全過:gate(inv/w1 全 0、Terminal 360、
-   overflow 0/2191、p99=68、runtime 92.4%)+ 抽驗 1162/1162 + RSS 218MB
-   + MCP payload PASS。報告:
+1. **wave_judgment_loop production 收尾(v4.39 code 已進 branch,本機執行)**:
+   `docs/changelog/wave-judgment-loop.md` 文末 runbook — alembic upgrade →
+   neely facts DELETE + 1.3.0 全市場重生 → 合併 gate(§9.2 + Ch6 分布 +
+   `verify_running_correction.py` b>a+c 100% + toolkit payload)→
+   `wave_judgments` trigger P0001 probe → 首批 P0 六檔 × 3 tf 判讀
+   (human + `neely-judgment` skill 各一)→ refresh 驗 J2/emit-judgment。
+   基線對照:1.1.1 forest p50/p95/p99 = 26/53/68(Ch6 閘後預期下降)。
+2. **neely Compaction v2 — 已收案(2026-08-28,neely_core 1.1.1;
+   Running 判準修正已隨 v4.39 M0 落地)**:報告
    `docs/benchmarks/neely_compaction_v2_gate_results_2026-08-27.md`;
-   歷程 `docs/changelog/neely-compaction-v2.md`。facts 已 DELETE + 以
-   1.1.1 全量重生(84,370 筆,`workflows/neely_only.toml` 單核 ~2 min)。
-   獨立拍板項:
-   `is_running_correction` proxy 語意不符(偽 Running 持 ±3 評級);
+   歷程 `docs/changelog/neely-compaction-v2.md`。殘留拍板項:
    TAIEX 於 `price_daily_fwd` 無供料另列 backlog(`_index_taiex_` 殘列可刪)。
-2. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
+3. **待辦 backlog(2026-06-04 拍版)**:① 對外 API 擴充(等 user 給範圍)— 詳見
    `docs/changelog/process-logs.md` §待辦 backlog。② V2 WAVE 欄已拍版 (a) 並落地
    (2026-06-11,`GET /waves/summary`;見 docs/changelog/v2-wave-endpoint.md),
    production verify 留本機 runbook。③ **漸進收攏 spec 拍版**(波浪引擎歷史段定型 +
    尾端錨定;討論稿 `m3Spec/proposal_progressive_settlement.md`,拍版前不動 Rust;
    表現層止血已落地,見 docs/changelog/wave-view-tuning.md)。
-3. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
-4. **wall time / PG contention 觀察**:2026-08-26 全市場 run-all 爆到 480 min
+4. **gov_bank_net Core 消費**(需先寫 EventKind 規格;best-guess 不上 Rust)。
+5. **wall time / PG contention 觀察**:2026-08-26 全市場 run-all 爆到 480 min
    (CPU 佔用 ~9%,DB-bound)— 主嫌 facts stats 五天未 autoanalyze,已跑
    maintain(實測紀錄見 process-logs);後續觀察項:`uq_facts_dedup` 2.7GB
    (pkey 僅 508MB,REINDEX CONCURRENTLY 候選)+ 兩顆零使用索引

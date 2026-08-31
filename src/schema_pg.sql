@@ -15,7 +15,8 @@
 -- 命名約定:
 --   - schema 一律放 public(目前無多 schema 需求)
 --   - 索引命名 idx_<table>_<purpose>
---   - 沒有 trigger 跟 stored procedure(維持 Collector 簡單性)
+--   - trigger 只用於 dirty 標記 / dedup / PIT 防護(wave_judgments append-only),
+--     不做業務邏輯(維持 Collector 簡單性;「零 trigger」原則自 PR20 起放寬)
 -- =============================================================================
 
 -- 為了讓 schema 可重複執行(idempotent),全部用 IF NOT EXISTS
@@ -1805,7 +1806,7 @@ CREATE TABLE IF NOT EXISTS forecast_log (
         OR source_core IN ('baseline', 'log_channel', 'fib', 'manual',
                            'kalman_raw', 'neely_fib', 'kalman_forecast_core',
                            'chip_forecast_core', 'macro_forecast_core',
-                           'fundamental_forecast_core')
+                           'fundamental_forecast_core', 'judgment')
     )
 );
 CREATE INDEX IF NOT EXISTS idx_forecast_log_pending
@@ -1824,6 +1825,45 @@ CREATE INDEX IF NOT EXISTS idx_forecast_log_external
 
 
 -- =============================================================================
+-- 波浪判讀 PIT 表(alembic k7l8m9n0o1p2;m3Spec/wave_judgment_loop.md §5)
+-- append-only:狀態變更 = INSERT 新列 + supersedes_id;UPDATE/DELETE 由 trigger 拒絕
+CREATE TABLE IF NOT EXISTS wave_judgments (
+    id              BIGSERIAL PRIMARY KEY,
+    stock_id        TEXT NOT NULL,
+    timeframe       TEXT NOT NULL CHECK (timeframe IN ('daily','weekly','monthly')),
+    as_of           DATE NOT NULL,
+    judged_by       TEXT NOT NULL,
+    snapshot_date   DATE NOT NULL,
+    params_hash     TEXT NOT NULL,
+    engine_version  TEXT NOT NULL,
+    assumption_hash TEXT NOT NULL,
+    accepted        JSONB NOT NULL,
+    degree_read     TEXT,
+    rationale       JSONB NOT NULL,
+    invalidation    JSONB NOT NULL,
+    confidence_class TEXT NOT NULL CHECK (confidence_class IN ('single','contested','no_fit')),
+    status          TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active','intact','invalidated','absorbed','vanished','superseded')),
+    supersedes_id   BIGINT REFERENCES wave_judgments(id),
+    diff_detail     JSONB,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wave_judgments_stock_tf_status
+    ON wave_judgments(stock_id, timeframe, status);
+CREATE INDEX IF NOT EXISTS idx_wave_judgments_supersedes
+    ON wave_judgments(supersedes_id);
+CREATE OR REPLACE FUNCTION wave_judgments_append_only() RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION
+        'wave_judgments is append-only (PIT): UPDATE/DELETE forbidden — write a superseding row'
+        USING ERRCODE = 'P0001';
+END;
+$$ LANGUAGE plpgsql;
+CREATE OR REPLACE TRIGGER trg_wave_judgments_append_only
+    BEFORE UPDATE OR DELETE ON wave_judgments
+    FOR EACH ROW
+    EXECUTE FUNCTION wave_judgments_append_only();
+
 -- 完成
 -- =============================================================================
 

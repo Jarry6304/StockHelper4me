@@ -58,6 +58,7 @@
       initialState={data.initialState}
       neely={data.waves?.neely ?? null}
       traditional={data.waves?.traditional ?? null}
+      dossier={data.waves?.dossier ?? null}
       resonance={data.resonance}
       ohlcSeries={data.ohlc}
       on:timeframe-change={handleTimeframeChange}

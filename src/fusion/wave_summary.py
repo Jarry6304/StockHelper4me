@@ -7,8 +7,10 @@
 - `structural_snapshots` resonance_fusion(Golden L3 物化):findings 歸約成
   共振三級 badge(strong / basic / divergence / none)
 
-**top scenario 選法鏡射前端 V1**(`frontend/src/lib/wave/power.ts::pickDefaultScenario`,
-含 fb9e166 老化形態修正)— V2 表格 cell 與 V1 個股卡 default focus 必須同一顆
+**v4.39(wave_judgment_loop §8)判讀優先**:有 active judgment 且 preferred
+anchor 對得回 forest → cell 取 accepted[preferred](`judged: true`);無 →
+現行表現層預設排序(鏡射前端 V1 `power.ts::pickDefaultScenario`,含 fb9e166
+老化形態修正)— V2 表格 cell 與 V1 個股卡 default focus 必須同一顆
 scenario,兩端排序鍵改一邊必同步另一邊:
   1. 未被現價觸發 invalidation 優先
   2. recency tier DESC(≤60d=3 / ≤180d=2 / ≤365d=1 / 其餘 0)
@@ -238,6 +240,7 @@ def _insufficient_row(stock_id: str) -> dict[str, Any]:
         "resonance": "none",
         "staleness_days": None,
         "scenario_age_days": None,
+        "judged": False,
     }
 
 
@@ -246,11 +249,16 @@ def digest_from_docs(
     neely_row: dict[str, Any] | None,
     reso_row: dict[str, Any] | None,
     as_of: date,
+    judgment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """單檔抽取(純函式,canned doc 可單測)。
 
     無 neely snapshot / insufficient_data / 空 forest → insufficient row
     (對齊 WaveCell「— 無法判斷」視覺)。
+
+    v4.39:`judgment`(active 判讀列)給定且 accepted[preferred] 的
+    anchor_key 對得回 forest → cell 取該候選(`judged: true`);對不回 /
+    無判讀 → 現行表現層預設排序(`judged: false`)。
     """
     neely = (neely_row or {}).get("snapshot")
     if not isinstance(neely, dict) or neely.get("insufficient_data"):
@@ -266,7 +274,24 @@ def digest_from_docs(
         if isinstance(last_p, (int, float)):
             current_price = float(last_p)
 
-    top = _pick_default_scenario(forest, as_of, current_price)
+    top: dict[str, Any] | None = None
+    judged = False
+    if judgment is not None:
+        from fusion.judgment.anchor_key import scenario_anchor_key
+        preferred_key = next(
+            (a.get("anchor_key") for a in judgment.get("accepted") or []
+             if isinstance(a, dict) and a.get("role") == "preferred"),
+            None,
+        )
+        if preferred_key is not None:
+            top = next(
+                (s for s in forest
+                 if isinstance(s, dict) and scenario_anchor_key(s) == preferred_key),
+                None,
+            )
+            judged = top is not None
+    if top is None:
+        top = _pick_default_scenario(forest, as_of, current_price)
     if top is None:
         return _insufficient_row(stock_id)
 
@@ -290,6 +315,7 @@ def digest_from_docs(
         "resonance": _resonance_level(reso if isinstance(reso, dict) else None),
         "staleness_days": staleness,
         "scenario_age_days": age_days,
+        "judged": judged,
     }
 
 
@@ -309,10 +335,23 @@ def wave_summary_rows(
     neely_docs = _fetch_latest_docs(conn, stock_ids, as_of, "neely_core", timeframe)
     reso_docs = _fetch_latest_docs(conn, stock_ids, as_of, "resonance_fusion", timeframe)
 
+    # v4.39:active 判讀批次(§8;查詢失敗視為無 — judgment-aware 是 additive
+    # 行為,不擋 V2 表)
+    try:
+        from fusion.judgment import fetch_active_judgments_batch
+        judgments = fetch_active_judgments_batch(
+            conn, stock_ids=stock_ids, timeframe=timeframe,
+        )
+    except Exception:  # noqa: BLE001
+        judgments = {}
+
     out: list[dict[str, Any]] = []
     for sid in stock_ids:
         try:
-            out.append(digest_from_docs(sid, neely_docs.get(sid), reso_docs.get(sid), as_of))
+            out.append(digest_from_docs(
+                sid, neely_docs.get(sid), reso_docs.get(sid), as_of,
+                judgment=judgments.get(sid),
+            ))
         except Exception:  # noqa: BLE001 — 單檔資料異常不擋整批(graceful degradation)
             out.append(_insufficient_row(sid))
     return out

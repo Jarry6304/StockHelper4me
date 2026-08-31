@@ -91,6 +91,7 @@ pub fn run(series: &TradOhlcvSeries, config: &TraditionalEngineConfig) -> Result
                 forest_overflow_triggered: false,
                 insufficient_data: true,
                 elapsed_ms: started.elapsed().as_millis() as u64,
+                engine_version: VERSION.to_string(),
             },
         });
     }
@@ -120,6 +121,7 @@ pub fn run(series: &TradOhlcvSeries, config: &TraditionalEngineConfig) -> Result
             forest_overflow_triggered: overflow,
             insufficient_data: false,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            engine_version: VERSION.to_string(),
         },
     })
 }
@@ -144,10 +146,14 @@ impl Default for TraditionalCore {
     }
 }
 
+/// 引擎版本單一來源(首個明確版本常數;prose 一貫稱「v3 由下而上多度數
+/// fractal 引擎」,以 3.0.0 對齊世代命名 — 舊 inventory "0.1.0" 為 skeleton 遺留)。
+pub const VERSION: &str = "3.0.0";
+
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "traditional_core",
-        "0.1.0",
+        VERSION,
         core_registry::CoreKind::Wave,
         "P3",
         "Traditional Core(Frost & Prechter EWP)獨立 vertical — 純函式 run(),不 impl WaveCore",

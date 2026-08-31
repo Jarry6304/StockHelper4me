@@ -19,7 +19,7 @@ pub const TAIEX_RESERVED_STOCK_ID: &str = "_index_taiex_";
 
 /// 個股 Neutrality 閾值倍數:|magnitude| < ATR * STOCK_NEUTRAL_ATR_MULTIPLIER → Neutral
 /// 寫死 1.0(對齊 §4.4 Neely 規則寫死原則)
-const STOCK_NEUTRAL_ATR_MULTIPLIER: f64 = 1.0;
+pub(crate) const STOCK_NEUTRAL_ATR_MULTIPLIER: f64 = 1.0;
 
 /// 套用 Rule of Neutrality 回傳 monowave 應有的 direction。
 ///

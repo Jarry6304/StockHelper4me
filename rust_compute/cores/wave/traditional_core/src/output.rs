@@ -244,6 +244,9 @@ pub struct TraditionalDiagnostics {
     pub forest_overflow_triggered: bool,
     pub insufficient_data: bool,
     pub elapsed_ms: u64,
+    /// 引擎版本(traditional_snapshots 無 source_version 欄,由此欄承載;
+    /// 舊 row 缺此欄 → 讀取端容缺。首個明確版本常數,對齊 v3 世代命名)
+    pub engine_version: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

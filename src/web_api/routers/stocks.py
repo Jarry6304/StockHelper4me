@@ -86,4 +86,15 @@ def waves(
         conn, stock_id=stock_id, as_of=as_of, core_name="neely_core", timeframe=timeframe,
     )
     trad_text = pt.fetch_traditional_forest_text(conn, stock_id=stock_id, timeframe=timeframe)
-    return pt.compose_waves(neely_text, trad_text)
+    # v4.39 additive(wave_judgment_loop §4):dossier 段(候選 anchor_key /
+    # active judgment);current_price 前端自算,invalidation 機械面交 is_invalidated=false
+    import json as _json
+
+    from fusion.judgment import build_dossier
+
+    try:
+        dossier = build_dossier(conn, stock_id=stock_id, as_of=as_of, current_price=None)
+        dossier_text = _json.dumps(dossier, ensure_ascii=False, default=str)
+    except Exception:  # dossier 失敗不擋 raw 波浪(額外段,graceful)
+        dossier_text = None
+    return pt.compose_waves(neely_text, trad_text, dossier_text)

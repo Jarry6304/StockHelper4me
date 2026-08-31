@@ -53,7 +53,9 @@ mcp = FastMCP(
     instructions=(
         "Taiwan stock M3 aggregation layer + cross-stock factor toolkit。\n\n"
         "**個股 / 整合 tools(4 個)**:\n"
-        "  1. `neely_forecast(stock_id, date)` — NEoWave 預測,4 個時間框架。\n"
+        "  1. `neely_forecast(stock_id, date)` — NEoWave 證據 dossier:三 timeframe "
+        "live-edge 候選(anchor_key + 證據/前瞻三區)+ assumptions + active judgment;"
+        "無 primary(判讀由 wave_judgments 承載,候選集外不可發明計數)。\n"
         "  2. `kalman_trend(stock_id, date)` — 1-D Kalman 趨勢 + 5-class regime。\n"
         "  3. `magic_formula_screen(date, top_n=30)` — Greenblatt 2005 跨股篩選。\n"
         "  4. `stock_snapshot(stock_id, date)` — 6-in-1 基本資料(health + loan + "
