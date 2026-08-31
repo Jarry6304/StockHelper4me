@@ -4,6 +4,7 @@
 
 | 版本 | 日期 | 一句話 | 檔案 |
 |---|---|---|---|
+| WAVE-JDG | 2026-08-31 | 證據→判讀→錨定迴路(M0–M4 code):neely 1.2.0 Ch6 閘 + Running 修正 → 1.3.0 E1–E4 證據欄;dossier 取代 primary、wave_judgments PIT 表 + J2 anchor diff、neely-judgment skill、track1/emitter/前端切 judgment | wave-judgment-loop.md |
 | NEELY-CMP-CLOSE | 2026-08-28 | §9.2 Level-1 抽驗揭露 Trending row 的 Overlap_Trending 閘缺口 → 修正 + 複驗全過(gate / 抽驗 1162/1162 / RSS 218MB / MCP payload);facts 以 neely 1.1.1 全量重生 84,370 — **Compaction v2 收案** | neely-compaction-v2.md |
 | NEELY-CMP-G2.4b | 2026-08-27 | 切換刪舊:serving = tiling-round 凍結(§7.1/§7.2)、刪 exhaustive/three_rounds、beam_width 移除、structure_label 新格式 + fusion parse 移除(Q6);neely 1.1.0 | neely-compaction-v2.md |
 | NEELY-CMP-G2.4a | 2026-08-26 | G2.4 前半契約協調(wave_count/degree_level/base_label 欄 + Gate v3 工具)+ P0 Gate v3 四輪實測收案 + 拍板 (A)(spec r4,報告入 docs/benchmarks) | neely-compaction-v2.md |
