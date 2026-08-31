@@ -63,6 +63,12 @@ max_retracement: number | null, post_pattern_behavior: PostBehavior,
  */
 ch6_status: Ch6Status, 
 /**
+ * E2 噪音穩健度(1.3.0):wave_tree 頂層 children 端點日期在
+ * `REVERSAL_ATR ∈ {0.3, 0.5, 0.7}` 三組 monowave 偵測皆存在 → true。
+ * false = 該計數依附於 0.5 噪音門檻的產物端點(判讀降權訊號)。
+ */
+robust: boolean, 
+/**
  * 客觀計數(取代 v1.1 主觀分數)
  */
 passed_rules: Array<RuleId>, deferred_rules: Array<RuleId>, rules_passed_count: number, deferred_rules_count: number, 

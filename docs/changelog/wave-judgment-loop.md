@@ -16,7 +16,7 @@
 |---|---|---|
 | 0 | spec 落地(m3Spec 兩檔 + 本檔 + INDEX) | ✅ |
 | 1 | M0:Ch6 閘接回 ladder + Running b>a+c(neely 1.2.0) | ✅ |
-| 2 | E1 assumptions/E4 ambiguity/E2 robust + reverse_logic 退場(neely 1.3.0) | ⬜ |
+| 2 | E1 assumptions/E4 ambiguity/E2 robust + reverse_logic 退場(neely 1.3.0) | ✅ |
 | 3 | J1 wave_judgments 表 + anchor_key + dossier 讀路徑切換 | ⬜ |
 | 4 | 判讀驗證器 + CLI/POST 寫路徑 + neely-judgment skill | ⬜ |
 | 5 | S3 下游(track1/emitter/V2/wave_impulse)+ J2 diff + refresh hook + 前端 | ⬜ |
@@ -55,3 +55,28 @@ report clone push `passed`(memo 共享 `Rc<ValidationReport>` 不可變,beam 鍵
 沙箱驗證:`cargo test --workspace` **666 passed / 0 failed**(基線 660;+4 ladder 驗收
 +1 post_validator +1 running 向量);codegen Track A diff 僅 additive 三檔;前端
 `svelte-check` 0 errors(順修 `power.test.ts` fixture 既有缺欄)+ `vitest` 145 passed。
+
+## Phase 2 紀錄(E1/E2/E4,neely 1.3.0)
+
+- **E1**:新 `assumptions.rs` — 8 常數(REVERSAL_ATR 0.5 / NEUTRAL_ATR 1.0 / ±10% / ±4% /
+  Exception 10% / SB 0.382 / touch 2% / POLYWAVE 3)升 `pub(crate)` 原地引用不重打數值
+  (「不外部化常數」invariant 不變,僅回報);`assumption_hash` = sha256(排序 `name=value`)
+  前 16 hex(`sha2` 新 dep;blake3 保留給 params_hash);`NeelyCoreOutput.assumptions` +
+  `.assumption_hash` 進 snapshot 頂層
+- **E4**:新 `live_edge.rs` — 候選 = `wave_tree.end` bar ≥ last−3 且 degree 最大,
+  count = distinct `(pattern_tag, end)`(同 end 同型異子結構不重計);
+  `NeelyCoreOutput.live_edge_ambiguity`(非 Option,無候選 = 全零);
+  `reverse_logic/` 模組刪除,`reverse_logic_observation` 欄恆 `None` 標 deprecated 留一版
+- **E2**:新 `monowave/robustness.rs` — `detect_monowaves_with_multiplier` 變體
+  (原簽名 = 0.5 wrapper),`{0.3, 0.7}` 兩組只重跑偵測(分類不移動端點,較 spec
+  字面「+ neutrality」再省一步,語意等價);`Scenario.robust` = wave_tree 頂層 children
+  端點日期兩組皆存在(Neutral monowave 端點入集合 → 合成葉端點視同存在);
+  **multiplier 刻意不進 NeelyEngineConfig**(params_hash 不可變 — 變了 = snapshot 另立
+  row + `fetch_structural_latest` 不分 params_hash 讀取不確定);Stage 13/14 新 timing key
+- **traditional**:首個版本常數 `VERSION = "3.0.0"`(prose 世代命名;舊 inventory
+  "0.1.0" 為 skeleton 遺留)+ `TraditionalDiagnostics.engine_version` additive
+  (traditional_snapshots 無 source_version 欄,由此欄承載;舊 row 讀取端容缺)
+
+沙箱驗證:`cargo test --workspace` 666 passed / 0 failed;codegen diff 僅 additive
+(`+Assumption/AssumptionSource/LiveEdgeAmbiguity` + Scenario.robust + NeelyCoreOutput 三欄);
+`svelte-check` 0 / `vitest` 145 passed。

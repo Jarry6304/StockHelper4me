@@ -30,7 +30,8 @@
 use crate::output::{Monowave, MonowaveDirection, OhlcvBar};
 
 /// Reversal noise floor:反向 movement 小於此倍數 ATR 不視為反轉
-const REVERSAL_ATR_MULTIPLIER: f64 = 0.5;
+/// (E1 假設清單引用;serving 路徑恆 0.5,E2 穩健度掃描以參數變體另跑)
+pub(crate) const REVERSAL_ATR_MULTIPLIER: f64 = 0.5;
 
 /// 單一 OHLC bar 的 mid price = (high + low) / 2(r5 Hybrid OHLC 切割用)
 #[inline]
@@ -42,6 +43,16 @@ fn mid_price(bar: &OhlcvBar) -> f64 {
 ///
 /// `atr_period` 對齊 NeelyEngineConfig.atr_period(預設 14)。
 pub fn detect_monowaves(bars: &[OhlcvBar], atr_period: usize) -> Vec<Monowave> {
+    detect_monowaves_with_multiplier(bars, atr_period, REVERSAL_ATR_MULTIPLIER)
+}
+
+/// E2 穩健度掃描用參數變體(multiplier ∈ {0.3, 0.7} 只跑偵測,不進 serving;
+/// 刻意不進 NeelyEngineConfig — 進 config = params_hash 變 = snapshot 另立 row)。
+pub fn detect_monowaves_with_multiplier(
+    bars: &[OhlcvBar],
+    atr_period: usize,
+    reversal_multiplier: f64,
+) -> Vec<Monowave> {
     if bars.len() < 2 {
         return Vec::new();
     }
@@ -60,7 +71,7 @@ pub fn detect_monowaves(bars: &[OhlcvBar], atr_period: usize) -> Vec<Monowave> {
 
         // 反轉門檻 = ATR(at extreme) * multiplier;ATR 為 0 時 fallback 為 0
         let atr_at_extreme = atrs.get(extreme_idx).copied().unwrap_or(0.0);
-        let reversal_threshold = (atr_at_extreme * REVERSAL_ATR_MULTIPLIER).max(0.0);
+        let reversal_threshold = (atr_at_extreme * reversal_multiplier).max(0.0);
 
         let new_direction = signum(movement);
 

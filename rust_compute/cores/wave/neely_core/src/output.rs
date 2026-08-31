@@ -81,9 +81,23 @@ pub struct NeelyCoreOutput {
     /// Phase 9 新增:Stage 9b Emulation 偵測結果(spec Ch12 Emulation)。
     pub emulation_suspects: Vec<EmulationSuspect>,
 
-    /// Phase 10 新增:Stage 10.5 Reverse Logic 觀察(spec §Expansion of Possibilities)。
-    /// 同一資料序列存在多套合法計數時觸發 — 市場處於某更大形態的中段。
+    /// **Deprecated(1.3.0,E4 取代)**:恆 `None`。`reverse_logic::observe`
+    /// 已刪除,live-edge 多解觀察改由 `live_edge_ambiguity` 承載;
+    /// 欄位保留一版供讀取端過渡,下一版移除。
     pub reverse_logic_observation: Option<ReverseLogicObservation>,
+
+    /// E1(1.3.0):引擎工程/詮釋常數清單(判讀者的假設揭露;
+    /// m3Spec/wave_judgment_loop.md §3)。值仍寫死於各模組,此處僅回報。
+    pub assumptions: Vec<Assumption>,
+
+    /// E1:`name=value` 排序串接後 sha256 前 16 hex — 跨 run 恆等,
+    /// 常數變動即變;judgment PIT 錨定與 J2 `engine_changed` 判別用。
+    pub assumption_hash: String,
+
+    /// E4(1.3.0):live-edge 互斥候選歧義(取代 Reverse Logic 觀察)。
+    /// 候選 = `wave_tree.end` 落在最後 3 bars 內且 degree_level 最大;
+    /// 互斥 = pattern_type 或 end 不同(同 end 同型僅子結構異不重計)。
+    pub live_edge_ambiguity: LiveEdgeAmbiguity,
 
     /// Phase 12 新增:Stage 11 Degree Ceiling 推導(architecture §8.5 / §13.3)。
     /// 依資料量自動推導本次分析能達到的最高 Degree。
@@ -97,6 +111,37 @@ pub struct NeelyCoreOutput {
     /// (對齊 m3Spec/fusion_layer.md §6 #1)。供 Fusion `key_levels` 模組直接讀,
     /// 不必每次重跑 Neely。
     pub flat_fib_zones: Vec<FibZone>,
+}
+
+/// E1 假設來源分類(m3Spec/wave_judgment_loop.md §3)。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
+pub enum AssumptionSource {
+    /// 原書明文(比例 / 定義)
+    Canon,
+    /// 精華版容差翻譯表等合理詮釋(architecture §4)
+    Interpretation,
+    /// 工程選擇(噪音門檻等,無書面依據)
+    Engineering,
+}
+
+/// E1:單一引擎假設(名稱 + 數值 + 來源)。
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
+pub struct Assumption {
+    pub name: String,
+    pub value: f64,
+    pub source: AssumptionSource,
+}
+
+/// E4:live-edge 互斥候選歧義(count = 互斥候選數;kinds = 去重 pattern tag;
+/// degree_level = 候選所在的最大 degree)。無 live-edge 候選 → 全零/空。
+#[derive(Debug, Clone, Default, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
+pub struct LiveEdgeAmbiguity {
+    pub count: usize,
+    pub kinds: Vec<String>,
+    pub degree_level: usize,
 }
 
 /// Three Rounds Round 3 暫停資訊(neely_core_architecture.md §8.4)。
@@ -489,6 +534,11 @@ pub struct Scenario {
     /// live edge 無 post-pattern 葉 → `Deferred`)
     pub ch6_status: Ch6Status,
 
+    /// E2 噪音穩健度(1.3.0):wave_tree 頂層 children 端點日期在
+    /// `REVERSAL_ATR ∈ {0.3, 0.5, 0.7}` 三組 monowave 偵測皆存在 → true。
+    /// false = 該計數依附於 0.5 噪音門檻的產物端點(判讀降權訊號)。
+    pub robust: bool,
+
     /// 客觀計數(取代 v1.1 主觀分數)
     pub passed_rules: Vec<RuleId>,
     pub deferred_rules: Vec<RuleId>,
@@ -543,6 +593,50 @@ pub struct Scenario {
     /// Triple Three / Triple Three Combination / Triple Three Running)。
     /// 由 pattern_type 直接推導。
     pub triplexity_detected: bool,
+}
+
+#[cfg(test)]
+impl Scenario {
+    /// 測試最小 fixture(新 test 用此,免每處重打 24 欄 literal)。
+    pub(crate) fn test_minimal() -> Self {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        Scenario {
+            id: "test".to_string(),
+            wave_count: 0,
+            wave_tree: WaveNode {
+                label: "test".to_string(),
+                start: date,
+                end: date,
+                degree_level: 0,
+                base_label: StructureLabel::Three,
+                children: Vec::new(),
+            },
+            pattern_type: NeelyPatternType::Impulse,
+            initial_direction: MonowaveDirection::Up,
+            compacted_base_label: StructureLabel::Five,
+            structure_label: "test".to_string(),
+            complexity_level: ComplexityLevel::Simple,
+            power_rating: PowerRating::Neutral,
+            max_retracement: None,
+            post_pattern_behavior: PostBehavior::Unconstrained,
+            ch6_status: Ch6Status::Deferred,
+            robust: true,
+            passed_rules: Vec::new(),
+            deferred_rules: Vec::new(),
+            rules_passed_count: 0,
+            deferred_rules_count: 0,
+            invalidation_triggers: Vec::new(),
+            expected_fib_zones: Vec::new(),
+            structural_facts: StructuralFacts::default(),
+            advisory_findings: Vec::new(),
+            in_triangle_context: false,
+            awaiting_l_label: false,
+            monowave_structure_labels: Vec::new(),
+            round_state: RoundState::Round1,
+            pattern_isolation_anchors: Vec::new(),
+            triplexity_detected: false,
+        }
+    }
 }
 
 /// Phase 15 新增:每 monowave 的 Pre-Constructive structure label set。

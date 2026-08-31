@@ -145,6 +145,7 @@ mod tests {
         let scenarios = (0..num_scenarios)
             .map(|i| Scenario {
                 ch6_status: crate::output::Ch6Status::Deferred,
+                robust: true,
                 wave_count: 0,
                 id: format!("s{}", i),
                 wave_tree: WaveNode {
@@ -217,6 +218,9 @@ mod tests {
             missing_wave_suspects: Vec::new(),
             emulation_suspects: Vec::new(),
             reverse_logic_observation: None,
+            assumptions: Vec::new(),
+            assumption_hash: String::new(),
+            live_edge_ambiguity: LiveEdgeAmbiguity::default(),
             degree_ceiling: DegreeCeiling {
                 max_reachable_degree: Degree::SubMicro,
                 reason: "test".to_string(),

@@ -464,6 +464,7 @@ mod tests {
         };
         Scenario {
             ch6_status: crate::output::Ch6Status::Deferred,
+            robust: true,
             wave_count: 0,
             id: "test_scenario".to_string(),
             wave_tree: WaveNode {

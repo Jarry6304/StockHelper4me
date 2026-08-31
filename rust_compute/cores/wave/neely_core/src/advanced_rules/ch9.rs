@@ -22,6 +22,9 @@ use crate::output::{
     RuleId, Scenario,
 };
 
+/// 觸線容差 ±2%(spec 1959「觸及」的量化;E1 假設清單引用)
+pub(crate) const CH9_TOUCH_TOLERANCE_PCT: f64 = 0.02;
+
 /// Ch9 Trendline Touchpoints Rule:
 ///   - 5 段形態 6 個轉折,同級 ≤ 4 點觸線
 ///   - 5+ 點觸 0-2 或 1-3 線 → 該段不可能是 Impulse(通常 Double/Triple Zigzag)
@@ -65,7 +68,7 @@ pub fn check_trendline_touchpoints(
     let slope = (w3_end.1 - w1_end.1) / dt;
 
     // 對每個 pivot 計算到 1-3 線的「相對偏差」
-    let tolerance_pct = 0.02;
+    let tolerance_pct = CH9_TOUCH_TOLERANCE_PCT;
     let touchpoints = pivots
         .iter()
         .filter(|(t, y)| {
@@ -370,6 +373,7 @@ mod tests {
     fn make_scenario(pattern: NeelyPatternType, start: NaiveDate, end: NaiveDate) -> Scenario {
         Scenario {
             ch6_status: crate::output::Ch6Status::Deferred,
+            robust: true,
             wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {

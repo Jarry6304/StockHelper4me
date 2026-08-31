@@ -15,6 +15,8 @@ chrono         = { workspace = true }
 serde          = { workspace = true }
 serde_json     = { workspace = true }
 inventory      = "0.3"
+# E1 assumption_hash(sha256 前 16 hex;blake3 保留給 params_hash 語意)
+sha2           = "0.10"
 # v4.32 Golden L3:TypeScript 契約 codegen(feature-gated → 生產 build 預設不開,零風險)
 ts-rs          = { version = "10", features = ["chrono-impl"], optional = true }
 

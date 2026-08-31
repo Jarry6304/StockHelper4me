@@ -308,7 +308,7 @@ fn build_base_tiling(classified: &[ClassifiedMonowave], bars: &[OhlcvBar]) -> Ba
 // ---------------------------------------------------------------------------
 
 /// S&B 區間(rules line 1189-1197;與 three_rounds.rs 同值)
-const SB_MIN_RATIO: f64 = 0.382;
+pub(crate) const SB_MIN_RATIO: f64 = 0.382;
 const SB_MAX_RATIO: f64 = 2.618;
 /// Fib² 極端區間(v4.8 G1.3 沿用;W7)
 const FIB2_MIN: f64 = 0.236;
@@ -2025,6 +2025,7 @@ fn freeze_scenario(
             .as_ref()
             .map(|r| r.status)
             .unwrap_or(Ch6Status::Deferred),
+        robust: true, // 凍結預填;Stage 13(E2 三組偵測)覆寫
         rules_passed_count: passed.len(),
         deferred_rules_count: deferred.len(),
         passed_rules: passed,

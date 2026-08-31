@@ -127,6 +127,7 @@ pub fn classify(
         max_retracement: None,               // Stage 10a 補
         post_pattern_behavior: PostBehavior::Unconstrained,
         ch6_status: Ch6Status::Deferred, // Level-0 資訊性路徑無 Ch6 評估
+        robust: true,                    // Stage 13 對 forest 覆寫;Level-0 不消費
         passed_rules: derived_passed.clone(),
         deferred_rules: report.deferred.clone(),
         // G2.2 修復(compaction v2「Level-N 規則欄真值」附帶):count 與 passed_rules

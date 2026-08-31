@@ -46,6 +46,7 @@ function mkScenario(
     max_retracement: null,
     post_pattern_behavior: 'Continuation' as never,
     ch6_status: p.ch6_status ?? 'Deferred',
+    robust: p.robust ?? true,
     passed_rules: [],
     deferred_rules: [],
     rules_passed_count: p.rules_passed_count ?? 0,
