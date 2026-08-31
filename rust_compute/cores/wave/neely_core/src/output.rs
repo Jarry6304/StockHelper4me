@@ -369,6 +369,9 @@ pub struct CompactionV2Diagnostics {
     /// W5:被 Ch5 端點重驗(overall_pass = false)拒絕的唯一視窗數
     /// (完整 RuleRejection 進 `NeelyDiagnostics.rejections`,§4.1)
     pub w5_rejected_windows: usize,
+    /// Ch6 Stage 1 硬閘拒絕的唯一 (視窗, kind) 數(neely_ch6_gate_running_fix;
+    /// 與 `w5_rejected_windows` 分計,gate 報告 Ch5/Ch6 歸因不混淆)
+    pub ch6_rejected_kinds: usize,
     /// G2.2 Q3 雙軌實驗(§12):完成端點版 vs bars 反查版比對的唯一 5-窗數
     pub q3_windows: usize,
     /// Q3:Overlap / 回測判定翻轉的視窗數;翻轉率 = q3_flips / q3_windows,
@@ -427,6 +430,21 @@ pub struct RuleReference {
 // Scenario / Wave Tree(§九)
 // ---------------------------------------------------------------------------
 
+/// Ch6 Post-Constructive 確認狀態(neely_ch6_gate_running_fix spec)。
+///
+/// - `Confirmed`:Stage 1 + Stage 2 皆通過(市場已確認形態完成)
+/// - `Pending`:接受但待後續驗證(Stage 2 未完成,或該形態族無 Stage 1 硬閘)
+/// - `Deferred`:post-pattern 葉為空(live edge)或資訊不足,無法評估
+///
+/// 1.1.1 及以前的 snapshot 無此欄 — 讀取端缺欄一律視為 `Deferred`,不回填。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
+pub enum Ch6Status {
+    Confirmed,
+    Pending,
+    Deferred,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "neely/"))]
 pub struct Scenario {
@@ -466,6 +484,10 @@ pub struct Scenario {
     /// 由 `power_rating::max_retracement::lookup` 依 PowerRating + in_triangle_context 查表。
     pub max_retracement: Option<f64>,
     pub post_pattern_behavior: PostBehavior,
+
+    /// Ch6 Post-Constructive 確認狀態(1.2.0 起,ladder 內硬閘後凍結;
+    /// live edge 無 post-pattern 葉 → `Deferred`)
+    pub ch6_status: Ch6Status,
 
     /// 客觀計數(取代 v1.1 主觀分數)
     pub passed_rules: Vec<RuleId>,

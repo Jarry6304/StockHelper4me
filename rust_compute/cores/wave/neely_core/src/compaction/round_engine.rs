@@ -41,12 +41,13 @@ use crate::classifier;
 use crate::config::NeelyEngineConfig;
 use crate::monowave::{ClassifiedMonowave, ProportionMetrics};
 use crate::output::{
-    AdvisoryFinding, AdvisorySeverity, Certainty, ComplexityLevel, CompactionV2Diagnostics,
-    Degree, DiagonalKind, MonowaveDirection, MonowaveStructureLabels, NeelyPatternType, OhlcvBar,
-    PatternBound, PatternIsolationAnchor, PostBehavior, RoundState, RuleId, RuleRejection,
-    Scenario, StructuralFacts, StructureLabel, StructureLabelCandidate, TriangleKind, WaveNode,
-    ZigzagKind,
+    AdvisoryFinding, AdvisorySeverity, Certainty, Ch6Status, ComplexityLevel,
+    CompactionV2Diagnostics, Degree, DiagonalKind, MonowaveDirection, MonowaveStructureLabels,
+    NeelyPatternType, OhlcvBar, PatternBound, PatternIsolationAnchor, PostBehavior, RoundState,
+    RuleId, RuleRejection, Scenario, StructuralFacts, StructureLabel, StructureLabelCandidate,
+    TriangleKind, WaveNode, ZigzagKind,
 };
+use crate::post_validator::{post_validate_window, Ch6Report, WaveView};
 use crate::power_rating;
 use crate::validator::{self, ValidationReport};
 use chrono::NaiveDate;
@@ -88,6 +89,8 @@ pub struct CompactionNode {
     pub children: Vec<Rc<CompactionNode>>,
     /// W5 產出;G2.1 stub 恆 None
     pub validation: Option<ValidationReport>,
+    /// Ch6 per-kind 評估(1.2.0;葉 = None;凍結 → `Scenario.ch6_status`)
+    pub ch6: Option<Ch6Report>,
     pub net_direction: MonowaveDirection,
     /// §5.4 canonical_key,建構時預算(節點不可變,Rc 共享)
     pub canonical: String,
@@ -287,6 +290,7 @@ fn build_base_tiling(classified: &[ClassifiedMonowave], bars: &[OhlcvBar]) -> Ba
                 end_price: s.end_price,
                 children: Vec::new(),
                 validation: None,
+                ch6: None,
                 net_direction: s.direction,
             })
         })
@@ -955,13 +959,16 @@ const W5_REJECTION_RECORDS_CAP: usize = 64;
 struct LadderCounters {
     w1_violations: usize,
     w5_rejected_windows: usize,
+    /// Ch6 Stage 1 硬閘拒絕的唯一 (視窗, kind) 數(與 w5 分計,歸因不混淆)
+    ch6_rejected_kinds: usize,
     q3_windows: usize,
     q3_flips: usize,
     w5_rejection_records: Vec<RuleRejection>,
 }
 
 struct LadderOutcome {
-    kinds: Vec<AcceptedKind>,
+    /// 各 kind 附 Ch6 評估(Stage 1 fail 的 kind 已於 try_ladder 內拒除)
+    kinds: Vec<(AcceptedKind, Ch6Report)>,
     /// W5 報告(passed 已含 default_passed_rules 同源推導);視窗內各 kind 共享
     report: Option<Rc<ValidationReport>>,
 }
@@ -984,7 +991,11 @@ impl LadderOutcome {
 /// 的 W3 短於 W2 即 R4 fail),一律硬閘會使 W6 分岔成死碼、D-5 不可修 —
 /// 對齊 validator 自身「變體規則 Fail 是資訊性,交 Classifier」語意,
 /// `:3` 族不受衝動 essentials 閘,ValidationReport 仍附掛節點供下游參考。
-fn try_ladder(window: &[Rc<CompactionNode>], counters: &mut LadderCounters) -> LadderOutcome {
+fn try_ladder(
+    window: &[Rc<CompactionNode>],
+    classified: &[ClassifiedMonowave],
+    counters: &mut LadderCounters,
+) -> LadderOutcome {
     if !w1_adjacency(window) {
         counters.w1_violations += 1;
         return LadderOutcome::empty();
@@ -1066,8 +1077,52 @@ fn try_ladder(window: &[Rc<CompactionNode>], counters: &mut LadderCounters) -> L
         }
         return LadderOutcome::empty();
     }
+
+    // Ch6 確認閘(per kind;neely_ch6_gate_running_fix):post_pattern = 全域
+    // classified 中 start_bar ≥ window_end_bar 的葉序列。monowave 偵測共享
+    // pivot bar(前波 end_bar = 次波 start_bar),spec 字面的嚴格 `>` 會把
+    // 「緊接形態終點的第一段反轉波」— 正是 Stage 1 的確認走勢 — 排除在外,
+    // 使已確認形態被誤拒(舊 Scenario 版同病但屬死碼);`≥` 才涵蓋完整
+    // post-pattern bar 級路徑。canonical 含 end_bar 且 classified 整個 run()
+    // 不變 → memo key 唯一決定 post_pattern,memo 命中語意不變。
+    let window_end_bar = window.last().expect("non-empty window").end_bar;
+    let post_start = classified.partition_point(|c| c.monowave.bar_indices.0 < window_end_bar);
+    let post_pattern = &classified[post_start..];
+    let mut kinds_ch6: Vec<(AcceptedKind, Ch6Report)> = Vec::with_capacity(kinds.len());
+    for kind in kinds {
+        let ch6 = if post_pattern.is_empty() {
+            Ch6Report::deferred("post-pattern 葉為空(live edge),Ch6 兩階段確認 deferred")
+        } else {
+            let view = WaveView {
+                pattern_type: &kind.pattern,
+                initial_direction: candidate.initial_direction,
+                waves: &synth,
+            };
+            post_validate_window(&view, post_pattern)
+        };
+        if ch6.stage1_pass == Some(false) {
+            // Stage 1 硬閘:該 kind 拒絕;同視窗其他 kind 各自評
+            counters.ch6_rejected_kinds += 1;
+            if counters.w5_rejection_records.len() < W5_REJECTION_RECORDS_CAP {
+                counters.w5_rejection_records.push(RuleRejection {
+                    candidate_id: candidate.id.clone(),
+                    rule_id: ch6.rule_id.clone().expect("Stage 1 fail 必有 rule_id"),
+                    expected: "Ch6 Stage 1:於時限內完成市場確認".to_string(),
+                    actual: ch6.pending_conditions.join("; "),
+                    gap: ch6.stage1_gap_bars as f64,
+                    neely_page: "1765-1797".to_string(),
+                });
+            }
+            continue;
+        }
+        kinds_ch6.push((kind, ch6));
+    }
+    if kinds_ch6.is_empty() {
+        // 全 kind 被 Ch6 擋下(w5_rejected_windows 不計 — Ch5/Ch6 歸因分開)
+        return LadderOutcome::empty();
+    }
     LadderOutcome {
-        kinds,
+        kinds: kinds_ch6,
         report: Some(Rc::new(report)),
     }
 }
@@ -1094,11 +1149,20 @@ fn make_parent(
     kind: &AcceptedKind,
     canonical: String,
     validation: Option<ValidationReport>,
+    ch6: Ch6Report,
 ) -> Rc<CompactionNode> {
     let first = window.first().expect("non-empty window");
     let last = window.last().expect("non-empty window");
     let degree = window.iter().map(|n| n.degree_level).max().unwrap_or(0) + 1;
     let net = window_net_direction(window);
+    // Ch6 Stage 1 通過 → 節點私有 report 補 passed(memo 共享的 Rc 報告不可變;
+    // beam 鍵 2 / rules_passed_count 由此反映 Ch6)
+    let mut validation = validation;
+    if ch6.stage1_pass == Some(true) {
+        if let (Some(v), Some(rid)) = (validation.as_mut(), ch6.rule_id.clone()) {
+            v.passed.push(rid);
+        }
+    }
     // parent 真實範圍 = children 聯集(任一 child 無 bars 反查 → None,判定退端點)
     let true_range = window
         .iter()
@@ -1120,6 +1184,7 @@ fn make_parent(
         end_price: last.end_price,
         children,
         validation,
+        ch6: Some(ch6),
         net_direction: net,
     })
 }
@@ -1343,6 +1408,7 @@ struct SpliceSpec {
     s: usize,
     w: usize,
     kind: AcceptedKind,
+    ch6: Ch6Report,
     report: Option<Rc<ValidationReport>>,
     /// beam 鍵近似分數(parent |power| / W5 passed 數 / parent degree)—
     /// 供 materialize 排序,消除先枚舉視窗的時間軸偏置(G2.1 gate 實測修正)
@@ -1389,6 +1455,7 @@ pub fn run(
         w1_violations: 0,
         round_branch_cap_hits: 0,
         w5_rejected_windows: 0,
+        ch6_rejected_kinds: 0,
         q3_windows: 0,
         q3_flips: 0,
         node_count_by_level: HashMap::new(),
@@ -1468,18 +1535,19 @@ pub fn run(
                     let outcome = match memo.get(&memo_key) {
                         Some(o) => Rc::clone(o),
                         None => {
-                            let o = Rc::new(try_ladder(window, &mut counters));
+                            let o = Rc::new(try_ladder(window, classified, &mut counters));
                             memo.insert(memo_key, Rc::clone(&o));
                             o
                         }
                     };
-                    for kind in outcome.kinds.iter() {
+                    for (kind, ch6) in outcome.kinds.iter() {
                         let score = splice_score(kind, &outcome.report, window);
                         specs.push(SpliceSpec {
                             tiling_idx,
                             s,
                             w,
                             kind: kind.clone(),
+                            ch6: ch6.clone(),
                             report: outcome.report.clone(),
                             score,
                         });
@@ -1525,6 +1593,7 @@ pub fn run(
                         &spec.kind,
                         parent_key.clone(),
                         spec.report.as_ref().map(|r| (**r).clone()),
+                        spec.ch6.clone(),
                     );
                     collect_pattern_nodes(&p, &mut forest_nodes);
                     p
@@ -1574,6 +1643,7 @@ pub fn run(
     diag.tiling_count = pool.len();
     diag.w1_violations = counters.w1_violations;
     diag.w5_rejected_windows = counters.w5_rejected_windows;
+    diag.ch6_rejected_kinds = counters.ch6_rejected_kinds;
     diag.q3_windows = counters.q3_windows;
     diag.q3_flips = counters.q3_flips;
 
@@ -1950,6 +2020,11 @@ fn freeze_scenario(
         power_rating: power,
         max_retracement: None,
         post_pattern_behavior: PostBehavior::Unconstrained,
+        ch6_status: node
+            .ch6
+            .as_ref()
+            .map(|r| r.status)
+            .unwrap_or(Ch6Status::Deferred),
         rules_passed_count: passed.len(),
         deferred_rules_count: deferred.len(),
         passed_rules: passed,
@@ -2086,8 +2161,11 @@ mod tests {
         // I1–I6 全零(G2.1 gate 準則)
         let total: usize = diag.invariant_violations.values().sum();
         assert_eq!(total, 0, "不變量違反必須為 0:{:?}", diag.invariant_violations);
-        // degree-1 節點:Impulse(全窗)+ Zigzag [0..3] + Zigzag [2..5]
-        assert_eq!(diag.node_count_by_level.get("1"), Some(&3));
+        // degree-1 節點:Impulse(全窗,post 空 → Deferred)+ Zigzag [2..5](同);
+        // Zigzag [0..3] 有 post-pattern 但 0-B 線未於 wave-c 時限內突破 →
+        // Ch6 Stage 1 拒絕(1.2.0)
+        assert_eq!(diag.node_count_by_level.get("1"), Some(&2));
+        assert_eq!(diag.ch6_rejected_kinds, 1);
     }
 
     #[test]
@@ -2180,6 +2258,7 @@ mod tests {
         use StructureLabel::{Five, Three};
         // 手工構造壞 tiling:間隙(I2)+ 錯 degree(I4)
         let a = Rc::new(CompactionNode {
+            ch6: None,
             kind: NodeKind::Leaf,
             label: NodeLabel::LeafCandidates(vec![Five]),
             degree_level: 0,
@@ -2197,6 +2276,7 @@ mod tests {
         });
         // 間隙:start_date 不接 a.end_date、價格也不接
         let b = Rc::new(CompactionNode {
+            ch6: None,
             kind: NodeKind::Leaf,
             label: NodeLabel::LeafCandidates(vec![Three]),
             degree_level: 3, // 葉 degree 應為 0 → I4
@@ -2225,6 +2305,7 @@ mod tests {
         // I1 聯集覆蓋條款:tiling 鏈完整但末節點未達 base 範圍 t_N(尾節點被
         // splice 吞掉的 bug 類別)→ I1
         let a = Rc::new(CompactionNode {
+            ch6: None,
             kind: NodeKind::Leaf,
             label: NodeLabel::LeafCandidates(vec![Five]),
             degree_level: 0,
@@ -2260,10 +2341,10 @@ mod tests {
     fn ladder_on(
         classified: &[ClassifiedMonowave],
         bars: &[crate::output::OhlcvBar],
-    ) -> (Vec<AcceptedKind>, LadderCounters) {
+    ) -> (Vec<(AcceptedKind, Ch6Report)>, LadderCounters) {
         let base = build_base_tiling(classified, bars);
         let mut counters = LadderCounters::default();
-        let out = try_ladder(&base.nodes, &mut counters);
+        let out = try_ladder(&base.nodes, classified, &mut counters);
         (out.kinds, counters)
     }
 
@@ -2290,13 +2371,14 @@ mod tests {
         use StructureLabel::Five;
         // 乾淨 Impulse 鏈 → overall_pass;passed 經 default_passed_rules 同源
         // 推導非空(D-3 修復:Level-N rules 欄真值,beam 鍵 2 可比)
-        let base = build_base_tiling(&impulse_chain(), &[]);
+        let chain = impulse_chain();
+        let base = build_base_tiling(&chain, &[]);
         let mut counters = LadderCounters::default();
-        let out = try_ladder(&base.nodes, &mut counters);
+        let out = try_ladder(&base.nodes, &chain, &mut counters);
         assert!(out
             .kinds
             .iter()
-            .any(|k| matches!(k.pattern, NeelyPatternType::Impulse) && k.base == Five));
+            .any(|(k, _)| matches!(k.pattern, NeelyPatternType::Impulse) && k.base == Five));
         let report = out.report.expect("接受視窗必附 ValidationReport");
         assert!(report.overall_pass);
         assert!(
@@ -2355,7 +2437,7 @@ mod tests {
         let (kinds, counters) = ladder_on(&classified, &[]);
         assert_eq!(counters.w5_rejected_windows, 0);
         assert!(
-            kinds.iter().any(|k| matches!(k.pattern, NeelyPatternType::Diagonal { .. })
+            kinds.iter().any(|(k, _)| matches!(k.pattern, NeelyPatternType::Diagonal { .. })
                 && k.base == Five),
             "Terminal Impulse(:5)應被接受:{:?}",
             kinds
@@ -2363,7 +2445,7 @@ mod tests {
         assert!(
             !kinds
                 .iter()
-                .any(|k| matches!(k.pattern, NeelyPatternType::Triangle { .. })),
+                .any(|(k, _)| matches!(k.pattern, NeelyPatternType::Triangle { .. })),
             "發散且未逐波擴大 → 非 Triangle:{:?}",
             kinds
         );
@@ -2385,7 +2467,7 @@ mod tests {
         ];
         let (kinds, counters) = ladder_on(&classified, &[]);
         assert!(
-            kinds.iter().any(|k| matches!(
+            kinds.iter().any(|(k, _)| matches!(
                 k.pattern,
                 NeelyPatternType::Triangle {
                     sub_kind: TriangleKind::Contracting
@@ -2397,7 +2479,7 @@ mod tests {
         assert!(
             !kinds
                 .iter()
-                .any(|k| matches!(k.pattern, NeelyPatternType::Diagonal { .. })),
+                .any(|(k, _)| matches!(k.pattern, NeelyPatternType::Diagonal { .. })),
             ":5 族 Terminal 應被 W5(R4 fail)閘下:{:?}",
             kinds
         );
@@ -2452,7 +2534,7 @@ mod tests {
         assert!(
             !kinds
                 .iter()
-                .any(|k| matches!(k.pattern, NeelyPatternType::Diagonal { .. })),
+                .any(|(k, _)| matches!(k.pattern, NeelyPatternType::Diagonal { .. })),
             "bars 判準下 b 盤中完全回測 → Terminal 不成立:{:?}",
             kinds
         );
@@ -2615,11 +2697,12 @@ mod tests {
 
     #[test]
     fn dedup_same_aggregation_reached_twice_counted_once() {
-        // impulse_chain 的 Zigzag [0..3] 在多輪間可被重複生成;seen dedup 應保唯一
+        // impulse_chain 的 Zigzag [2..5] 在多輪間可被重複生成;seen dedup 應保唯一
         let classified = impulse_chain();
         let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
-        // node_count_by_level 以 canonical 去重;Impulse+2 Zigzag = 3(不因分支重複膨脹)
-        assert_eq!(diag.node_count_by_level.get("1"), Some(&3));
+        // node_count_by_level 以 canonical 去重;Impulse + Zigzag [2..5] = 2
+        // (Zigzag [0..3] 被 Ch6 Stage 1 拒絕;不因分支重複膨脹)
+        assert_eq!(diag.node_count_by_level.get("1"), Some(&2));
     }
 
     // ── G2.3:A-9 W2 細分(與 classifier 量值版核心同源)──────────────────
@@ -2657,10 +2740,11 @@ mod tests {
     fn a9_three_window_running_correction() {
         use MonowaveDirection::{Down, Up};
         use StructureLabel::{Five, Three};
+        // 1.2.0 判準 b > a + c:a=100 / b=125 / c=20(c 終點 1005 未回 a 起點 1000)
         let classified = vec![
             cm(0, 5, 1000.0, 900.0, Down, &[Three]),
-            cm(5, 10, 900.0, 1020.0, Up, &[Three]),
-            cm(10, 15, 1020.0, 940.0, Down, &[Five]),
+            cm(5, 10, 900.0, 1025.0, Up, &[Three]),
+            cm(10, 15, 1025.0, 1005.0, Down, &[Five]),
         ];
         let base = build_base_tiling(&classified, &[]);
         let rows = w2_label_rows(&base.nodes);
@@ -2784,8 +2868,11 @@ mod tests {
     fn boundary_reassess_counts_on_impulse_chain() {
         let classified = impulse_chain();
         let diag = run(&classified, &[], &[], Timeframe::Daily, &cfg()).diagnostics;
-        assert_eq!(diag.boundary_pairs_checked, 2);
-        assert_eq!(diag.boundary_sides_skipped, 4);
+        // 1.2.0:Zigzag [0..3] 被 Ch6 拒 → 其 tiling 不 materialize;
+        // 剩 Impulse 全窗(前後皆無鄰居,2 側跳過)+ Zigzag [2..5](prev=葉 1
+        // 可比 → 1 對;無 next → 1 側跳過)
+        assert_eq!(diag.boundary_pairs_checked, 1);
+        assert_eq!(diag.boundary_sides_skipped, 3);
         assert_eq!(diag.boundary_advisory_info, 0);
         assert_eq!(diag.boundary_advisory_warning, 0);
     }
@@ -2794,6 +2881,7 @@ mod tests {
 
     fn leaf_node(labels: &[StructureLabel]) -> Rc<CompactionNode> {
         Rc::new(CompactionNode {
+            ch6: None,
             kind: NodeKind::Leaf,
             label: NodeLabel::LeafCandidates(labels.to_vec()),
             degree_level: 0,
@@ -2818,6 +2906,7 @@ mod tests {
         children: Vec<Rc<CompactionNode>>,
     ) -> Rc<CompactionNode> {
         Rc::new(CompactionNode {
+            ch6: None,
             kind: NodeKind::Pattern(pt),
             label: NodeLabel::Fixed(base),
             degree_level: degree,
@@ -2958,8 +3047,9 @@ mod tests {
             validated: false,
             forced_corrective: false,
         };
-        // forest = Impulse [bars 0..25] + Zigzag [0..15] + Zigzag [10..25]
-        // pb(0,2) = bars 0..15:union 語意含於 Impulse + Z1;Z2(bars 10..25)
+        // forest = Impulse [bars 0..25] + Zigzag [10..25](Zigzag [0..15] 被
+        // Ch6 Stage 1 拒絕,1.2.0)。pb(0,2) = bars 0..15:union 語意僅含於
+        // Impulse;pb(3,4) = bars 15..25:含於 Impulse + Z2;Z2 對 pb(0,2)
         // 僅重疊不包含 → 不得掛載(舊「日期重疊即算」近似廢除,§7.2)
         let classified = impulse_chain();
         let bounds = [pb(0, 2), pb(3, 4)];
@@ -2971,7 +3061,7 @@ mod tests {
             .iter()
             .map(|s| s.pattern_isolation_anchors.len())
             .sum();
-        assert_eq!(total_anchors, 4, "union 語意:兩 bound 各掛 2 個 scenario");
+        assert_eq!(total_anchors, 3, "union 語意:Impulse 掛 2、Z2 掛 1");
         // 全跨度 Impulse 完整包含兩個 bound
         let impulse = res
             .forest
@@ -2985,11 +3075,115 @@ mod tests {
         assert_eq!(diag.degree_clamped_levels, 1);
         // §6.2:degree-1 節點(children 全葉)complexity 全 1;凍結後
         // complexity_level 對映 Simple
-        assert_eq!(diag.complexity_count_by_level.get("1"), Some(&3));
+        assert_eq!(diag.complexity_count_by_level.get("1"), Some(&2));
         assert_eq!(diag.triplexity_nodes, 0);
         assert!(res
             .forest
             .iter()
             .all(|s| matches!(s.complexity_level, crate::output::ComplexityLevel::Simple)));
+    }
+
+    // ── 1.2.0:Ch6 確認閘驗收(m3Spec/neely_ch6_gate_running_fix.md)────────
+
+    /// 驗收 1:post 葉在 ≤ W5 duration 內破 2-4 線 → 接受且 passed ∋ Ch6_Impulse_Stage1
+    #[test]
+    fn ch6_impulse_stage1_pass_lands_in_passed_rules() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        // impulse_chain 後接:回測至 109(破 2-4 線,6 bars = W5 dur)再創高
+        let mut classified = impulse_chain();
+        classified.push(cm(25, 30, 121.0, 109.0, Down, &[Three]));
+        classified.push(cm(30, 55, 109.0, 139.0, Up, &[Five]));
+        let res = run(&classified, &[], &[], Timeframe::Daily, &cfg());
+        let impulse = res
+            .forest
+            .iter()
+            .find(|s| matches!(s.pattern_type, NeelyPatternType::Impulse))
+            .expect("市場已確認的 Impulse 應被凍結");
+        assert!(
+            impulse.passed_rules.contains(&RuleId::Ch6_Impulse_Stage1),
+            "passed_rules 應含 Ch6_Impulse_Stage1:{:?}",
+            impulse.passed_rules
+        );
+        assert_eq!(impulse.rules_passed_count, impulse.passed_rules.len());
+        // 回測觸及 wave-4 區(109)→ Stage 2 亦過 → Confirmed
+        assert_eq!(impulse.ch6_status, Ch6Status::Confirmed);
+    }
+
+    /// 驗收 2:破線耗時 > W5 duration → Impulse kind 拒絕 + RuleRejection 記錄
+    #[test]
+    fn ch6_impulse_stage1_timeout_rejects_kind() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        // impulse_chain 後接:淺回檔(不破 2-4 線,線位 bar30≈114)再上攻 → 超時
+        let mut classified = impulse_chain();
+        classified.push(cm(25, 30, 121.0, 120.0, Down, &[Three]));
+        classified.push(cm(30, 35, 120.0, 130.0, Up, &[Five]));
+        let base = build_base_tiling(&classified, &[]);
+        let mut counters = LadderCounters::default();
+        let out = try_ladder(&base.nodes[0..5], &classified, &mut counters);
+        assert!(
+            !out.kinds
+                .iter()
+                .any(|(k, _)| matches!(k.pattern, NeelyPatternType::Impulse)),
+            "超時未確認 → Impulse kind 應被 Ch6 拒絕:{:?}",
+            out.kinds
+        );
+        assert_eq!(counters.ch6_rejected_kinds, 1);
+        assert!(
+            counters
+                .w5_rejection_records
+                .iter()
+                .any(|r| r.rule_id == RuleId::Ch6_Impulse_Stage1),
+            "w5_rejection_records 應含 Ch6_Impulse_Stage1"
+        );
+        assert_eq!(counters.w5_rejected_windows, 0, "Ch5/Ch6 歸因分開");
+    }
+
+    /// 驗收 3:post 葉為空(live edge)→ 接受、ch6_status = Deferred、passed 無 Ch6
+    #[test]
+    fn ch6_live_edge_defers_without_passed_rule() {
+        let classified = impulse_chain();
+        let res = run(&classified, &[], &[], Timeframe::Daily, &cfg());
+        let impulse = res
+            .forest
+            .iter()
+            .find(|s| matches!(s.pattern_type, NeelyPatternType::Impulse))
+            .expect("live edge Impulse 應保留");
+        assert_eq!(impulse.ch6_status, Ch6Status::Deferred);
+        assert!(
+            !impulse
+                .passed_rules
+                .iter()
+                .any(|r| matches!(r, RuleId::Ch6_Impulse_Stage1)),
+            "Deferred 不入 passed"
+        );
+    }
+
+    /// 驗收 2 後半:無 Stage 1 判準的 kind(Terminal/Diagonal)不受 Ch6 硬閘牽連
+    #[test]
+    fn ch6_terminal_kind_survives_unconfirming_post_pattern() {
+        use MonowaveDirection::{Down, Up};
+        use StructureLabel::{Five, Three};
+        // w6_terminal_impulse geometry + 永不確認的 post(貼線上方盤整)
+        let classified = vec![
+            cm(0, 5, 100.0, 110.0, Up, &[Three]),
+            cm(5, 10, 110.0, 103.0, Down, &[Three]),
+            cm(10, 15, 103.0, 114.0, Up, &[Three]),
+            cm(15, 20, 114.0, 106.0, Down, &[Three]),
+            cm(20, 25, 106.0, 115.0, Up, &[Three]),
+            cm(25, 30, 115.0, 114.0, Down, &[Three]),
+            cm(30, 40, 114.0, 125.0, Up, &[Five]),
+        ];
+        let base = build_base_tiling(&classified, &[]);
+        let mut counters = LadderCounters::default();
+        let out = try_ladder(&base.nodes[0..5], &classified, &mut counters);
+        let (_, ch6) = out
+            .kinds
+            .iter()
+            .find(|(k, _)| matches!(k.pattern, NeelyPatternType::Diagonal { .. }))
+            .expect("Terminal(Diagonal)無 Stage 1 → 不因 post 未確認而被拒");
+        assert_eq!(ch6.stage1_pass, None);
+        assert_eq!(counters.ch6_rejected_kinds, 0);
     }
 }

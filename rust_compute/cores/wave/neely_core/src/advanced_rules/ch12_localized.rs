@@ -83,6 +83,7 @@ mod tests {
     fn make_scenario(pattern: NeelyPatternType, in_triangle: bool) -> Scenario {
         let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         Scenario {
+            ch6_status: crate::output::Ch6Status::Deferred,
             wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {

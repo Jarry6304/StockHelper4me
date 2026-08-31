@@ -124,11 +124,15 @@ pub mod validator;
 pub use config::{NeelyCoreParams, NeelyEngineConfig, OverflowStrategy};
 pub use output::{NeelyCoreOutput, NeelyDiagnostics, OhlcvSeries};
 
+/// 引擎版本單一來源:inventory 註冊 / `WaveCore::version()` / facts
+/// `source_version` 皆引此常數(1.2.0 起收攏,防三處字面量漂移)。
+pub const VERSION: &str = "1.2.0";
+
 // inventory 註冊(對齊 m3Spec/cores_overview.md §五 Monolithic Binary 部署模型)
 inventory::submit! {
     core_registry::CoreRegistration::new(
         "neely_core",
-        "1.1.1",
+        VERSION,
         core_registry::CoreKind::Wave,
         "P0",
         "Neely Wave Core(NEoWave 完整體系;Compaction v2 tiling-round serving — P0 Gate v3 收案切換,spec r4)",
@@ -268,7 +272,14 @@ impl WaveCore for NeelyCore {
         // 1.1.0 → 1.1.1(2026-08-28 — Trending Impulse row 補 Overlap_Trending 閘:
         // W4 進 W2 區(Terminal 幾何)的 [:5 :3 :5 :3 :5] 視窗不再凍結為 Impulse;
         // §9.2 Level-1 抽驗揭露,詳 docs/changelog/neely-compaction-v2.md)
-        "1.1.1"
+        // 1.1.1 → 1.2.0(neely_ch6_gate_running_fix — Ch6 確認閘接回 ladder:
+        // post_validator 端點泛化(WaveView)後於 try_ladder W5 族別閘後 per-kind
+        // 評估,Stage 1 fail 硬閘拒絕該 kind(RuleRejection Ch6_*_Stage1 +
+        // diagnostics.ch6_rejected_kinds)、Stage 1 pass 入節點私有 passed(beam
+        // 鍵 2 反映)、live edge → Scenario.ch6_status = Deferred(additive 欄);
+        // is_running_correction 判準 b>a && c<a proxy → **b > a + c**
+        // (Level-0 / Level-N 同源,classify_3wave_mags 單一路徑))
+        VERSION
     }
 
     fn compute(&self, input: &Self::Input, params: Self::Params) -> Result<Self::Output> {
@@ -660,7 +671,8 @@ mod tests {
     fn name_and_version_are_stable() {
         let core = NeelyCore::new();
         assert_eq!(core.name(), "neely_core");
-        assert_eq!(core.version(), "1.1.1");
+        // 字面量刻意重打:版本 bump 必須是有意識的(同步改此處與 crate::VERSION)
+        assert_eq!(core.version(), "1.2.0");
     }
 
     // -------------------------------------------------------------

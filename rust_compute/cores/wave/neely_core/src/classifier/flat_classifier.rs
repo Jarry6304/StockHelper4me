@@ -87,22 +87,18 @@ pub fn classify_flat(a_mag: f64, b_mag: f64, c_mag: f64) -> Option<FlatKind> {
     }
 }
 
-/// Phase 16:Running Correction 偵測 — c 不退至 a 起點。
+/// Phase 16:Running Correction 偵測 — c 終點未退回 a 起點。
 ///
 /// 對齊 spec line 2024-2037 Running 場景 + r5 line 1161「上提頂層」設計:
-///   Running Correction 結構為 3 段(a-b-c)但 c 不退至 a 起點,
+///   Running Correction 結構為 3 段(a-b-c)但 c 終點未回到 a 起點,
 ///   後續 Impulse 多 > 161.8%(常達 261.8%)。
 ///
-/// 判定:b 強於 a(b/a > 100%)且 c 不退至 a 起點(c < a — 即 c_over_a < 1.0)。
-/// 這對應 Elongated 的反面 — Elongated 是 c > a,Running 是 c < a 且 b 已超 a。
+/// 判定(1.2.0,neely_ch6_gate_running_fix):「c 終點未退回 a 起點」以幅度
+/// 表達 ⇔ **b > a + c**(蘊含 b > a)。舊判準 `b > a && c < a` 是 proxy —
+/// (100,120,80) 時 c 終點已跌破 a 起點 20 仍誤判 Running(production 16 筆
+/// 偽 Running 持 ±3 評級),(100,125,20) 則因 c < a 不必要條件而漏判。
 pub fn is_running_correction(a_mag: f64, b_mag: f64, c_mag: f64) -> bool {
-    if a_mag <= 0.0 {
-        return false;
-    }
-    let b_over_a = b_mag / a_mag;
-    let c_over_a = c_mag / a_mag;
-    // Running Correction:b > a(b 強)+ c 短於 a(c 不退至 a 起點)
-    b_over_a > 1.0 && c_over_a < 1.0
+    a_mag > 0.0 && b_mag > a_mag + c_mag
 }
 
 #[cfg(test)]
@@ -193,20 +189,27 @@ mod tests {
     }
 
     #[test]
-    fn running_correction_detected_when_b_strong_c_short() {
-        // b/a = 1.20 + c/a = 0.80 → Running
-        assert!(is_running_correction(100.0, 120.0, 80.0));
+    fn running_correction_not_detected_when_c_returns_past_a_start() {
+        // 1.2.0 翻轉:b=120 但 a+c=180 ≥ b → c 終點已跌破 a 起點 20,
+        // 非 Running(落回 Flat Irregular*)
+        assert!(!is_running_correction(100.0, 120.0, 80.0));
+    }
+
+    #[test]
+    fn running_correction_detected_when_b_exceeds_a_plus_c() {
+        // b=125 > a+c=120 → c 終點未回到 a 起點(舊判準因 c<a 不成立而漏判)
+        assert!(is_running_correction(100.0, 125.0, 20.0));
     }
 
     #[test]
     fn running_correction_not_detected_when_b_normal() {
-        // b/a = 0.85 → b 不超 a,不是 Running
+        // b=85 未超 a+c,不是 Running
         assert!(!is_running_correction(100.0, 85.0, 50.0));
     }
 
     #[test]
     fn running_correction_not_detected_when_c_long() {
-        // b/a = 1.20 但 c > a → 是 Elongated 不是 Running
+        // b=120 < a+c=220 → 非 Running(Elongated 場景)
         assert!(!is_running_correction(100.0, 120.0, 120.0));
     }
 }

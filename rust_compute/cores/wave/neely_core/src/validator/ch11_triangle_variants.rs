@@ -414,6 +414,7 @@ mod tests {
 
     fn make_scenario_triangle(classified: &[ClassifiedMonowave], kind: TriangleKind) -> Scenario {
         Scenario {
+            ch6_status: crate::output::Ch6Status::Deferred,
             wave_count: 0,
             id: "test".to_string(),
             wave_tree: WaveNode {
