@@ -104,13 +104,21 @@ def fetch_traditional_forest_text(
     return row["j"] if row else None
 
 
-def compose_waves(neely_text: str | None, traditional_text: str | None) -> Response:
-    """邊緣組裝 `{ neely, traditional }` 並排(**不合併、無 consensus**)。
+def compose_waves(
+    neely_text: str | None,
+    traditional_text: str | None,
+    dossier_text: str | None = None,
+) -> Response:
+    """邊緣組裝 `{ neely, traditional, dossier }` 並排(**不合併、無 consensus**)。
 
     raw passthrough 字串拼接(不 deserialize),缺值 → null。
+    `dossier`(v4.39 additive,wave_judgment_loop §4):raw 兩鍵不動 —
+    V1 圖表繼續吃 full NeelyCoreOutput,dossier 供判讀面(候選 anchor_key /
+    active judgment / 選取→錨定)增量接線。
     """
-    body = '{"neely":%s,"traditional":%s}' % (
+    body = '{"neely":%s,"traditional":%s,"dossier":%s}' % (
         neely_text if neely_text is not None else "null",
         traditional_text if traditional_text is not None else "null",
+        dossier_text if dossier_text is not None else "null",
     )
     return Response(content=body, media_type="application/json")

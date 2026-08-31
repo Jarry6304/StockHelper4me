@@ -65,11 +65,12 @@ def test_timeframe_fib_range_constant():
     assert fp.TIMEFRAME_FIB_RANGE["6m"] == (1.000, 1.382)
 
 
-def test_forecast_reimport_aliases_are_shared_objects():
-    """mcp_server._forecast 以舊私名 alias re-import,須是同一物件(single source)。"""
-    import mcp_server._forecast as f
+def test_public_facade_reexports_are_shared_objects():
+    """fusion 公開出口(PEP 562 轉發)與 _fib_projection 須是同一物件
+    (single source;v4.39 _forecast.py 退役後守衛移到公開面)。"""
+    import fusion
 
-    assert f._project_range is fp.project_range
-    assert f._find_closest_zone is fp.find_closest_zone
-    assert f._extract_invalidation_price is fp.extract_invalidation_price
-    assert f._TIMEFRAME_FIB_RANGE is fp.TIMEFRAME_FIB_RANGE
+    assert fusion.project_range is fp.project_range
+    assert fusion.find_closest_zone is fp.find_closest_zone
+    assert fusion.extract_invalidation_price is fp.extract_invalidation_price
+    assert fusion.TIMEFRAME_FIB_RANGE is fp.TIMEFRAME_FIB_RANGE

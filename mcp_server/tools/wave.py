@@ -1,6 +1,6 @@
 """波浪域 tools — Neely / Traditional 雙引擎 + wave screen + 雙軌共振。
 
-實作層:mcp_server/_forecast.py / _traditional.py / _screens.py +
+實作層:mcp_server/_dossier.py / _traditional.py / _screens.py +
 src/fusion/dual_track/。註冊見 server.py mcp.tool() 區塊。
 """
 
@@ -30,44 +30,32 @@ def neely_forecast(
     stock_id: str,
     date: str,
 ) -> dict[str, Any]:
-    """Neely 預測:4 個時間框架(月 / 季 / 半年 / 年)+ 上漲機率 + 價位區間(plan §Tool 1)。
+    """Neely 證據 dossier:三 timeframe live-edge 候選 + 錨定鍵 + active judgment。
 
-    內部:撈 Neely scenario_forest 取 top 5 by power_rating → Fibonacci 投影
-    分 4 時間框架 → 跨 cores 加權算 prob_up → invalidation_price 從 triggers 抽。
+    v4.39(wave_judgment_loop §4)起讀者面零 primary:引擎只交證據,選擇由
+    判讀(人/LLM)寫入 wave_judgments 承載。回應**無** `primary_scenario` /
+    `scenario_count` / `scenario_staleness` 鍵(刪除,非 rename);候選排序
+    只反映結構(degree desc → end desc → start asc),無任何分數鍵。
 
-    輸出只回結論(~2 KB / ~500 tokens),不回 raw scenario_forest。
+    每 timeframe 段:`snapshot_ref{snapshot_date, params_hash}`、`monowave_count`、
+    `last_bar`、`live_edge.ambiguity`(E4;舊 snapshot null)、`candidates[]`
+    (身分含 `anchor_key` / 證據 `evidence{passed_rules, ch6_status, robust, …}` /
+    前瞻 `forward{power_rating, invalidation_triggers, expected_fib_zones, …}` /
+    機械 `is_invalidated`)、`historical{count}`(完整 forest 走 /neely/forest)、
+    `traditional{candidates, concordance}`(並排不整合)。頂層另有
+    `engine{neely, traditional, assumption_hash}`、`assumptions[]`(E1,判讀前
+    必讀)、`cross_timeframe{direction_conflict, notes}`、`active_judgment`
+    (per-timeframe;null = 尚無判讀)、`quality_caveat`。
 
-    Forest 語意(G2.4 契約協調,compaction v2 §7.4):scenario **巢狀分層** —
-    `wave_tree` 節點帶 `degree_level`(葉 monowave = 0,parent = max(children)+1)
-    與 `base_label`(:3/:5);同一 forest 內 Level-0(monowave 級)與 Level-N
-    (聚合級)scenario 是**不同層級的解讀,不是同級並列的替代方案**,
-    比較/排序時勿把跨層 scenario 當同級競爭。結構化 `wave_count` 欄 =
-    wave_tree 頂層 children 數(取代 structure_label 字串 parse)。
+    判讀限定在 `candidates[].anchor_key` 集合內;`no_fit` 是合法輸出。
 
     Args:
         stock_id: 股票代號(例 "2330")
         date: 查詢日 ISO 字串
-
-    Returns:
-        {
-          "stock_id": "2330",
-          "as_of": "2026-05-13",
-          "current_price": 1234.5,
-          "primary_scenario": {label, pattern_type, power_rating, wave_count},
-          "scenario_count": int,
-          "forecasts": {
-            "1_month":   {"prob_up": 0.62, "range_high": [...], "range_low": [...]},
-            "1_quarter": {...},
-            "6_month":   {...},
-            "1_year":    {...}
-          },
-          "key_levels": {"support": [...], "resistance": [...]},
-          "invalidation_price": float | None
-        }
     """
-    from mcp_server._forecast import compute_neely_forecast
+    from mcp_server._dossier import compute_neely_dossier
 
-    return compute_neely_forecast(stock_id, _parse_date(date))
+    return compute_neely_dossier(stock_id, _parse_date(date))
 
 
 def scan_wave_impulse(

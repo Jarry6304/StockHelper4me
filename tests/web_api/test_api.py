@@ -172,11 +172,18 @@ def test_waves_composes_neely_and_traditional():
     c = _client([{"j": '{"k": 1}'}])
     r = c.get("/stocks/3363/waves?as_of=2026-05-28")
     assert r.status_code == 200
-    assert r.json() == {"neely": {"k": 1}, "traditional": {"k": 1}}  # 並排,不合併
+    body = r.json()
+    # raw 兩鍵不變(v4.39 additive:多 dossier 段,不動既有)
+    assert body["neely"] == {"k": 1}
+    assert body["traditional"] == {"k": 1}
+    assert "dossier" in body  # 段存在;內容形狀由 tests/fusion/test_judgment_dossier 驗
 
 
 def test_waves_both_null_when_missing():
     c = _client([])
     r = c.get("/stocks/9999/waves?as_of=2026-05-28")
     assert r.status_code == 200
-    assert r.json() == {"neely": None, "traditional": None}
+    body = r.json()
+    assert body["neely"] is None
+    assert body["traditional"] is None
+    assert "dossier" in body

@@ -17,7 +17,7 @@
 | 0 | spec 落地(m3Spec 兩檔 + 本檔 + INDEX) | ✅ |
 | 1 | M0:Ch6 閘接回 ladder + Running b>a+c(neely 1.2.0) | ✅ |
 | 2 | E1 assumptions/E4 ambiguity/E2 robust + reverse_logic 退場(neely 1.3.0) | ✅ |
-| 3 | J1 wave_judgments 表 + anchor_key + dossier 讀路徑切換 | ⬜ |
+| 3 | J1 wave_judgments 表 + anchor_key + dossier 讀路徑切換 | ✅ |
 | 4 | 判讀驗證器 + CLI/POST 寫路徑 + neely-judgment skill | ⬜ |
 | 5 | S3 下游(track1/emitter/V2/wave_impulse)+ J2 diff + refresh hook + 前端 | ⬜ |
 | 6 | 收尾(CLAUDE.md 輪替 / runbook 定稿) | ⬜ |
@@ -80,3 +80,37 @@ report clone push `passed`(memo 共享 `Rc<ValidationReport>` 不可變,beam 鍵
 沙箱驗證:`cargo test --workspace` 666 passed / 0 failed;codegen diff 僅 additive
 (`+Assumption/AssumptionSource/LiveEdgeAmbiguity` + Scenario.robust + NeelyCoreOutput 三欄);
 `svelte-check` 0 / `vitest` 145 passed。
+
+## Phase 3 紀錄(M1:J1 表 + anchor_key + dossier)
+
+- **J1**:alembic `k7l8m9n0o1p2` — `wave_judgments` 全 DDL(§5)+ **repo 首個
+  RAISE EXCEPTION trigger**(`trg_wave_judgments_append_only`,BEFORE UPDATE OR DELETE,
+  訊息 + SQLSTATE P0001 為契約);schema_pg.sql 同步 + 剝掉過期「無 trigger」註記。
+  「active」語意 = `status='active'` 且無子列(supersedes 鏈最新);
+  沙箱不可測 trigger 本體 → runbook probe
+- **anchor_key**(`src/fusion/judgment/anchor_key.py`):§6 日期樹鍵,golden test 凍結。
+  兩處格式細節(實作拍板,屬 PIT 身分一部分):
+  (1) **頭部標籤剝顯示尾碼** ` L{degree}{arrow}` — 使 standalone 判讀鍵與「同子樹
+  作為更大候選 children」同鍵,§J2 判定 3(absorbed)的比對前提;
+  (2) **children 串 > 2048 chars → `#<sha256 前 16>` 決定性收斂** — 大型聚合全遞迴鍵
+  可達數十 KB(炸 payload 與 judgments 儲存);同一函式供 dossier/驗證/J2 →
+  收斂後等值與子樹比對全數一致,淺樹(判讀常態)保持人可讀
+- **dossier**(`src/fusion/judgment/dossier.py`;`mcp_server/_dossier.py` 薄轉接 —
+  builder 落 fusion 因 web_api 不能 import mcp_server):§4 全鍵;
+  live-edge 過濾以 monowave_series 端點 date↔bar 對映計算;候選排序
+  `(degree desc, end desc, start asc)` 無分數鍵;`active_judgment` 為 **per-timeframe
+  dict**(spec 例為 scalar;§5 表以 (stock, timeframe) 為鍵,faithful 讀法);
+  payload 護欄:per-tf 候選 cap 12 + `wave_tree` 序列化深度 cap 2(更深
+  `children_omitted` 計數;anchor_key 仍由完整樹算);payload 政策改釘
+  verify_mcp_toolkit 的 soft 50KB / hard 1MB(舊 5K-token 釘屬已退役 compact 回應)
+- **讀路徑切換**:`mcp_server/_forecast.py` **刪除**(picker 三處 + prob/key_levels/
+  missing-wave 機械全退場;quality_caveat 邏輯遷入 dossier 改吃候選集);
+  `neely_forecast` 回應 = dossier,`primary_scenario`/`scenario_count`/`scenario_staleness`
+  三鍵刪除;`/stocks/{id}/waves` **additive** 加 `dossier` 段(raw 兩鍵不動,
+  graceful degrade);`fetch_traditional_latest` 新增於 fusion/raw
+- scripts:`verify_mcp_toolkit_v4_29._summary_note` + `verify_mcp_kalman_neely._check_neely`
+  改讀 dossier 鍵(snapshot_ref 新鮮度 + 候選計數)
+- tests:`test_toolkit_v2.py` 摘除 neely 段(~750 行:picker/degradation/prob 全屬
+  舊契約);新 `test_judgment_anchor_key`(golden)/`test_judgment_dossier`(15)/
+  `test_dossier`(tool-level + payload 雙釘);web `/waves` additive 斷言;
+  **pytest 全套 1036 passed / 2 xfailed**(基線 1037;淨 -1 = 舊契約測試汰換)

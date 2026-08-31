@@ -110,9 +110,12 @@ def _check_call(
 def _summary_note(name: str, out: dict[str, Any]) -> str:
     """Per-tool short summary string for verbose output."""
     if name == "neely_forecast":
-        p = out.get("primary_scenario") or {}
-        return (f"price={out.get('current_price')} waves={p.get('wave_count')} "
-                f"degree={p.get('effective_degree')} "
+        # v4.39 dossier(wave_judgment_loop §4):無 primary,看 daily 候選面
+        daily = (out.get("timeframes") or {}).get("daily") or {}
+        cands = daily.get("candidates") or []
+        return (f"price={out.get('current_price')} daily_candidates={len(cands)} "
+                f"historical={(daily.get('historical') or {}).get('count')} "
+                f"engine={(out.get('engine') or {}).get('neely')} "
                 f"usable={(out.get('quality_caveat') or {}).get('is_usable')}")
     if name == "kalman_trend":
         return (f"smoothed={out.get('smoothed_price')} "

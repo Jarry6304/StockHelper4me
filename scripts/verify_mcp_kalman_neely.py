@@ -71,24 +71,34 @@ def _check_neely(stock_id: str, as_of: str) -> tuple[str, str]:
     except Exception as e:
         return "ERROR", f"{type(e).__name__}: {e}"
 
+    # v4.39 dossier(wave_judgment_loop §4):無 primary/staleness 鍵,
+    # 健康度改看 daily 段:snapshot_ref 新鮮度(≤ 7 天)+ 候選/歷史計數
     current_price = r.get("current_price")
-    primary = r.get("primary_scenario") or {}
-    wave_count = primary.get("wave_count")
-    staleness = r.get("scenario_staleness") or {}
-    is_stale = staleness.get("is_stale")
+    daily = (r.get("timeframes") or {}).get("daily") or {}
+    snap_ref = daily.get("snapshot_ref") or {}
+    cand_count = len(daily.get("candidates") or [])
+    hist_count = (daily.get("historical") or {}).get("count") or 0
 
     issues: list[str] = []
     if not (isinstance(current_price, (int, float)) and current_price > 0):
         issues.append(f"current_price={current_price}")
-    if not (isinstance(wave_count, int) and wave_count > 0):
-        issues.append(f"wave_count={wave_count}")
-    if is_stale is True:
-        age = staleness.get("age_days")
-        issues.append(f"stale({age}d)")
+    if not snap_ref.get("snapshot_date"):
+        issues.append("no_daily_snapshot")
+    else:
+        from datetime import date as _date, datetime as _dt
+        try:
+            snap_d = _dt.fromisoformat(str(snap_ref["snapshot_date"])).date()
+            age = (_dt.fromisoformat(as_of).date() - snap_d).days
+            if age > 7:
+                issues.append(f"stale({age}d)")
+        except (TypeError, ValueError):
+            issues.append("bad_snapshot_date")
+    if cand_count + hist_count <= 0:
+        issues.append("empty_forest")
 
     note = (
-        f"price={current_price} waves={wave_count} "
-        f"label={primary.get('structure_label')!r}"
+        f"price={current_price} candidates={cand_count} historical={hist_count} "
+        f"engine={(r.get('engine') or {}).get('neely')}"
         if not issues else "; ".join(issues)
     )
     return ("OK" if not issues else "FAIL"), note
