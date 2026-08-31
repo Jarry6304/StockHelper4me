@@ -94,6 +94,44 @@ export async function apiGet<T = unknown>(path: string, opts: FetchOptions = {})
   }
 }
 
+/**
+ * POST(v4.39 判讀寫入用;唯一寫端點 POST /judgments)。
+ *
+ * 422 這裡不映 ScenarioForestOverflowError(那是 /neely/forest 專屬)—
+ * 回傳 ApiError 帶 detail,caller(judgments.ts)自行解讀拒絕原因。
+ */
+export async function apiPost<T = unknown>(
+  path: string,
+  body: unknown,
+  opts: FetchOptions = {}
+): Promise<T> {
+  const url = `${getBaseUrl()}${path}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      signal: opts.signal,
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch (cause) {
+    throw new NetworkError(cause);
+  }
+
+  if (res.ok) {
+    return (await res.json()) as T;
+  }
+
+  let detail: unknown = undefined;
+  try {
+    detail = await res.json();
+  } catch {
+    detail = await res.text().catch(() => undefined);
+  }
+  if (res.status === 404) throw new NotFoundError(detail);
+  throw new ApiError(res.status, `HTTP ${res.status}`, detail);
+}
+
 // ── helper: ISO date string ───────────────────────────────────────────────
 
 export function toIsoDate(d: Date | string): string {

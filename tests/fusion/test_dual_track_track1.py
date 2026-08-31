@@ -1,6 +1,8 @@
 """Tests for src/fusion/dual_track/track1.py — 軌道一(結構)讀法。
 
-對齊 m3Spec/dual_track_resonance.md §三 + §六。
+對齊 m3Spec/dual_track_resonance.md §三 + §六 + m3Spec/wave_judgment_loop.md §8:
+v4.39 起 picker 刪除 — judgment 路徑(active judgment accepted[preferred])
+或 aggregate 路徑(up_share / invalidation_band / ambiguity_count)。
 """
 
 from __future__ import annotations
@@ -22,15 +24,37 @@ from fusion.dual_track._shared import FibLine, Track1View  # noqa: E402
 from fusion.dual_track.track1 import (  # noqa: E402
     read_track1,
     scenario_is_invalidated,
+    _behavior_is_directional,
     _extract_invalidation_price,
     _extract_all_invalidation_thresholds,
     _check_any_threshold_breached,
     _zone_to_fib_line,
-    _pick_primary,
     _effective_degree,
     _direction_from_power,
     _cluster_and_cap_fib_lines,
 )
+from fusion.judgment import scenario_anchor_key  # noqa: E402
+
+
+def _judgment_for(scenario, *, jid=1, judged_by="human:jarry"):
+    """active judgment,accepted[preferred] 錨到 scenario。"""
+    return {
+        "id": jid,
+        "judged_by": judged_by,
+        "accepted": [{"role": "preferred",
+                      "anchor_key": scenario_anchor_key(scenario)}],
+    }
+
+
+def _patch_reads(snap_rows, judgment):
+    """同時 patch snapshot 讀取與 judgment 查找(track1 module-local binding)。"""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    stack.enter_context(patch(
+        "fusion.dual_track.track1.fetch_structural_latest", return_value=snap_rows))
+    stack.enter_context(patch(
+        "fusion.dual_track.track1.fetch_active_judgment", return_value=judgment))
+    return stack
 
 
 def _make_scenario(
@@ -110,17 +134,33 @@ class TestEffectiveDegree:
         assert _effective_degree({}) is None
 
 
-# ─── Picker ──────────────────────────────────────────────────────────────────
+# ─── Aggregate 特徵 helper(v4.39;picker 已刪除)────────────────────────────
 
 
-class TestPicker:
-    def test_higher_degree_wins(self):
-        short = _make_scenario(span_days=30, power="StrongBullish")
-        long_ = _make_scenario(span_days=2000, power="Bearish")
-        assert _pick_primary([short, long_]) is long_
+class TestBehaviorIsDirectional:
+    def test_string_directional(self):
+        assert _behavior_is_directional("FullRetracementRequired") is True
 
-    def test_empty_returns_none(self):
-        assert _pick_primary([]) is None
+    def test_string_non_directional(self):
+        assert _behavior_is_directional("Unconstrained") is False
+        assert _behavior_is_directional("HintsAtPattern") is False
+
+    def test_none_and_missing(self):
+        assert _behavior_is_directional(None) is False
+
+    def test_tagged_dict(self):
+        assert _behavior_is_directional({"MinRetracement": {"ratio": 0.9}}) is True
+        assert _behavior_is_directional(
+            {"HintsAtPattern": {"suggested_pattern": "Triangle", "reason": "x"}}
+        ) is False
+
+    def test_composite_recurses(self):
+        assert _behavior_is_directional({"Composite": {"behaviors": [
+            "Unconstrained", {"MinRetracement": {"ratio": 0.9}},
+        ]}}) is True
+        assert _behavior_is_directional(
+            {"Composite": {"behaviors": ["Unconstrained"]}}
+        ) is False
 
 
 # ─── Fib zone extraction ─────────────────────────────────────────────────────
@@ -273,7 +313,7 @@ class TestNeutralA3Gate:
             }],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="0050", as_of=date(2024, 6, 1),
                               current_price=95.85)
         assert t1.direction == "neutral"
@@ -291,7 +331,7 @@ class TestNeutralA3Gate:
             }],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
                               current_price=250.0)
         assert t1.direction == "neutral"
@@ -309,7 +349,7 @@ class TestNeutralA3Gate:
             }],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
                               current_price=100.0)
         assert t1.invalidated is False
@@ -331,7 +371,7 @@ class TestNeutralA3Gate:
             ],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
                               current_price=250.0)
         # bullish + above 200 → 應仍 False(bullish 只看 below trigger,
@@ -350,7 +390,7 @@ class TestNeutralA3Gate:
             ],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
                               current_price=75.0)
         assert t1.invalidated is True
@@ -367,7 +407,7 @@ class TestNeutralA3Gate:
             ],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="X", as_of=date(2024, 6, 1),
                               current_price=70.0)
         # bearish + below 80 + current=70 → 不該 invalidated(bearish 不看 below)
@@ -406,7 +446,7 @@ class TestReadTrack1:
             }],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary, jid=9)):
             t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1),
                               current_price=85.0)
         assert t1.has_snapshot is True
@@ -421,6 +461,9 @@ class TestReadTrack1:
         assert t1.invalidation_price == 80.0
         assert t1.invalidated is False  # 85 > 80
         assert t1.fallback_to_flat_union is False
+        # v4.39 additive:judgment 路徑標記
+        assert t1.source == "judgment"
+        assert t1.judgment_id == 9
 
     def test_invalidation_gate_triggered(self):
         primary = _make_scenario(
@@ -431,19 +474,19 @@ class TestReadTrack1:
             }],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1),
                               current_price=75.0)
         assert t1.invalidated is True
         assert any("A-3 invalidation gate" in n for n in t1.notes)
 
     def test_fallback_to_flat_union(self):
-        # primary 無 zones,flat_fib_zones 有
+        # preferred 無 zones,flat_fib_zones 有
         primary = _make_scenario(fib_zones=[])
         snap = _make_snapshot([primary], flat=[
             {"label": "u_0.382", "low": 88.0, "high": 92.0, "source_ratio": 0.382},
         ])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
         assert t1.fallback_to_flat_union is True
         assert len(t1.fib_lines) == 1
@@ -461,8 +504,7 @@ class TestReadTrack1:
         )
         daily_snap = {**_make_snapshot([daily_primary]), "timeframe": "daily"}
         weekly_snap = {**_make_snapshot([weekly_primary]), "timeframe": "weekly"}
-        with patch("fusion.dual_track.track1.fetch_structural_latest",
-                   return_value=[daily_snap, weekly_snap]):
+        with _patch_reads([daily_snap, weekly_snap], _judgment_for(daily_primary)):
             t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1),
                               timeframe="daily")
         assert len(t1.fib_lines) == 1
@@ -550,7 +592,7 @@ class TestClusterAndCapFibLines:
             ],
         )
         snap = _make_snapshot([primary])
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
         # cluster + cap 後應 ≤ 30
         assert len(t1.fib_lines) <= 30
@@ -597,11 +639,11 @@ class TestB3CrossToolConsistency:
         )
         snap = _make_snapshot([primary])
 
-        # canonical(write-side / b1)
+        # canonical(b1)
         canon_result = canonical_is_invalidated(primary, current_price)
 
-        # track1 (read-side / B3)
-        with patch("fusion.dual_track.track1.fetch_structural_latest", return_value=[snap]):
+        # track1 judgment 路徑(read-side / B3;v4.39 起 A-3 閘門只在 judgment 路徑)
+        with _patch_reads([snap], _judgment_for(primary)):
             t1 = read_track1(None, stock_id="TEST", as_of=date(2024, 6, 1),
                               current_price=current_price)
 
@@ -616,3 +658,166 @@ class TestB3CrossToolConsistency:
         )
         # cross-tool 一致(冗余 assertion 但 highlights 設計意圖)
         assert canon_result == t1.invalidated
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# v4.39 wave_judgment_loop §8:judgment-or-aggregate 路徑
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _directional(power, *, span_days=200, behavior="FullRetracementRequired",
+                 invalidation_triggers=None, fib_zones=None):
+    s = _make_scenario(power=power, span_days=span_days,
+                       invalidation_triggers=invalidation_triggers,
+                       fib_zones=fib_zones)
+    s["post_pattern_behavior"] = behavior
+    return s
+
+
+class TestAggregatePath:
+    def test_up_share_half_is_undecided(self):
+        """spec 驗收:無 active judgment 且 up_share=0.5 → direction='undecided'。"""
+        forest = [
+            _directional("StrongBullish", span_days=100),
+            _directional("Bearish", span_days=150),
+        ]
+        snap = _make_snapshot(forest)
+        with _patch_reads([snap], None):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.source == "aggregate"
+        assert t1.up_share == 0.5
+        assert t1.direction == "undecided"
+        assert t1.judgment_id is None
+        # aggregate 無單一 thesis → 單候選欄空
+        assert t1.pattern_type is None
+        assert t1.invalidated is False
+
+    def test_up_share_above_60_is_bullish(self):
+        forest = [
+            _directional("StrongBullish", span_days=100),
+            _directional("Bullish", span_days=150),
+            _directional("Bearish", span_days=250),
+        ]
+        snap = _make_snapshot(forest)
+        with _patch_reads([snap], None):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.up_share == pytest.approx(2 / 3)
+        assert t1.direction == "bullish"
+
+    def test_up_share_below_40_is_bearish(self):
+        forest = [
+            _directional("StrongBearish", span_days=100),
+            _directional("Bearish", span_days=150),
+            _directional("Bullish", span_days=250),
+        ]
+        snap = _make_snapshot(forest)
+        with _patch_reads([snap], None):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.up_share == pytest.approx(1 / 3)
+        assert t1.direction == "bearish"
+
+    def test_no_directional_candidates_undecided(self):
+        # Unconstrained / Neutral 都不入分母 → up_share=None → undecided
+        forest = [
+            _directional("StrongBullish", behavior="Unconstrained"),
+            _directional("Neutral", span_days=150),
+        ]
+        snap = _make_snapshot(forest)
+        with _patch_reads([snap], None):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.up_share is None
+        assert t1.direction == "undecided"
+
+    def test_invalidation_band_min_max(self):
+        forest = [
+            _directional("Bullish", span_days=100, invalidation_triggers=[
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakBelow": 80.0}},
+            ]),
+            _directional("Bearish", span_days=150, invalidation_triggers=[
+                {"on_trigger": "InvalidateScenario",
+                 "trigger_type": {"PriceBreakAbove": 120.0}},
+            ]),
+        ]
+        snap = _make_snapshot(forest)
+        with _patch_reads([snap], None):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.invalidation_band == {"min": 80.0, "max": 120.0}
+
+    def test_ambiguity_count_from_engine_e4(self):
+        forest = [_directional("Bullish")]
+        snap = _make_snapshot(forest)
+        snap["snapshot"]["live_edge_ambiguity"] = {
+            "count": 3, "kinds": ["Impulse", "Flat"], "degree_level": 5,
+        }
+        with _patch_reads([snap], None):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.ambiguity_count == 3
+
+    def test_fib_lines_from_flat_union(self):
+        # aggregate 無選取 → fib_lines 只來自 flat_fib_zones 聯集
+        forest = [_directional("Bullish", fib_zones=[
+            {"label": "cand", "low": 50.0, "high": 60.0},
+        ])]
+        snap = _make_snapshot(forest, flat=[
+            {"label": "u_0.5", "low": 88.0, "high": 92.0},
+        ])
+        with _patch_reads([snap], None):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert len(t1.fib_lines) == 1
+        assert t1.fib_lines[0].price == 90.0
+        assert t1.fallback_to_flat_union is True
+
+    def test_live_edge_filter_with_bar_map(self):
+        # monowave bar 對映存在 → 只聚合 live-edge(end ≥ last−3)候選
+        live = _directional("StrongBullish", span_days=100)
+        stale = _directional("Bearish", span_days=50)
+        live["wave_tree"]["end"] = "2024-06-01"
+        stale["wave_tree"]["end"] = "2024-03-01"
+        snap = _make_snapshot([live, stale])
+        snap["snapshot"]["monowave_series"] = [
+            {"start_date": "2024-01-01", "end_date": "2024-03-01",
+             "bar_indices": [0, 40]},
+            {"start_date": "2024-03-01", "end_date": "2024-06-01",
+             "bar_indices": [40, 100]},
+        ]
+        with _patch_reads([snap], None):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        # stale(end bar 40 < 100−3)不入聚合 → 只剩 bullish → up_share=1.0
+        assert t1.up_share == 1.0
+        assert t1.direction == "bullish"
+
+
+class TestJudgmentDegrade:
+    def test_no_fit_judgment_falls_back_to_aggregate(self):
+        forest = [_directional("StrongBullish")]
+        snap = _make_snapshot(forest)
+        no_fit = {"id": 3, "judged_by": "human:jarry", "accepted": []}
+        with _patch_reads([snap], no_fit):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.source == "aggregate"
+        assert any("no_fit" in n for n in t1.notes)
+
+    def test_anchor_miss_degrades_with_note(self):
+        forest = [_directional("StrongBullish")]
+        snap = _make_snapshot(forest)
+        stale_judgment = {
+            "id": 4, "judged_by": "human:jarry",
+            "accepted": [{"role": "preferred",
+                          "anchor_key": "Flat|:3|2020-01-01|2020-06-01[]"}],
+        }
+        with _patch_reads([snap], stale_judgment):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.source == "aggregate"
+        assert t1.judgment_id is None
+        assert any("不在最新 forest" in n for n in t1.notes)
+
+    def test_judgment_lookup_failure_degrades(self):
+        # conn=None + 未 patch fetch_active_judgment → AttributeError → aggregate
+        forest = [_directional("StrongBullish")]
+        snap = _make_snapshot(forest)
+        with patch("fusion.dual_track.track1.fetch_structural_latest",
+                   return_value=[snap]):
+            t1 = read_track1(None, stock_id="2330", as_of=date(2024, 6, 1))
+        assert t1.source == "aggregate"
+        assert any("judgment lookup failed" in n for n in t1.notes)

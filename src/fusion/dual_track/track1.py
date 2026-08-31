@@ -1,23 +1,26 @@
 """dual_track · 軌道一(結構)讀法。
 
-對齊 m3Spec/dual_track_resonance.md §三 + §六:
+對齊 m3Spec/dual_track_resonance.md §三 + §六 + m3Spec/wave_judgment_loop.md §8:
 - 一律讀 structural_snapshots(neely_core 完整 forest)
-- 不靠 forecast_log 的 neely_fib 行(那是 internal_only 對齊影子)
-- primary picker 對齊 v3.35 degree-aware 規則
+- 不靠 forecast_log 的行(judgment forward 列是 internal_only 對齊影子)
+- **v4.39 起無 picker**:有 active judgment → 用 accepted[preferred] 候選
+  (pattern、fib zones、失效價);無 → 計數無關聚合特徵(up_share /
+  invalidation_band / ambiguity_count),`up_share ∉ [0.4, 0.6]` 才給方向,
+  否則 `direction="undecided"`
 
 輸出 Track1View 含:
-- primary scenario 的離散 fib 線清單(從 expected_fib_zones,fallback flat_fib_zones)
-- 失效價(invalidation_triggers 內 InvalidateScenario + PriceBreakBelow/Above)
-- 方向(power_rating sign 推 bullish/bearish)
-- A-3 失效閘門狀態(若給 current_price)
+- judgment 路徑:preferred 候選的離散 fib 線(expected_fib_zones,fallback
+  flat_fib_zones)、失效價、方向(power_rating sign)、A-3 失效閘門狀態
+- aggregate 路徑:flat_fib_zones 聯集線(引擎聚合,無選取)+ 聚合特徵;
+  無單一 thesis → invalidated 恆 False
 """
 
 from __future__ import annotations
 
-import re
 from datetime import date
 from typing import Any
 
+from fusion.judgment import fetch_active_judgment, scenario_anchor_key
 from fusion.raw._db import fetch_structural_latest
 
 from fusion.dual_track._shared import (
@@ -45,25 +48,89 @@ from fusion._picker import (
 _DEGREE_RANK = DEGREE_RANK
 
 
-def _pick_primary(forest: list[dict]) -> dict | None:
-    """讀取面 picker:對齊 v3.35(degree DESC, power DESC, rules DESC)。
+# ─── Aggregate 特徵(無 judgment 路徑;wave_judgment_loop §8)────────────────
 
-    本函式只用於讀取面(track1.read_track1 + wave_impulse_screen fallback)。
-    寫入面(neely_emitter)走自家 _pick_primary 帶 current_price filter。
+# live-edge 判定與 dossier 同源(end_bar ≥ last_bar − LIVE_EDGE_BARS)
+_LIVE_EDGE_BARS = 3
+
+# post_pattern_behavior → 是否表達方向性前瞻。方向本身取 power_rating sign
+# (engine 的 post_behavior 即由 (pattern_type, power_rating, ctx) 查表產生,
+# 方向資訊在 power_rating;behavior 決定「有無約束」):
+#   FullRetracementRequired / MinRetracement / ReachesWaveZone /
+#   NextImpulseExceeds / NotFullyRetracedUnless / Composite → 有方向性(計數)
+#   Unconstrained / HintsAtPattern / 缺欄 → 無方向性(不入 up_share 分母)
+#   power_rating = Neutral → 同樣不入分母(sign = 0)
+_NON_DIRECTIONAL_BEHAVIORS = {"Unconstrained", "HintsAtPattern"}
+
+
+def _behavior_is_directional(behavior: Any) -> bool:
+    if behavior is None:
+        return False
+    if isinstance(behavior, str):
+        return behavior not in _NON_DIRECTIONAL_BEHAVIORS
+    if isinstance(behavior, dict) and behavior:
+        kind = next(iter(behavior.keys()))
+        if kind == "Composite":
+            subs = (behavior.get("Composite") or {}).get("behaviors") or []
+            return any(_behavior_is_directional(b) for b in subs)
+        return kind not in _NON_DIRECTIONAL_BEHAVIORS
+    return False
+
+
+def _live_scenarios(snapshot: dict, forest: list[dict]) -> tuple[list[dict], bool]:
+    """live-edge 候選(dossier 同款 bar 對映)。
+
+    無 monowave bar 對映(舊 snapshot / 精簡 fixture)→ 全 forest 視為 live
+    (寬鬆側 fallback;聚合特徵仍 count-independent)。回傳 (live, had_bar_map)。
     """
-    if not forest:
-        return None
-    scored = [
-        (
-            _degree_rank(_effective_degree(s)),
-            _power_rating_strength(s.get("power_rating")),
-            int(s.get("rules_passed_count") or 0),
-            s,
-        )
-        for s in forest
-    ]
-    scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
-    return scored[0][3]
+    bar_of: dict[str, int] = {}
+    last_bar_index = 0
+    for m in snapshot.get("monowave_series") or []:
+        if not isinstance(m, dict):
+            continue
+        idx = m.get("bar_indices") or [0, 0]
+        try:
+            s_idx, e_idx = int(idx[0]), int(idx[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        bar_of[str(m.get("start_date"))] = s_idx
+        bar_of[str(m.get("end_date"))] = e_idx
+        last_bar_index = max(last_bar_index, e_idx)
+    if not bar_of:
+        return list(forest), False
+    live = []
+    for s in forest:
+        end_bar = bar_of.get(str((s.get("wave_tree") or {}).get("end")))
+        if end_bar is not None and end_bar >= last_bar_index - _LIVE_EDGE_BARS:
+            live.append(s)
+    return live, True
+
+
+def _aggregate_features(
+    snapshot: dict, live: list[dict],
+) -> tuple[float | None, dict[str, float] | None, int | None]:
+    """計數無關聚合:(up_share, invalidation_band, ambiguity_count)。
+
+    up_share = 有方向性前瞻(見 _behavior_is_directional)且 power sign ≠ 0
+    的 live 候選中,sign > 0 的比例(等權);分母 0 → None。
+    invalidation_band = live 候選全部 InvalidateScenario 價位的 {min, max}。
+    ambiguity_count = 引擎 E4 live_edge_ambiguity.count(1.3.0 起;缺 → None)。
+    """
+    ups = downs = 0
+    thresholds: list[float] = []
+    for s in live:
+        if _behavior_is_directional(s.get("post_pattern_behavior")):
+            d = _direction_from_power(s.get("power_rating"))
+            if d == "bullish":
+                ups += 1
+            elif d == "bearish":
+                downs += 1
+        thresholds.extend(v for _, v in _extract_all_invalidation_thresholds(s))
+    up_share = ups / (ups + downs) if (ups + downs) else None
+    band = {"min": min(thresholds), "max": max(thresholds)} if thresholds else None
+    ambiguity = snapshot.get("live_edge_ambiguity") or {}
+    count = ambiguity.get("count") if isinstance(ambiguity, dict) else None
+    return up_share, band, count
 
 
 # ─── Invalidation(A-3 閘門前置)──────────────────────────────────────────────
@@ -72,7 +139,7 @@ def _pick_primary(forest: list[dict]) -> dict | None:
 def _extract_invalidation_price(scenario: dict, direction: str) -> float | None:
     """從 scenario.invalidation_triggers 抽 InvalidateScenario + PriceBreakBelow/Above。
 
-    對齊 mcp_server/_forecast.py:_scenario_is_invalidated 的解析:
+    對齊 fusion._picker.canonical_is_invalidated 的解析(b1 canonical):
     - bullish scenario → PriceBreakBelow(price);direction bearish → PriceBreakAbove
     - on_trigger 必 InvalidateScenario(WeakenScenario / PromoteAlternative 不算)
 
@@ -301,7 +368,17 @@ def read_track1(
     current_price: float | None = None,
     timeframe: str = "daily",
 ) -> Track1View:
-    """讀 structural_snapshots → Track1View(neely primary scenario + fib lines)。
+    """讀 structural_snapshots(+ wave_judgments)→ Track1View。
+
+    wave_judgment_loop §8:
+    - 有 active judgment 且 accepted[preferred] 的 anchor_key 對得回最新
+      forest → **judgment 路徑**(該候選的 pattern / fib zones / 失效價 /
+      A-3 閘門;source="judgment")
+    - 無 judgment、no_fit 判讀、或 anchor 對不回(J2 diff 責任區)→
+      **aggregate 路徑**:計數無關特徵(up_share / invalidation_band /
+      ambiguity_count),`up_share > 0.6` → bullish、`< 0.4` → bearish、
+      其餘(含分母 0)→ "undecided";fib_lines = flat_fib_zones 聯集
+      (引擎聚合,無選取);無單一 thesis → invalidated 恆 False
 
     Args:
         conn: PG conn(dict_row factory)
@@ -325,7 +402,7 @@ def read_track1(
         return Track1View(
             stock_id=stock_id, as_of=as_of, snapshot_date=None,
             has_snapshot=False, pattern_type=None, power_rating=None,
-            direction="neutral", effective_degree=None, wave_count=0,
+            direction="undecided", effective_degree=None, wave_count=0,
             fib_lines=[], notes=[f"no neely_core structural_snapshot ≤ {as_of} (tf={timeframe})"],
         )
 
@@ -338,26 +415,104 @@ def read_track1(
             snapshot = {}
     snapshot_date = row.get("snapshot_date")
 
-    forest = snapshot.get("scenario_forest") or []
-    primary = _pick_primary(forest)
-    if primary is None:
+    forest = [s for s in (snapshot.get("scenario_forest") or []) if isinstance(s, dict)]
+    if not forest:
         return Track1View(
             stock_id=stock_id, as_of=as_of, snapshot_date=snapshot_date,
             has_snapshot=True, pattern_type=None, power_rating=None,
-            direction="neutral", effective_degree=None, wave_count=0,
+            direction="undecided", effective_degree=None, wave_count=0,
             fib_lines=[], notes=["empty scenario_forest"],
         )
 
+    notes: list[str] = []
+
+    # ── active judgment 查找(§8 消費優先序:human 先、其次最新)──────────
+    judgment: dict | None = None
+    try:
+        judgment = fetch_active_judgment(conn, stock_id=stock_id, timeframe=timeframe)
+    except Exception as e:
+        notes.append(f"judgment lookup failed({type(e).__name__})→ aggregate 路徑")
+
+    primary: dict | None = None
+    judgment_id: int | None = None
+    if judgment is not None:
+        preferred_key = next(
+            (a.get("anchor_key") for a in judgment.get("accepted") or []
+             if isinstance(a, dict) and a.get("role") == "preferred"),
+            None,
+        )
+        if preferred_key is None:
+            notes.append(
+                f"active judgment #{judgment.get('id')} 為 no_fit(無 preferred)→ aggregate 路徑"
+            )
+        else:
+            primary = next(
+                (s for s in forest if scenario_anchor_key(s) == preferred_key), None
+            )
+            if primary is None:
+                notes.append(
+                    f"active judgment #{judgment.get('id')} preferred anchor 不在最新 "
+                    f"forest → 降級 aggregate(J2 diff 責任區,emitter/track1 不代判)"
+                )
+            else:
+                judgment_id = judgment.get("id")
+
+    # ── 聚合特徵(兩路徑都計;judgment 路徑作附帶脈絡)─────────────────────
+    live, had_bar_map = _live_scenarios(snapshot, forest)
+    up_share, invalidation_band, ambiguity_count = _aggregate_features(snapshot, live)
+    if not had_bar_map:
+        notes.append("無 monowave bar 對映(舊 snapshot)→ 全 forest 視為 live 聚合")
+
+    source = "judgment" if primary is not None else "aggregate"
+
+    if primary is None:
+        # ── aggregate 路徑:無選取,無單一 thesis ──────────────────────────
+        if up_share is None:
+            direction = "undecided"
+        elif up_share > 0.6:
+            direction = "bullish"
+        elif up_share < 0.4:
+            direction = "bearish"
+        else:
+            direction = "undecided"
+
+        flat = snapshot.get("flat_fib_zones") or []
+        raw_fib_lines = [fl for fl in (_zone_to_fib_line(z) for z in flat) if fl is not None]
+        fib_lines, n_raw, was_reduced = _cluster_and_cap_fib_lines(raw_fib_lines)
+        if not fib_lines:
+            notes.append("no fib zones (flat_fib_zones empty;aggregate 路徑無候選選取)")
+        if was_reduced:
+            notes.append(
+                f"fib_lines reduced {n_raw} → {len(fib_lines)} "
+                f"(1% bucket cluster + cap {FIB_LINES_MAX_COUNT};對齊 MCP context budget)"
+            )
+        notes.append(
+            f"aggregate 路徑(無 active judgment):up_share={up_share} "
+            f"→ direction={direction};判讀請走 dossier + judgment submit"
+        )
+        return Track1View(
+            stock_id=stock_id, as_of=as_of, snapshot_date=snapshot_date,
+            has_snapshot=True, pattern_type=None, power_rating=None,
+            direction=direction, effective_degree=None, wave_count=0,
+            fib_lines=fib_lines,
+            invalidation_price=None,
+            invalidated=False,
+            fallback_to_flat_union=bool(fib_lines),
+            notes=notes,
+            source=source, judgment_id=None, up_share=up_share,
+            invalidation_band=invalidation_band, ambiguity_count=ambiguity_count,
+        )
+
+    # ── judgment 路徑:accepted[preferred] 候選 ────────────────────────────
     pattern_label = _pattern_type_label(primary.get("pattern_type"))
     direction = _direction_from_power(primary.get("power_rating"))
     power_label = _power_rating_label(primary.get("power_rating"))
     degree = _effective_degree(primary)
-    structure_label = primary.get("structure_label") or primary.get("id")
     # compaction v2 §7.4 / Q6:wave_count 只讀結構化欄(字串 parse 已移除;
     # structure_label 新格式 `{Pattern} L{degree} [...]` 僅供顯示)
     wave_count = int(primary.get("wave_count") or 0)
 
-    # Fib zones — primary 優先,fallback flat_fib_zones
+    # Fib zones — preferred 候選優先,fallback flat_fib_zones
     zones = primary.get("expected_fib_zones") or []
     fallback_used = False
     if not zones:
@@ -393,11 +548,11 @@ def read_track1(
         relevant_thresholds, current_price
     )
 
-    notes: list[str] = []
+    notes.append(f"judgment 路徑:active judgment #{judgment_id} accepted[preferred]")
     if not fib_lines:
-        notes.append("no fib zones (neither primary.expected_fib_zones nor flat_fib_zones populated)")
+        notes.append("no fib zones (neither preferred.expected_fib_zones nor flat_fib_zones populated)")
     if fallback_used:
-        notes.append("fib_lines from flat_fib_zones fallback (primary.expected_fib_zones empty)")
+        notes.append("fib_lines from flat_fib_zones fallback (preferred.expected_fib_zones empty)")
     if was_reduced:
         notes.append(
             f"fib_lines reduced {n_raw} → {len(fib_lines)} "
@@ -426,4 +581,6 @@ def read_track1(
         invalidated=invalidated,
         fallback_to_flat_union=fallback_used,
         notes=notes,
+        source=source, judgment_id=judgment_id, up_share=up_share,
+        invalidation_band=invalidation_band, ambiguity_count=ambiguity_count,
     )

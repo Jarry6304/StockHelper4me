@@ -3,12 +3,9 @@
   import type { Monowave } from '$contracts/neely/Monowave';
   import type { ResonanceFusion } from '$contracts/fusion';
   import type { Scenario } from '$contracts/neely/Scenario';
+  import type { ActiveJudgmentSummary } from '$lib/api/waves';
   import { createEventDispatcher } from 'svelte';
-  import {
-    extractCurrentPriceFromMonowaves,
-    pickDefaultScenario,
-    sortScenarios
-  } from '$lib/wave/power';
+  import { sortScenarios } from '$lib/wave/power';
   import type { OhlcPoint } from '$lib/wave/plotly-build';
   import PlotlyWaveChart from './PlotlyWaveChart.svelte';
   import ScenarioList from './ScenarioList.svelte';
@@ -26,24 +23,34 @@
     track2: boolean;
     invalidation: boolean;
   } = { fib: true, waveMarkers: true, track2: true, invalidation: true };
+  /** v4.39:active judgment(WaveCard 解析 anchor→scenario id)。 */
+  export let judgedScenarioId: string | null = null;
+  export let acceptedScenarioIds: string[] = [];
+  export let judgment: ActiveJudgmentSummary | null = null;
+  /** dossier 有 snapshot_ref 才能錨定(POST /judgments 的 as_of 基準)。 */
+  export let anchorEnabled: boolean = false;
+  export let anchorPending: boolean = false;
 
   const dispatch = createEventDispatcher<{
     'scenario-select': { scenarioId: string };
+    anchor: { scenarioId: string };
     collapse: void;
   }>();
 
   $: sorted = sortScenarios(scenarios);
-  // 預設選 invalidation-filter + tier-by-recency + within-tier-by-power
-  // (對齊 Overview 的 pickDefaultScenario;詳見 power.ts rationale)。
-  $: currentPrice = extractCurrentPriceFromMonowaves(monowaves);
-  $: defaultScenario = pickDefaultScenario(scenarios, asOf, { currentPrice });
-  $: defaultSelected = defaultScenario?.id ?? sorted[0]?.id ?? null;
+  // v4.39(wave_judgment_loop §8):**不預選** — 有 active judgment ⇒ 預設
+  // 焦點 = accepted[preferred];無 ⇒ null(顯示候選 + 證據,判讀者自行點選)。
+  // pickDefaultScenario 不再於此呼叫(保留於 power.ts 供 V2 鏡射對)。
+  $: defaultSelected = judgedScenarioId ?? null;
   $: effectiveSelected = selectedScenarioId ?? defaultSelected;
-  $: selectedScenario =
-    sorted.find((s) => s.id === effectiveSelected) ?? defaultScenario ?? sorted[0] ?? null;
+  $: selectedScenario = sorted.find((s) => s.id === effectiveSelected) ?? null;
   $: fibZones =
     (selectedScenario?.expected_fib_zones as FibZone[] | undefined) ?? [];
   $: invalidationTriggers = selectedScenario?.invalidation_triggers ?? [];
+  $: canAnchorSelected =
+    anchorEnabled &&
+    !!selectedScenario &&
+    selectedScenario.id !== judgedScenarioId;
 
   // displayId 對映 ScenarioList 用「S1, S2...」順序
   $: displayMap = new Map(sorted.map((s, i) => [s.id, `S${i + 1}`]));
@@ -95,7 +102,37 @@
     />
   </div>
 
-  <ScenarioList {scenarios} selectedId={effectiveSelected} {asOf} on:select={handleSelect} />
+  <div class="scen-side">
+    {#if judgment && judgedScenarioId}
+      <div class="judged-banner" role="status">
+        ⚓ active judgment #{judgment.id} · {judgment.judged_by} ·
+        {judgment.confidence_class}({judgment.status ?? 'active'})
+      </div>
+    {:else}
+      <div class="judged-banner faint" role="status">
+        未判讀 — 候選平權顯示,不預選;點選候選後可「錨定」寫入判讀
+      </div>
+    {/if}
+    <ScenarioList
+      {scenarios}
+      selectedId={effectiveSelected}
+      acceptedIds={acceptedScenarioIds}
+      {asOf}
+      on:select={handleSelect}
+    />
+    {#if canAnchorSelected && selectedScenario}
+      <div class="anchor-row">
+        <button
+          class="anchor-btn"
+          type="button"
+          disabled={anchorPending}
+          on:click={() => dispatch('anchor', { scenarioId: selectedScenario.id })}
+        >
+          {anchorPending ? '錨定中…' : `⚓ 錨定此候選(${selectedDisplay ?? selectedScenario.id})`}
+        </button>
+      </div>
+    {/if}
+  </div>
 </div>
 
 {#if selectedScenario && layers.invalidation}
@@ -121,6 +158,50 @@
   .detail-chart {
     padding: 14px;
     border-right: 1px solid var(--line);
+  }
+
+  .scen-side {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .judged-banner {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--wave);
+    background: #0c2030;
+    border-bottom: 1px solid var(--line);
+    padding: 8px 12px;
+  }
+
+  .judged-banner.faint {
+    color: var(--ink-faint);
+    background: transparent;
+  }
+
+  .anchor-row {
+    padding: 8px 12px 12px;
+    background: var(--header-bg);
+  }
+
+  .anchor-btn {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--wave);
+    border: 1px solid #21466a;
+    border-radius: 6px;
+    padding: 6px 10px;
+    background: #0c2030;
+  }
+
+  .anchor-btn:hover:enabled {
+    background: #0e2840;
+  }
+
+  .anchor-btn:disabled {
+    opacity: 0.5;
   }
 
   @media (max-width: 780px) {

@@ -8,10 +8,18 @@ export {
   NotFoundError,
   NetworkError,
   apiGet,
+  apiPost,
   toIsoDate,
   getBaseUrl
 } from './client';
 export type { FetchOptions } from './client';
+export {
+  postJudgment,
+  buildAnchorJudgment,
+  JudgmentRejectedError,
+  type JudgmentSubmission,
+  type JudgmentAccepted
+} from './judgments';
 
 export { healthCheck, type HealthResponse } from './health';
 export { getNeelyForest, type Timeframe, type GetNeelyForestArgs } from './neely';
@@ -21,7 +29,15 @@ export {
   type TraditionalScenario,
   type GetTraditionalForestArgs
 } from './traditional';
-export { getWaves, type WavesResponse, type GetWavesArgs } from './waves';
+export {
+  getWaves,
+  type WavesResponse,
+  type GetWavesArgs,
+  type WaveDossier,
+  type DossierCandidate,
+  type DossierTimeframeSection,
+  type ActiveJudgmentSummary
+} from './waves';
 export { getResonance, type GetResonanceArgs } from './resonance';
 export { getLevels, type GetLevelsArgs } from './levels';
 export { getOhlc, type OhlcRow, type OhlcResponse, type GetOhlcArgs } from './ohlc';

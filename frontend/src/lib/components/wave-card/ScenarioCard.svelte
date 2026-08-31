@@ -11,6 +11,8 @@
 
   export let scenario: Scenario;
   export let selected: boolean = false;
+  /** v4.39:此候選在 active judgment 的 accepted 內(⚓ 高亮)。 */
+  export let anchored: boolean = false;
   /** scenario 顯示用 id(若 Scenario.id 太抽象,可外傳「S1 / S2 …」)。 */
   export let displayId: string = scenario.id;
   /** as_of 用來算 wave_tree.end 距今多少天(stale 警示)。 */
@@ -40,6 +42,7 @@
 <div
   class="scen"
   class:sel={selected}
+  class:anchored
   role="button"
   tabindex="0"
   aria-pressed={selected}
@@ -48,6 +51,9 @@
 >
   <div class="r1">
     <span class="sid">{displayId}</span>
+    {#if anchored}
+      <span class="anchor-mark" title="active judgment accepted 候選">⚓</span>
+    {/if}
     <CertaintyBadge {certainty} />
     <span class="pw" data-direction={powerDir}>Power {powerAbsLevel(power)}</span>
   </div>
@@ -89,6 +95,16 @@
     border-color: #2e6f8c;
     background: #0c2433;
     box-shadow: 0 0 0 1px #2e6f8c40;
+  }
+
+  .scen.anchored {
+    border-color: #21466a;
+    box-shadow: 0 0 0 1px #21466a80;
+  }
+
+  .anchor-mark {
+    font-size: 11px;
+    color: var(--wave);
   }
 
   .scen:focus-visible {

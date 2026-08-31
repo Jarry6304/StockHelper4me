@@ -19,7 +19,7 @@
 | 2 | E1 assumptions/E4 ambiguity/E2 robust + reverse_logic 退場(neely 1.3.0) | ✅ |
 | 3 | J1 wave_judgments 表 + anchor_key + dossier 讀路徑切換 | ✅ |
 | 4 | 判讀驗證器 + CLI/POST 寫路徑 + neely-judgment skill | ✅ |
-| 5 | S3 下游(track1/emitter/V2/wave_impulse)+ J2 diff + refresh hook + 前端 | ⬜ |
+| 5 | S3 下游(track1/emitter/V2/wave_impulse)+ J2 diff + refresh hook + 前端 | ✅ |
 | 6 | 收尾(CLAUDE.md 輪替 / runbook 定稿) | ⬜ |
 
 ## Phase 1 紀錄(M0,neely 1.2.0)
@@ -137,3 +137,62 @@ report clone push `passed`(memo 共享 `Rc<ValidationReport>` 不可變,beam 鍵
   全部引 m3Spec/neely_rules.md 行號)+ `dossier-reading.md` + `output-schema.json`
   (與驗證器以測試互鎖)
 - tests:validate 逐規則 14 + POST 3 + schema 互鎖 2;**pytest 全套 1053 passed / 2 xfailed**
+
+## Phase 5 紀錄(M4′:S3 下游 + J2 + refresh hook + 前端)
+
+- **J2 錨定 diff**(`src/fusion/judgment/diff.py`,§6):per-anchor 判定 —
+  命中 = intact 不寫列;未命中依序 (1) **記錄的** triggers
+  (`invalidation.recorded_triggers`,提交時拷貝)對 `(as_of, now]` daily bars
+  檢查 PriceBreakBelow(low ≤ level)/ PriceBreakAbove(high ≥ level)/
+  TimeExceeds + 判讀 `time_limit_bar` ⇒ `invalidated` + diff_detail{rule,bar,price};
+  (2) 嚴格子樹(結構遞迴,非字串包含)⇒ `absorbed` + parent_anchor_key;
+  (3) 其餘 `vanished` — `source_version`+`assumption_hash` 與判讀時同 ⇒
+  `cause=engine_regression` + `logger.error` 告警(引擎 bug 非市場),異 ⇒
+  `engine_changed`;多錨最差優先(invalidated > vanished > absorbed > intact);
+  狀態列拷貝內容欄 + supersedes_id,`judged_by` 沿用原列(J2 非判讀者);
+  bars lazy fetch(全 intact 不撈價)
+- **refresh 接線**:`_run_refresh` 於 tw_cores 後、forecast 前插 Step 7「J2 錨定
+  diff」(同 `--skip-cores` guard,total_steps 8→9;J2 先降級失效判讀,emitter
+  才不會對過期判讀發列);forecast step 文案 emit-neely → emit-judgment
+- **S3 emitter**(`forecast/neely_emitter.py` 重寫):`emit_judgment_forecast` —
+  active judgment 的 accepted[preferred] 以 anchor_key 對回最新 forest,
+  發 `source_core='judgment'` 單列外包絡(calibrated=False / internal_only=True;
+  params_hash=`judgment|id=…|tf=…|degree=…|by=…`);無判讀/no_fit/對不回 → 不發
+  (`anchor_not_in_forest` 屬 J2 責任區,emitter 不代判);stale gate(7d)沿用;
+  舊 `neely_fib` 值凍結唯讀(alembic `l8m9n0o1p2q3` 白名單 +'judgment',
+  schema_pg.sql 同步);`forecast/__init__` 出口同步
+- **track1 重寫**(§8 judgment-or-aggregate):picker 刪除;judgment 路徑 =
+  accepted[preferred] 候選(pattern/fib zones/失效價/A-3 閘門,source="judgment");
+  aggregate 路徑 = `up_share`(live-edge 候選中「有方向性前瞻」的等權比例 —
+  `post_pattern_behavior` ∈ {Unconstrained, HintsAtPattern} 或 power=Neutral
+  不入分母,方向取 power_rating sign;engine 的 post_behavior 本就由
+  (pattern, power, ctx) 查表,方向資訊在 power)、`invalidation_band{min,max}`、
+  `ambiguity_count`(E4);`up_share > 0.6` bullish / `< 0.4` bearish / 其餘
+  **"undecided"**(wire 變更:direction 新字面值,消費端 else 分支安全);
+  aggregate fib_lines = flat_fib_zones 聯集(無選取),invalidated 恆 False;
+  `Track1View` additive 欄(source/judgment_id/up_share/invalidation_band/
+  ambiguity_count),`contracts.py` + Track B codegen(fusion.ts diff additive)
+- **pick 站 judgment-aware(拍版 4)**:`wave_summary.digest_from_docs` 先查
+  active judgment(batch),命中 ⇒ cell 取 preferred + `judged: true`,無/對不回
+  ⇒ 現行 pickDefaultScenario 鏡射排序;`WaveSummaryRow.judged` additive;
+  `wave_impulse_screen` Step 5 fallback 由 canonical picker 改 active judgment
+  preferred(無 ⇒ None,excluded_reason=`no_recent_correction_no_judgment`;
+  Step 1-4 域內語意不動;active 判讀以 db.query 版 `_fetch_active_judgments`
+  查,表缺/失敗視為無)
+- **前端**:`/waves` 第三段 `dossier` 接線(`waves.ts` 型別;anchor→scenario
+  對映走 dossier 候選的 anchor_key+id,前端**不重算錨定鍵**);V1 卡 —
+  Overview/Detail **不再呼叫 pickDefaultScenario**(函式保留供 V2 鏡射對):
+  有 active judgment ⇒ 焦點 accepted[preferred] + ⚓ 判讀 badge + ScenarioList
+  accepted 高亮,無 ⇒ 候選平權**不預選**;「選取 → 錨定」= Detail 錨定鈕 →
+  `POST /judgments`(`judgments.ts`:single/preferred,invalidation 預填候選
+  InvalidateScenario triggers、rule_refs 預填 passed_rules;422 → 拒絕原因 +
+  legal keys 顯示);V2 `WaveCell` ⚓ judged 記號;`client.ts` 加 `apiPost`;
+  順修:`frontend` devDeps 補 `@types/node`(tsconfig `types:["node"]` 既有
+  宣告,fresh clone 下 tsc 才可解析)
+- tests:J2 diff 全矩陣 19(intact/invalidated×4 trigger 型/absorbed/vanished×2
+  cause/多錨最差/狀態列拷貝)、emitter 18(重寫;picker-golden 檔隨 picker 刪除,
+  stale-gate 覆蓋併入)、track1 70(judgment/aggregate/degrade 三路徑 + B3 一致性
+  改走 judgment 路徑)、wave_summary 44(judgment-first 3);前端 vitest 146 /
+  svelte-check 0 err / tsc 0 err
+- 驗收:`grep -rn _pick_primary src mcp_server` = **0**;pytest tests/
+  **1084 passed**(xfail 2 隨 picker-golden 檔汰換);cargo 未動(Phase 2 基線)

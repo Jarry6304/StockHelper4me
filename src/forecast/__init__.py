@@ -27,7 +27,7 @@ from forecast.calibration import (
     nonconformity_score,
     cqr_quantile,
 )
-from forecast.neely_emitter import emit_neely_fib
+from forecast.neely_emitter import emit_judgment_forecast
 from forecast.manual import write_manual_forecast
 from forecast.fusion import eligible_cores, fuse_one, fuse_batch
 
@@ -45,7 +45,7 @@ __all__ = [
     "conformalize_batch",
     "nonconformity_score",
     "cqr_quantile",
-    "emit_neely_fib",
+    "emit_judgment_forecast",
     "write_manual_forecast",
     "eligible_cores",
     "fuse_one",

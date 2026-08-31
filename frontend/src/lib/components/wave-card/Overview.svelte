@@ -1,12 +1,12 @@
 <script lang="ts">
   import type { Monowave } from '$contracts/neely/Monowave';
   import type { Scenario } from '$contracts/neely/Scenario';
+  import type { ActiveJudgmentSummary } from '$lib/api/waves';
   import { createEventDispatcher } from 'svelte';
   import {
     collectLiveFibZones,
     extractCurrentPriceFromMonowaves,
     isScenarioInvalidated,
-    pickDefaultScenario,
     scenarioRecencyDays
   } from '$lib/wave/power';
   import type { OhlcPoint } from '$lib/wave/plotly-build';
@@ -18,18 +18,20 @@
   export let scenarios: Scenario[];
   export let asOf: string | null = null;
   export let ohlcSeries: OhlcPoint[] | null = null;
+  /** v4.39:active judgment 的 preferred 候選(WaveCard 解析 anchor→id)。 */
+  export let judgedScenarioId: string | null = null;
+  export let judgment: ActiveJudgmentSummary | null = null;
 
   const dispatch = createEventDispatcher<{ expand: void }>();
 
-  // 預設選 invalidation-filter + tier-by-recency + within-tier-by-power(對齊 spec L1
-  // 「forest 無 primary」— 此只是 UI 預設焦點,非答案)。
-  //
-  // 2 層防護(production 1 次回傳跨年 forest):
-  //   (1) currentPrice 過濾已 invalidated scenario(triggers vs current_price)
-  //   (2) tier 化 recency(≤60d / ≤180d / ≤365d / >365d)— 即時優先於強訊號
-  // 詳見 power.ts §pickDefaultScenario rationale。
+  // v4.39(wave_judgment_loop §8):本頁不再呼叫 pickDefaultScenario —
+  // 有 active judgment ⇒ 焦點 = accepted[preferred] 候選 + 判讀 badge;
+  // 無 ⇒ **不預選**(顯示候選 + 證據;判讀走「展開詳情」選取→錨定)。
+  // pickDefaultScenario 保留在 power.ts 供 V2 cell 無判讀 fallback 鏡射對。
   $: currentPrice = extractCurrentPriceFromMonowaves(monowaves);
-  $: topScenario = pickDefaultScenario(scenarios, asOf, { currentPrice });
+  $: topScenario = judgedScenarioId
+    ? (scenarios.find((s) => s.id === judgedScenarioId) ?? null)
+    : null;
   // 雲層只畫 live(結尾 ≤180d)scenario 的 fib zones — 不再用 flat_fib_zones
   // 全 forest 聯集(historical anchor 的價位會被畫進今天的投影窗 = 失準)。
   $: liveFibZones = collectLiveFibZones(scenarios, asOf);
@@ -63,6 +65,14 @@
 <div class="meta">
   {#if structureLabel}
     <span class="struct" class:stale={isStale}>{structureLabel}</span>
+    {#if judgment && judgedScenarioId}
+      <span
+        class="judged-tag"
+        title="active judgment #{judgment.id} · {judgment.judged_by} · {judgment.confidence_class}"
+      >
+        ⚓ 已判讀({judgment.status ?? 'active'})
+      </span>
+    {/if}
     {#if isStale && scenarioStaleDays !== null}
       <span class="stale-tag" title="本 scenario 結尾距 as_of 已超過 1 年,可能是 historical anchor">
         ⚠ 結尾 {scenarioStaleDays}d 前
@@ -73,6 +83,10 @@
         ⚠ 已 invalidated
       </span>
     {/if}
+  {:else if scenarios.length > 0}
+    <span class="struct faint">
+      (未判讀 — {scenarios.length} 個候選;展開詳情選取後錨定)
+    </span>
   {:else}
     <span class="struct faint">(無 scenario)</span>
   {/if}
@@ -136,6 +150,16 @@
     color: var(--fib);
     background: #1c160a;
     border: 1px dashed #5a4a2a;
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
+
+  .judged-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--wave);
+    background: #0c2030;
+    border: 1px solid #21466a;
     border-radius: 4px;
     padding: 1px 6px;
   }

@@ -84,6 +84,13 @@ export interface Track1View {
   invalidated: boolean;
   fallback_to_flat_union: boolean;
   notes: string[];
+  source?: string;
+  judgment_id?: number | null;
+  up_share?: number | null;
+  invalidation_band?: {
+    [k: string]: number;
+  } | null;
+  ambiguity_count?: number | null;
 }
 export interface Track2View {
   stock_id: string;
@@ -118,6 +125,7 @@ export interface WaveSummaryRow {
   resonance: string;
   staleness_days: number | null;
   scenario_age_days: number | null;
+  judged?: boolean;
 }
 export interface WavesSummary {
   as_of: string;

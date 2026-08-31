@@ -95,6 +95,7 @@ class TestDigestFromDocs:
             "resonance": "basic",
             "staleness_days": 0,
             "scenario_age_days": 10,  # wave_tree.end 2026-06-01 → as_of 2026-06-11
+            "judged": False,  # v4.39:無 active judgment → 表現層預設排序
         }
 
     def test_scenario_age_none_when_end_unparseable(self):
@@ -280,3 +281,46 @@ class TestWaveSummaryRows:
     def test_bad_timeframe_raises(self):
         with pytest.raises(ValueError):
             wave_summary_rows(_DispatchConn({}), ["2330"], AS_OF, timeframe="hourly")
+
+
+class TestJudgmentFirst:
+    """v4.39 wave_judgment_loop §8:V2 cell 判讀優先(拍版 4)。"""
+
+    def _judgment_for(self, scenario, *, jid=11):
+        from fusion.judgment.anchor_key import scenario_anchor_key
+        return {
+            "id": jid,
+            "stock_id": "2330",
+            "judged_by": "human:jarry",
+            "accepted": [{"role": "preferred",
+                          "anchor_key": scenario_anchor_key(scenario)}],
+        }
+
+    def test_judgment_preferred_beats_default_ordering(self):
+        # 預設排序會選 NEW(recency tier 高);判讀錨 OLD → cell 取 OLD + judged
+        old = _scenario(label="OLD", power="StrongBullish", end="2025-01-01")
+        new = _scenario(label="NEW", power="Neutral", end="2026-06-01")
+        row = _neely_row([old, new])
+        d = digest_from_docs("2330", row, None, AS_OF,
+                             judgment=self._judgment_for(old))
+        assert d["label"] == "OLD"
+        assert d["judged"] is True
+
+    def test_anchor_miss_falls_back_to_default(self):
+        # 判讀錨的候選已不在 forest → 回表現層預設 + judged=False
+        old = _scenario(label="OLD", power="StrongBullish", end="2025-01-01")
+        new = _scenario(label="NEW", power="Neutral", end="2026-06-01")
+        gone = _scenario(label="GONE", end="2024-01-01")
+        row = _neely_row([old, new])
+        d = digest_from_docs("2330", row, None, AS_OF,
+                             judgment=self._judgment_for(gone))
+        assert d["label"] == "NEW"
+        assert d["judged"] is False
+
+    def test_no_fit_judgment_falls_back(self):
+        new = _scenario(label="NEW", end="2026-06-01")
+        row = _neely_row([new])
+        d = digest_from_docs("2330", row, None, AS_OF,
+                             judgment={"id": 5, "accepted": []})
+        assert d["label"] == "NEW"
+        assert d["judged"] is False
