@@ -196,3 +196,64 @@ report clone push `passed`(memo 共享 `Rc<ValidationReport>` 不可變,beam 鍵
   svelte-check 0 err / tsc 0 err
 - 驗收:`grep -rn _pick_primary src mcp_server` = **0**;pytest tests/
   **1084 passed**(xfail 2 隨 picker-golden 檔汰換);cargo 未動(Phase 2 基線)
+
+## Phase 6 紀錄(收尾)
+
+- 新 `scripts/verify_running_correction.py`(M0 gate 驗收項:全體 RunningCorrection
+  以 wave_tree children 端點反查 (a,b,c),**b > a + c 100%**,不一致 exit 1;
+  鏡射 sample_level1_impulse.py 反查法)
+- `docs/benchmarks/neely_p0_gate_check.sql` §4 對齊 1.3.0 timing keys:
+  `stage_5_classifier` / `stage_6_post_validator`(Ch6 進 ladder,計入
+  `stage_8_compaction`)/ `stage_10_5_reverse_logic`(模組退場)三 key 移除,
+  補 `stage_13_robustness` / `stage_14_live_edge`
+- `m3Spec/proposal_progressive_settlement.md` 加 v4.39 註記(判讀迴路取代
+  「引擎替讀者選 primary」啟發式;S1 判準 2 的 ch6_status 訊號已產出;
+  提案剩餘範圍 = 引擎側 settlement 本體,另案)
+- CLAUDE.md:最近版本摘要輪替(v4.39 進 / v4.37 出)、alembic head →
+  `l8m9n0o1p2q3`(兩處)、常見任務 + 判讀 skill 列、下次 session 優先序改列
+  本案 production runbook
+
+## 本機 production runbook(user 執行;sandbox 無 DB / 無 FinMind)
+
+```powershell
+git pull
+# 1) 建置 + migration(k7l8m9n0o1p2 wave_judgments + l8m9n0o1p2q3 whitelist)
+cd rust_compute; cargo test --workspace; cargo build --release -p tw_cores; cd ..
+alembic upgrade head
+pytest
+
+# 2) neely facts 全市場重生(1.2.0+1.3.0 一次到位;1.1.1 實測 wall ~2 min)
+psql $env:DATABASE_URL -c "DELETE FROM facts WHERE source_core = 'neely_core';"
+.\rust_compute\target\release\tw_cores.exe run-all --write --workflow workflows/neely_only.toml
+python scripts/run_sql_file.py scripts/maintain_facts_stats.sql
+
+# 3) 合併 gate(M0 + 1.3.0)
+python scripts/verify_compaction_v2_gate.py          # §9.2 全項(inv/w1=0、overflow=0、p99≤100、Terminal :5)
+python scripts/sample_level1_impulse.py --show 20    # R7 / Overlap 抽驗
+python scripts/verify_running_correction.py          # b > a + c 100%(新)
+python scripts/verify_mcp_toolkit_v4_29.py           # dossier payload soft 50KB / hard 1MB
+# 版本覆蓋 100% = '1.3.0':
+psql $env:DATABASE_URL -c "SELECT source_version, count(*) FROM structural_snapshots WHERE core_name='neely_core' AND timeframe='daily' GROUP BY 1;"
+# Ch6 分布(gate 報告項:Deferred 比例 + forest p50/p95/p99 vs 1.1.1 基線 26/53/68 — 預期下降,上升即紅燈):
+psql $env:DATABASE_URL -c "SELECT snapshot->>'ch6_rejected_kinds' IS NOT NULL, count(*) FROM structural_snapshots WHERE core_name='neely_core' GROUP BY 1;"
+psql $env:DATABASE_URL -c "WITH f AS (SELECT jsonb_array_length(snapshot->'scenario_forest') n FROM structural_snapshots WHERE core_name='neely_core' AND timeframe='daily') SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY n) p50, percentile_disc(0.95) WITHIN GROUP (ORDER BY n) p95, percentile_disc(0.99) WITHIN GROUP (ORDER BY n) p99 FROM f;"
+psql $env:DATABASE_URL -c "SELECT s->>'ch6_status' st, count(*) FROM structural_snapshots, jsonb_array_elements(snapshot->'scenario_forest') s WHERE core_name='neely_core' AND timeframe='daily' GROUP BY 1;"
+
+# 4) wave_judgments append-only trigger probe(預期 SQLSTATE P0001 拒絕)
+psql $env:DATABASE_URL -c "INSERT INTO wave_judgments (stock_id, timeframe, as_of, judged_by, snapshot_date, params_hash, engine_version, assumption_hash, accepted, rationale, invalidation, confidence_class, status) VALUES ('_probe_','daily',CURRENT_DATE,'human',CURRENT_DATE,'x','1.3.0','x','[]','{}','{}','no_fit','active');"
+psql $env:DATABASE_URL -c "UPDATE wave_judgments SET status='invalidated' WHERE stock_id='_probe_';"   # 預期 ERROR P0001
+psql $env:DATABASE_URL -c "DELETE FROM wave_judgments WHERE stock_id='_probe_';"                       # 預期 ERROR P0001(probe 列留著無妨,append-only)
+
+# 5) 首批判讀(P0 Gate 六檔 × daily/weekly/monthly;human 與 llm 各至少一筆對照)
+#    dossier 取得:MCP neely_forecast,或 GET /stocks/{id}/waves 的 dossier 段
+#    LLM 判讀:用 .claude/skills/neely-judgment/ skill 產出 JSON
+python src/main.py judgment submit --file judgment_2330_daily.json
+python src/main.py judgment list --stocks 2330
+#    前端「選取→錨定」煙囪:uvicorn web_api.app:app + cd frontend && npm run dev →
+#    /stocks/2330 展開詳情 → 點候選 → ⚓ 錨定(POST /judgments 201;422 顯示合法鍵)
+
+# 6) refresh chain 驗 J2 + emit-judgment(Step 7 J2 錨定 diff / Step 8 emit-judgment)
+python src/main.py refresh --skip-bronze
+python src/main.py judgment diff        # 手動重跑 = 冪等(intact 不寫列)
+psql $env:DATABASE_URL -c "SELECT source_core, count(*) FROM forecast_log WHERE forecast_date = CURRENT_DATE GROUP BY 1;"
+```

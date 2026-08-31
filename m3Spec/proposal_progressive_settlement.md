@@ -3,6 +3,12 @@
 > ⚠️ **本檔為討論稿,未拍版,不得作為實作依據。** 拍版前不動 Rust(鐵則
 > 「best-guess 不上 Rust」);拍版後改寫進正式 m3Spec 並另案排程。
 > 緣起與表現層止血紀錄見 `docs/changelog/wave-view-tuning.md`(2026-06-11)。
+>
+> **v4.39 註記(2026-08-31)**:`m3Spec/wave_judgment_loop.md` 已落地 —
+> 「引擎替讀者選 primary」的各處啟發式(picker / 表現層預設)由**判讀迴路**
+> (dossier → wave_judgments → J2 錨定 diff)取代;本提案 S1 判準 2 需要的
+> `ch6_status`(Deferred = live edge)訊號亦已由 neely 1.2.0 Ch6 閘產出。
+> 本提案剩餘範圍 = 引擎側歷史段**定型**(settlement)本體,仍屬另案拍版。
 
 ## 1. 問題陳述(2026-06-11 實測事實)
 
